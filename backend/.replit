@@ -1,0 +1,37 @@
+# Replit configuration for Backend API
+
+# Language
+language = "nodejs"
+
+# Run command
+run = "npm start"
+
+# Entry point
+entrypoint = "server.js"
+
+# Enable Nix
+[nix]
+channel = "stable-22_11"
+
+# Always install dependencies
+[deploy]
+run = ["sh", "-c", "npm install && npm start"]
+
+# Environment
+[env]
+NODE_ENV = "production"
+PORT = "3000"
+
+# Packager
+[packager]
+language = "nodejs"
+ignoredPackages = ["*.md"]
+
+# Unit test
+[unitTest]
+language = "nodejs"
+
+# LSP
+[lsp]
+language = "nodejs"
+

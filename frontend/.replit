@@ -1,0 +1,39 @@
+# Replit configuration for Frontend
+
+# Language
+language = "nodejs"
+
+# Run command - Use dev server for Replit (faster, less memory)
+# For production build, use: npm run build && npm run serve
+run = "npm run dev"
+
+# Entry point
+entrypoint = "index.html"
+
+# Enable Nix
+[nix]
+channel = "stable-22_11"
+
+# Deploy command - Build and serve production bundle
+[deploy]
+run = ["sh", "-c", "npm install && NODE_OPTIONS='--max-old-space-size=4096' npm run build && npm run serve"]
+
+# Environment
+[env]
+NODE_ENV = "production"
+PORT = "5173"
+NODE_OPTIONS = "--max-old-space-size=4096"
+
+# Packager
+[packager]
+language = "nodejs"
+ignoredPackages = ["*.md"]
+
+# Unit test
+[unitTest]
+language = "nodejs"
+
+# LSP
+[lsp]
+language = "nodejs"
+
