@@ -171,19 +171,19 @@ Create and manage all school branches. This is a Superadmin-only feature - Admin
 1. Click "Add Branch" button
 2. Fill in the form:
    - **Branch Name**: Name of the branch (required)
-   - **Branch Address**: Physical address (required)
+   - **Email**: Branch email address (required)
+   - **Phone Number**: Contact phone (optional)
+   - **Status**: Active or Inactive (optional, defaults to Active)
+   - **Address**: Physical address (required)
    - **City**: City name (required)
-   - **State/Province**: State or province (required)
+   - **State/Province/Region**: State or province (required)
    - **Postal Code**: ZIP/postal code (required)
    - **Country**: Country name (required)
-   - **Phone Number**: Contact phone (required)
-   - **Email**: Branch email address (required)
-   - **Business Registration Number**: Legal registration number
-   - **Tax ID**: Tax identification number
-   - **Establishment Date**: When branch was established
-   - **Currency**: Currency code (e.g., USD, PHP)
-   - **Locale**: Language/locale setting
-   - **Status**: Active or Inactive (required)
+   - **Locale**: Language/locale setting (optional)
+   - **Business Registration Number**: Legal registration number (optional)
+   - **Tax ID**: Tax identification number (optional)
+   - **Establishment Date**: When branch was established (optional)
+   - **Currency**: Currency code (e.g., USD, PHP) (optional, defaults to PHP)
 3. Click "Save"
 4. Branch is created and available for use
 
@@ -293,21 +293,20 @@ Create, view, and manage announcements system-wide or per branch. Send messages 
 2. Fill in the form:
    - **Title**: Brief, descriptive title (required)
    - **Message Body**: Full announcement content (required)
-   - **Priority**: High, Medium, or Low (required)
-   - **Recipient Groups**: Select who should see this:
+   - **Recipient Groups**: Select who should see this (required, at least one):
      - All
      - Students
      - Teachers
-     - Parents
      - Admin
      - Finance
+   - **Status**: Active, Inactive, or Draft (required)
+   - **Priority**: High, Medium, or Low (required)
    - **Branch Selection**: 
-     - Specific Branch (select from dropdown)
-     - All Branches (system-wide)
-   - **Start Date**: When announcement becomes visible
-   - **End Date**: When announcement expires
-   - **Status**: Active, Inactive, or Draft
-3. Click "Publish" to make it active
+     - Specific Branch (select from dropdown) (required)
+     - Select "All Branches" option for system-wide
+   - **Start Date**: When announcement becomes visible (required)
+   - **End Date**: When announcement expires (required)
+3. Click "Create Announcement" to save it
 
 **Managing Announcements**
 - **Edit**: Click "Edit" to modify
