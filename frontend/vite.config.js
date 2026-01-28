@@ -13,6 +13,7 @@ export default defineConfig({
       '.replit.app',
       '.repl.co',
       'localhost',
+      'cms.little-champion.com',
     ],
   },
   preview: {
