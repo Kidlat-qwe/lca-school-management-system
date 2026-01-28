@@ -1,4 +1,5 @@
 import { query, getClient } from '../config/database.js';
+import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 
 /**
  * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
@@ -76,7 +77,11 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     const student = studentResult.rows[0];
     
     // Calculate issue date (use next generation date as issue date)
-    const issueDate = new Date(installmentInvoice.next_generation_date);
+    // Use local-noon parsing to avoid timezone shifting (PH time can become previous day in UTC).
+    const issueDate =
+      typeof installmentInvoice.next_generation_date === 'string'
+        ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
+        : new Date(installmentInvoice.next_generation_date);
     
     // Calculate due date (7 days after issue date, or use profile's bill_invoice_due_date logic)
     const dueDate = new Date(issueDate);
@@ -93,8 +98,8 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         installmentInvoice.total_amount_including_tax || profile.amount,
         'Unpaid',
         `Auto-generated from installment invoice: ${profile.description || 'Installment payment'}`,
-        issueDate.toISOString().split('T')[0],
-        dueDate.toISOString().split('T')[0],
+        formatYmdLocal(issueDate),
+        formatYmdLocal(dueDate),
         null, // System-generated
         installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile for phase tracking
       ]
@@ -206,7 +211,7 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
          SET status = 'Generated', scheduled_date = $1
          WHERE installmentinvoicedtl_id = $2`,
         [
-          new Date().toISOString().split('T')[0],
+          formatYmdLocal(new Date()),
           installmentInvoice.installmentinvoicedtl_id,
         ]
       );
@@ -217,9 +222,9 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
          SET status = NULL, next_generation_date = $1, next_invoice_month = $2, scheduled_date = $3
          WHERE installmentinvoicedtl_id = $4`,
         [
-          nextGenDate.toISOString().split('T')[0],
-          nextInvoiceMonth.toISOString().split('T')[0],
-          new Date().toISOString().split('T')[0], // Update scheduled_date to today (when it was generated)
+          formatYmdLocal(nextGenDate),
+          formatYmdLocal(nextInvoiceMonth),
+          formatYmdLocal(new Date()), // Update scheduled_date to today (when it was generated)
           installmentInvoice.installmentinvoicedtl_id,
         ]
       );
@@ -238,8 +243,8 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       invoice_description: `INV-${newInvoice.invoice_id}`,
       student_name: student.full_name,
       amount: installmentInvoice.total_amount_including_tax || profile.amount,
-      next_generation_date: isLastInvoice ? null : nextGenDate.toISOString().split('T')[0],
-      next_invoice_month: isLastInvoice ? null : nextInvoiceMonth.toISOString().split('T')[0],
+      next_generation_date: isLastInvoice ? null : formatYmdLocal(nextGenDate),
+      next_invoice_month: isLastInvoice ? null : formatYmdLocal(nextInvoiceMonth),
       generated_count: updatedProfile.rows[0]?.generated_count || newCount,
       total_phases: updatedProfile.rows[0]?.total_phases || totalPhases,
       phase_limit_reached: isLastInvoice,
@@ -271,7 +276,8 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
 export const processDueInstallmentInvoices = async () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split('T')[0];
+  // Use local date formatting so “today” matches business timezone.
+  const todayStr = formatYmdLocal(today);
   
   try {
     // Find all active installment invoices where next_generation_date <= today

@@ -15,6 +15,7 @@
 import dotenv from 'dotenv';
 import pkg from 'pg';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
+import { getNationalHolidaySetForYears } from '../utils/holidayService.js';
 
 // Load environment variables
 dotenv.config();
@@ -142,6 +143,10 @@ async function generateSessionsForAllClasses() {
           enabled: true
         }));
 
+        const startYear = Number(String(classData.start_date).slice(0, 4));
+        const years = Number.isInteger(startYear) ? [startYear, startYear + 1, startYear + 2, startYear + 3] : [];
+        const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(years);
+
         // Generate sessions using utility function
         const sessions = generateClassSessions(
           {
@@ -153,7 +158,9 @@ async function generateSessionsForAllClasses() {
           phaseSessionsResult.rows,
           classData.number_of_phase,
           classData.number_of_session_per_phase,
-          null // No created_by for migration script
+          null, // No created_by for migration script
+          null, // No session duration here
+          holidayDateSet
         );
 
         console.log(`   🔢 Generated ${sessions.length} session(s)`);

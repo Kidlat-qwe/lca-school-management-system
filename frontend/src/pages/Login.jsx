@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const Login = () => {
@@ -186,18 +186,7 @@ const Login = () => {
             </div>
           </form>
 
-          {/* Sign Up Link */}
-          <div className="mt-4 text-center">
-            <p className="text-xs sm:text-sm text-gray-600">
-              Don't have an account?{' '}
-              <Link
-                to="/signup"
-                className="font-medium text-primary-600 hover:text-primary-500 transition-colors"
-              >
-                Create account
-              </Link>
-            </p>
-          </div>
+          {/* Sign Up Link intentionally hidden */}
         </div>
 
         {/* Footer */}

@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import * as XLSX from 'xlsx';
 
 const AdminPaymentLogs = () => {
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [exportLoading, setExportLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -150,6 +152,83 @@ const AdminPaymentLogs = () => {
     return matchesSearch && matchesStatus && matchesPaymentMethod;
   });
 
+  const handleExportToExcel = async () => {
+    try {
+      setExportLoading(true);
+      
+      // Fetch all payments for admin's branch (paginate: backend limit max 100)
+      const limit = 100;
+      const allPayments = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await apiRequest(`/payments?limit=${limit}&page=${page}`);
+        const data = res.data || [];
+        allPayments.push(...data);
+        const total = res.pagination?.total ?? 0;
+        hasMore = allPayments.length < total;
+        page += 1;
+      }
+
+      if (allPayments.length === 0) {
+        alert('No payment records found to export.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Prepare data for Excel
+      const excelData = allPayments.map(payment => ({
+        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+        'Invoice Description': payment.invoice_description || '-',
+        'Student Name': payment.student_name || 'N/A',
+        'Student Email': payment.student_email || '-',
+        'Payment Method': payment.payment_method || '-',
+        'Payment Type': payment.payment_type || '-',
+        'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
+        'Status': payment.status || 'N/A',
+        'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'Reference Number': payment.reference_number || '-',
+        'Remarks': payment.remarks || '-',
+      }));
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(excelData);
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 12 },  // Invoice ID
+        { wch: 30 },  // Invoice Description
+        { wch: 25 },  // Student Name
+        { wch: 30 },  // Student Email
+        { wch: 18 },  // Payment Method
+        { wch: 18 },  // Payment Type
+        { wch: 15 },  // Amount
+        { wch: 12 },  // Status
+        { wch: 15 },  // Issue Date
+        { wch: 20 },  // Reference Number
+        { wch: 30 },  // Remarks
+      ];
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'Payment Logs');
+
+      // Generate filename with branch name
+      const branchName = selectedBranchName.replace(/[^a-zA-Z0-9]/g, '_');
+      const date = new Date().toISOString().split('T')[0];
+      const filename = `Payment_Logs_${branchName}_${date}.xlsx`;
+
+      // Save file
+      XLSX.writeFile(wb, filename);
+
+      setExportLoading(false);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export payment logs. Please try again.');
+      setExportLoading(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -167,6 +246,25 @@ const AdminPaymentLogs = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
           <p className="text-sm text-gray-500 mt-1">View and manage all payment records</p>
         </div>
+        <button
+          onClick={handleExportToExcel}
+          disabled={exportLoading}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+        >
+          {exportLoading ? (
+            <>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              Exporting...
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Export to Excel
+            </>
+          )}
+        </button>
       </div>
 
       {/* Error Message */}

@@ -333,6 +333,10 @@ router.get(
           cs.enrolled_at,
           cs.enrolled_by,
           cs.phase_number,
+          COALESCE(cs.enrollment_status, 'Active') as enrollment_status,
+          cs.removed_at,
+          cs.removed_reason,
+          cs.removed_by,
           u.user_id,
           u.full_name,
           u.email,
@@ -341,7 +345,8 @@ router.get(
           u.gender,
           u.level_tag,
           u.profile_picture_url,
-          'enrolled' as student_type
+          'enrolled' as student_type,
+          CASE WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' THEN true ELSE false END as shouldCount
          FROM classstudentstbl cs
          INNER JOIN userstbl u ON cs.student_id = u.user_id
          WHERE cs.class_id = $1`,

@@ -5,6 +5,7 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { sendInvoiceEmail } from '../utils/emailService.js';
 import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
+import { formatYmdLocal } from '../utils/dateUtils.js';
 
 const router = express.Router();
 
@@ -534,14 +535,14 @@ router.post(
                  RETURNING *`,
                 [
                   invoice.installmentinvoiceprofiles_id,
-                  profile.bill_invoice_due_date || nextInvoiceDueDate.toISOString().split('T')[0],
+                  profile.bill_invoice_due_date || formatYmdLocal(nextInvoiceDueDate),
                   'Pending', // Will be updated to 'Generated' after invoice is created
                   studentName,
                   profile.amount, // Installment amount (monthly amount)
                   profile.amount, // Assuming no tax for now
                   profile.frequency || '1 month(s)',
-                  firstGenerationDate.toISOString().split('T')[0],
-                  nextInvoiceDueDate.toISOString().split('T')[0],
+                  formatYmdLocal(firstGenerationDate),
+                  formatYmdLocal(nextInvoiceDueDate),
                 ]
               );
               
@@ -1194,14 +1195,14 @@ router.put(
                      RETURNING *`,
                     [
                       invoice.installmentinvoiceprofiles_id,
-                      profile.bill_invoice_due_date || nextInvoiceDueDate.toISOString().split('T')[0],
+                      profile.bill_invoice_due_date || formatYmdLocal(nextInvoiceDueDate),
                       'Pending', // Will be updated to 'Generated' after invoice is created
                       studentName,
                       profile.amount, // Installment amount (monthly amount)
                       profile.amount, // Assuming no tax for now
                       profile.frequency || '1 month(s)',
-                      firstGenerationDate.toISOString().split('T')[0],
-                      nextInvoiceDueDate.toISOString().split('T')[0],
+                      formatYmdLocal(firstGenerationDate),
+                      formatYmdLocal(nextInvoiceDueDate),
                     ]
                   );
                   

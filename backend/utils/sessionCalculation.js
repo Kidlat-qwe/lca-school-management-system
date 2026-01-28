@@ -158,7 +158,12 @@ const calculateEndTime = (startTime, durationHours) => {
 };
 
 /**
- * Generate all session records for a class
+ * Generate all session records for a class.
+ *
+ * Holiday support:
+ * - Pass `holidayDateSet` as a Set of YYYY-MM-DD strings. If a computed session date is in the set,
+ *   that day is skipped and the schedule extends automatically.
+ *
  * @param {Object} classData - Class data with class_id, teacher_id, start_date, etc.
  * @param {Array} daysOfWeek - Array of day objects from roomschedtbl
  * @param {Array} phaseSessions - Array of phase sessions from phasesessionstbl
@@ -166,9 +171,10 @@ const calculateEndTime = (startTime, durationHours) => {
  * @param {number} number_of_session_per_phase - Number of sessions per phase
  * @param {number} createdBy - User ID who is creating the sessions
  * @param {number|Object} sessionDurationPerDay - Optional fixed duration in hours for all sessions, or legacy object format for backward compatibility
+ * @param {Set<string>} holidayDateSet - Optional set of YYYY-MM-DD holiday dates to skip
  * @returns {Array} - Array of session objects ready for database insertion
  */
-const generateClassSessions = (classData, daysOfWeek, phaseSessions, number_of_phase, number_of_session_per_phase, createdBy, sessionDurationPerDay = null) => {
+const generateClassSessions = (classData, daysOfWeek, phaseSessions, number_of_phase, number_of_session_per_phase, createdBy, sessionDurationPerDay = null, holidayDateSet = null) => {
   if (!classData.start_date || !daysOfWeek || daysOfWeek.length === 0) {
     return [];
   }
@@ -240,58 +246,96 @@ const generateClassSessions = (classData, daysOfWeek, phaseSessions, number_of_p
     });
   }
 
-  // Generate sessions for each phase
-  for (let phase = 1; phase <= number_of_phase; phase++) {
-    for (let session = 1; session <= number_of_session_per_phase; session++) {
-      // Calculate the session date
-      const scheduledDate = calculateSessionDate(
-        classData.start_date,
-        daysOfWeek,
-        phase,
-        session,
-        number_of_session_per_phase
-      );
+  const enabledDayNames = Object.keys(dayMap);
+  if (enabledDayNames.length === 0) {
+    return [];
+  }
 
-      if (!scheduledDate) {
-        continue; // Skip if date calculation fails
-      }
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const enabledDayNumbers = new Set(
+    enabledDayNames.map((dayName) => dayNames.indexOf(dayName)).filter((n) => n >= 0)
+  );
 
-      // Find the day of week for this session date
-      const sessionDateObj = new Date(scheduledDate + 'T12:00:00');
-      const dayOfWeekIndex = sessionDateObj.getDay();
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const dayOfWeekName = dayNames[dayOfWeekIndex];
+  const isHoliday = (ymd) => {
+    if (!holidayDateSet || !(holidayDateSet instanceof Set)) return false;
+    return holidayDateSet.has(ymd);
+  };
 
-      // Get time from day map
+  const parseYmdToLocalDate = (ymd) => {
+    if (!ymd || typeof ymd !== 'string') return null;
+    const [y, m, d] = ymd.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    // Use noon to avoid DST issues
+    return new Date(y, m - 1, d, 12, 0, 0, 0);
+  };
+
+  const formatLocalDateToYmd = (dateObj) => {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const startDate = parseYmdToLocalDate(
+    classData.start_date instanceof Date
+      ? `${classData.start_date.getFullYear()}-${String(classData.start_date.getMonth() + 1).padStart(2, '0')}-${String(classData.start_date.getDate()).padStart(2, '0')}`
+      : String(classData.start_date)
+  );
+
+  if (!startDate) {
+    return [];
+  }
+
+  const totalSessions = Number(number_of_phase) * Number(number_of_session_per_phase);
+  if (!Number.isFinite(totalSessions) || totalSessions <= 0) {
+    return [];
+  }
+
+  let currentDate = new Date(startDate);
+  let sessionsCompleted = 0;
+
+  // Iterate day-by-day and assign sessions in order, skipping holidays.
+  while (sessionsCompleted < totalSessions) {
+    const dow = currentDate.getDay();
+    const ymd = formatLocalDateToYmd(currentDate);
+
+    if (enabledDayNumbers.has(dow) && !isHoliday(ymd)) {
+      const overallSessionNumber = sessionsCompleted + 1; // 1-indexed across whole curriculum
+      const phase = Math.floor((overallSessionNumber - 1) / Number(number_of_session_per_phase)) + 1;
+      const sessionInPhase = ((overallSessionNumber - 1) % Number(number_of_session_per_phase)) + 1;
+
+      const dayOfWeekName = dayNames[dow];
       const daySchedule = dayMap[dayOfWeekName];
-      if (!daySchedule) {
-        continue; // Skip if no schedule for this day
+      if (daySchedule) {
+        const key = `${phase}_${sessionInPhase}`;
+        const phasesessiondetail_id = phaseSessionMap[key] || null;
+
+        sessions.push({
+          class_id: classData.class_id,
+          phasesessiondetail_id,
+          phase_number: phase,
+          phase_session_number: sessionInPhase,
+          scheduled_date: ymd,
+          scheduled_start_time: daySchedule.start_time,
+          scheduled_end_time: daySchedule.end_time,
+          original_teacher_id: classData.teacher_id || null,
+          assigned_teacher_id: classData.teacher_id || null,
+          substitute_teacher_id: null,
+          substitute_reason: null,
+          status: 'Scheduled',
+          actual_date: null,
+          actual_start_time: null,
+          actual_end_time: null,
+          notes: null,
+          created_by: createdBy || null
+        });
+
+        sessionsCompleted++;
       }
-
-      // Find corresponding phase session detail
-      const key = `${phase}_${session}`;
-      const phasesessiondetail_id = phaseSessionMap[key] || null;
-
-      sessions.push({
-        class_id: classData.class_id,
-        phasesessiondetail_id,
-        phase_number: phase,
-        phase_session_number: session,
-        scheduled_date: scheduledDate,
-        scheduled_start_time: daySchedule.start_time,
-        scheduled_end_time: daySchedule.end_time,
-        original_teacher_id: classData.teacher_id || null,
-        assigned_teacher_id: classData.teacher_id || null,
-        substitute_teacher_id: null,
-        substitute_reason: null,
-        status: 'Scheduled',
-        actual_date: null,
-        actual_start_time: null,
-        actual_end_time: null,
-        notes: null,
-        created_by: createdBy || null
-      });
     }
+
+    // Move to next day
+    currentDate.setDate(currentDate.getDate() + 1);
   }
 
   return sessions;

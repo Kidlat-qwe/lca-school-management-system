@@ -882,7 +882,7 @@ router.put(
                       : 'student does not meet eligibility requirements';
                     reasons.push(eligibilityReason);
                   }
-                  if (!meetsMinPayment) reasons.push(`package price ($${originalPackageAmount.toFixed(2)}) is less than minimum payment ($${parseFloat(promo.min_payment_amount).toFixed(2)})`);
+                  if (!meetsMinPayment) reasons.push(`package price (PHP ${originalPackageAmount.toFixed(2)}) is less than minimum payment (PHP ${parseFloat(promo.min_payment_amount).toFixed(2)})`);
                   
                   console.warn(`Promo ${promo_id} could not be applied during upgrade: ${reasons.join(', ')}`);
                 }
@@ -905,12 +905,12 @@ router.put(
             if (promoApplied.promo_type === 'percentage_discount' && promoApplied.discount_percentage) {
               discountDescription += `${promoApplied.discount_percentage}%`;
             } else if (promoApplied.promo_type === 'fixed_discount' && promoApplied.discount_amount) {
-              discountDescription += `$${parseFloat(promoApplied.discount_amount).toFixed(2)}`;
+              discountDescription += `PHP ${parseFloat(promoApplied.discount_amount).toFixed(2)}`;
             } else if (promoApplied.promo_type === 'combined') {
               if (promoApplied.discount_percentage && parseFloat(promoApplied.discount_percentage) > 0) {
                 discountDescription += `${promoApplied.discount_percentage}%`;
               } else if (promoApplied.discount_amount && parseFloat(promoApplied.discount_amount) > 0) {
-                discountDescription += `$${parseFloat(promoApplied.discount_amount).toFixed(2)}`;
+                discountDescription += `PHP ${parseFloat(promoApplied.discount_amount).toFixed(2)}`;
               }
             }
             

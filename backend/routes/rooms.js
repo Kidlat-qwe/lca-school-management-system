@@ -298,7 +298,11 @@ router.get(
           LEFT JOIN classestbl c ON rs.class_id = c.class_id
           LEFT JOIN programstbl p ON c.program_id = p.program_id
           LEFT JOIN userstbl u_single ON c.teacher_id = u_single.user_id
-          WHERE rs.room_id = $1
+          -- IMPORTANT:
+          -- Show schedules for ALL classes that are assigned to this room.
+          -- Some historical data may have roomschedtbl.room_id not matching classestbl.room_id after edits;
+          -- using OR ensures the UI can still show all sections/classes that "use" the selected room.
+          WHERE (rs.room_id = $1 OR c.room_id = $1)
           ORDER BY 
             CASE rs.day_of_week
               WHEN 'Monday' THEN 1

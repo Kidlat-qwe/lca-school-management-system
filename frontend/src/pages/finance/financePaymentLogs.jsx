@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
+import * as XLSX from 'xlsx';
 
 const FinancePaymentLogs = () => {
   const [payments, setPayments] = useState([]);
@@ -13,6 +14,9 @@ const FinancePaymentLogs = () => {
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
   const [branches, setBranches] = useState([]);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [selectedExportBranches, setSelectedExportBranches] = useState([]);
+  const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
     fetchPayments();
@@ -161,6 +165,122 @@ const FinancePaymentLogs = () => {
     return matchesSearch && matchesBranch && matchesStatus && matchesPaymentMethod;
   });
 
+  const handleExportClick = () => {
+    setSelectedExportBranches([]);
+    setShowExportModal(true);
+  };
+
+  const handleExportBranchToggle = (branchId) => {
+    setSelectedExportBranches(prev => {
+      if (prev.includes(branchId)) {
+        return prev.filter(id => id !== branchId);
+      } else {
+        return [...prev, branchId];
+      }
+    });
+  };
+
+  const handleSelectAllBranches = () => {
+    if (selectedExportBranches.length === branches.length) {
+      setSelectedExportBranches([]);
+    } else {
+      setSelectedExportBranches(branches.map(b => b.branch_id));
+    }
+  };
+
+  const handleExportToExcel = async () => {
+    if (selectedExportBranches.length === 0) return;
+    try {
+      setExportLoading(true);
+      
+      const limit = 100;
+      const fetchPage = async (branchId, page = 1) => {
+        const url = `/payments?branch_id=${branchId}&limit=${limit}&page=${page}`;
+        return apiRequest(url);
+      };
+      const fetchAllForBranch = async (branchId) => {
+        const result = [];
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          const res = await fetchPage(branchId, page);
+          const data = res.data || [];
+          result.push(...data);
+          const total = res.pagination?.total ?? 0;
+          hasMore = result.length < total;
+          page += 1;
+        }
+        return result;
+      };
+
+      const promises = selectedExportBranches.map(bid => fetchAllForBranch(bid));
+      const results = await Promise.all(promises);
+      const allPayments = results.flat();
+
+      if (allPayments.length === 0) {
+        alert('No payment records found to export.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Prepare data for Excel
+      const excelData = allPayments.map(payment => ({
+        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+        'Invoice Description': payment.invoice_description || '-',
+        'Student Name': payment.student_name || 'N/A',
+        'Student Email': payment.student_email || '-',
+        'Payment Method': payment.payment_method || '-',
+        'Payment Type': payment.payment_type || '-',
+        'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
+        'Status': payment.status || 'N/A',
+        'Branch': payment.branch_name || 'N/A',
+        'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'Reference Number': payment.reference_number || '-',
+        'Remarks': payment.remarks || '-',
+      }));
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(excelData);
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 12 },  // Invoice ID
+        { wch: 30 },  // Invoice Description
+        { wch: 25 },  // Student Name
+        { wch: 30 },  // Student Email
+        { wch: 18 },  // Payment Method
+        { wch: 18 },  // Payment Type
+        { wch: 15 },  // Amount
+        { wch: 12 },  // Status
+        { wch: 25 },  // Branch
+        { wch: 15 },  // Issue Date
+        { wch: 20 },  // Reference Number
+        { wch: 30 },  // Remarks
+      ];
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'Payment Logs');
+
+      // Generate filename
+      const branchName = selectedExportBranches.length === 1
+        ? branches.find(b => b.branch_id === selectedExportBranches[0])?.branch_name.replace(/[^a-zA-Z0-9]/g, '_') || 'Selected_Branch'
+        : 'Selected_Branches';
+      const date = new Date().toISOString().split('T')[0];
+      const filename = `Payment_Logs_${branchName}_${date}.xlsx`;
+
+      // Save file
+      XLSX.writeFile(wb, filename);
+
+      setShowExportModal(false);
+      setExportLoading(false);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export payment logs. Please try again.');
+      setExportLoading(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -178,6 +298,15 @@ const FinancePaymentLogs = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
           <p className="text-sm text-gray-500 mt-1">View and manage all payment records</p>
         </div>
+        <button
+          onClick={handleExportClick}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Export to Excel
+        </button>
       </div>
 
       {/* Error Message */}
@@ -470,6 +599,111 @@ const FinancePaymentLogs = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold text-gray-900">Export Payment Logs</h2>
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={exportLoading}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Branches to Export</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Select at least one branch to include in the export. The Export button is disabled until you select a branch.
+                </p>
+
+                {/* Select All Button */}
+                <div className="mb-4">
+                  <button
+                    onClick={handleSelectAllBranches}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors text-sm font-medium"
+                    disabled={exportLoading}
+                  >
+                    {selectedExportBranches.length === branches.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+
+                {/* Branch List */}
+                <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-4">
+                  {branches.length === 0 ? (
+                    <p className="text-gray-500 text-center py-4">No branches available</p>
+                  ) : (
+                    branches.map((branch) => (
+                      <label
+                        key={branch.branch_id}
+                        className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedExportBranches.includes(branch.branch_id)}
+                          onChange={() => handleExportBranchToggle(branch.branch_id)}
+                          disabled={exportLoading}
+                          className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                        />
+                        <span className="text-gray-900">{branch.branch_name}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+
+                {/* Export Info */}
+                <div className={`mt-4 p-4 rounded-lg ${selectedExportBranches.length === 0 ? 'bg-amber-50' : 'bg-blue-50'}`}>
+                  <p className={`text-sm ${selectedExportBranches.length === 0 ? 'text-amber-800' : 'text-blue-800'}`}>
+                    <strong>Selected:</strong>{' '}
+                    {selectedExportBranches.length === 0
+                      ? 'No branches selected — select at least one to export'
+                      : selectedExportBranches.length === branches.length
+                      ? 'All Branches'
+                      : `${selectedExportBranches.length} Branch${selectedExportBranches.length !== 1 ? 'es' : ''}`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  disabled={exportLoading}
+                  className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleExportToExcel}
+                  disabled={exportLoading || branches.length === 0 || selectedExportBranches.length === 0}
+                  className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {exportLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Exporting...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Export to Excel
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

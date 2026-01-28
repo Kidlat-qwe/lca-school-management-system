@@ -372,12 +372,16 @@ router.get(
     try {
       const { packageId } = req.params;
 
-      // Get the package's branch_id to filter promos
+      // Get the package's branch_id, package_type, and downpayment_amount to filter promos and inform clients
       const packageResult = await query(
-        'SELECT branch_id FROM packagestbl WHERE package_id = $1',
+        'SELECT branch_id, package_type, downpayment_amount FROM packagestbl WHERE package_id = $1',
         [packageId]
       );
       const packageBranchId = packageResult.rows[0]?.branch_id;
+      const packageType = packageResult.rows[0]?.package_type ?? null;
+      const packageDownpayment = packageResult.rows[0]?.downpayment_amount != null
+        ? parseFloat(packageResult.rows[0].downpayment_amount)
+        : null;
 
       // Build query with branch filtering
       // Show system-wide promos (branch_id IS NULL) OR branch-specific promos matching package branch
@@ -455,6 +459,10 @@ router.get(
       res.json({
         success: true,
         data: promosWithDetails,
+        package_info: {
+          package_type: packageType,
+          downpayment_amount: packageDownpayment,
+        },
       });
     } catch (error) {
       next(error);
@@ -477,13 +485,21 @@ router.get(
     try {
       const { packageId, studentId } = req.params;
 
-      // Get package price and branch_id for filtering
+      // Get package price, branch_id, package_type, and downpayment_amount for filtering and discount calc
       const packageResult = await query(
-        'SELECT package_price, branch_id FROM packagestbl WHERE package_id = $1',
+        'SELECT package_price, branch_id, package_type, downpayment_amount FROM packagestbl WHERE package_id = $1',
         [packageId]
       );
       const packagePrice = packageResult.rows[0]?.package_price || 0;
       const packageBranchId = packageResult.rows[0]?.branch_id;
+      const packageType = packageResult.rows[0]?.package_type ?? null;
+      const packageDownpayment = packageResult.rows[0]?.downpayment_amount != null
+        ? parseFloat(packageResult.rows[0].downpayment_amount)
+        : null;
+      // For Installment packages, promo applies to down payment only; use it for min check and discount base
+      const eligibilityBase = packageType === 'Installment' && packageDownpayment != null && packageDownpayment > 0
+        ? packageDownpayment
+        : packagePrice;
 
       // Check if student is new or existing
       const enrollmentCheck = await query(
@@ -598,8 +614,8 @@ router.get(
           continue;
         }
 
-        // Check min_payment_amount
-        if (promo.min_payment_amount && packagePrice < promo.min_payment_amount) {
+        // Check min_payment_amount (use down payment for Installment packages)
+        if (promo.min_payment_amount && eligibilityBase < promo.min_payment_amount) {
           continue;
         }
 
@@ -673,12 +689,13 @@ router.get(
             [promo.promo_id]
           );
 
-          // Calculate discount amount
+          // Calculate discount amount (use down payment base for Installment packages)
           let discountAmount = 0;
           if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
-            discountAmount = (packagePrice * promo.discount_percentage) / 100;
+            discountAmount = (eligibilityBase * promo.discount_percentage) / 100;
           } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
-            discountAmount = promo.discount_amount;
+            const fixed = parseFloat(promo.discount_amount);
+            discountAmount = eligibilityBase != null ? Math.min(fixed, eligibilityBase) : fixed;
           }
 
           return {
@@ -687,7 +704,7 @@ router.get(
             package_ids: packages.map(p => p.package_id), // For easy filtering
             merchandise: merchandiseResult.rows,
             calculated_discount: discountAmount,
-            final_price: packagePrice - discountAmount,
+            final_price: Math.max(0, eligibilityBase - discountAmount),
           };
         })
       );
@@ -695,6 +712,10 @@ router.get(
       res.json({
         success: true,
         data: promosWithDetails,
+        package_info: {
+          package_type: packageType,
+          downpayment_amount: packageDownpayment,
+        },
       });
     } catch (error) {
       next(error);

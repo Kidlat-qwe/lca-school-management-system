@@ -1224,19 +1224,37 @@ const AdminPromo = () => {
                                     className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                                   />
                                   <div className="flex-1">
-                                    <span className="text-sm font-medium text-gray-900">
-                                      {pkg.package_name}
-                                    </span>
-                                    {pkg.level_tag && (
-                                      <span className="ml-2 text-xs text-gray-500">
-                                        ({pkg.level_tag})
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                      <span className="text-sm font-medium text-gray-900">
+                                        {pkg.package_name}
                                       </span>
-                                    )}
-                                    {pkg.package_price && (
-                                      <span className="ml-2 text-xs text-gray-600">
-                                        - ₱{parseFloat(pkg.package_price).toFixed(2)}
-                                      </span>
-                                    )}
+                                      {pkg.level_tag && (
+                                        <span className="text-xs text-gray-500">
+                                          ({pkg.level_tag})
+                                        </span>
+                                      )}
+                                      {pkg.package_type === 'Installment' && (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                                          Installment
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-gray-600">
+                                      {pkg.package_type === 'Installment' ? (
+                                        <>
+                                          {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
+                                            <span>Down payment: ₱{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
+                                          )}
+                                          {pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
+                                            <span>Monthly: ₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                          )}
+                                        </>
+                                      ) : (
+                                        pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
+                                          <span>₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                        )
+                                      )}
+                                    </div>
                                   </div>
                                 </label>
                               );
@@ -1252,6 +1270,15 @@ const AdminPromo = () => {
                           {formData.package_ids.length} package(s) selected
                         </p>
                       )}
+                      {formData.package_ids.length > 0 &&
+                        formData.package_ids.some((id) => {
+                          const p = packages.find((pkg) => pkg.package_id.toString() === id);
+                          return p && p.package_type === 'Installment';
+                        }) && (
+                          <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            For Installment packages, promo is applied to the <strong>down payment only</strong>.
+                          </p>
+                        )}
                     </div>
 
                     {/* Branch is auto-set to admin's branch - read-only display */}
@@ -1414,12 +1441,25 @@ const AdminPromo = () => {
                             {formErrors.discount_percentage && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.discount_percentage}</p>
                             )}
-                            {formData.promo_type === 'combined' && formData.discount_percentage && formData.package_ids.length > 0 && (
+                            {(formData.promo_type === 'percentage_discount' || formData.promo_type === 'combined') &&
+                              formData.discount_percentage &&
+                              formData.package_ids.length > 0 && (
                               <p className="mt-1 text-xs text-gray-500">
                                 {(() => {
-                                  const firstPackage = packages.find(p => formData.package_ids.includes(p.package_id.toString()));
-                                  return firstPackage?.package_price
-                                    ? `Discount Amount (${firstPackage.package_name}): ₱${((parseFloat(firstPackage.package_price) * parseFloat(formData.discount_percentage)) / 100).toFixed(2)}`
+                                  const firstPackage = packages.find((p) =>
+                                    formData.package_ids.includes(p.package_id.toString())
+                                  );
+                                  const base =
+                                    firstPackage?.package_type === 'Installment' &&
+                                    firstPackage?.downpayment_amount != null
+                                      ? parseFloat(firstPackage.downpayment_amount)
+                                      : firstPackage?.package_price != null
+                                        ? parseFloat(firstPackage.package_price)
+                                        : null;
+                                  const label =
+                                    firstPackage?.package_type === 'Installment' ? 'on down payment' : '';
+                                  return base != null && base > 0
+                                    ? `Discount amount (${firstPackage.package_name}${label ? `, ${label}` : ''}): ₱${((base * parseFloat(formData.discount_percentage)) / 100).toFixed(2)}`
                                     : '';
                                 })()}
                               </p>

@@ -26,6 +26,25 @@ const InstallmentInvoice = () => {
   const [generateFormErrors, setGenerateFormErrors] = useState({});
   const [generating, setGenerating] = useState(false);
 
+  const getFrequencyMonths = (frequency) => {
+    const match = String(frequency || '1 month(s)').match(/(\d+)/);
+    return parseInt(match?.[1] || '1', 10);
+  };
+
+  const parseYmdLocalNoon = (ymd) => {
+    if (!ymd) return null;
+    const [y, m, d] = String(ymd).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d, 12, 0, 0, 0);
+  };
+
+  const formatYmd = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   useEffect(() => {
     fetchInvoices();
   }, []);
@@ -92,58 +111,41 @@ const InstallmentInvoice = () => {
     setSelectedInvoiceForGeneration(invoice);
     
     // Calculate dates based on frequency
-    const frequency = invoice.frequency || '1 month(s)';
-    const months = parseInt(frequency.match(/(\d+)/)?.[1] || '1', 10);
-    
-    // Current dates - use next_generation_date as base
-    const currentGenDate = invoice.next_generation_date 
-      ? new Date(invoice.next_generation_date) 
-      : new Date();
-    
-    // Issue date: same as generation date or today
-    const issueDate = new Date(currentGenDate);
-    
-    // Due date: 7 days after issue date (or use a default)
+    const months = getFrequencyMonths(invoice.frequency);
+
+    // Current invoice defaults (per requirement):
+    // - issue_date: today
+    // - due_date: issue_date + 7 days
+    // - invoice_month: first day of current month
+    // - generation_date: same as issue_date
+    const issueDate = new Date();
+    issueDate.setHours(0, 0, 0, 0);
+
     const dueDate = new Date(issueDate);
     dueDate.setDate(dueDate.getDate() + 7);
-    
-    // Invoice month: first day of the month of issue date
+
     const invoiceMonth = new Date(issueDate);
     invoiceMonth.setDate(1);
-    
-    // Generation date: same as next_generation_date
-    const generationDate = new Date(currentGenDate);
-    
-    // Next dates: add frequency months
-    const nextIssueDate = new Date(issueDate);
-    nextIssueDate.setMonth(nextIssueDate.getMonth() + months);
-    
-    const nextDueDate = new Date(dueDate);
-    nextDueDate.setMonth(nextDueDate.getMonth() + months);
-    
+
+    const generationDate = new Date(issueDate);
+
+    // Next invoice defaults:
+    // - next_issue_date: empty (user must set)
+    // - next_due_date: empty (user must set)
+    // - next_invoice_month: after current month (frequency-based)
+    // - next_generation_date: empty (user must set)
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
     
-    const nextGenerationDate = new Date(generationDate);
-    nextGenerationDate.setMonth(nextGenerationDate.getMonth() + months);
-    
-    // Format dates as YYYY-MM-DD
-    const formatDate = (date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
-    
     setGenerateFormData({
-      issue_date: formatDate(issueDate),
-      due_date: formatDate(dueDate),
-      invoice_month: formatDate(invoiceMonth),
-      generation_date: formatDate(generationDate),
-      next_issue_date: formatDate(nextIssueDate),
-      next_due_date: formatDate(nextDueDate),
-      next_invoice_month: formatDate(nextInvoiceMonth),
-      next_generation_date: formatDate(nextGenerationDate),
+      issue_date: formatYmd(issueDate),
+      due_date: formatYmd(dueDate),
+      invoice_month: formatYmd(invoiceMonth),
+      generation_date: formatYmd(generationDate),
+      next_issue_date: '',
+      next_due_date: '',
+      next_invoice_month: formatYmd(nextInvoiceMonth),
+      next_generation_date: '',
     });
     
     setIsGenerateModalOpen(true);
@@ -620,7 +622,33 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.issue_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, issue_date: e.target.value })}
+                        onChange={(e) => {
+                          const nextIssueYmd = e.target.value;
+                          const issue = parseYmdLocalNoon(nextIssueYmd);
+                          if (!issue) {
+                            setGenerateFormData({ ...generateFormData, issue_date: nextIssueYmd });
+                            return;
+                          }
+
+                          const due = new Date(issue);
+                          due.setDate(due.getDate() + 7);
+
+                          const invoiceMonth = new Date(issue);
+                          invoiceMonth.setDate(1);
+
+                          const months = getFrequencyMonths(selectedInvoiceForGeneration?.frequency);
+                          const nextInvoiceMonth = new Date(invoiceMonth);
+                          nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
+
+                          setGenerateFormData({
+                            ...generateFormData,
+                            issue_date: nextIssueYmd,
+                            due_date: formatYmd(due),
+                            invoice_month: formatYmd(invoiceMonth),
+                            generation_date: formatYmd(issue),
+                            next_invoice_month: formatYmd(nextInvoiceMonth),
+                          });
+                        }}
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.issue_date ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -643,6 +671,7 @@ const InstallmentInvoice = () => {
                           generateFormErrors.due_date ? 'border-red-500' : 'border-gray-300'
                         }`}
                         required
+                        disabled
                       />
                       {generateFormErrors.due_date && (
                         <p className="text-red-500 text-xs mt-1">{generateFormErrors.due_date}</p>
@@ -661,6 +690,7 @@ const InstallmentInvoice = () => {
                           generateFormErrors.invoice_month ? 'border-red-500' : 'border-gray-300'
                         }`}
                         required
+                        disabled
                       />
                       {generateFormErrors.invoice_month && (
                         <p className="text-red-500 text-xs mt-1">{generateFormErrors.invoice_month}</p>
@@ -676,6 +706,7 @@ const InstallmentInvoice = () => {
                         value={generateFormData.generation_date}
                         onChange={(e) => setGenerateFormData({ ...generateFormData, generation_date: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        disabled
                       />
                     </div>
                   </div>

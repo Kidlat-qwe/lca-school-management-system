@@ -31,6 +31,7 @@ import attendanceRoutes from './routes/attendance.js';
 import announcementsRoutes from './routes/announcements.js';
 import suspensionsRoutes from './routes/suspensions.js';
 import uploadRoutes from './routes/upload.js';
+import holidaysRoutes from './routes/holidays.js';
 
 // Import middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -41,6 +42,7 @@ import './config/firebase.js';
 
 // Import scheduled jobs
 import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
+import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
 
 dotenv.config();
 
@@ -153,6 +155,7 @@ app.use(`${API_VERSION}/attendance`, attendanceRoutes);
 app.use(`${API_VERSION}/announcements`, announcementsRoutes);
 app.use(`${API_VERSION}/suspensions`, suspensionsRoutes);
 app.use(`${API_VERSION}/upload`, uploadRoutes);
+app.use(`${API_VERSION}/holidays`, holidaysRoutes);
 
 // 404 handler
 app.use(notFoundHandler);
@@ -171,6 +174,9 @@ app.listen(PORT, HOST, () => {
   // Start scheduled jobs
   startInstallmentInvoiceScheduler();
   console.log(`⏰ Installment invoice scheduler started`);
+
+  startInstallmentDelinquencyScheduler();
+  console.log(`⏰ Installment delinquency scheduler started`);
 });
 
 export default app;

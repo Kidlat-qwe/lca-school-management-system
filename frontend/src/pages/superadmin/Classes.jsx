@@ -25,6 +25,9 @@ const Classes = () => {
   const [rooms, setRooms] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [selectedProgram, setSelectedProgram] = useState(null);
+  const [holidayCacheKey, setHolidayCacheKey] = useState('');
+  const [holidayDateSet, setHolidayDateSet] = useState(new Set());
+  const [loadingHolidays, setLoadingHolidays] = useState(false);
   const [formData, setFormData] = useState({
     branch_id: '',
     room_id: '',
@@ -101,16 +104,18 @@ const Classes = () => {
   // Suspension states
   const [isSuspensionModalOpen, setIsSuspensionModalOpen] = useState(false);
   const [selectedClassForSuspension, setSelectedClassForSuspension] = useState(null);
+  const [suspensionStep, setSuspensionStep] = useState('select-sessions'); // 'select-sessions', 'schedule-makeup'
   const [suspensionFormData, setSuspensionFormData] = useState({
     suspension_name: '',
-    start_date: '',
-    end_date: '',
     reason: 'Typhoon',
-    auto_reschedule: true,
+    description: '',
   });
-  const [suspensionPreview, setSuspensionPreview] = useState(null);
-  const [loadingSuspensionPreview, setLoadingSuspensionPreview] = useState(false);
+  const [availableClassSessions, setAvailableClassSessions] = useState([]); // All scheduled sessions for the class
+  const [selectedSessionsToSuspend, setSelectedSessionsToSuspend] = useState([]); // Array of session objects to suspend
+  const [makeupSchedules, setMakeupSchedules] = useState([]); // Array of {suspended_session_id, makeup_date, makeup_start_time, makeup_end_time}
   const [creatingSuspension, setCreatingSuspension] = useState(false);
+  const [suspensionRoomSchedules, setSuspensionRoomSchedules] = useState([]); // Room schedules for suspension modal
+  const [loadingSuspensionRoomSchedules, setLoadingSuspensionRoomSchedules] = useState(false);
   const [selectedPricingLists, setSelectedPricingLists] = useState([]);
   const [selectedMerchandise, setSelectedMerchandise] = useState([]); // Array of {merchandise_id, size}
   const [packageMerchSelections, setPackageMerchSelections] = useState({});
@@ -446,22 +451,25 @@ const initializePackageMerchSelections = useCallback(
 
       if (response.success && response.data) {
         const promo = response.data;
-        const packagePrice = parseFloat(selectedPackage?.package_price || 0);
+        // For Installment packages, apply promo to downpayment; otherwise use package_price
+        const baseAmount = selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+          ? parseFloat(selectedPackage.downpayment_amount)
+          : parseFloat(selectedPackage?.package_price || 0);
         let discountAmount = 0;
         
         if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
-          discountAmount = (packagePrice * promo.discount_percentage) / 100;
+          discountAmount = (baseAmount * promo.discount_percentage) / 100;
         } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
-          discountAmount = parseFloat(promo.discount_amount);
+          discountAmount = Math.min(parseFloat(promo.discount_amount), baseAmount);
         } else if (promo.promo_type === 'combined') {
           if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
-            discountAmount = (packagePrice * promo.discount_percentage) / 100;
+            discountAmount = (baseAmount * promo.discount_percentage) / 100;
           } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
-            discountAmount = parseFloat(promo.discount_amount);
+            discountAmount = Math.min(parseFloat(promo.discount_amount), baseAmount);
           }
         }
         
-        const finalPrice = packagePrice - discountAmount;
+        const finalPrice = Math.max(0, baseAmount - discountAmount);
         
         const validatedPromo = {
           ...promo,
@@ -1526,7 +1534,13 @@ const initializePackageMerchSelections = useCallback(
   // Helper function to get count of students that should be counted (from enrolledStudents array)
   const getCountableStudents = (students) => {
     return students.filter(student => {
-      if (student.student_type === 'enrolled') return true;
+      if (student.student_type === 'enrolled') {
+        // Exclude delinquent/removed students from capacity counts
+        // Backend provides either `shouldCount` (boolean) or `enrollment_status`
+        if (student.shouldCount === false) return false;
+        if (student.enrollment_status && student.enrollment_status !== 'Active') return false;
+        return true;
+      }
       if (student.student_type === 'reserved') {
         // Only count reserved students that should be counted (not expired/unpaid past due)
         return student.shouldCount !== false; // Default to true if not set
@@ -2954,6 +2968,7 @@ const initializePackageMerchSelections = useCallback(
     const today = new Date();
     const currentYear = today.getFullYear();
     const currentMonth = today.getMonth(); // 0-11 (0 = January)
+    const currentDay = today.getDate();
     
     // Calculate next month
     // If current month is December (11), next month is January of next year
@@ -2973,16 +2988,18 @@ const initializePackageMerchSelections = useCallback(
       return `${year}-${monthStr}-${dayStr}`;
     };
     
-    // Invoice Issue Date: First day of next month (e.g., December 1st if current month is November)
-    const invoiceIssueDateStr = formatDateLocal(nextMonthYear, nextMonthMonth, 1);
+    // Invoice Issue Date: Always today
+    const invoiceIssueDateStr = formatDateLocal(currentYear, currentMonth, currentDay);
     
-    // Invoice Due Date: First week of next month (7th day of the month)
-    const invoiceDueDateStr = formatDateLocal(nextMonthYear, nextMonthMonth, 7);
+    // Invoice Due Date: A week from today (7 days from today)
+    const dueDate = new Date(today);
+    dueDate.setDate(dueDate.getDate() + 7);
+    const invoiceDueDateStr = formatDateLocal(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
     
-    // Billing Month: Next month in YYYY-MM format
+    // Billing Month: Always next month in YYYY-MM format
     const billingMonth = formatDateLocal(nextMonthYear, nextMonthMonth, 1).substring(0, 7); // Get YYYY-MM part
     
-    // Invoice Generation Date: First day of billing month (same as invoice issue date)
+    // Invoice Generation Date: Every 1st of the billing month
     const invoiceGenerationDateStr = formatDateLocal(nextMonthYear, nextMonthMonth, 1);
     
     return {
@@ -3950,6 +3967,8 @@ const initializePackageMerchSelections = useCallback(
       return '';
     }
 
+    const holidaySet = holidayDateSet instanceof Set ? holidayDateSet : new Set();
+
     // Get enabled days
     const enabledDays = Object.entries(daysOfWeek)
       .filter(([_, data]) => data.enabled)
@@ -3975,8 +3994,22 @@ const initializePackageMerchSelections = useCallback(
     // Calculate total sessions needed
     const totalSessions = numberOfPhases * numberOfSessionsPerPhase;
 
-    // Start from the start date
-    const start = new Date(startDate);
+    const parseYmdLocalNoon = (ymd) => {
+      if (!ymd) return null;
+      const [y, m, d] = String(ymd).split('-').map(Number);
+      if (!y || !m || !d) return null;
+      return new Date(y, m - 1, d, 12, 0, 0, 0);
+    };
+
+    const formatYmdLocal = (dateObj) => {
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+
+    // Start from the start date (local-noon to avoid timezone shifting)
+    const start = parseYmdLocalNoon(startDate) || new Date(startDate);
     // Create a new date object to avoid mutating the original
     let currentDate = new Date(start);
     let sessionsCompleted = 0;
@@ -3984,10 +4017,14 @@ const initializePackageMerchSelections = useCallback(
     // Iterate day by day until we've completed all sessions
     while (sessionsCompleted < totalSessions) {
       const currentDayOfWeek = currentDate.getDay();
+      const currentYmd = formatYmdLocal(currentDate);
       
       // Check if today is one of the enabled days
       if (enabledDayNumbers.includes(currentDayOfWeek)) {
-        sessionsCompleted++;
+        // Skip national holidays
+        if (!holidaySet.has(currentYmd)) {
+          sessionsCompleted++;
+        }
         
         // If we've completed all sessions, this is the end date
         if (sessionsCompleted >= totalSessions) {
@@ -4005,6 +4042,79 @@ const initializePackageMerchSelections = useCallback(
     const day = String(currentDate.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
+
+  const loadNationalHolidaysForStartDate = useCallback(async (startDateStr) => {
+    if (!startDateStr || typeof startDateStr !== 'string' || startDateStr.length < 4) {
+      setHolidayCacheKey('');
+      setHolidayDateSet(new Set());
+      return;
+    }
+
+    const startYear = Number(startDateStr.slice(0, 4));
+    if (!Number.isInteger(startYear)) {
+      setHolidayCacheKey('');
+      setHolidayDateSet(new Set());
+      return;
+    }
+
+    const endYear = startYear + 3;
+    const rangeStart = `${startYear}-01-01`;
+    const rangeEnd = `${endYear}-12-31`;
+    const key = `${rangeStart}:${rangeEnd}`;
+
+    // Avoid refetching the same range repeatedly
+    if (holidayCacheKey === key) return;
+
+    setHolidayCacheKey(key);
+    setLoadingHolidays(true);
+    try {
+      const response = await apiRequest(`/holidays/national?start_date=${rangeStart}&end_date=${rangeEnd}`);
+      const dates = (response?.data || []).map((h) => h?.date).filter(Boolean);
+      setHolidayDateSet(new Set(dates));
+    } catch (e) {
+      console.error('Error loading national holidays:', e);
+      setHolidayDateSet(new Set());
+    } finally {
+      setLoadingHolidays(false);
+    }
+  }, [holidayCacheKey]);
+
+  // Load national holidays whenever start_date changes (used for end date calculation and scheduling UX)
+  useEffect(() => {
+    if (!formData.start_date) {
+      setHolidayCacheKey('');
+      setHolidayDateSet(new Set());
+      return;
+    }
+    loadNationalHolidaysForStartDate(formData.start_date);
+  }, [formData.start_date, loadNationalHolidaysForStartDate]);
+
+  // Recalculate end_date after holidays load (or change), as long as manual override is off.
+  useEffect(() => {
+    if (manualEndDateAdjustment.enabled) return;
+    if (!formData.start_date) return;
+    if (!selectedProgram?.number_of_phase || !selectedProgram?.number_of_session_per_phase) return;
+    if (!formData.days_of_week) return;
+
+    const calculated = calculateEndDate(
+      formData.start_date,
+      formData.days_of_week,
+      selectedProgram.number_of_phase,
+      selectedProgram.number_of_session_per_phase
+    );
+
+    if (calculated && calculated !== formData.end_date) {
+      setFormData((prev) => ({ ...prev, end_date: calculated }));
+    }
+  }, [
+    manualEndDateAdjustment.enabled,
+    formData.start_date,
+    formData.days_of_week,
+    formData.end_date,
+    selectedProgram,
+    holidayCacheKey,
+    holidayDateSet,
+  ]);
 
   // Calculate end time from start time and duration
   const calculateEndTimeFromDuration = (startTime, durationHours) => {
@@ -4663,114 +4773,281 @@ const initializePackageMerchSelections = useCallback(
     }));
   };
 
-  const handlePreviewSuspension = () => {
-    if (!selectedClassForSuspension || !suspensionFormData.start_date || !suspensionFormData.end_date) {
-      alert('Please fill in all required fields');
-      return;
-    }
-
-    setLoadingSuspensionPreview(true);
+  // Fetch all scheduled sessions for the selected class
+  const fetchClassSessionsForSuspension = async (classId, phaseNumber = null) => {
+    setLoadingClassSessions(true);
     try {
-      // Filter existing classSessions by date range and status
-      const startDate = new Date(suspensionFormData.start_date);
-      const endDate = new Date(suspensionFormData.end_date);
+      // Fetch sessions directly from API for the specific class
+      const sessionsResponse = await apiRequest(`/classes/${classId}/sessions`);
       
-      // Set time to start/end of day for proper comparison
-      startDate.setHours(0, 0, 0, 0);
-      endDate.setHours(23, 59, 59, 999);
+      if (sessionsResponse.success && sessionsResponse.data) {
+        // Filter only scheduled sessions that belong to this specific class
+        let sessions = sessionsResponse.data.filter(
+          session => session.status === 'Scheduled' && 
+                     session.classsession_id && 
+                     session.class_id === classId
+        );
+        
+        // If phaseNumber is provided, filter to only that phase
+        if (phaseNumber !== null) {
+          sessions = sessions.filter(session => session.phase_number === parseInt(phaseNumber));
+        }
+        
+        // Group sessions by phase for easier selection
+        const sessionsByPhase = sessions.reduce((acc, session) => {
+          const phase = session.phase_number || 1;
+          if (!acc[phase]) {
+            acc[phase] = [];
+          }
+          acc[phase].push(session);
+          return acc;
+        }, {});
 
-      const affectedSessions = classSessions.filter(session => {
-        if (session.status !== 'Scheduled') return false;
-        
-        if (!session.scheduled_date) return false;
-        
-        const sessionDate = new Date(session.scheduled_date);
-        sessionDate.setHours(0, 0, 0, 0);
-        
-        return sessionDate >= startDate && sessionDate <= endDate;
-      });
-
-      setSuspensionPreview(affectedSessions);
+        setAvailableClassSessions(sessionsByPhase);
+      } else {
+        setAvailableClassSessions({});
+      }
     } catch (error) {
-      console.error('Error filtering suspension preview:', error);
-      alert('Failed to load preview. Please try again.');
+      console.error('Error fetching class sessions:', error);
+      alert('Failed to load class sessions');
+      setAvailableClassSessions({});
     } finally {
-      setLoadingSuspensionPreview(false);
+      setLoadingClassSessions(false);
     }
   };
 
+  // Handle session selection/deselection
+  const handleSessionToggle = (session) => {
+    setSelectedSessionsToSuspend(prev => {
+      const isSelected = prev.some(s => s.classsession_id === session.classsession_id);
+      if (isSelected) {
+        return prev.filter(s => s.classsession_id !== session.classsession_id);
+      } else {
+        return [...prev, session];
+      }
+    });
+  };
+
+  // Validate that all selected sessions are from the same phase
+  const validateSamePhase = () => {
+    if (selectedSessionsToSuspend.length === 0) return true;
+    const firstPhase = selectedSessionsToSuspend[0].phase_number;
+    return selectedSessionsToSuspend.every(s => s.phase_number === firstPhase);
+  };
+
+  // Fetch room schedules for suspension modal
+  const fetchSuspensionRoomSchedules = async (roomId, excludeClassId = null) => {
+    if (!roomId) {
+      setSuspensionRoomSchedules([]);
+      return;
+    }
+
+    try {
+      setLoadingSuspensionRoomSchedules(true);
+      const response = await apiRequest(`/rooms/${roomId}/schedules`);
+      if (response.success && response.data) {
+        // Filter to only show schedules that have a class_id (assigned to a class)
+        // IMPORTANT: Do NOT exclude the current class. The UI should show ALL schedules for this room
+        // so users can choose makeup times without confusion.
+        const activeSchedules = response.data.filter(schedule => {
+          // Only show schedules that have a class_id (assigned to a class)
+          if (!schedule.class_id) return false;
+          return true;
+        });
+        setSuspensionRoomSchedules(activeSchedules);
+      } else {
+        setSuspensionRoomSchedules([]);
+      }
+    } catch (err) {
+      console.error('Error fetching room schedules for suspension:', err);
+      setSuspensionRoomSchedules([]);
+    } finally {
+      setLoadingSuspensionRoomSchedules(false);
+    }
+  };
+
+  // Move to makeup scheduling step
+  const handleNextToMakeupScheduling = async () => {
+    if (selectedSessionsToSuspend.length === 0) {
+      alert('Please select at least one session to suspend');
+      return;
+    }
+
+    if (!suspensionFormData.suspension_name || !suspensionFormData.reason) {
+      alert('Please fill in suspension name and reason');
+      return;
+    }
+
+    if (!validateSamePhase()) {
+      alert('All selected sessions must be from the same phase');
+      return;
+    }
+
+    // Initialize makeup schedules for each suspended session
+    const initialMakeupSchedules = selectedSessionsToSuspend.map(session => ({
+      suspended_session_id: session.classsession_id,
+      suspended_session: session,
+      makeup_date: '',
+      makeup_start_time: session.scheduled_start_time || '',
+      makeup_end_time: session.scheduled_end_time || '',
+    }));
+
+    setMakeupSchedules(initialMakeupSchedules);
+    
+    // Fetch room schedules if class has a room
+    if (selectedClassForSuspension && selectedClassForSuspension.room_id) {
+      await fetchSuspensionRoomSchedules(
+        selectedClassForSuspension.room_id.toString()
+      );
+    } else {
+      setSuspensionRoomSchedules([]);
+    }
+    
+    setSuspensionStep('schedule-makeup');
+  };
+
+  // Calculate end time based on start time and original session duration
+  const calculateEndTime = (startTime, originalStartTime, originalEndTime) => {
+    if (!startTime || !originalStartTime || !originalEndTime) return '';
+    
+    // Parse times
+    const [startH, startM] = startTime.split(':').map(Number);
+    const [origStartH, origStartM] = originalStartTime.split(':').map(Number);
+    const [origEndH, origEndM] = originalEndTime.split(':').map(Number);
+    
+    // Calculate duration in minutes
+    const origStartMinutes = origStartH * 60 + origStartM;
+    const origEndMinutes = origEndH * 60 + origEndM;
+    const durationMinutes = origEndMinutes - origStartMinutes;
+    
+    // Calculate new end time
+    const newStartMinutes = startH * 60 + startM;
+    const newEndMinutes = newStartMinutes + durationMinutes;
+    
+    // Handle day overflow (if end time goes past midnight)
+    const endH = Math.floor(newEndMinutes / 60) % 24;
+    const endM = newEndMinutes % 60;
+    
+    return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+  };
+
+  // Update makeup schedule for a specific suspended session
+  const handleMakeupScheduleChange = (suspendedSessionId, field, value) => {
+    setMakeupSchedules(prev =>
+      prev.map(schedule => {
+        if (schedule.suspended_session_id === suspendedSessionId) {
+          const updated = { ...schedule, [field]: value };
+          
+          // Auto-calculate end time when start time changes
+          if (field === 'makeup_start_time' && value) {
+            updated.makeup_end_time = calculateEndTime(
+              value,
+              schedule.suspended_session.scheduled_start_time,
+              schedule.suspended_session.scheduled_end_time
+            );
+          }
+          
+          return updated;
+        }
+        return schedule;
+      })
+    );
+  };
+
+  // Validate makeup schedules are within phase date range
+  const validateMakeupSchedules = () => {
+    if (makeupSchedules.length === 0) return false;
+
+    // Check all makeup dates are filled
+    const allFilled = makeupSchedules.every(
+      schedule => schedule.makeup_date && schedule.makeup_start_time && schedule.makeup_end_time
+    );
+
+    if (!allFilled) {
+      alert('Please fill in all makeup schedules');
+      return false;
+    }
+
+    // Get phase date range from selected sessions
+    const phaseNumber = selectedSessionsToSuspend[0].phase_number;
+    const phaseSessions = classSessions.filter(s => s.phase_number === phaseNumber);
+    
+    if (phaseSessions.length === 0) return true;
+
+    const phaseDates = phaseSessions.map(s => new Date(s.scheduled_date));
+    const phaseStartDate = new Date(Math.min(...phaseDates));
+    const phaseEndDate = new Date(Math.max(...phaseDates));
+
+    // Validate each makeup date is within phase range
+    for (const schedule of makeupSchedules) {
+      const makeupDate = new Date(schedule.makeup_date);
+      if (makeupDate < phaseStartDate || makeupDate > phaseEndDate) {
+        alert(`Makeup dates must be within the phase date range (${phaseStartDate.toLocaleDateString()} - ${phaseEndDate.toLocaleDateString()})`);
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  // Create suspension with manual makeup schedules
   const handleCreateSuspension = async () => {
     if (!selectedClassForSuspension) {
       alert('No class selected');
       return;
     }
 
-    if (!suspensionFormData.suspension_name || !suspensionFormData.start_date || !suspensionFormData.end_date) {
-      alert('Please fill in all required fields');
+    if (!validateMakeupSchedules()) {
       return;
     }
 
-    // Compute affected sessions count (even if preview was not clicked)
-    let affectedCount = 0;
-    try {
-      const startDate = new Date(suspensionFormData.start_date);
-      const endDate = new Date(suspensionFormData.end_date);
-      startDate.setHours(0, 0, 0, 0);
-      endDate.setHours(23, 59, 59, 999);
-
-      const affectedSessionsForConfirm = classSessions.filter((session) => {
-        if (session.status !== 'Scheduled') return false;
-        if (!session.scheduled_date) return false;
-        const sessionDate = new Date(session.scheduled_date);
-        sessionDate.setHours(0, 0, 0, 0);
-        return sessionDate >= startDate && sessionDate <= endDate;
-      });
-
-      affectedCount = affectedSessionsForConfirm.length;
-    } catch (error) {
-      console.error('Error calculating affected sessions for confirmation:', error);
-      affectedCount = suspensionPreview?.length || 0;
-    }
-
     const confirmed = window.confirm(
-      `Are you sure you want to suspend "${selectedClassForSuspension.class_name}"?\n\n` +
-      `This will cancel ${affectedCount} scheduled session(s)` +
-      (suspensionFormData.auto_reschedule ? ' and automatically extend the class end date.' : '.')
+      `Are you sure you want to suspend ${selectedSessionsToSuspend.length} session(s) and create makeup schedules?\n\n` +
+      `Suspended sessions will be cancelled and makeup sessions will be created at your specified dates.`
     );
 
     if (!confirmed) return;
 
     setCreatingSuspension(true);
     try {
+      const payload = {
+        suspension_name: suspensionFormData.suspension_name,
+        reason: suspensionFormData.reason,
+        description: suspensionFormData.description || '',
+        branch_id: selectedClassForSuspension.branch_id,
+        affected_class_ids: [selectedClassForSuspension.class_id],
+        selected_session_ids: selectedSessionsToSuspend.map(s => s.classsession_id),
+        makeup_schedules: makeupSchedules.map(schedule => ({
+          suspended_session_id: schedule.suspended_session_id,
+          makeup_date: schedule.makeup_date,
+          makeup_start_time: schedule.makeup_start_time,
+          makeup_end_time: schedule.makeup_end_time,
+        })),
+      };
+
       await apiRequest('/suspensions', {
         method: 'POST',
-        body: {
-          suspension_name: suspensionFormData.suspension_name,
-          branch_id: selectedClassForSuspension.branch_id,
-          start_date: suspensionFormData.start_date,
-          end_date: suspensionFormData.end_date,
-          reason: suspensionFormData.reason,
-          affected_class_ids: [selectedClassForSuspension.class_id],
-          auto_reschedule: suspensionFormData.auto_reschedule,
-        },
+        body: payload,
       });
 
-      alert('Suspension created successfully!');
+      alert('Suspension created successfully with makeup schedules!');
+      
+      // Reset modal state
       setIsSuspensionModalOpen(false);
       setSelectedClassForSuspension(null);
+      setSuspensionStep('select-sessions');
       setSuspensionFormData({
         suspension_name: '',
-        start_date: '',
-        end_date: '',
         reason: 'Typhoon',
-        auto_reschedule: true,
+        description: '',
       });
-      setSuspensionPreview(null);
+      setAvailableClassSessions([]);
+      setSelectedSessionsToSuspend([]);
+      setMakeupSchedules([]);
+      setSuspensionRoomSchedules([]);
 
-      // Refresh class list
+      // Refresh class data
       fetchClasses();
-      
-      // If in detail view, refresh the selected class details and sessions
       if (viewMode === 'detail' && selectedClassForDetails) {
         await handleViewClass(selectedClassForDetails);
       }
@@ -5003,7 +5280,51 @@ const initializePackageMerchSelections = useCallback(
                     };
                   });
 
-                const mergedSessions = [...sessions, ...extraSessions].sort((a, b) => a.phase_session_number - b.phase_session_number);
+                // IMPORTANT:
+                // Sort by actual scheduled date/time so make-up (Rescheduled) sessions appear
+                // in chronological order (e.g., a Jan 29 make-up appears before a Jan 30 session),
+                // regardless of phase_session_number.
+                const classSessionsByKey = new Map();
+                phaseClassSessions.forEach(cs => {
+                  classSessionsByKey.set(`${cs.phase_number}-${cs.phase_session_number}`, cs);
+                });
+
+                const getSessionSortMeta = (session) => {
+                  const key = `${session.phase_number}-${session.phase_session_number}`;
+                  const cs = classSessionsByKey.get(key);
+
+                  const date =
+                    cs?.scheduled_date ||
+                    (selectedClassForDetails.start_date && sessionsPerPhase
+                      ? calculateSessionDate(
+                          selectedClassForDetails.start_date,
+                          daysOfWeek,
+                          session.phase_number,
+                          session.phase_session_number,
+                          sessionsPerPhase
+                        )
+                      : null);
+
+                  const startTime = cs?.scheduled_start_time || '';
+                  return { date, startTime };
+                };
+
+                const mergedSessions = [...sessions, ...extraSessions].sort((a, b) => {
+                  const aMeta = getSessionSortMeta(a);
+                  const bMeta = getSessionSortMeta(b);
+
+                  if (aMeta.date && bMeta.date && aMeta.date !== bMeta.date) {
+                    return aMeta.date.localeCompare(bMeta.date);
+                  }
+                  if (aMeta.date && !bMeta.date) return -1;
+                  if (!aMeta.date && bMeta.date) return 1;
+
+                  if (aMeta.startTime && bMeta.startTime && aMeta.startTime !== bMeta.startTime) {
+                    return aMeta.startTime.localeCompare(bMeta.startTime);
+                  }
+
+                  return a.phase_session_number - b.phase_session_number;
+                });
                 const activeSessionsOrdered = [...phaseClassSessions].sort((a, b) => {
                   if (a.scheduled_date && b.scheduled_date && a.scheduled_date !== b.scheduled_date) {
                     return new Date(a.scheduled_date) - new Date(b.scheduled_date);
@@ -5450,27 +5771,19 @@ const initializePackageMerchSelections = useCallback(
                       setOpenSessionMenuId(null);
                       if (selectedClassForDetails) {
                         setSelectedClassForSuspension(selectedClassForDetails);
-                        
-                        // Format session date as YYYY-MM-DD for date input
-                        let formattedDate = '';
-                        if (sessionDate) {
-                          const date = new Date(sessionDate);
-                          if (!isNaN(date.getTime())) {
-                            const year = date.getFullYear();
-                            const month = String(date.getMonth() + 1).padStart(2, '0');
-                            const day = String(date.getDate()).padStart(2, '0');
-                            formattedDate = `${year}-${month}-${day}`;
-                          }
-                        }
-                        
+                        setSuspensionStep('select-sessions');
                         setSuspensionFormData({
                           suspension_name: '',
-                          start_date: formattedDate,
-                          end_date: formattedDate, // Pre-fill both with the same date
                           reason: 'Typhoon',
-                          auto_reschedule: true,
+                          description: '',
                         });
-                        setSuspensionPreview(null);
+                        setAvailableClassSessions([]);
+                        setSelectedSessionsToSuspend([]);
+                        setMakeupSchedules([]);
+                        
+                        // Fetch class sessions for suspension - only from the clicked session's phase
+                        fetchClassSessionsForSuspension(selectedClassForDetails.class_id, phaseNum);
+                        
                         setIsSuspensionModalOpen(true);
                       }
                     }}
@@ -6401,14 +6714,16 @@ const initializePackageMerchSelections = useCallback(
         document.body
       )}
 
-      {/* Suspension Modal - Only in Detail View */}
+      {/* Suspension Modal - Two-Step Process */}
       {isSuspensionModalOpen && selectedClassForSuspension && createPortal(
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Create Suspension Period</h2>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {suspensionStep === 'select-sessions' ? 'Select Sessions to Suspend' : 'Schedule Makeup Sessions'}
+                </h2>
                 <p className="text-sm text-gray-600 mt-1">
                   Class: {selectedClassForSuspension.class_name} ({selectedClassForSuspension.level_tag})
                 </p>
@@ -6417,7 +6732,11 @@ const initializePackageMerchSelections = useCallback(
                 onClick={() => {
                   setIsSuspensionModalOpen(false);
                   setSelectedClassForSuspension(null);
-                  setSuspensionPreview(null);
+                  setSuspensionStep('select-sessions');
+                  setAvailableClassSessions([]);
+                  setSelectedSessionsToSuspend([]);
+                  setMakeupSchedules([]);
+                  setSuspensionRoomSchedules([]);
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
@@ -6428,147 +6747,334 @@ const initializePackageMerchSelections = useCallback(
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
-              {/* Suspension Description */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Suspension Description <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={suspensionFormData.suspension_name}
-                  onChange={(e) => handleSuspensionFormChange('suspension_name', e.target.value)}
-                  placeholder="e.g., Typhoon Odette - December 2021"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                />
-              </div>
-
-              {/* Date Range */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Start Date <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={suspensionFormData.start_date}
-                    onChange={(e) => handleSuspensionFormChange('start_date', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    End Date <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={suspensionFormData.end_date}
-                    onChange={(e) => handleSuspensionFormChange('end_date', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                </div>
-              </div>
-
-              {/* Reason */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Reason <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={suspensionFormData.reason}
-                  onChange={(e) => handleSuspensionFormChange('reason', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                >
-                  <option value="Typhoon">Typhoon</option>
-                  <option value="Earthquake">Earthquake</option>
-                  <option value="Flood">Flood</option>
-                  <option value="Holiday">Holiday</option>
-                  <option value="Government Mandate">Government Mandate</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              {/* Auto-reschedule Option */}
-              <div className="flex items-start">
-                <input
-                  type="checkbox"
-                  id="auto-reschedule"
-                  checked={suspensionFormData.auto_reschedule}
-                  onChange={(e) => handleSuspensionFormChange('auto_reschedule', e.target.checked)}
-                  className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                />
-                <label htmlFor="auto-reschedule" className="ml-2 block text-sm text-gray-900">
-                  <span className="font-medium">Automatically reschedule sessions</span>
-                  <span className="block text-xs text-gray-500 mt-0.5">
-                    This will extend the class end date to accommodate cancelled sessions
-                  </span>
-                </label>
-              </div>
-
-              {/* Preview Button */}
-              <button
-                onClick={handlePreviewSuspension}
-                disabled={!suspensionFormData.start_date || !suspensionFormData.end_date || loadingSuspensionPreview}
-                className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {loadingSuspensionPreview ? 'Loading Preview...' : 'Preview Affected Sessions'}
-              </button>
-
-              {/* Preview Results */}
-              {suspensionPreview && (
-                <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                  <h4 className="text-sm font-semibold text-amber-900 mb-2">
-                    Affected Sessions: {suspensionPreview.length}
-                  </h4>
-                  {suspensionPreview.length === 0 ? (
-                    <p className="text-sm text-amber-700">No scheduled sessions found in this date range.</p>
-                  ) : (
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {suspensionPreview.map((session, idx) => (
-                        <div key={idx} className="text-xs text-amber-800 bg-white p-2 rounded border border-amber-100">
-                          <div className="font-medium">
-                            Phase {session.phase_number}, Session {session.phase_session_number}
-                          </div>
-                          <div className="text-amber-600">
-                            {new Date(session.scheduled_date).toLocaleDateString()} at {session.scheduled_start_time}
-                          </div>
-                        </div>
-                      ))}
+            <div
+              className={`flex-1 min-h-0 p-6 ${
+                suspensionStep === 'schedule-makeup'
+                  ? 'overflow-hidden flex'
+                  : 'overflow-hidden flex flex-col space-y-4'
+              }`}
+            >
+              {/* Step 1: Select Sessions */}
+              {suspensionStep === 'select-sessions' && (
+                <>
+                  {/* Suspension Details */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Suspension Description <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={suspensionFormData.suspension_name}
+                        onChange={(e) => handleSuspensionFormChange('suspension_name', e.target.value)}
+                        placeholder="e.g., Typhoon Odette"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      />
                     </div>
-                  )}
-                  {suspensionFormData.auto_reschedule && suspensionPreview.length > 0 && (
-                    <p className="text-xs text-amber-700 mt-2">
-                      ℹ️ The class end date will be extended by approximately {suspensionPreview.length} day(s) to reschedule these sessions.
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Reason <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={suspensionFormData.reason}
+                        onChange={(e) => handleSuspensionFormChange('reason', e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      >
+                        <option value="Typhoon">Typhoon</option>
+                        <option value="Earthquake">Earthquake</option>
+                        <option value="Flood">Flood</option>
+                        <option value="Holiday">Holiday</option>
+                        <option value="Government Mandate">Government Mandate</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Select Sessions by Phase */}
+                  <div className="mt-6 flex-1 min-h-0 flex flex-col">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-3">
+                      Select Sessions to Suspend ({selectedSessionsToSuspend.length} selected)
+                    </h4>
+                    <p className="text-xs text-amber-600 mb-3">
+                      ⚠️ All selected sessions must be from the same phase
                     </p>
-                  )}
-                </div>
+
+                    {loadingClassSessions ? (
+                      <div className="text-center py-8">
+                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+                        <p className="text-sm text-gray-600 mt-2">Loading sessions...</p>
+                      </div>
+                    ) : Object.keys(availableClassSessions).length === 0 ? (
+                      <p className="text-sm text-gray-500 text-center py-8">No scheduled sessions available</p>
+                    ) : (
+                      <div className="space-y-4 flex-1 min-h-0 overflow-y-auto">
+                        {Object.keys(availableClassSessions).sort((a, b) => parseInt(a) - parseInt(b)).map(phaseNumber => (
+                          <div key={phaseNumber} className="border border-gray-200 rounded-lg p-4">
+                            <h5 className="font-semibold text-gray-900 mb-3">Phase {phaseNumber}</h5>
+                            <div className="space-y-2">
+                              {availableClassSessions[phaseNumber].map(session => (
+                                <label
+                                  key={session.classsession_id}
+                                  className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedSessionsToSuspend.some(s => s.classsession_id === session.classsession_id)}
+                                    onChange={() => handleSessionToggle(session)}
+                                    className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
+                                  />
+                                  <div className="ml-3 flex-1">
+                                    <div className="text-sm font-medium text-gray-900">
+                                      Session {session.phase_session_number}
+                                    </div>
+                                    <div className="text-xs text-gray-600">
+                                      {new Date(session.scheduled_date).toLocaleDateString('en-US', {
+                                        weekday: 'short',
+                                        year: 'numeric',
+                                        month: 'short',
+                                        day: 'numeric'
+                                      })} • {session.scheduled_start_time} - {session.scheduled_end_time}
+                                    </div>
+                                  </div>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Step 2: Schedule Makeup */}
+              {suspensionStep === 'schedule-makeup' && (
+                <>
+                  {/* Left Column: Makeup Scheduling */}
+                  <div className="flex-1 pr-4 overflow-y-auto">
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+                      <h4 className="text-sm font-semibold text-amber-900 mb-2">
+                        Suspended Sessions: {selectedSessionsToSuspend.length}
+                      </h4>
+                      <p className="text-xs text-amber-700">
+                        Please schedule makeup sessions for each suspended session. Makeup dates must be within the same phase.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {makeupSchedules.map((schedule, index) => {
+                        // Get the phase number from the suspended session
+                        const phaseNumber = schedule.suspended_session.phase_number;
+                        return (
+                          <div key={schedule.suspended_session_id} className="border border-gray-200 rounded-lg p-4">
+                            <div className="flex items-start justify-between mb-3">
+                              <div>
+                                <h5 className="font-semibold text-gray-900">
+                                  Phase {schedule.suspended_session.phase_number}, Session {schedule.suspended_session.phase_session_number}
+                                </h5>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  Original: {new Date(schedule.suspended_session.scheduled_date).toLocaleDateString()} • {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}
+                                </p>
+                              </div>
+                              <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded">
+                                Suspended
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">
+                                  Makeup Date <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                  type="date"
+                                  value={schedule.makeup_date}
+                                  onChange={(e) => handleMakeupScheduleChange(schedule.suspended_session_id, 'makeup_date', e.target.value)}
+                                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                                    Start Time <span className="text-red-500">*</span>
+                                  </label>
+                                  <input
+                                    type="time"
+                                    value={schedule.makeup_start_time}
+                                    onChange={(e) => handleMakeupScheduleChange(schedule.suspended_session_id, 'makeup_start_time', e.target.value)}
+                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                                    End Time <span className="text-red-500">*</span>
+                                  </label>
+                                  <input
+                                    type="time"
+                                    value={schedule.makeup_end_time}
+                                    disabled
+                                    readOnly
+                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Right Column: Existing Schedule */}
+                  <div className="w-80 border-l border-gray-200 pl-4 overflow-y-auto">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-blue-900">
+                          📅 Existing Schedules
+                        </h4>
+                        <p className="text-xs text-blue-700 mt-0.5">
+                          {selectedClassForSuspension?.room_id ? 
+                            (rooms.find(r => r.room_id === selectedClassForSuspension.room_id)?.room_name || 'Selected Room') :
+                            'No room assigned'
+                          }
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {loadingSuspensionRoomSchedules ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="flex items-center space-x-2 text-blue-600">
+                          <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          <span className="text-sm">Loading...</span>
+                        </div>
+                      </div>
+                    ) : suspensionRoomSchedules.length > 0 ? (
+                      <div className="space-y-2">
+                        {/* Group schedules by day of week */}
+                        {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => {
+                          const daySchedules = suspensionRoomSchedules.filter(s => s.day_of_week === day);
+                          
+                          if (daySchedules.length === 0) {
+                            return (
+                              <div key={day} className="border border-gray-200 rounded-lg p-2 bg-gray-50">
+                                <div className="text-xs font-semibold text-gray-500 uppercase">
+                                  {day.substring(0, 3)}
+                                </div>
+                                <div className="text-xs text-gray-400 italic mt-1">No schedule</div>
+                              </div>
+                            );
+                          }
+                          
+                          return (
+                            <div key={day} className="border border-blue-200 rounded-lg bg-blue-50">
+                              <div className="w-full flex items-center justify-between p-2">
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-xs font-semibold text-blue-900 uppercase">
+                                    {day.substring(0, 3)}
+                                  </span>
+                                  <span className="text-[10px] text-blue-600 bg-blue-200 px-1.5 py-0.5 rounded-full">
+                                    {daySchedules.length}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div className="p-2 space-y-1.5">
+                                {daySchedules.map((schedule, idx) => {
+                                  const startTime = schedule.start_time ? schedule.start_time.substring(0, 5) : '--:--';
+                                  const endTime = schedule.end_time ? schedule.end_time.substring(0, 5) : '--:--';
+                                  const className = schedule.class_name 
+                                    ? `${schedule.program_name || ''} - ${schedule.class_name}`.trim()
+                                    : schedule.level_tag 
+                                      ? `${schedule.program_name || ''} - ${schedule.level_tag}`.trim()
+                                      : schedule.program_name || `Class ${schedule.class_id}`;
+                                  
+                                  return (
+                                    <div key={idx} className="bg-white rounded border border-blue-100 p-1.5 hover:bg-blue-50 transition-colors">
+                                      <div className="flex items-center justify-between mb-0.5">
+                                        <span className="text-[10px] font-medium text-blue-700">
+                                          {startTime} - {endTime}
+                                        </span>
+                                        {selectedClassForSuspension?.class_id &&
+                                          schedule.class_id === selectedClassForSuspension.class_id && (
+                                            <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                                              This class
+                                            </span>
+                                          )}
+                                      </div>
+                                      <p className="text-[11px] text-blue-900 truncate font-medium" title={className}>
+                                        {className}
+                                      </p>
+                                      {schedule.teacher_names && (
+                                        <p className="text-[10px] text-blue-600 truncate mt-0.5" title={schedule.teacher_names}>
+                                          {schedule.teacher_names}
+                                        </p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center py-8">
+                        <p className="text-sm text-gray-500 italic text-center">
+                          {selectedClassForSuspension?.room_id 
+                            ? 'No existing schedules found for this room.'
+                            : 'No room assigned to this class.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200">
+            <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 flex-shrink-0">
+              {suspensionStep === 'schedule-makeup' && (
+                <button
+                  onClick={() => setSuspensionStep('select-sessions')}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  Back
+                </button>
+              )}
               <button
                 onClick={() => {
                   setIsSuspensionModalOpen(false);
                   setSelectedClassForSuspension(null);
-                  setSuspensionPreview(null);
+                  setSuspensionStep('select-sessions');
+                  setAvailableClassSessions([]);
+                  setSelectedSessionsToSuspend([]);
+                  setMakeupSchedules([]);
+                  setSuspensionRoomSchedules([]);
                 }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
               >
                 Cancel
               </button>
-              <button
-                onClick={handleCreateSuspension}
-                disabled={
-                  !suspensionFormData.suspension_name ||
-                  !suspensionFormData.start_date ||
-                  !suspensionFormData.end_date ||
-                  creatingSuspension
-                }
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {creatingSuspension ? 'Creating...' : 'Create Suspension'}
-              </button>
+              {suspensionStep === 'select-sessions' ? (
+                <button
+                  onClick={handleNextToMakeupScheduling}
+                  disabled={selectedSessionsToSuspend.length === 0}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                </button>
+              ) : (
+                <button
+                  onClick={handleCreateSuspension}
+                  disabled={creatingSuspension}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {creatingSuspension ? 'Creating...' : 'Create Suspension'}
+                </button>
+              )}
             </div>
           </div>
         </div>,
@@ -8355,6 +8861,11 @@ const initializePackageMerchSelections = useCallback(
                           {enrolledStudents.map((student) => {
                             const isReserved = student.student_type === 'reserved';
                             const isPending = student.student_type === 'pending';
+                            const isRemovedEnrollment =
+                              !isReserved &&
+                              !isPending &&
+                              (student.shouldCount === false ||
+                                (student.enrollment_status && student.enrollment_status !== 'Active'));
                             const uniqueKey = isReserved 
                               ? `reserved-${student.reservation_id}` 
                               : `enrolled-${student.classstudent_id || student.user_id}`;
@@ -8401,9 +8912,19 @@ const initializePackageMerchSelections = useCallback(
                                   : '-');
 
                             return (
-                              <tr key={uniqueKey} className={isReserved ? 'bg-yellow-50' : ''}>
+                              <tr
+                                key={uniqueKey}
+                                className={`${isReserved ? 'bg-yellow-50' : ''} ${isRemovedEnrollment ? 'bg-red-50' : ''}`}
+                              >
                                 <td className="px-4 py-4">
-                                  <div className="text-sm font-medium text-gray-900">{student.full_name}</div>
+                                  <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                                    <span>{student.full_name}</span>
+                                    {isRemovedEnrollment && (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-800">
+                                        Removed (Delinquent)
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-4">
                                   <div className="text-sm text-gray-500">{student.email}</div>
@@ -8450,7 +8971,11 @@ const initializePackageMerchSelections = useCallback(
                                   <div className="text-sm text-gray-900">{reservationFee}</div>
                                 </td>
                                 <td className="px-4 py-4 whitespace-nowrap">
-                                  {reservationStatus ? (
+                                  {isRemovedEnrollment ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                      Removed
+                                    </span>
+                                  ) : reservationStatus ? (
                                     <span
                                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                         reservationStatus === 'Fee Paid'
@@ -8472,7 +8997,9 @@ const initializePackageMerchSelections = useCallback(
                                   <div className="text-sm text-gray-500">{dueDate}</div>
                                 </td>
                                 <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
-                                  {isReserved && reservationStatus === 'Fee Paid' ? (
+                                  {isRemovedEnrollment ? (
+                                    <span className="text-sm text-gray-400">-</span>
+                                  ) : isReserved && reservationStatus === 'Fee Paid' ? (
                                     <button
                                       onClick={() => {
                                         const reservation = enrollReservedStudents.find(
@@ -8923,13 +9450,34 @@ const initializePackageMerchSelections = useCallback(
                               <p className="text-base font-semibold text-gray-900 mt-0.5">
                                   {selectedPackage.package_name}
                                 </p>
-                            {selectedPackage.package_price && (
+                            {selectedPackage.package_type === 'Installment' ? (
+                              <div className="flex flex-col gap-1 mt-1">
+                                {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
+                                  <div className="flex items-baseline space-x-2">
+                                    <span className="text-base font-bold text-gray-900">
+                                      ₱{parseFloat(selectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="text-xs text-gray-600 font-medium">Down payment</span>
+                                  </div>
+                                )}
+                                {selectedPackage.package_price && (
+                                  <div className="flex items-baseline space-x-2">
+                                    <span className="text-base font-bold text-gray-900">
+                                      ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="text-xs text-gray-600 font-medium">Monthly</span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              selectedPackage.package_price && (
                                 <div className="flex items-baseline space-x-2 mt-1">
                                   <span className="text-xl font-bold text-gray-900">
-                                  ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
+                                    ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
                                   <span className="text-xs text-gray-600 font-medium">Package Price</span>
-                              </div>
+                                </div>
+                              )
                             )}
                           </div>
                           </div>
@@ -9098,12 +9646,17 @@ const initializePackageMerchSelections = useCallback(
                                         <div className="mt-2 pt-2 border-t border-gray-200">
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-xs text-gray-500 line-through">
-                                              ₱{parseFloat(selectedPackage?.package_price || 0).toFixed(2)}
+                                              ₱{(selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                                ? parseFloat(selectedPackage.downpayment_amount)
+                                                : parseFloat(selectedPackage?.package_price || 0)
+                                              ).toFixed(2)}
                                             </span>
                                             <span className="text-lg font-bold text-green-600">
                                               ₱{validatedPromoFromCode.final_price.toFixed(2)}
                                             </span>
-                                            <span className="text-xs text-gray-600">Final Price</span>
+                                            <span className="text-xs text-gray-600">
+                                              {selectedPackage?.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
+                                            </span>
                                           </div>
                                         </div>
                                       )}
@@ -9114,14 +9667,17 @@ const initializePackageMerchSelections = useCallback(
 
                               {/* Show auto-apply promos */}
                               {availablePromos.map((promo) => {
-                                const packagePrice = parseFloat(selectedPackage.package_price || 0);
+                                // For Installment packages, apply promo to downpayment; otherwise use package_price
+                                const baseAmount = selectedPackage.package_type === 'Installment' && selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                  ? parseFloat(selectedPackage.downpayment_amount)
+                                  : parseFloat(selectedPackage.package_price || 0);
                                 let discountAmount = 0;
                                 if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
-                                  discountAmount = (packagePrice * promo.discount_percentage) / 100;
+                                  discountAmount = (baseAmount * promo.discount_percentage) / 100;
                                 } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
-                                  discountAmount = parseFloat(promo.discount_amount);
+                                  discountAmount = Math.min(parseFloat(promo.discount_amount), baseAmount);
                                 }
-                                const finalPrice = packagePrice - discountAmount;
+                                const finalPrice = Math.max(0, baseAmount - discountAmount);
                                 
                                 return (
                                   <button
@@ -9168,12 +9724,14 @@ const initializePackageMerchSelections = useCallback(
                                           <div className="mt-2 pt-2 border-t border-gray-200">
                                             <div className="flex items-baseline space-x-2">
                                               <span className="text-xs text-gray-500 line-through">
-                                                ₱{packagePrice.toFixed(2)}
+                                                ₱{baseAmount.toFixed(2)}
                                               </span>
                                               <span className="text-lg font-bold text-green-600">
                                                 ₱{finalPrice.toFixed(2)}
                                               </span>
-                                              <span className="text-xs text-gray-600">Final Price</span>
+                                              <span className="text-xs text-gray-600">
+                                                {selectedPackage.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
+                                              </span>
                                             </div>
                                           </div>
                                         )}
@@ -10369,10 +10927,25 @@ const initializePackageMerchSelections = useCallback(
                           <p className="text-sm text-gray-700">
                             <strong>Package:</strong> {selectedPackage.package_name}
                           </p>
-                          {selectedPackage.package_price && (
-                            <p className="text-sm text-gray-700">
-                              <strong>Package Price:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
-                            </p>
+                          {selectedPackage.package_type === 'Installment' ? (
+                            <>
+                              {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
+                                <p className="text-sm text-gray-700">
+                                  <strong>Down payment:</strong> ₱{parseFloat(selectedPackage.downpayment_amount).toFixed(2)}
+                                </p>
+                              )}
+                              {selectedPackage.package_price && (
+                                <p className="text-sm text-gray-700">
+                                  <strong>Monthly:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            selectedPackage.package_price && (
+                              <p className="text-sm text-gray-700">
+                                <strong>Package Price:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
+                              </p>
+                            )
                           )}
                           {selectedPromo && (
                             <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
@@ -12798,13 +13371,34 @@ const initializePackageMerchSelections = useCallback(
                             <p className="text-base font-semibold text-gray-900 mt-0.5">
                               {upgradeSelectedPackage.package_name}
                             </p>
-                            {upgradeSelectedPackage.package_price && (
-                              <div className="flex items-baseline space-x-2 mt-1">
-                                <span className="text-xl font-bold text-gray-900">
+                            {upgradeSelectedPackage.package_type === 'Installment' ? (
+                              <div className="flex flex-col gap-1 mt-1">
+                                {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
+                                  <div className="flex items-baseline space-x-2">
+                                    <span className="text-base font-bold text-gray-900">
+                                      ₱{parseFloat(upgradeSelectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="text-xs text-gray-600 font-medium">Down payment</span>
+                                  </div>
+                                )}
+                                {upgradeSelectedPackage.package_price && (
+                                  <div className="flex items-baseline space-x-2">
+                                    <span className="text-base font-bold text-gray-900">
                                       ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
-                                <span className="text-xs text-gray-600 font-medium">Package Price</span>
+                                    </span>
+                                    <span className="text-xs text-gray-600 font-medium">Monthly</span>
+                                  </div>
+                                )}
                               </div>
+                            ) : (
+                              upgradeSelectedPackage.package_price && (
+                                <div className="flex items-baseline space-x-2 mt-1">
+                                  <span className="text-xl font-bold text-gray-900">
+                                    ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                  <span className="text-xs text-gray-600 font-medium">Package Price</span>
+                                </div>
+                              )
                             )}
                           </div>
                         </div>
@@ -13389,22 +13983,31 @@ const initializePackageMerchSelections = useCallback(
                       <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                         <h4 className="font-semibold text-gray-900 mb-2">Selected Package</h4>
                         <p className="text-sm text-gray-700">{upgradeSelectedPackage.package_name}</p>
-                        {upgradeSelectedPackage.package_price && (
-                          <div className="mt-2 space-y-1">
-                            <p className="text-sm text-gray-700">
-                              Original Price: <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                            </p>
+                        {upgradeSelectedPackage.package_type === 'Installment' ? (
+                          <div className="mt-2 space-y-2">
+                            {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
+                              <p className="text-sm text-gray-700">
+                                <strong>Down payment:</strong> <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.downpayment_amount).toFixed(2)}</span>
+                              </p>
+                            )}
+                            {upgradeSelectedPackage.package_price && (
+                              <p className="text-sm text-gray-700">
+                                <strong>Monthly:</strong> <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.package_price).toFixed(2)}</span>
+                              </p>
+                            )}
                             {upgradeSelectedPromo && (() => {
-                              const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
+                              const baseAmount = upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0
+                                ? parseFloat(upgradeSelectedPackage.downpayment_amount)
+                                : parseFloat(upgradeSelectedPackage.package_price || 0);
                               let promoDiscount = 0;
                               if (upgradeSelectedPromo.promo_type === 'percentage_discount' && upgradeSelectedPromo.discount_percentage) {
-                                promoDiscount = (packagePrice * upgradeSelectedPromo.discount_percentage) / 100;
+                                promoDiscount = (baseAmount * upgradeSelectedPromo.discount_percentage) / 100;
                               } else if (upgradeSelectedPromo.promo_type === 'fixed_discount' && upgradeSelectedPromo.discount_amount) {
-                                promoDiscount = parseFloat(upgradeSelectedPromo.discount_amount);
+                                promoDiscount = Math.min(parseFloat(upgradeSelectedPromo.discount_amount), baseAmount);
                               }
                               return promoDiscount > 0 ? (
                                 <p className="text-sm text-blue-700">
-                                  Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               ) : null;
                             })()}
@@ -13413,24 +14016,70 @@ const initializePackageMerchSelections = useCallback(
                                 Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                             )}
-                            <div className="pt-2 border-t border-gray-300">
-                              <p className="text-sm font-semibold text-gray-900">
-                                Final Amount: <span className="text-lg">${(() => {
-                                  const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
-                                  let promoDiscount = 0;
-                                  if (upgradeSelectedPromo) {
-                                    if (upgradeSelectedPromo.promo_type === 'percentage_discount' && upgradeSelectedPromo.discount_percentage) {
-                                      promoDiscount = (packagePrice * upgradeSelectedPromo.discount_percentage) / 100;
-                                    } else if (upgradeSelectedPromo.promo_type === 'fixed_discount' && upgradeSelectedPromo.discount_amount) {
-                                      promoDiscount = parseFloat(upgradeSelectedPromo.discount_amount);
+                            {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
+                              <div className="pt-2 border-t border-gray-300">
+                                <p className="text-sm font-semibold text-gray-900">
+                                  Final Down payment Amount: <span className="text-lg">₱{(() => {
+                                    const baseAmount = parseFloat(upgradeSelectedPackage.downpayment_amount);
+                                    let promoDiscount = 0;
+                                    if (upgradeSelectedPromo) {
+                                      if (upgradeSelectedPromo.promo_type === 'percentage_discount' && upgradeSelectedPromo.discount_percentage) {
+                                        promoDiscount = (baseAmount * upgradeSelectedPromo.discount_percentage) / 100;
+                                      } else if (upgradeSelectedPromo.promo_type === 'fixed_discount' && upgradeSelectedPromo.discount_amount) {
+                                        promoDiscount = Math.min(parseFloat(upgradeSelectedPromo.discount_amount), baseAmount);
+                                      }
                                     }
-                                  }
-                                  const finalAmount = Math.max(0, packagePrice - promoDiscount - reservationFeePaid);
-                                  return finalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                                })()}</span>
-                              </p>
-                            </div>
+                                    const finalAmount = Math.max(0, baseAmount - promoDiscount - reservationFeePaid);
+                                    return finalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                  })()}</span>
+                                </p>
+                              </div>
+                            )}
                           </div>
+                        ) : (
+                          upgradeSelectedPackage.package_price && (
+                            <div className="mt-2 space-y-1">
+                              <p className="text-sm text-gray-700">
+                                Original Price: <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </p>
+                              {upgradeSelectedPromo && (() => {
+                                const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
+                                let promoDiscount = 0;
+                                if (upgradeSelectedPromo.promo_type === 'percentage_discount' && upgradeSelectedPromo.discount_percentage) {
+                                  promoDiscount = (packagePrice * upgradeSelectedPromo.discount_percentage) / 100;
+                                } else if (upgradeSelectedPromo.promo_type === 'fixed_discount' && upgradeSelectedPromo.discount_amount) {
+                                  promoDiscount = parseFloat(upgradeSelectedPromo.discount_amount);
+                                }
+                                return promoDiscount > 0 ? (
+                                  <p className="text-sm text-blue-700">
+                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  </p>
+                                ) : null;
+                              })()}
+                              {reservationFeePaid > 0 && (
+                                <p className="text-sm text-green-700">
+                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </p>
+                              )}
+                              <div className="pt-2 border-t border-gray-300">
+                                <p className="text-sm font-semibold text-gray-900">
+                                  Final Amount: <span className="text-lg">₱{(() => {
+                                    const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
+                                    let promoDiscount = 0;
+                                    if (upgradeSelectedPromo) {
+                                      if (upgradeSelectedPromo.promo_type === 'percentage_discount' && upgradeSelectedPromo.discount_percentage) {
+                                        promoDiscount = (packagePrice * upgradeSelectedPromo.discount_percentage) / 100;
+                                      } else if (upgradeSelectedPromo.promo_type === 'fixed_discount' && upgradeSelectedPromo.discount_amount) {
+                                        promoDiscount = parseFloat(upgradeSelectedPromo.discount_amount);
+                                      }
+                                    }
+                                    const finalAmount = Math.max(0, packagePrice - promoDiscount - reservationFeePaid);
+                                    return finalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                  })()}</span>
+                                </p>
+                              </div>
+                            </div>
+                          )
                         )}
                         <p className="text-sm text-gray-700 mt-1">
                           Type: {upgradeSelectedPackage.package_type}

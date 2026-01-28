@@ -155,7 +155,9 @@ const Header = ({ onMenuClick }) => {
 
   return (
     <>
-      <header className="bg-[#F7C844] border-b border-primary-600 h-16 flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 fixed top-0 left-0 right-0 z-50 py-2 shadow-sm">
+      <div className="fixed top-0 left-0 right-0 z-50 bg-[#F7C844]">
+        <div className="h-[env(safe-area-inset-top,0px)]" aria-hidden="true" />
+        <header className="bg-[#F7C844] border-b border-primary-600 min-h-16 flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-2 shadow-sm">
         {/* Logo and Company Name / Branch Name */}
         <div className="flex items-center space-x-2 sm:space-x-3 flex-1 min-w-0">
           <img
@@ -273,7 +275,8 @@ const Header = ({ onMenuClick }) => {
           )}
           </div>
         </div>
-    </header>
+        </header>
+      </div>
 
     {/* Mobile Menu Button - Fixed Bottom Right */}
     {onMenuClick && (

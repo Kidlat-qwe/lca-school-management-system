@@ -5,8 +5,16 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
+import { getNationalHolidaySetForYears } from '../utils/holidayService.js';
 
 const router = express.Router();
+
+const getDefaultHolidayYearsFromStartDate = (startDate) => {
+  if (!startDate) return [];
+  const y = Number(String(startDate).slice(0, 4));
+  if (!Number.isInteger(y)) return [];
+  return [y, y + 1, y + 2, y + 3];
+};
 
 /**
  * Check if a schedule conflicts with existing active class schedules in a room
@@ -295,6 +303,7 @@ router.get(
                  LEFT JOIN (
                    SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
                    FROM classstudentstbl
+                   WHERE COALESCE(enrollment_status, 'Active') = 'Active'
                    GROUP BY class_id
                  ) enrollment_counts ON c.class_id = enrollment_counts.class_id
                  LEFT JOIN (
@@ -524,6 +533,7 @@ router.get(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
+           WHERE COALESCE(enrollment_status, 'Active') = 'Active'
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          LEFT JOIN (
@@ -954,6 +964,9 @@ router.post(
               enabled: day.enabled !== false
             }));
 
+          const holidayYears = getDefaultHolidayYearsFromStartDate(start_date);
+          const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+
           // Generate sessions using utility function
           const sessions = generateClassSessions(
             {
@@ -966,7 +979,8 @@ router.post(
             program.number_of_phase,
             program.number_of_session_per_phase,
             req.user.userId || null,
-            program.session_duration_hours || null
+            program.session_duration_hours || null,
+            holidayDateSet
           );
 
           // Insert sessions into database with generated class codes
@@ -1306,6 +1320,9 @@ router.put(
                   enabled: true
                 }));
 
+                const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
+                const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+
                 // Generate sessions using utility function
                 const sessions = generateClassSessions(
                   {
@@ -1318,7 +1335,8 @@ router.put(
                   classData.number_of_phase,
                   classData.number_of_session_per_phase,
                   req.user.userId || null,
-                  classData.session_duration_hours || null
+                  classData.session_duration_hours || null,
+                  holidayDateSet
                 );
 
                 // Update or insert sessions using UPSERT
@@ -1482,7 +1500,7 @@ router.delete(
 
       // Check for dependencies that prevent deletion
       const enrolledStudents = await client.query(
-        'SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1',
+        "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
         [id]
       );
       const studentCount = parseInt(enrolledStudents.rows[0].count, 10);
@@ -1688,6 +1706,9 @@ router.get(
             enabled: true
           }));
 
+          const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
+          const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+
           // Generate sessions using utility function
           const sessions = generateClassSessions(
             {
@@ -1700,7 +1721,8 @@ router.get(
             classData.number_of_phase,
             classData.number_of_session_per_phase,
             null, // System-generated
-            classData.session_duration_hours || null
+            classData.session_duration_hours || null,
+            holidayDateSet
           );
 
           // Insert sessions into database
@@ -1753,7 +1775,9 @@ router.get(
       const enrollmentCountsResult = await query(
         `SELECT phase_number, COUNT(*) as enrolled_count
          FROM classstudentstbl
-         WHERE class_id = $1 AND phase_number IS NOT NULL
+         WHERE class_id = $1
+           AND phase_number IS NOT NULL
+           AND COALESCE(enrollment_status, 'Active') = 'Active'
          GROUP BY phase_number`,
         [id]
       );
@@ -2226,6 +2250,9 @@ router.post(
         enabled: true
       }));
 
+      const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
+      const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+
       // Generate sessions
       const sessions = generateClassSessions(
         {
@@ -2238,7 +2265,8 @@ router.post(
         classData.number_of_phase,
         classData.number_of_session_per_phase,
         req.user.userId || null,
-        classData.session_duration_hours || null
+        classData.session_duration_hours || null,
+        holidayDateSet
       );
 
       // Insert sessions (skip duplicates)
@@ -2601,6 +2629,9 @@ router.post(
         enabled: true
       }));
 
+      const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
+      const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+
       // Generate sessions
       const sessions = generateClassSessions(
         {
@@ -2613,7 +2644,8 @@ router.post(
         classData.number_of_phase,
         classData.number_of_session_per_phase,
         req.user.userId || null,
-        classData.session_duration_hours || null
+        classData.session_duration_hours || null,
+        holidayDateSet
       );
 
       // Insert sessions (skip duplicates)
@@ -3033,7 +3065,7 @@ router.post(
           // Reservations reserve a spot but don't enroll the student
           if (classData.max_students) {
             const enrolledCount = await client.query(
-              'SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1',
+              "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
               [class_id]
             );
             const reservedCount = await client.query(
@@ -3298,7 +3330,7 @@ router.post(
       // Reserved students count toward max_students but are not enrolled yet
       if (classData.max_students) {
         const enrolledCount = await client.query(
-          'SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1',
+          "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
           [class_id]
         );
         const reservedCount = await client.query(
@@ -3760,9 +3792,12 @@ router.post(
         newInvoice = invoiceResult.rows[0];
       }
 
-      // Handle promo if provided (only for main invoice, not for downpayment invoice)
+      // Handle promo if provided (main invoice) OR on downpayment only (Installment packages)
       let promoDiscount = 0;
       let promoApplied = null;
+      let downpaymentPromoDiscount = 0;
+      let downpaymentPromoApplied = null;
+
       if (promo_id && !skipMainInvoice) {
         try {
           // Fetch promo details with packages from junction table
@@ -3885,12 +3920,12 @@ router.post(
                 if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
                   discountDescription += `${promo.discount_percentage}%`;
                 } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
-                  discountDescription += `$${parseFloat(promo.discount_amount).toFixed(2)}`;
+                  discountDescription += `PHP ${parseFloat(promo.discount_amount).toFixed(2)}`;
                 } else if (promo.promo_type === 'combined') {
                   if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
                     discountDescription += `${promo.discount_percentage}%`;
                   } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
-                    discountDescription += `$${parseFloat(promo.discount_amount).toFixed(2)}`;
+                    discountDescription += `PHP ${parseFloat(promo.discount_amount).toFixed(2)}`;
                   }
                 }
                 discountDescription += ')';
@@ -3938,7 +3973,7 @@ router.post(
                   : 'student does not meet eligibility requirements';
                 reasons.push(eligibilityReason);
               }
-              if (!meetsMinPayment) reasons.push(`package price ($${packagePrice.toFixed(2)}) is less than minimum payment ($${parseFloat(promo.min_payment_amount).toFixed(2)})`);
+              if (!meetsMinPayment) reasons.push(`package price (PHP ${packagePrice.toFixed(2)}) is less than minimum payment (PHP ${parseFloat(promo.min_payment_amount).toFixed(2)})`);
               
               console.warn(`Promo ${promo_id} could not be applied: ${reasons.join(', ')}`);
             }
@@ -3948,6 +3983,187 @@ router.post(
         } catch (promoError) {
           console.error('Error applying promo:', promoError);
           // Don't fail enrollment if promo fails, just log it
+        }
+      }
+
+      // Apply promo to downpayment only when package is Installment (promo applies to downpayment only)
+      if (promo_id && skipMainInvoice && downpaymentInvoice && packageData && packageData.package_type === 'Installment' && downpaymentAmount > 0) {
+        try {
+          const promoResult = await client.query(
+            `SELECT p.*, pkg.package_price, pkg.downpayment_amount
+             FROM promostbl p
+             LEFT JOIN packagestbl pkg ON p.package_id = pkg.package_id
+             WHERE p.promo_id = $1 AND p.status = 'Active'`,
+            [promo_id]
+          );
+
+          if (promoResult.rows.length > 0) {
+            const promo = promoResult.rows[0];
+
+            if (promo.promo_code) {
+              if (!promo_code || promo_code.trim().toUpperCase() !== promo.promo_code.toUpperCase()) {
+                throw new Error('Invalid or missing promo code');
+              }
+            }
+
+            const promoPackagesResult = await client.query(
+              'SELECT package_id FROM promopackagestbl WHERE promo_id = $1',
+              [promo_id]
+            );
+            let promoPackageIds = promoPackagesResult.rows.map(r => r.package_id);
+            if (promoPackageIds.length === 0 && promo.package_id) {
+              promoPackageIds.push(promo.package_id);
+            }
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const startDate = promo.start_date ? new Date(promo.start_date) : null;
+            const endDate = promo.end_date ? new Date(promo.end_date) : null;
+            const isDateValid = (!startDate || startDate <= today) && (!endDate || endDate >= today);
+            const isUsageValid = !promo.max_uses || (promo.current_uses || 0) < promo.max_uses;
+
+            const usageCheck = await client.query(
+              'SELECT promousage_id FROM promousagetbl WHERE promo_id = $1 AND student_id = $2',
+              [promo_id, student_id]
+            );
+            const hasAlreadyUsed = usageCheck.rows.length > 0;
+
+            let isEligible = false;
+            if (!hasAlreadyUsed) {
+              const enrollmentCheck = await client.query(
+                'SELECT COUNT(*) as count FROM classstudentstbl WHERE student_id = $1',
+                [student_id]
+              );
+              const enrollmentCount = parseInt(enrollmentCheck.rows[0]?.count || 0);
+              const isNewStudent = enrollmentCount === 0;
+              const isExistingStudent = enrollmentCount > 0;
+              const referralCheck = await client.query(
+                'SELECT referral_id, status FROM referralstbl WHERE referred_student_id = $1',
+                [student_id]
+              );
+              const hasReferral = referralCheck.rows.length > 0 && referralCheck.rows[0].status === 'Verified';
+
+              switch (promo.eligibility_type) {
+                case 'all':
+                  isEligible = true;
+                  break;
+                case 'new_students_only':
+                  isEligible = isNewStudent;
+                  break;
+                case 'existing_students_only':
+                  isEligible = isExistingStudent;
+                  break;
+                case 'referral_only':
+                  isEligible = hasReferral;
+                  break;
+                default:
+                  isEligible = true;
+              }
+            }
+
+            // For Installment: min_payment and discount base = downpayment amount
+            const meetsMinPayment = !promo.min_payment_amount || downpaymentAmount >= parseFloat(promo.min_payment_amount);
+            const packageMatches = promoPackageIds && promoPackageIds.includes(package_id);
+
+            if (isDateValid && isUsageValid && packageMatches && !hasAlreadyUsed && isEligible && meetsMinPayment) {
+              if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
+                downpaymentPromoDiscount = (downpaymentAmount * parseFloat(promo.discount_percentage)) / 100;
+              } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
+                const fixed = parseFloat(promo.discount_amount);
+                downpaymentPromoDiscount = Math.min(fixed, downpaymentAmount);
+              } else if (promo.promo_type === 'combined') {
+                if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
+                  downpaymentPromoDiscount = (downpaymentAmount * parseFloat(promo.discount_percentage)) / 100;
+                } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
+                  const fixed = parseFloat(promo.discount_amount);
+                  downpaymentPromoDiscount = Math.min(fixed, downpaymentAmount);
+                }
+              }
+
+              const discountedDownpayment = Math.max(0, downpaymentAmount - downpaymentPromoDiscount);
+
+              await client.query(
+                `UPDATE invoicestbl SET amount = $1, promo_id = $2 WHERE invoice_id = $3`,
+                [discountedDownpayment, promo_id, downpaymentInvoice.invoice_id]
+              );
+
+              if (downpaymentPromoDiscount > 0) {
+                let discountDescription = `Promo: ${promo.promo_name} (`;
+                if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
+                  discountDescription += `${promo.discount_percentage}%`;
+                } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
+                  discountDescription += `PHP ${parseFloat(promo.discount_amount).toFixed(2)}`;
+                } else if (promo.promo_type === 'combined') {
+                  if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
+                    discountDescription += `${promo.discount_percentage}%`;
+                  } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
+                    discountDescription += `PHP ${parseFloat(promo.discount_amount).toFixed(2)}`;
+                  }
+                }
+                discountDescription += ' — applied to down payment)';
+
+                await client.query(
+                  `INSERT INTO invoiceitemstbl (invoice_id, description, amount, discount_amount)
+                   VALUES ($1, $2, $3, $4)`,
+                  [downpaymentInvoice.invoice_id, discountDescription, 0, downpaymentPromoDiscount]
+                );
+              }
+
+              const promoMerchResult = await client.query(
+                `SELECT pm.*, m.merchandise_name, m.price
+                 FROM promomerchandisetbl pm
+                 LEFT JOIN merchandisestbl m ON pm.merchandise_id = m.merchandise_id
+                 WHERE pm.promo_id = $1`,
+                [promo_id]
+              );
+              for (const promoMerch of promoMerchResult.rows) {
+                for (let i = 0; i < (promoMerch.quantity || 1); i++) {
+                  await client.query(
+                    `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+                     VALUES ($1, $2, $3)`,
+                    [downpaymentInvoice.invoice_id, `Free: ${promoMerch.merchandise_name} (Promo: ${promo.promo_name})`, 0]
+                  );
+                }
+              }
+
+              downpaymentPromoApplied = promo;
+
+              await client.query(
+                `INSERT INTO promousagetbl (promo_id, student_id, invoice_id, discount_applied)
+                 VALUES ($1, $2, $3, $4)`,
+                [promo_id, student_id, downpaymentInvoice.invoice_id, downpaymentPromoDiscount]
+              );
+              await client.query(
+                `UPDATE promostbl
+                 SET current_uses = COALESCE(current_uses, 0) + 1,
+                     status = CASE
+                       WHEN max_uses IS NOT NULL AND (COALESCE(current_uses, 0) + 1) >= max_uses THEN 'Inactive'
+                       ELSE status
+                     END,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE promo_id = $1`,
+                [promo_id]
+              );
+
+              const promoExpiredCheck = await client.query(
+                `SELECT end_date FROM promostbl WHERE promo_id = $1`,
+                [promo_id]
+              );
+              if (promoExpiredCheck.rows.length > 0) {
+                const endDate = promoExpiredCheck.rows[0].end_date;
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                if (endDate && new Date(endDate) < today) {
+                  await client.query(
+                    `UPDATE promostbl SET status = 'Inactive', updated_at = CURRENT_TIMESTAMP WHERE promo_id = $1`,
+                    [promo_id]
+                  );
+                }
+              }
+            }
+          }
+        } catch (downpaymentPromoError) {
+          console.error('Error applying promo to downpayment:', downpaymentPromoError);
         }
       }
 
@@ -5136,6 +5352,7 @@ router.post(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
+           WHERE COALESCE(enrollment_status, 'Active') = 'Active'
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          WHERE c.class_id = $1`,

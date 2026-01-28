@@ -148,7 +148,7 @@ export const sendInvoiceEmail = async ({
             
             <p>Please find your invoice PDF attached to this email for your records.</p>
             
-            <p>If you have any questions or concerns regarding this invoice, please don't hesitate to contact us through our Facebook Page: <a href=" https://www.facebook.com/share/17kpQWebTu"> https://www.facebook.com/share/17kpQWebTu</a></p>
+            <p>If you have any questions or concerns regarding this invoice, please don't hesitate to contact us through our Facebook Page: <a href="https://www.facebook.com/littlechampionsacademy">https://www.facebook.com/littlechampionsacademy</a></p>
             
             <p>Thank you for choosing Little Champions Academy. We appreciate your trust and support!</p>
             
@@ -332,7 +332,7 @@ export const sendSuspensionEmail = async ({
             
             <div class="contact-info">
               <p><strong>If you have any questions or concerns, please contact us:</strong></p>
-              <p>Facebook Page: <a href="https://www.facebook.com/share/17kpQWebTu">https://www.facebook.com/share/17kpQWebTu</a></p>
+              <p>Facebook Page: <a href="https://www.facebook.com/littlechampionsacademy">https://www.facebook.com/littlechampionsacademy</a></p>
             </div>
             
             <p>Thank you for your understanding and continued support.</p>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import * as XLSX from 'xlsx';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -12,6 +13,7 @@ const StudentPaymentLogs = () => {
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const studentId = userInfo?.userId || userInfo?.user_id;
 
@@ -120,6 +122,65 @@ const StudentPaymentLogs = () => {
     return matchesSearch && matchesStatus && matchesPaymentMethod;
   });
 
+  const handleExportToExcel = async () => {
+    try {
+      setExportLoading(true);
+      
+      // Use current payments data
+      if (payments.length === 0) {
+        alert('No payment records found to export.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Prepare data for Excel
+      const excelData = payments.map(payment => ({
+        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+        'Invoice Description': payment.invoice_description || '-',
+        'Payment Method': payment.payment_method || '-',
+        'Payment Type': payment.payment_type || '-',
+        'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
+        'Status': payment.status || 'N/A',
+        'Payment Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'Reference Number': payment.reference_number || '-',
+      }));
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(excelData);
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 12 },  // Invoice ID
+        { wch: 30 },  // Invoice Description
+        { wch: 18 },  // Payment Method
+        { wch: 18 },  // Payment Type
+        { wch: 15 },  // Amount
+        { wch: 12 },  // Status
+        { wch: 15 },  // Payment Date
+        { wch: 20 },  // Reference Number
+      ];
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'My Payment Logs');
+
+      // Generate filename
+      const studentName = userInfo?.fullName || userInfo?.full_name || 'Student';
+      const sanitizedName = studentName.replace(/[^a-zA-Z0-9]/g, '_');
+      const date = new Date().toISOString().split('T')[0];
+      const filename = `Payment_Logs_${sanitizedName}_${date}.xlsx`;
+
+      // Save file
+      XLSX.writeFile(wb, filename);
+
+      setExportLoading(false);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export payment logs. Please try again.');
+      setExportLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -136,6 +197,25 @@ const StudentPaymentLogs = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
           <p className="text-sm text-gray-500 mt-1">View your payment history</p>
         </div>
+        <button
+          onClick={handleExportToExcel}
+          disabled={exportLoading || payments.length === 0}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+        >
+          {exportLoading ? (
+            <>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              Exporting...
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Export to Excel
+            </>
+          )}
+        </button>
       </div>
 
       {/* Error Message */}

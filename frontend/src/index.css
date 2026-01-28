@@ -3,12 +3,16 @@
 @tailwind utilities;
 
 @layer base {
-  body {
-    @apply bg-gray-50 text-gray-900;
+  html {
+    margin: 0;
+    padding: 0;
     overflow-x: hidden;
   }
-  
-  html {
+
+  body {
+    margin: 0;
+    padding: 0;
+    @apply bg-gray-50 text-gray-900;
     overflow-x: hidden;
   }
   

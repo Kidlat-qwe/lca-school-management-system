@@ -229,7 +229,15 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
       currentY += 15;
     } else {
       items.forEach((item, idx) => {
-        const netAmount = Number(item.amount) || 0;
+        // Show the effective line amount so penalties are visible on the invoice.
+        // (amount - discount + penalty + tax)
+        const amt = Number(item.amount) || 0;
+        const discount = Number(item.discount_amount) || 0;
+        const penalty = Number(item.penalty_amount) || 0;
+        const taxPct = Number(item.tax_percentage) || 0;
+        const taxableBase = amt - discount + penalty;
+        const tax = taxableBase * (taxPct / 100);
+        const netAmount = taxableBase + tax;
         const packageName = extractPackage(item.description);
         
         doc.text((idx + 1).toString(), colNum, currentY);
@@ -322,7 +330,7 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
     currentY += 15;
     
     // Facebook page text with hyperlink - formatted better
-    const fbUrl = 'https://www.facebook.com/share/17kpQWebTu';
+    const fbUrl = 'https://www.facebook.com/littlechampionsacademy';
     doc.text('If you have any questions or need assistance, please don\'t hesitate to reach out to our Facebook Page:', 50, currentY, { width: 500 });
     currentY += 12;
     
