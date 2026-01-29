@@ -11,6 +11,7 @@
    - [Calendar](#calendar)
    - [Announcements](#announcements)
    - [Personnel Management](#personnel-management)
+   - [Students](#students)
    - [Guardians](#guardians)
    - [Curriculum](#curriculum)
    - [Program](#program)
@@ -23,6 +24,7 @@
    - [Invoice Management](#invoice-management)
    - [Installment Invoice](#installment-invoice)
    - [Payment Logs](#payment-logs)
+   - [Settings](#settings)
 6. [Common Workflows](#common-workflows)
 7. [Best Practices](#best-practices)
 8. [Troubleshooting](#troubleshooting)
@@ -142,7 +144,7 @@ The Superadmin Dashboard provides a comprehensive system-wide overview with key 
 
 ### Branch Management
 
-**Path**: Branch → Branch List
+**Path**: Branch
 
 #### Purpose
 
@@ -221,7 +223,7 @@ Create and manage all school branches. This is a Superadmin-only feature - Admin
 
 ### Calendar
 
-**Path**: Calendar → Calendar Schedule
+**Path**: Calendar
 
 #### Purpose
 
@@ -334,58 +336,44 @@ Create, view, and manage announcements system-wide or per branch. Send messages 
 
 #### Purpose
 
-Manage all users across all branches. Create, edit, and manage Superadmin, Admin, Finance, Teacher, and Student users.
+Manage **non-student** user accounts across all branches (Admin, Teacher, Finance), plus creation of **Superadmin/Superfinance** accounts.
 
 #### Features
 
 **Viewing Personnel**
 
-- See all users across all branches
+- See all non-student users across all branches
 - Filter by Branch
-- Filter by User Type
-- Search by name or email
+- Filter by Role
+- Search by name
 - View user details
 
 **Table Columns**
 - Full Name
 - Email
-- User Type
-- Branch (if assigned)
-- Phone Number
+- Role
+- Branch (or “All branches” for Superadmin/Superfinance)
+- Level Tag (if any)
+- Status
 - Actions
 
 **Creating New Users**
 
 1. Click "Add Personnel" button
-2. Fill in the form:
-   - **Full Name**: User's full name (required)
-   - **Email**: Unique email address (required)
-   - **Password**: Initial password (required, min 6 characters)
-   - **User Type**: Select from:
-     - **Superadmin**: Full system access (Superadmin only)
-     - **Admin**: Branch administrator
-     - **Finance**: Financial staff
-       - Can assign to branch (branch-level Finance)
-       - Or leave branch unassigned (Superfinance - system-wide)
-     - **Teacher**: Teaching staff
-     - **Student**: Students
-   - **Gender**: Select from dropdown
-   - **Date of Birth**: Select date
-   - **Phone Number**: Contact number
-   - **Branch**: Select branch (required for Admin, Teacher, Student, branch-level Finance)
-     - Leave empty for Superadmin and Superfinance
-   - **Level Tag**: Required for Students (Nursery, Pre-K, etc.)
-3. Click "Create User"
+2. Select a branch (required for branch-bound roles), then click **Continue**
+3. Fill in the form:
+   - **Full Name** (required)
+   - **Email** (required)
+   - **Password** (required when creating, min 6 characters)
+   - **Role**: Admin, Teacher, or Finance
+   - **Branch**: comes from the previous step
+4. Click "Create User"
 
-**User Types You Can Create**
+**Creating Super Accounts (All Branches)**
 
-- **Superadmin**: Full system access (only Superadmin can create)
-- **Admin**: Branch administrators (only Superadmin can create)
-- **Finance**: 
-  - Branch-level: Assigned to specific branch
-  - Superfinance: No branch assigned (system-wide)
-- **Teacher**: Teaching staff
-- **Student**: Students
+From the branch selection step, click **Create super account** to create:
+- **Superadmin** (all branches)
+- **Superfinance** (Finance role with no branch; all branches for finance operations)
 
 **Editing Users**
 
@@ -403,19 +391,61 @@ Manage all users across all branches. Create, edit, and manage Superadmin, Admin
 
 **Search and Filter**
 
-- **Search Bar**: Type name or email to search
+- **Search Bar**: Type a name to search
 - **Filter by Branch**: Select branch from dropdown
-- **Filter by User Type**: Select user type from dropdown
-- **Clear Filters**: Click "Clear" to reset
+- **Filter by Role**: Select role from dropdown
+- **Reset**: Choose "All Branches" / "All Roles" and clear the search box
 
 #### Important Notes
 
 - Only Superadmin can create Superadmin and Admin users
+- Students are managed in `Manage Users → Student`, not in `Personnel`.
 - Email addresses must be unique
 - Passwords must be at least 6 characters
-- Students require a Level Tag
 - Superfinance users should not have a branch assigned
 - Deleting a user is permanent and may affect related records
+
+---
+
+### Students
+
+**Path**: Manage Users → Student
+
+#### Purpose
+
+Create and manage **Student** accounts across all branches. Student creation also captures the student’s **guardian information**.
+
+#### Features
+
+**Viewing Students**
+- See students across all branches
+- Search by student name
+- Filter by branch (optional)
+
+**Creating a Student**
+
+1. Click "Add Student"
+2. Select the student’s **Branch**, then continue
+3. Fill in **Student Information** (required unless marked optional):
+   - **Full Name**
+   - **Email**
+   - **Password** (required when creating)
+   - **Phone Number** (optional)
+   - **Level Tag**: Playgroup, Nursery, Pre-Kindergarten, Kindergarten, Grade School
+4. Fill in **Guardian Information** (required):
+   - **Guardian Name / Guardian Email / Relationship**
+   - **Guardian Phone Number / Guardian Gender**
+   - **Address / City / Postal Code / State-Province-Region / Country**
+5. Click "Create Student"
+
+**Editing a Student**
+- Three-dots menu → **Edit**
+- Email is locked (cannot be changed)
+- Password is optional (leave blank to keep current)
+- Guardian details can be updated
+
+**Deleting a Student**
+- Three-dots menu → **Delete** → confirm
 
 ---
 
@@ -653,6 +683,9 @@ All features from Admin Classes page, plus:
 - Same enrollment process as Admin
 - Can enroll students in any branch's classes
 - Can view enrollment across all branches
+- **For Installment Packages**: Package selection shows:
+  - **Down payment**: Initial downpayment amount
+  - **Monthly**: Monthly installment amount
 
 **Class Details**
 
@@ -865,8 +898,13 @@ Create and manage promotional offers across all branches or system-wide. Promos 
 2. Fill in the form:
    - **Promo Name**: Name of promotion (required)
    - **Promo Code**: Unique code (required)
-   - **Promo Type**: Percentage Discount, Fixed Amount Discount, or Referral Bonus
-   - **Discount Value**: Amount or percentage (required)
+   - **Promo Type**: Select from:
+     - Percentage Discount (e.g., 10% off)
+     - Fixed Amount Discount (e.g., $50 off)
+     - Free Merchandise
+     - Combined (discount + merchandise)
+     - Referral Bonus
+   - **Discount Value**: Amount or percentage (required for discount types)
    - **Start Date**: When promo becomes active (required)
    - **End Date**: When promo expires (required)
    - **Status**: Active or Inactive
@@ -874,13 +912,48 @@ Create and manage promotional offers across all branches or system-wide. Promos 
      - Select specific branches
      - Or select "All Branches" for system-wide promo
    - **Applicable Packages**: Select packages that can use this promo
-   - **Usage Limits**: Maximum times promo can be used
+   - **Student Eligibility**: Select eligibility type:
+     - All Students: Available to all students
+     - New Enrollees Only: Only for new students
+     - Returning Students Only: Only for returning students
+     - Specific Students: Select individual students
+   - **Usage Limits**: Maximum times promo can be used (optional)
+   - **For Installment Packages** (when Installment package is selected):
+     - **Apply Promo To**: Select where promo applies:
+       - Downpayment: Promo applies only to downpayment invoice
+       - Monthly: Promo applies to monthly installment invoices
+       - Both: Promo applies to both downpayment and monthly invoices
+     - **Number of Monthly Invoices to Apply Promo**: If "Monthly" or "Both" is selected, specify how many monthly invoices should receive the promo (e.g., 3 months)
 3. Click "Save"
 
 **System-Wide vs Branch-Specific Promos**
 
 - **System-Wide**: Select "All Branches" - usable across all branches
 - **Branch-Specific**: Select specific branches - only usable in those branches
+
+**Promo Types Explained**
+
+- **Percentage Discount**: Reduces price by percentage (e.g., 10% = 10% off)
+- **Fixed Amount Discount**: Reduces price by fixed amount (e.g., $50 off)
+- **Free Merchandise**: Provides free merchandise items (select merchandise items to include)
+- **Combined**: Provides both discount and free merchandise
+- **Referral Bonus**: Special discount for referrals
+
+**Installment Package Promo Scope**
+
+When creating a promo for Installment packages, you can specify where the promo applies:
+
+- **Downpayment Only**: Promo discount/benefits apply only to the initial downpayment invoice
+- **Monthly Only**: Promo applies to monthly installment invoices only (not downpayment)
+  - Specify how many monthly invoices should receive the promo (e.g., first 3 months)
+- **Both**: Promo applies to both downpayment and monthly invoices
+  - For monthly invoices, specify how many months should receive the promo
+
+**Promo Usage Tracking**
+
+- Promo usage is tracked **once per student per promo per package**
+- This means a student can use the same promo code for different packages
+- But cannot use the same promo code twice for the same package
 
 **Promo Management**
 
@@ -894,6 +967,7 @@ Create and manage promotional offers across all branches or system-wide. Promos 
 - Superadmin can create system-wide promos (Admin cannot)
 - Promo codes must be unique
 - System-wide promos are available to all branches
+- Installment promos can target downpayment, monthly, or both
 
 ---
 
@@ -1029,6 +1103,88 @@ Record and track all payments across all branches. Manage financial transactions
 
 ---
 
+### Settings
+
+**Path**: Settings
+
+#### Purpose
+
+Configure system-wide or branch-specific settings, including installment delinquency management. These settings control how the system handles overdue installment payments.
+
+#### Features
+
+**Viewing Settings**
+
+- See current effective settings
+- Choose scope: **Global** (system-wide) or **Branch** (branch-specific)
+- For branch scope: Select branch from dropdown
+- View which settings are branch-specific vs global defaults
+
+**Installment Delinquency Settings**
+
+Configure how the system handles overdue installment payments:
+
+1. **Penalty Rate (%)**: 
+   - Percentage penalty applied to overdue installment invoices
+   - Range: 0-100%
+   - Example: 10% means 10% penalty on overdue amount
+   - Applied after grace period expires
+
+2. **Grace Period (Days)**:
+   - Number of days after due date before penalty is applied
+   - Range: 0-365 days
+   - Example: 7 days means penalty applies 7 days after due date
+   - Set to 0 to apply penalty immediately on overdue
+
+3. **Final Drop-off Days**:
+   - Number of days overdue before student is automatically removed from enrollment
+   - Range: 0-365 days
+   - Example: 30 days means student removed 30 days after due date
+   - Set to 0 to disable automatic removal
+
+**Updating Settings**
+
+1. Navigate to Settings page
+2. **Select Scope**:
+   - **Global**: Set system-wide defaults (applies to all branches unless overridden)
+   - **Branch**: Set branch-specific settings (select branch from dropdown)
+3. Review current effective settings
+4. Modify values as needed:
+   - Enter penalty rate as percentage (e.g., "10" for 10%)
+   - Enter grace period in days (e.g., "7" for 7 days)
+   - Enter final drop-off days (e.g., "30" for 30 days)
+5. Click "Save Settings"
+6. Settings are applied immediately
+
+**How Settings Work**
+
+- **Global Settings**: Apply to all branches as defaults
+- **Branch Settings**: Override global defaults for specific branches
+- System automatically applies penalties based on effective settings
+- Penalties are added to overdue invoices automatically
+- Students are automatically removed after final drop-off period expires
+- Settings affect all installment invoices in the applicable scope
+
+**Understanding Effective Settings**
+
+- Settings show scope indicator: "Global" or "Branch"
+- Branch settings override global defaults
+- Effective settings are what the system actually uses
+- Can set different values per branch if needed
+
+#### Important Notes
+
+- Global settings apply to all branches unless branch-specific settings exist
+- Branch settings override global defaults
+- Changes take effect immediately for new overdue invoices
+- Existing overdue invoices may need manual processing
+- Penalty rate is applied as percentage of overdue amount
+- Grace period gives students time before penalty applies
+- Final drop-off automatically removes students after specified days
+- Can configure different policies per branch if needed
+
+---
+
 ## Common Workflows
 
 ### Workflow 1: Setting Up a New Branch
@@ -1039,7 +1195,8 @@ Record and track all payments across all branches. Manage financial transactions
    - Save branch
 
 2. **Create Branch Admin**
-   - Go to Personnel → Add Personnel
+   - Go to Manage Users → Personnel
+   - Click "Add Personnel"
    - Create Admin user
    - Assign to the new branch
 
@@ -1064,9 +1221,9 @@ Record and track all payments across all branches. Manage financial transactions
 ### Workflow 2: Enrolling a Student (System-Wide)
 
 1. **Verify Student Account** (if not exists)
-   - Go to Personnel → Add Personnel
-   - Create Student user
-   - Assign to branch
+   - Go to Manage Users → Student
+   - Click "Add Student"
+   - Select branch, then fill student + guardian information (required)
 
 2. **Select Branch and Class**
    - Go to Classes
@@ -1162,8 +1319,8 @@ Record and track all payments across all branches. Manage financial transactions
 
 ## Document Information
 
-**Version**: 1.0
-**Last Updated**: January 2026
+**Version**: 1.2
+**Last Updated**: January 29, 2026
 **Role**: Superadmin
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.

@@ -564,6 +564,46 @@ const SuperfinanceInvoice = () => {
     }
   };
 
+  // Check if invoice is overdue and not paid
+  const isInvoiceOverdue = (invoice) => {
+    if (!invoice.due_date) return false;
+    if (invoice.status === 'Paid') return false;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDate = new Date(invoice.due_date);
+    dueDate.setHours(0, 0, 0, 0);
+    
+    return dueDate < today;
+  };
+
+  const handleSendOverdueEmail = async (invoice) => {
+    setOpenMenuId(null);
+    
+    if (!window.confirm(`Send overdue payment reminder email to student(s) for invoice ${invoice.invoice_description || `INV-${invoice.invoice_id}`}?`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await apiRequest(`/invoices/${invoice.invoice_id}/send-overdue-email`, {
+        method: 'POST',
+      });
+      
+      if (response.success) {
+        alert(response.message || 'Email sent successfully!');
+      } else {
+        alert(response.message || 'Failed to send email');
+      }
+    } catch (err) {
+      console.error('Error sending overdue email:', err);
+      const errorMessage = err.response?.data?.message || err.message || 'Failed to send email';
+      alert(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleClosePaymentModal = () => {
     setShowPaymentModal(false);
     setSelectedInvoiceForPayment(null);
@@ -1306,6 +1346,29 @@ const SuperfinanceInvoice = () => {
                       <span>Pay</span>
                       <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isInvoiceOverdue(selectedInvoice)) {
+                          return;
+                        }
+                        setOpenMenuId(null);
+                        setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
+                        handleSendOverdueEmail(selectedInvoice);
+                      }}
+                      disabled={!isInvoiceOverdue(selectedInvoice)}
+                      className={`flex items-center justify-between w-full text-left px-4 py-2 text-sm transition-colors ${
+                        isInvoiceOverdue(selectedInvoice)
+                          ? 'text-orange-600 hover:bg-orange-50 cursor-pointer'
+                          : 'text-gray-400 cursor-not-allowed opacity-50'
+                      }`}
+                    >
+                      <span>Send Email</span>
+                      <svg className={`w-4 h-4 ${isInvoiceOverdue(selectedInvoice) ? 'text-orange-600' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                       </svg>
                     </button>
                   </>

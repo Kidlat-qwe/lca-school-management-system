@@ -63,6 +63,8 @@ const AdminPromo = () => {
     status: 'Active',
     description: '',
     selectedMerchandise: [], // Array of {merchandise_id, quantity}
+    installment_apply_scope: 'downpayment', // For Installment packages: downpayment, monthly, or both
+    installment_months_to_apply: '', // Number of months to apply promo for monthly scope
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -265,6 +267,8 @@ const AdminPromo = () => {
       status: 'Active',
       description: '',
       selectedMerchandise: [],
+      installment_apply_scope: 'downpayment',
+      installment_months_to_apply: '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -340,6 +344,8 @@ const AdminPromo = () => {
           merchandise_id: m.merchandise_id,
           quantity: m.quantity || 1,
         })),
+        installment_apply_scope: fullPromo.installment_apply_scope || 'downpayment',
+        installment_months_to_apply: fullPromo.installment_months_to_apply?.toString() || '',
       });
       setFormErrors({});
       setIsModalOpen(true);
@@ -516,6 +522,23 @@ const AdminPromo = () => {
       }
     }
 
+    // Validate installment scope fields if any selected package is Installment
+    const hasInstallmentPackage = formData.package_ids.some((id) => {
+      const p = packages.find((pkg) => pkg.package_id.toString() === id);
+      return p && p.package_type === 'Installment';
+    });
+    
+    if (hasInstallmentPackage) {
+      if (!formData.installment_apply_scope) {
+        errors.installment_apply_scope = 'Please select where to apply the promo for Installment packages';
+      }
+      
+      if ((formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && 
+          (!formData.installment_months_to_apply || parseInt(formData.installment_months_to_apply) < 1)) {
+        errors.installment_months_to_apply = 'Number of months to apply must be at least 1 when scope includes monthly';
+      }
+    }
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -550,6 +573,13 @@ const AdminPromo = () => {
         status: formData.status,
         description: formData.description?.trim() || null,
         merchandise: formData.selectedMerchandise,
+        installment_apply_scope: formData.package_ids.some((id) => {
+          const p = packages.find((pkg) => pkg.package_id.toString() === id);
+          return p && p.package_type === 'Installment';
+        }) ? formData.installment_apply_scope : null,
+        installment_months_to_apply: (formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && formData.installment_months_to_apply
+          ? parseInt(formData.installment_months_to_apply)
+          : null,
       };
 
       if (editingPromo) {
@@ -1275,9 +1305,79 @@ const AdminPromo = () => {
                           const p = packages.find((pkg) => pkg.package_id.toString() === id);
                           return p && p.package_type === 'Installment';
                         }) && (
-                          <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                            For Installment packages, promo is applied to the <strong>down payment only</strong>.
-                          </p>
+                          <div className="mt-2 space-y-3">
+                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                              Configure how the promo applies to Installment packages:
+                            </p>
+                            
+                            {/* Installment Apply Scope */}
+                            <div>
+                              <label className="label-field text-sm">
+                                Apply Promo To <span className="text-red-500">*</span>
+                              </label>
+                              <div className="space-y-2">
+                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="installment_apply_scope"
+                                    value="downpayment"
+                                    checked={formData.installment_apply_scope === 'downpayment'}
+                                    onChange={handleInputChange}
+                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                  />
+                                  <span className="text-sm text-gray-700">Downpayment Only</span>
+                                </label>
+                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="installment_apply_scope"
+                                    value="monthly"
+                                    checked={formData.installment_apply_scope === 'monthly'}
+                                    onChange={handleInputChange}
+                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                  />
+                                  <span className="text-sm text-gray-700">Monthly Installments Only</span>
+                                </label>
+                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="installment_apply_scope"
+                                    value="both"
+                                    checked={formData.installment_apply_scope === 'both'}
+                                    onChange={handleInputChange}
+                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                  />
+                                  <span className="text-sm text-gray-700">Both (Downpayment + Monthly)</span>
+                                </label>
+                              </div>
+                            </div>
+                            
+                            {/* Months to Apply (shown when scope includes monthly) */}
+                            {(formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && (
+                              <div>
+                                <label htmlFor="installment_months_to_apply" className="label-field text-sm">
+                                  Number of Monthly Invoices to Apply Promo <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                  type="number"
+                                  id="installment_months_to_apply"
+                                  name="installment_months_to_apply"
+                                  value={formData.installment_months_to_apply}
+                                  onChange={handleInputChange}
+                                  className={`input-field ${formErrors.installment_months_to_apply ? 'border-red-500' : ''}`}
+                                  min="1"
+                                  required
+                                  placeholder="e.g., 3"
+                                />
+                                {formErrors.installment_months_to_apply && (
+                                  <p className="mt-1 text-sm text-red-600">{formErrors.installment_months_to_apply}</p>
+                                )}
+                                <p className="mt-1 text-xs text-gray-500">
+                                  Enter how many monthly installment invoices should receive the promo discount.
+                                </p>
+                              </div>
+                            )}
+                          </div>
                         )}
                     </div>
 
@@ -1441,7 +1541,7 @@ const AdminPromo = () => {
                             {formErrors.discount_percentage && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.discount_percentage}</p>
                             )}
-                            {(formData.promo_type === 'percentage_discount' || formData.promo_type === 'combined') &&
+                              {(formData.promo_type === 'percentage_discount' || formData.promo_type === 'combined') &&
                               formData.discount_percentage &&
                               formData.package_ids.length > 0 && (
                               <p className="mt-1 text-xs text-gray-500">
@@ -1449,15 +1549,25 @@ const AdminPromo = () => {
                                   const firstPackage = packages.find((p) =>
                                     formData.package_ids.includes(p.package_id.toString())
                                   );
-                                  const base =
-                                    firstPackage?.package_type === 'Installment' &&
-                                    firstPackage?.downpayment_amount != null
-                                      ? parseFloat(firstPackage.downpayment_amount)
-                                      : firstPackage?.package_price != null
-                                        ? parseFloat(firstPackage.package_price)
-                                        : null;
-                                  const label =
-                                    firstPackage?.package_type === 'Installment' ? 'on down payment' : '';
+                                  
+                                  if (!firstPackage) return '';
+                                  
+                                  // Determine base amount based on scope for Installment packages
+                                  let base = null;
+                                  let label = '';
+                                  
+                                  if (firstPackage.package_type === 'Installment') {
+                                    if (formData.installment_apply_scope === 'downpayment' || formData.installment_apply_scope === 'both') {
+                                      base = firstPackage.downpayment_amount != null ? parseFloat(firstPackage.downpayment_amount) : null;
+                                      label = 'on down payment';
+                                    } else if (formData.installment_apply_scope === 'monthly') {
+                                      base = firstPackage.package_price != null ? parseFloat(firstPackage.package_price) : null;
+                                      label = 'per monthly installment';
+                                    }
+                                  } else {
+                                    base = firstPackage.package_price != null ? parseFloat(firstPackage.package_price) : null;
+                                  }
+                                  
                                   return base != null && base > 0
                                     ? `Discount amount (${firstPackage.package_name}${label ? `, ${label}` : ''}): ₱${((base * parseFloat(formData.discount_percentage)) / 100).toFixed(2)}`
                                     : '';

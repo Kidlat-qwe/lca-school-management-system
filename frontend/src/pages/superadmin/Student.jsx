@@ -620,6 +620,9 @@ const Student = () => {
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Phone Number
                   </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Last Login
+                  </th>
                   <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
@@ -682,6 +685,42 @@ const Student = () => {
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900 truncate">
                         {student.phone_number || '-'}
+                      </div>
+                    </td>
+                    <td className="px-3 py-4">
+                      <div className="text-sm text-gray-900">
+                        {student.last_login
+                          ? (() => {
+                              // Parse timestamp string (format: YYYY-MM-DD HH24:MI:SS) as Philippines time
+                              const dateStr = student.last_login;
+                              // Convert PostgreSQL timestamp format to ISO format with timezone
+                              const isoStr = dateStr.replace(' ', 'T') + '+08:00';
+                              const date = new Date(isoStr);
+                              
+                              // Format date: DD/MM/YYYY
+                              const formattedDate = date.toLocaleDateString('en-GB', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                timeZone: 'Asia/Manila',
+                              });
+                              
+                              // Format time: HH:MMam/pm
+                              const formattedTime = date.toLocaleTimeString('en-US', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: true,
+                                timeZone: 'Asia/Manila',
+                              }).toLowerCase();
+                              
+                              return (
+                                <div className="flex flex-col">
+                                  <span>{formattedDate}</span>
+                                  <span>{formattedTime}</span>
+                                </div>
+                              );
+                            })()
+                          : '-'}
                       </div>
                     </td>
                     <td className="px-3 py-4 text-right text-sm font-medium">

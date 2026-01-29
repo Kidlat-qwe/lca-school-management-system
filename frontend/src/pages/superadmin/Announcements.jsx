@@ -325,7 +325,7 @@ const Announcements = () => {
       recipient_groups: announcement.recipient_groups || [],
       status: announcement.status || 'Active',
       priority: announcement.priority || 'Medium',
-      branch_id: announcement.branch_id?.toString() || '',
+      branch_id: announcement.branch_id ? announcement.branch_id.toString() : 'all',
       start_date: formatDateForInput(announcement.start_date),
       end_date: formatDateForInput(announcement.end_date),
     });
@@ -415,6 +415,7 @@ const Announcements = () => {
       errors.priority = 'Priority is required';
     }
 
+    // Branch is required - "all" means all branches (valid), empty string means not selected (error)
     if (!formData.branch_id || formData.branch_id === '') {
       errors.branch_id = 'Branch is required';
     }
@@ -453,7 +454,9 @@ const Announcements = () => {
         recipient_groups: formData.recipient_groups,
         status: formData.status,
         priority: formData.priority,
-        branch_id: formData.branch_id && formData.branch_id !== '' ? parseInt(formData.branch_id) : null,
+        branch_id: formData.branch_id === 'all' || formData.branch_id === '' 
+          ? null 
+          : (formData.branch_id ? parseInt(formData.branch_id) : null),
         start_date: formData.start_date && formData.start_date.trim() !== '' ? formData.start_date : null,
         end_date: formData.end_date && formData.end_date.trim() !== '' ? formData.end_date : null,
       };
@@ -1247,6 +1250,7 @@ const Announcements = () => {
                         }`}
                       >
                         <option value="">Select Branch</option>
+                        <option value="all">All Branches</option>
                         {branches.map((branch) => (
                           <option key={branch.branch_id} value={branch.branch_id}>
                             {branch.branch_name}

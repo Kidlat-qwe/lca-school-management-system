@@ -11,12 +11,34 @@ const router = express.Router();
 /**
  * POST /api/v1/auth/verify
  * Verify Firebase token and return user info
+ * Updates last_login timestamp on successful verification
  */
 router.post(
   '/verify',
   verifyFirebaseToken,
   async (req, res, next) => {
     try {
+      // Update last_login timestamp for the authenticated user (Philippines timezone UTC+8)
+      if (req.user.userId) {
+        await query(
+          `UPDATE userstbl SET last_login = (NOW() AT TIME ZONE 'Asia/Manila')::timestamp WHERE user_id = $1`,
+          [req.user.userId]
+        );
+      }
+
+      // Fetch updated user info including last_login (formatted in Philippines timezone)
+      if (req.user.userId) {
+        const userResult = await query(
+          `SELECT user_id, email, full_name, user_type, branch_id, firebase_uid, profile_picture_url, 
+                  TO_CHAR(last_login, 'YYYY-MM-DD HH24:MI:SS') as last_login
+           FROM userstbl WHERE user_id = $1`,
+          [req.user.userId]
+        );
+        if (userResult.rows.length > 0) {
+          req.user.last_login = userResult.rows[0].last_login;
+        }
+      }
+
       res.json({
         success: true,
         message: 'Token verified successfully',

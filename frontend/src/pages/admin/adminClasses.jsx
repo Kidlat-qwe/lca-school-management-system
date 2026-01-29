@@ -1287,6 +1287,73 @@ const initializePackageMerchSelections = useCallback(
     setClassSessions([]);
   };
 
+  const handleUnenrollStudent = async (student) => {
+    if (!selectedClassForEnrollment) return;
+    
+    const studentName = student.full_name || `Student ID: ${student.user_id}`;
+    const reason = window.prompt(
+      `Are you sure you want to unenroll ${studentName} from this class?\n\n` +
+      `Please provide a reason (e.g., "Client informed student will not continue"):`
+    );
+    
+    if (!reason || reason.trim() === '') {
+      alert('Unenrollment cancelled. Reason is required.');
+      return;
+    }
+    
+    if (!window.confirm(`Confirm unenrollment of ${studentName}?\n\nReason: ${reason.trim()}`)) {
+      return;
+    }
+
+    try {
+      setLoadingEnrolledStudents(true);
+      
+      // Fetch all enrollment records for this student in this class
+      const enrollmentResponse = await apiRequest(`/students/class/${selectedClassForEnrollment.class_id}`);
+      const allStudents = enrollmentResponse.data || [];
+      
+      // Find all enrollment IDs for this student (can have multiple phases)
+      const enrollmentIds = allStudents
+        .filter(s => s.user_id === student.user_id && s.classstudent_id)
+        .map(s => s.classstudent_id);
+      
+      if (enrollmentIds.length === 0) {
+        alert('No active enrollment found for this student.');
+        return;
+      }
+      
+      // Unenroll all enrollments for this student
+      const unenrollPromises = enrollmentIds.map(enrollmentId =>
+        apiRequest(`/students/unenroll/${enrollmentId}`, {
+          method: 'DELETE',
+        }).then(response => {
+          // API returns { success: true, message: ... }
+          return { success: true, enrollmentId, response };
+        }).catch(err => {
+          console.error(`Error unenrolling enrollment ${enrollmentId}:`, err);
+          return { success: false, enrollmentId, error: err.message || err.response?.data?.message || 'Unknown error' };
+        })
+      );
+      
+      const results = await Promise.all(unenrollPromises);
+      const successCount = results.filter(r => r.success === true).length;
+      const failCount = results.filter(r => r.success === false).length;
+      
+      if (successCount > 0) {
+        alert(`Student ${studentName} has been unenrolled successfully.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
+        // Refresh enrolled students list
+        await fetchEnrolledStudents(selectedClassForEnrollment.class_id);
+      } else {
+        alert(`Failed to unenroll student. Please try again.`);
+      }
+    } catch (err) {
+      console.error('Error unenrolling student:', err);
+      alert(err.message || 'Failed to unenroll student. Please try again.');
+    } finally {
+      setLoadingEnrolledStudents(false);
+    }
+  };
+
   const fetchEnrolledStudents = async (classId, phaseNumber = null) => {
     try {
       setLoadingEnrolledStudents(true);
@@ -8666,6 +8733,17 @@ const initializePackageMerchSelections = useCallback(
                                     >
                                       Upgrade
                                     </button>
+                                  ) : !isReserved && !isPending ? (
+                                    <button
+                                      onClick={() => handleUnenrollStudent(student)}
+                                      className="text-red-600 hover:text-red-900 flex items-center space-x-1"
+                                      title="Unenroll student from class"
+                                    >
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                      <span>Unenroll</span>
+                                    </button>
                                   ) : (
                                     <span className="text-sm text-gray-400">-</span>
                                   )}
@@ -8862,12 +8940,38 @@ const initializePackageMerchSelections = useCallback(
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
+                                  {pkg.package_type === 'Installment' && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                                      Installment
+                                    </span>
+                                  )}
                                 </div>
                               {pkg.package_price && (
-                                <div className="flex items-baseline space-x-2 mb-2">
-                                  <span className="text-xl font-bold text-gray-900">
-                                    ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                  </span>
+                                <div className="flex flex-col space-y-1 mb-2">
+                                  {pkg.package_type === 'Installment' ? (
+                                    <>
+                                      {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
+                                        <div className="flex items-baseline space-x-2">
+                                          <span className="text-sm text-gray-600">Down payment:</span>
+                                          <span className="text-lg font-bold text-gray-900">
+                                            ₱{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          </span>
+                                        </div>
+                                      )}
+                                      <div className="flex items-baseline space-x-2">
+                                        <span className="text-sm text-gray-600">Monthly:</span>
+                                        <span className="text-lg font-bold text-gray-900">
+                                          ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div className="flex items-baseline space-x-2">
+                                      <span className="text-xl font-bold text-gray-900">
+                                        ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                               {pkg.details && pkg.details.length > 0 && (
@@ -11031,7 +11135,7 @@ const initializePackageMerchSelections = useCallback(
                   Back
                 </button>
               )}
-              {enrollStep !== 'view' && enrollStep !== 'enrollment-option' && enrollStep !== 'package-selection' && (
+              {enrollStep !== 'view' && enrollStep !== 'enrollment-option' && enrollStep !== 'package-selection' && !(enrollStep === 'review' && generatedInvoices.length > 0) && (
                 <div className="flex items-center gap-3">
                   {/* Total Amount Display - For per-phase enrollment in student-selection and review steps */}
                   {(enrollStep === 'student-selection' || enrollStep === 'review') && (
@@ -12946,12 +13050,38 @@ const initializePackageMerchSelections = useCallback(
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
+                                  {pkg.package_type === 'Installment' && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                                      Installment
+                                    </span>
+                                  )}
                                 </div>
                                 {pkg.package_price && (
-                                  <div className="flex items-baseline space-x-2 mb-2">
-                                    <span className="text-xl font-bold text-gray-900">
-                                      ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
+                                  <div className="flex flex-col space-y-1 mb-2">
+                                    {pkg.package_type === 'Installment' ? (
+                                      <>
+                                        {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
+                                          <div className="flex items-baseline space-x-2">
+                                            <span className="text-sm text-gray-600">Down payment:</span>
+                                            <span className="text-lg font-bold text-gray-900">
+                                              ₱{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </span>
+                                          </div>
+                                        )}
+                                        <div className="flex items-baseline space-x-2">
+                                          <span className="text-sm text-gray-600">Monthly:</span>
+                                          <span className="text-lg font-bold text-gray-900">
+                                            ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          </span>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <div className="flex items-baseline space-x-2">
+                                        <span className="text-xl font-bold text-gray-900">
+                                          ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>

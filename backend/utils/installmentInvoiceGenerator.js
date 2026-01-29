@@ -76,6 +76,75 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     
     const student = studentResult.rows[0];
     
+    // Get promo info from profile if available
+    const profilePromoResult = await client.query(
+      `SELECT promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied 
+       FROM installmentinvoiceprofilestbl 
+       WHERE installmentinvoiceprofiles_id = $1`,
+      [installmentInvoice.installmentinvoiceprofiles_id]
+    );
+    
+    const profilePromo = profilePromoResult.rows[0] || {};
+    const promoId = profilePromo.promo_id;
+    const promoApplyScope = profilePromo.promo_apply_scope;
+    const promoMonthsToApply = profilePromo.promo_months_to_apply;
+    const promoMonthsApplied = profilePromo.promo_months_applied || 0;
+    
+    // Check if promo should be applied to this monthly invoice
+    const shouldApplyPromoToMonthly = promoId && 
+      promoApplyScope && 
+      (promoApplyScope === 'monthly' || promoApplyScope === 'both') &&
+      promoMonthsToApply !== null &&
+      promoMonthsApplied < promoMonthsToApply;
+    
+    let promoDiscount = 0;
+    let promoData = null;
+    let promoMerchandise = [];
+    
+    if (shouldApplyPromoToMonthly) {
+      // Fetch promo details (including promo type to handle free_merchandise)
+      const promoResult = await client.query(
+        `SELECT promo_id, promo_name, promo_type, discount_percentage, discount_amount 
+         FROM promostbl 
+         WHERE promo_id = $1 AND status = 'Active'`,
+        [promoId]
+      );
+      
+      if (promoResult.rows.length > 0) {
+        promoData = promoResult.rows[0];
+        const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
+        
+        // Calculate discount based on promo type (only for discount types)
+        if (promoData.promo_type === 'percentage_discount' && promoData.discount_percentage) {
+          promoDiscount = (baseAmount * parseFloat(promoData.discount_percentage)) / 100;
+        } else if (promoData.promo_type === 'fixed_discount' && promoData.discount_amount) {
+          const fixed = parseFloat(promoData.discount_amount);
+          promoDiscount = Math.min(fixed, baseAmount);
+        } else if (promoData.promo_type === 'combined') {
+          // Combined can have discount + merchandise
+          if (promoData.discount_percentage && parseFloat(promoData.discount_percentage) > 0) {
+            promoDiscount = (baseAmount * parseFloat(promoData.discount_percentage)) / 100;
+          } else if (promoData.discount_amount && parseFloat(promoData.discount_amount) > 0) {
+            const fixed = parseFloat(promoData.discount_amount);
+            promoDiscount = Math.min(fixed, baseAmount);
+          }
+        }
+        // Note: free_merchandise type doesn't have discount, only merchandise items
+        
+        // Fetch free merchandise items for this promo (for free_merchandise and combined types)
+        if (promoData.promo_type === 'free_merchandise' || promoData.promo_type === 'combined') {
+          const merchResult = await client.query(
+            `SELECT pm.*, m.merchandise_name, m.price
+             FROM promomerchandisetbl pm
+             LEFT JOIN merchandisestbl m ON pm.merchandise_id = m.merchandise_id
+             WHERE pm.promo_id = $1`,
+            [promoId]
+          );
+          promoMerchandise = merchResult.rows || [];
+        }
+      }
+    }
+    
     // Calculate issue date (use next generation date as issue date)
     // Use local-noon parsing to avoid timezone shifting (PH time can become previous day in UTC).
     const issueDate =
@@ -87,21 +156,26 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     const dueDate = new Date(issueDate);
     dueDate.setDate(dueDate.getDate() + 7); // Default: 7 days after issue date
     
+    // Calculate final invoice amount after promo discount
+    const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
+    const finalInvoiceAmount = Math.max(0, baseAmount - promoDiscount);
+    
     // Create invoice (link to installment invoice profile for phase tracking)
     const invoiceResult = await client.query(
-      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         'TEMP', // Temporary, will be updated
         profile.branch_id || null,
-        installmentInvoice.total_amount_including_tax || profile.amount,
+        finalInvoiceAmount, // Use discounted amount
         'Unpaid',
         `Auto-generated from installment invoice: ${profile.description || 'Installment payment'}`,
         formatYmdLocal(issueDate),
         formatYmdLocal(dueDate),
         null, // System-generated
         installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile for phase tracking
+        shouldApplyPromoDiscount ? promoId : null, // Link promo if discount applied
       ]
     );
     
@@ -127,6 +201,54 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
           : null,
       ]
     );
+    
+    // Apply promo to monthly invoice (discount and/or free merchandise)
+    if (shouldApplyPromoToMonthly && promoData) {
+      // Add discount item if discount was applied
+      if (promoDiscount > 0) {
+        let discountDescription = `Promo: ${promoData.promo_name} (`;
+        if (promoData.promo_type === 'percentage_discount' && promoData.discount_percentage) {
+          discountDescription += `${promoData.discount_percentage}%`;
+        } else if (promoData.promo_type === 'fixed_discount' && promoData.discount_amount) {
+          discountDescription += `PHP ${parseFloat(promoData.discount_amount).toFixed(2)}`;
+        } else if (promoData.promo_type === 'combined') {
+          if (promoData.discount_percentage && parseFloat(promoData.discount_percentage) > 0) {
+            discountDescription += `${promoData.discount_percentage}%`;
+          } else if (promoData.discount_amount && parseFloat(promoData.discount_amount) > 0) {
+            discountDescription += `PHP ${parseFloat(promoData.discount_amount).toFixed(2)}`;
+          }
+        }
+        discountDescription += ' — applied to monthly installment)';
+        
+        await client.query(
+          `INSERT INTO invoiceitemstbl (invoice_id, description, amount, discount_amount)
+           VALUES ($1, $2, $3, $4)`,
+          [newInvoice.invoice_id, discountDescription, 0, promoDiscount]
+        );
+      }
+      
+      // Add free merchandise items if promo includes merchandise (for free_merchandise or combined types)
+      if (promoMerchandise.length > 0) {
+        for (const promoMerch of promoMerchandise) {
+          for (let i = 0; i < (promoMerch.quantity || 1); i++) {
+            await client.query(
+              `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+               VALUES ($1, $2, $3)`,
+              [newInvoice.invoice_id, `Free: ${promoMerch.merchandise_name} (Promo: ${promoData.promo_name})`, 0]
+            );
+          }
+        }
+      }
+      
+      // Increment promo_months_applied counter (transactionally) - only if promo was actually applied
+      // This applies whether it's discount, merchandise, or both
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl 
+         SET promo_months_applied = COALESCE(promo_months_applied, 0) + 1 
+         WHERE installmentinvoiceprofiles_id = $1`,
+        [installmentInvoice.installmentinvoiceprofiles_id]
+      );
+    }
     
     // Link student to invoice
     await client.query(
@@ -242,7 +364,9 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       invoice_id: newInvoice.invoice_id,
       invoice_description: `INV-${newInvoice.invoice_id}`,
       student_name: student.full_name,
-      amount: installmentInvoice.total_amount_including_tax || profile.amount,
+      amount: finalInvoiceAmount, // Return discounted amount
+      original_amount: baseAmount, // Original amount before discount
+      promo_discount: promoDiscount, // Discount applied
       next_generation_date: isLastInvoice ? null : formatYmdLocal(nextGenDate),
       next_invoice_month: isLastInvoice ? null : formatYmdLocal(nextInvoiceMonth),
       generated_count: updatedProfile.rows[0]?.generated_count || newCount,

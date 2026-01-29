@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS public.branchestbl
     country character varying(100) COLLATE pg_catalog."default",
     state_province_region character varying(100) COLLATE pg_catalog."default",
     locale character varying(10) COLLATE pg_catalog."default",
-    currency character varying(10) COLLATE pg_catalog."default",
+    currency character varying(10) COLLATE pg_catalog."default" DEFAULT 'PHP'::character varying,
     CONSTRAINT branchestbl_pkey PRIMARY KEY (branch_id),
     CONSTRAINT branchestbl_branch_email_key UNIQUE (branch_email)
 );
@@ -223,6 +223,10 @@ CREATE TABLE IF NOT EXISTS public.classstudentstbl
     enrolled_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     enrolled_by character varying(255) COLLATE pg_catalog."default",
     phase_number integer,
+    enrollment_status character varying(20) COLLATE pg_catalog."default" DEFAULT 'Active'::character varying,
+    removed_at timestamp without time zone,
+    removed_reason text COLLATE pg_catalog."default",
+    removed_by character varying(255) COLLATE pg_catalog."default",
     CONSTRAINT classstudentstbl_pkey PRIMARY KEY (classstudent_id)
 );
 
@@ -348,6 +352,7 @@ CREATE TABLE IF NOT EXISTS public.invoicestbl
     installmentinvoiceprofiles_id integer,
     package_id integer,
     promo_id integer,
+    late_penalty_applied_for_due_date date,
     CONSTRAINT invoicestbl_pkey PRIMARY KEY (invoice_id)
 );
 
@@ -730,6 +735,37 @@ COMMENT ON COLUMN public.suspensionperiodstbl.affected_class_ids
 
 COMMENT ON COLUMN public.suspensionperiodstbl.auto_reschedule
     IS 'Whether to automatically extend class end dates to reschedule suspended sessions';
+
+CREATE TABLE IF NOT EXISTS public.system_settingstbl
+(
+    setting_id serial NOT NULL,
+    setting_key character varying(100) COLLATE pg_catalog."default" NOT NULL,
+    setting_value text COLLATE pg_catalog."default",
+    setting_type character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'string'::character varying,
+    category character varying(50) COLLATE pg_catalog."default",
+    description text COLLATE pg_catalog."default",
+    branch_id integer,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_by integer,
+    CONSTRAINT system_settingstbl_pkey PRIMARY KEY (setting_id),
+    CONSTRAINT system_settingstbl_unique_key_per_branch UNIQUE (setting_key, branch_id)
+);
+
+COMMENT ON TABLE public.system_settingstbl
+    IS 'Stores configurable system parameters. Supports per-branch overrides and global defaults (branch_id NULL).';
+
+COMMENT ON COLUMN public.system_settingstbl.setting_key
+    IS 'Unique identifier for the setting (e.g., installment_penalty_rate).';
+
+COMMENT ON COLUMN public.system_settingstbl.setting_value
+    IS 'Value stored as text; parsed by setting_type.';
+
+COMMENT ON COLUMN public.system_settingstbl.setting_type
+    IS 'Type hint for parsing/validation (string, int, number, boolean, json).';
+
+COMMENT ON COLUMN public.system_settingstbl.branch_id
+    IS 'NULL = global default. Non-NULL = per-branch override.';
 
 CREATE TABLE IF NOT EXISTS public.userstbl
 (
@@ -1412,6 +1448,22 @@ ALTER TABLE IF EXISTS public.suspensionperiodstbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_suspension_created_by
     ON public.suspensionperiodstbl(created_by);
+
+
+ALTER TABLE IF EXISTS public.system_settingstbl
+    ADD CONSTRAINT system_settingstbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_system_settings_branch_id
+    ON public.system_settingstbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.system_settingstbl
+    ADD CONSTRAINT system_settingstbl_updated_by_fkey FOREIGN KEY (updated_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.userstbl

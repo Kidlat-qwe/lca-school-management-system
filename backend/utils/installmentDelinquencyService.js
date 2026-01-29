@@ -1,10 +1,45 @@
 import { getClient } from '../config/database.js';
+import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
 
-const PENALTY_RATE = 0.10;
+const getDefaultBillingSettings = () => ({
+  installment_penalty_rate: { value: SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue, scope: 'default' },
+  installment_penalty_grace_days: {
+    value: SETTINGS_DEFINITIONS.installment_penalty_grace_days.defaultValue,
+    scope: 'default',
+  },
+  installment_final_dropoff_days: {
+    value: SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue,
+    scope: 'default',
+  },
+});
 
 const round2 = (n) => {
   const x = Number(n) || 0;
   return Math.round(x * 100) / 100;
+};
+
+const addDaysLocalNoon = (dateObj, days) => {
+  const baseYmd = formatYmdLocal(dateObj);
+  const base = parseYmdToLocalNoon(baseYmd);
+  if (!base) return null;
+  const d = new Date(base);
+  d.setDate(d.getDate() + (Number(days) || 0));
+  return d;
+};
+
+const isAfterDate = (a, b) => {
+  const ay = a ? formatYmdLocal(a) : null;
+  const by = b ? formatYmdLocal(b) : null;
+  if (!ay || !by) return false;
+  return ay > by;
+};
+
+const isOnOrAfterDate = (a, b) => {
+  const ay = a ? formatYmdLocal(a) : null;
+  const by = b ? formatYmdLocal(b) : null;
+  if (!ay || !by) return false;
+  return ay >= by;
 };
 
 const computeInvoiceTotals = async (client, invoiceId) => {
@@ -42,8 +77,8 @@ const computeInvoiceTotals = async (client, invoiceId) => {
 
 /**
  * Process delinquent installment invoices:
- * - Apply one-time 10% penalty after due_date (based on remaining balance)
- * - Remove student from class if overdue by >= 1 month (same day-of-month next month)
+ * - Apply one-time penalty after due_date + grace_days (based on remaining balance)
+ * - Remove student from class if overdue by >= final_dropoff_days
  */
 export const processInstallmentDelinquencies = async () => {
   const client = await getClient();
@@ -56,6 +91,8 @@ export const processInstallmentDelinquencies = async () => {
   };
 
   try {
+    const settingsCache = new Map(); // branchId (or 'global') -> effective settings
+
     // Find installment-linked invoices that are overdue and not paid/cancelled
     const candidates = await client.query(
       `SELECT
@@ -65,7 +102,8 @@ export const processInstallmentDelinquencies = async () => {
         i.installmentinvoiceprofiles_id,
         i.late_penalty_applied_for_due_date,
         ip.student_id,
-        ip.class_id
+        ip.class_id,
+        COALESCE(ip.branch_id, i.branch_id) as branch_id
        FROM invoicestbl i
        INNER JOIN installmentinvoiceprofilestbl ip
          ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
@@ -98,6 +136,7 @@ export const processInstallmentDelinquencies = async () => {
 
         const invoice = invoiceLock.rows[0];
         const dueDate = invoice.due_date; // Date object (pg)
+        const today = new Date();
 
         const { remainingBalance } = await computeInvoiceTotals(client, invoiceId);
 
@@ -107,13 +146,46 @@ export const processInstallmentDelinquencies = async () => {
           continue;
         }
 
+        // Get effective billing settings for this branch (with safe fallback if settings table doesn't exist yet)
+        const branchId = row.branch_id !== undefined && row.branch_id !== null ? Number(row.branch_id) : null;
+        const cacheKey = branchId === null ? 'global' : String(branchId);
+        let effective = settingsCache.get(cacheKey);
+        if (!effective) {
+          try {
+            effective = await getEffectiveSettings(
+              client,
+              ['installment_penalty_rate', 'installment_penalty_grace_days', 'installment_final_dropoff_days'],
+              branchId
+            );
+          } catch {
+            effective = getDefaultBillingSettings();
+          }
+          settingsCache.set(cacheKey, effective);
+        }
+
+        const penaltyRate = Number(effective.installment_penalty_rate?.value);
+        const graceDays = Number(effective.installment_penalty_grace_days?.value);
+        const finalDropoffDays = Number(effective.installment_final_dropoff_days?.value);
+
+        // Penalty applies when CURRENT_DATE > due_date + graceDays
+        const graceThreshold = addDaysLocalNoon(dueDate, graceDays);
+        const isPenaltyEligible = graceThreshold ? isAfterDate(today, graceThreshold) : true;
+
+        // Removal applies when CURRENT_DATE >= due_date + finalDropoffDays
+        const dropoffThreshold = addDaysLocalNoon(dueDate, finalDropoffDays);
+        const isRemovalEligible = dropoffThreshold ? isOnOrAfterDate(today, dropoffThreshold) : false;
+
         // 1) One-time penalty (guarded by due_date)
         const alreadyAppliedForDueDate =
           invoice.late_penalty_applied_for_due_date &&
-          String(invoice.late_penalty_applied_for_due_date) === String(dueDate);
+          formatYmdLocal(invoice.late_penalty_applied_for_due_date) === formatYmdLocal(dueDate);
 
-        if (!alreadyAppliedForDueDate) {
-          const penalty = round2(remainingBalance * PENALTY_RATE);
+        if (!alreadyAppliedForDueDate && isPenaltyEligible) {
+          const safeRate = Number.isFinite(penaltyRate)
+            ? penaltyRate
+            : SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue;
+          const penalty = round2(remainingBalance * safeRate);
+          const penaltyPctLabel = Math.round(safeRate * 100);
 
           if (penalty > 0) {
             await client.query(
@@ -122,7 +194,7 @@ export const processInstallmentDelinquencies = async () => {
                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
               [
                 invoiceId,
-                'Late Payment Penalty (10%)',
+                `Late Payment Penalty (${penaltyPctLabel}%)`,
                 0,
                 0,
                 penalty,
@@ -168,17 +240,8 @@ export const processInstallmentDelinquencies = async () => {
           }
         }
 
-        // 2) Auto removal when overdue by >= 1 month (same day-of-month logic via interval '1 month')
-        const overdueMonthCheck = await client.query(
-          `SELECT 1
-           FROM invoicestbl
-           WHERE invoice_id = $1
-             AND due_date IS NOT NULL
-             AND (due_date + INTERVAL '1 month') <= CURRENT_DATE`,
-          [invoiceId]
-        );
-
-        if (overdueMonthCheck.rows.length > 0 && row.class_id && row.student_id) {
+        // 2) Auto removal when overdue by >= final_dropoff_days
+        if (isRemovalEligible && row.class_id && row.student_id) {
           // Recompute after any penalty insertion to ensure remaining > 0
           const totalsForRemoval = await computeInvoiceTotals(client, invoiceId);
           if (totalsForRemoval.remainingBalance > 0) {
@@ -192,7 +255,11 @@ export const processInstallmentDelinquencies = async () => {
                  AND student_id = $4
                  AND COALESCE(enrollment_status, 'Active') = 'Active'`,
               [
-                'Installment delinquency (>= 1 month overdue)',
+                `Installment delinquency (>= ${
+                  Number.isFinite(finalDropoffDays)
+                    ? finalDropoffDays
+                    : SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue
+                } days overdue)`,
                 'System',
                 row.class_id,
                 row.student_id,

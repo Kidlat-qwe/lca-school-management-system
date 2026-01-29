@@ -706,6 +706,213 @@ router.get(
 );
 
 /**
+ * POST /api/sms/invoices/:id/send-overdue-email
+ * Send overdue payment reminder email to student(s) for an invoice
+ * Access: Superadmin, Admin, Finance
+ */
+router.post(
+  '/:id/send-overdue-email',
+  [
+    param('id').isInt().withMessage('Invoice ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { id } = req.params;
+
+      // Get invoice details
+      const invoiceResult = await client.query(
+        `SELECT i.*, b.branch_name
+         FROM invoicestbl i
+         LEFT JOIN branchestbl b ON i.branch_id = b.branch_id
+         WHERE i.invoice_id = $1`,
+        [id]
+      );
+
+      if (invoiceResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+      }
+
+      const invoice = invoiceResult.rows[0];
+
+      // Check if invoice is overdue and not paid
+      const today = new Date();
+      const dueDate = new Date(invoice.due_date);
+      const isOverdue = dueDate < today;
+      const isPaid = invoice.status === 'Paid';
+
+      if (!isOverdue) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invoice is not overdue. Email can only be sent for overdue invoices.',
+        });
+      }
+
+      if (isPaid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invoice is already paid. Email can only be sent for unpaid invoices.',
+        });
+      }
+
+      // Get students linked to this invoice
+      const studentsResult = await client.query(
+        `SELECT inv_student.*, u.full_name, u.email
+         FROM invoicestudentstbl inv_student
+         JOIN userstbl u ON inv_student.student_id = u.user_id
+         WHERE inv_student.invoice_id = $1`,
+        [id]
+      );
+
+      if (studentsResult.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No students found for this invoice',
+        });
+      }
+
+      // Get invoice items to calculate outstanding balance
+      const itemsResult = await client.query(
+        'SELECT * FROM invoiceitemstbl WHERE invoice_id = $1',
+        [id]
+      );
+
+      // Calculate totals
+      const totals = itemsResult.rows.reduce(
+        (acc, item) => {
+          const amt = Number(item.amount) || 0;
+          const discount = Number(item.discount_amount) || 0;
+          const penalty = Number(item.penalty_amount) || 0;
+          const taxPct = Number(item.tax_percentage) || 0;
+          const taxableBase = amt - discount + penalty;
+          const tax = taxableBase * (taxPct / 100);
+          acc.subtotal += amt;
+          acc.discount += discount;
+          acc.penalty += penalty;
+          acc.tax += tax;
+          return acc;
+        },
+        { subtotal: 0, discount: 0, penalty: 0, tax: 0 }
+      );
+      const grandTotal = totals.subtotal - totals.discount + totals.penalty + totals.tax;
+
+      // Get total payments
+      const paymentsResult = await client.query(
+        `SELECT COALESCE(SUM(payable_amount), 0) as total_payments
+         FROM paymentstbl
+         WHERE invoice_id = $1`,
+        [id]
+      );
+      const totalPayments = Number(paymentsResult.rows[0]?.total_payments || 0);
+      const outstandingBalance = grandTotal - totalPayments;
+
+      // Get class name if invoice is linked to enrollment
+      let className = null;
+      try {
+        const enrollmentResult = await client.query(
+          `SELECT c.class_name
+           FROM enrollmentstbl e
+           JOIN classestbl c ON e.class_id = c.class_id
+           JOIN invoicestudentstbl inv_student ON e.student_id = inv_student.student_id
+           WHERE inv_student.invoice_id = $1
+           LIMIT 1`,
+          [id]
+        );
+        if (enrollmentResult.rows.length > 0) {
+          className = enrollmentResult.rows[0].class_name;
+        }
+      } catch (err) {
+        // Class name is optional, continue without it
+        console.warn('Could not fetch class name for invoice:', err);
+      }
+
+      // Import email service
+      const { sendOverduePaymentReminderEmail } = await import('../utils/emailService.js');
+
+      // Send email to each student
+      const emailResults = [];
+      for (const student of studentsResult.rows) {
+        // Send to BOTH: guardian email (if exists) and the student's registered email
+        const guardianResult = await client.query(
+          `SELECT guardian_name, email
+           FROM guardianstbl
+           WHERE student_id = $1
+           ORDER BY guardian_id ASC
+           LIMIT 1`,
+          [student.student_id]
+        );
+        const guardian = guardianResult.rows[0] || null;
+        const parentName = guardian?.guardian_name || null;
+        const recipientEmails = Array.from(
+          new Set([guardian?.email, student.email].filter((e) => e && String(e).trim() !== ''))
+        );
+
+        if (recipientEmails.length === 0) {
+          emailResults.push({
+            student_id: student.student_id,
+            student_name: student.full_name,
+            success: false,
+            message: 'No email address found for guardian or student',
+          });
+          continue;
+        }
+
+        try {
+          await sendOverduePaymentReminderEmail({
+            to: recipientEmails,
+            parentName,
+            studentName: student.full_name,
+            invoiceId: invoice.invoice_id,
+            invoiceNumber: invoice.invoice_description || `INV-${invoice.invoice_id}`,
+            invoiceDescription: invoice.invoice_description || `INV-${invoice.invoice_id}`,
+            amount: outstandingBalance,
+            dueDate: invoice.due_date,
+            className: className,
+            centerName: invoice.branch_name || null,
+            facebookLink: 'https://www.facebook.com/littlechampionsacademy',
+          });
+
+          emailResults.push({
+            student_id: student.student_id,
+            student_name: student.full_name,
+            email: recipientEmails,
+            success: true,
+            message: 'Email sent successfully',
+          });
+        } catch (emailError) {
+          console.error(`Error sending email to ${recipientEmails.join(', ')}:`, emailError);
+          emailResults.push({
+            student_id: student.student_id,
+            student_name: student.full_name,
+            email: recipientEmails,
+            success: false,
+            message: emailError.message || 'Failed to send email',
+          });
+        }
+      }
+
+      const successCount = emailResults.filter(r => r.success).length;
+      const failCount = emailResults.filter(r => !r.success).length;
+
+      res.json({
+        success: true,
+        message: `Email sent to ${successCount} student(s). ${failCount > 0 ? `${failCount} failed.` : ''}`,
+        results: emailResults,
+      });
+    } catch (error) {
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * POST /api/sms/invoices
  * Create new invoice with items and students
  * Access: Superadmin, Admin

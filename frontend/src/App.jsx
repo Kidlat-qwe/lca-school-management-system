@@ -22,6 +22,7 @@ import InstallmentInvoice from './pages/superadmin/InstallmentInvoice';
 import PaymentLogs from './pages/superadmin/PaymentLogs';
 import CalendarSchedule from './pages/superadmin/CalendarSchedule';
 import Announcements from './pages/superadmin/Announcements';
+import Settings from './pages/superadmin/Settings';
 import AdminDashboard from './pages/admin/adminDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
@@ -39,6 +40,7 @@ import AdminRoom from './pages/admin/adminRoom';
 import AdminInvoice from './pages/admin/adminInvoice';
 import AdminInstallmentInvoice from './pages/admin/adminInstallmentInvoice';
 import AdminPaymentLogs from './pages/admin/adminPaymentLogs';
+import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
 import TeacherCalendar from './pages/teacher/teacherCalendar';
 import TeacherClasses from './pages/teacher/teacherClasses';
@@ -98,6 +100,7 @@ function App() {
             <Route path="payment-logs" element={<PaymentLogs />} />
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="announcements" element={<Announcements />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
           
           {/* Admin Routes */}
@@ -126,6 +129,7 @@ function App() {
             <Route path="invoice" element={<AdminInvoice />} />
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
+            <Route path="settings" element={<AdminSettings />} />
           </Route>
           
           {/* Teacher Routes */}

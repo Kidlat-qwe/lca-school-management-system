@@ -815,8 +815,8 @@ View curriculum details for your classes. Access learning topics, goals, and age
 
 ## Document Information
 
-**Version**: 1.0
-**Last Updated**: January 2026
+**Version**: 1.2
+**Last Updated**: January 29, 2026
 **Role**: Teacher
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.

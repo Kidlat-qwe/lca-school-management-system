@@ -130,22 +130,26 @@ const InstallmentInvoice = () => {
     const generationDate = new Date(issueDate);
 
     // Next invoice defaults:
-    // - next_issue_date: empty (user must set)
-    // - next_due_date: empty (user must set)
-    // - next_invoice_month: after current month (frequency-based)
-    // - next_generation_date: empty (user must set)
+    // - next_issue_date: first day of next invoice month
+    // - next_due_date: 7th day of next invoice month
+    // - next_invoice_month: after current month (frequency-based; stored as 1st of month)
+    // - next_generation_date: first day of next invoice month
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
+    nextInvoiceMonth.setDate(1);
+
+    const nextDueDate = new Date(nextInvoiceMonth);
+    nextDueDate.setDate(7);
     
     setGenerateFormData({
       issue_date: formatYmd(issueDate),
       due_date: formatYmd(dueDate),
       invoice_month: formatYmd(invoiceMonth),
       generation_date: formatYmd(generationDate),
-      next_issue_date: '',
-      next_due_date: '',
+      next_issue_date: formatYmd(nextInvoiceMonth),
+      next_due_date: formatYmd(nextDueDate),
       next_invoice_month: formatYmd(nextInvoiceMonth),
-      next_generation_date: '',
+      next_generation_date: formatYmd(nextInvoiceMonth),
     });
     
     setIsGenerateModalOpen(true);
@@ -639,6 +643,10 @@ const InstallmentInvoice = () => {
                           const months = getFrequencyMonths(selectedInvoiceForGeneration?.frequency);
                           const nextInvoiceMonth = new Date(invoiceMonth);
                           nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
+                          nextInvoiceMonth.setDate(1);
+
+                          const nextDue = new Date(nextInvoiceMonth);
+                          nextDue.setDate(7);
 
                           setGenerateFormData({
                             ...generateFormData,
@@ -646,7 +654,10 @@ const InstallmentInvoice = () => {
                             due_date: formatYmd(due),
                             invoice_month: formatYmd(invoiceMonth),
                             generation_date: formatYmd(issue),
+                            next_issue_date: formatYmd(nextInvoiceMonth),
+                            next_due_date: formatYmd(nextDue),
                             next_invoice_month: formatYmd(nextInvoiceMonth),
+                            next_generation_date: formatYmd(nextInvoiceMonth),
                           });
                         }}
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
@@ -671,7 +682,6 @@ const InstallmentInvoice = () => {
                           generateFormErrors.due_date ? 'border-red-500' : 'border-gray-300'
                         }`}
                         required
-                        disabled
                       />
                       {generateFormErrors.due_date && (
                         <p className="text-red-500 text-xs mt-1">{generateFormErrors.due_date}</p>
@@ -690,7 +700,6 @@ const InstallmentInvoice = () => {
                           generateFormErrors.invoice_month ? 'border-red-500' : 'border-gray-300'
                         }`}
                         required
-                        disabled
                       />
                       {generateFormErrors.invoice_month && (
                         <p className="text-red-500 text-xs mt-1">{generateFormErrors.invoice_month}</p>
@@ -706,7 +715,6 @@ const InstallmentInvoice = () => {
                         value={generateFormData.generation_date}
                         onChange={(e) => setGenerateFormData({ ...generateFormData, generation_date: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                        disabled
                       />
                     </div>
                   </div>
@@ -758,7 +766,26 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.next_invoice_month}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, next_invoice_month: e.target.value })}
+                        onChange={(e) => {
+                          const picked = parseYmdLocalNoon(e.target.value);
+                          if (!picked) {
+                            setGenerateFormData({ ...generateFormData, next_invoice_month: e.target.value });
+                            return;
+                          }
+
+                          const monthFirst = new Date(picked);
+                          monthFirst.setDate(1);
+                          const due = new Date(monthFirst);
+                          due.setDate(7);
+
+                          setGenerateFormData({
+                            ...generateFormData,
+                            next_invoice_month: formatYmd(monthFirst),
+                            next_issue_date: formatYmd(monthFirst),
+                            next_due_date: formatYmd(due),
+                            next_generation_date: formatYmd(monthFirst),
+                          });
+                        }}
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.next_invoice_month ? 'border-red-500' : 'border-gray-300'
                         }`}

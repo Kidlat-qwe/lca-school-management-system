@@ -354,8 +354,9 @@ View available enrollment packages. See what packages are available for enrollme
 
 - **Full Payment**: Pay entire amount at once
 - **Installment**: Pay in monthly installments
-  - Monthly amount shown
-  - Downpayment required (if applicable)
+  - **Down payment**: Initial downpayment amount (shown clearly)
+  - **Monthly**: Monthly installment amount (shown clearly)
+  - Both amounts are displayed when viewing Installment packages
 
 **Viewing Package Details**
 
@@ -374,8 +375,9 @@ View available enrollment packages. See what packages are available for enrollme
 - **Level Tag**: Educational level (Nursery, Pre-Kindergarten, etc.)
 - **Package Price**: 
   - For Full Payment: Total price
-  - For Installment: Monthly installment amount
-- **Downpayment**: Initial downpayment (for Installment packages)
+  - For Installment: Shows both:
+    - **Down payment**: Initial downpayment amount
+    - **Monthly**: Monthly installment amount
 - **Description**: What the package includes
 - **Phase Coverage**: Which phases are covered
 
@@ -929,8 +931,8 @@ Each payment shows:
 
 ## Document Information
 
-**Version**: 1.0
-**Last Updated**: January 2026
+**Version**: 1.2
+**Last Updated**: January 29, 2026
 **Role**: Student
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.

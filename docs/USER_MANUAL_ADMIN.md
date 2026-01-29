@@ -10,6 +10,7 @@
    - [Calendar](#calendar)
    - [Announcements](#announcements)
    - [Personnel Management](#personnel-management)
+   - [Students](#students)
    - [Guardians](#guardians)
    - [Curriculum](#curriculum)
    - [Program](#program)
@@ -22,6 +23,7 @@
    - [Invoice Management](#invoice-management)
    - [Installment Invoice](#installment-invoice)
    - [Payment Logs](#payment-logs)
+   - [Settings](#settings)
 6. [Common Workflows](#common-workflows)
 7. [Troubleshooting](#troubleshooting)
 
@@ -62,7 +64,7 @@ This manual is specifically designed for **Admin** users of the Physical School 
 
 ### What You Can Do
 
-- Manage all personnel (Teachers, Students, Finance) for your branch
+- Manage branch users (Teachers/Finance via `Manage Users → Personnel`, Students via `Manage Users → Student`)
 - Create and manage classes
 - Manage curriculum and programs for your branch
 - Handle financial operations (invoices, payments)
@@ -130,7 +132,7 @@ The Admin Dashboard provides a comprehensive overview of your branch's operation
 
 ### Calendar
 
-**Path**: Calendar → Calendar Schedule
+**Path**: Calendar
 
 #### Purpose
 
@@ -234,22 +236,22 @@ Create, view, and manage announcements for your branch. Send messages to student
 
 #### Purpose
 
-Manage all users (personnel) for your branch. Create, edit, and manage Teachers, Students, and Finance users.
+Manage your branch staff accounts (non-students). This page is for **Teacher** and **Finance** users in your branch.
 
 #### Features
 
 **Viewing Personnel**
-- See all users in your branch
-- Filter by User Type (Teacher, Student, Finance)
-- Search by name or email
+- See all non-student users in your branch
+- Filter by Role (Teacher, Finance)
+- Search by name
 - View user details in table format
 
 **Table Columns**
 - Full Name
 - Email
-- User Type
-- Branch (your branch)
-- Phone Number
+- Role
+- Level Tag (if any)
+- Status
 - Actions (Edit, Delete)
 
 **Creating New Users**
@@ -259,28 +261,19 @@ Manage all users (personnel) for your branch. Create, edit, and manage Teachers,
    - **Full Name**: User's full name (required)
    - **Email**: Unique email address (required)
    - **Password**: Initial password (required, min 6 characters)
-   - **User Type**: Select from:
-     - Student
-     - Teacher
-     - Finance
-     - Admin (Note: You cannot create Admin users)
-   - **Gender**: Select from dropdown
-   - **Date of Birth**: Select date
-   - **Phone Number**: Contact number
+   - **Role**: Teacher or Finance
+   - **Phone**: Optional
    - **Branch**: Automatically set to your branch (cannot change)
-   - **Level Tag**: Required for Students (Nursery, Pre-K, etc.)
 3. Click "Create User"
 
-**User Types You Can Create**
+#### Important Notes
 
-- **Student**: Students enrolled in your branch
-- **Teacher**: Teaching staff for your branch
-- **Finance**: Finance staff for your branch (branch-level)
-
-**User Types You Cannot Create**
-
-- **Superadmin**: Only Superadmin can create
-- **Admin**: Only Superadmin can create
+- Students are managed in `Manage Users → Student`, not in `Personnel`.
+- Admin users cannot create other Admin/Superadmin accounts.
+- Email addresses must be unique.
+- Passwords must be at least 6 characters.
+- You can only manage users from your branch.
+- Deleting a user is permanent and may affect related records.
 
 **Editing Users**
 
@@ -297,17 +290,55 @@ Manage all users (personnel) for your branch. Create, edit, and manage Teachers,
 
 **Search and Filter**
 
-- **Search Bar**: Type name or email to search
-- **Filter by User Type**: Select from dropdown
-- **Clear Filters**: Click "Clear" to reset
+- **Search Bar**: Type a name to search
+- **Filter by Role**: Select from dropdown
+- **Reset**: Choose "All Roles" and clear the search box
 
-#### Important Notes
+---
 
-- Email addresses must be unique
-- Passwords must be at least 6 characters
-- Students require a Level Tag
-- You can only manage users from your branch
-- Deleting a user is permanent and may affect related records
+### Students
+
+**Path**: Manage Users → Student
+
+#### Purpose
+
+Create and manage **Student** accounts for your branch. Student creation also collects the student’s **guardian information**.
+
+#### Features
+
+**Viewing Students**
+- See all students in your branch
+- Search by student name
+- View basic info (email, level tag, phone)
+
+**Creating a Student**
+
+1. Click "Add Student"
+2. Fill in **Student Information**:
+   - **Full Name** (required)
+   - **Email** (required)
+   - **Password** (required when creating)
+   - **Phone Number** (optional)
+   - **Branch**: fixed to your branch
+   - **Level Tag** (required): Playgroup, Nursery, Pre-Kindergarten, Kindergarten, Grade School
+3. Fill in **Guardian Information** (required):
+   - **Guardian Name**
+   - **Guardian Email**
+   - **Relationship**
+   - **Guardian Phone Number**
+   - **Guardian Gender**
+   - **Address / City / Postal Code / State-Province-Region / Country**
+4. Click "Create Student"
+
+**Editing a Student**
+- Click the three-dots menu → **Edit**
+- Email is locked (cannot be changed)
+- Password is optional (leave blank to keep current)
+- Update guardian details as needed
+
+**Deleting a Student**
+- Click the three-dots menu → **Delete**
+- Confirm deletion
 
 ---
 
@@ -1102,21 +1133,52 @@ Create and manage promotional offers and discounts for your branch. Promos can b
    - **Promo Type**: Select from:
      - Percentage Discount (e.g., 10% off)
      - Fixed Amount Discount (e.g., $50 off)
+     - Free Merchandise
+     - Combined (discount + merchandise)
      - Referral Bonus
-   - **Discount Value**: Amount or percentage (required)
+   - **Discount Value**: Amount or percentage (required for discount types)
    - **Start Date**: When promo becomes active (required)
    - **End Date**: When promo expires (required)
    - **Status**: Active or Inactive (required)
    - **Applicable Branches**: Select branches (your branch or all)
    - **Applicable Packages**: Select packages that can use this promo
+   - **Student Eligibility**: Select eligibility type:
+     - All Students: Available to all students
+     - New Enrollees Only: Only for new students
+     - Returning Students Only: Only for returning students
+     - Specific Students: Select individual students
    - **Usage Limits**: Maximum times promo can be used (optional)
+   - **For Installment Packages** (when Installment package is selected):
+     - **Apply Promo To**: Select where promo applies:
+       - Downpayment: Promo applies only to downpayment invoice
+       - Monthly: Promo applies to monthly installment invoices
+       - Both: Promo applies to both downpayment and monthly invoices
+     - **Number of Monthly Invoices to Apply Promo**: If "Monthly" or "Both" is selected, specify how many monthly invoices should receive the promo (e.g., 3 months)
 3. Click "Save"
 
 **Promo Types Explained**
 
 - **Percentage Discount**: Reduces price by percentage (e.g., 10% = 10% off)
 - **Fixed Amount Discount**: Reduces price by fixed amount (e.g., $50 off)
+- **Free Merchandise**: Provides free merchandise items (select merchandise items to include)
+- **Combined**: Provides both discount and free merchandise
 - **Referral Bonus**: Special discount for referrals
+
+**Installment Package Promo Scope**
+
+When creating a promo for Installment packages, you can specify where the promo applies:
+
+- **Downpayment Only**: Promo discount/benefits apply only to the initial downpayment invoice
+- **Monthly Only**: Promo applies to monthly installment invoices only (not downpayment)
+  - Specify how many monthly invoices should receive the promo (e.g., first 3 months)
+- **Both**: Promo applies to both downpayment and monthly invoices
+  - For monthly invoices, specify how many months should receive the promo
+
+**Promo Usage Tracking**
+
+- Promo usage is tracked **once per student per promo per package**
+- This means a student can use the same promo code for different packages
+- But cannot use the same promo code twice for the same package
 
 **Editing Promos**
 
@@ -1546,6 +1608,81 @@ When a payment is recorded, the system automatically:
 
 ---
 
+### Settings
+
+**Path**: Settings
+
+#### Purpose
+
+Configure system-wide settings for your branch, including installment delinquency management. These settings control how the system handles overdue installment payments.
+
+#### Features
+
+**Viewing Settings**
+
+- See current effective settings for your branch
+- Settings may inherit from global defaults or be branch-specific
+- View which settings are branch-specific vs global
+
+**Installment Delinquency Settings**
+
+Configure how the system handles overdue installment payments:
+
+1. **Penalty Rate (%)**: 
+   - Percentage penalty applied to overdue installment invoices
+   - Range: 0-100%
+   - Example: 10% means 10% penalty on overdue amount
+   - Applied after grace period expires
+
+2. **Grace Period (Days)**:
+   - Number of days after due date before penalty is applied
+   - Range: 0-365 days
+   - Example: 7 days means penalty applies 7 days after due date
+   - Set to 0 to apply penalty immediately on overdue
+
+3. **Final Drop-off Days**:
+   - Number of days overdue before student is automatically removed from enrollment
+   - Range: 0-365 days
+   - Example: 30 days means student removed 30 days after due date
+   - Set to 0 to disable automatic removal
+
+**Updating Settings**
+
+1. Navigate to Settings page
+2. Review current effective settings
+3. Modify values as needed:
+   - Enter penalty rate as percentage (e.g., "10" for 10%)
+   - Enter grace period in days (e.g., "7" for 7 days)
+   - Enter final drop-off days (e.g., "30" for 30 days)
+4. Click "Save Settings"
+5. Settings are applied immediately to your branch
+
+**How Settings Work**
+
+- Settings are branch-specific (apply only to your branch)
+- System automatically applies penalties based on these settings
+- Penalties are added to overdue invoices automatically
+- Students are automatically removed after final drop-off period expires
+- Settings affect all installment invoices in your branch
+
+**Understanding Effective Settings**
+
+- Settings may show "Global" or "Branch" scope
+- "Global" means using system-wide default
+- "Branch" means using your branch-specific setting
+- Branch settings override global defaults
+
+#### Important Notes
+
+- Settings apply to all installment invoices in your branch
+- Changes take effect immediately for new overdue invoices
+- Existing overdue invoices may need manual processing
+- Penalty rate is applied as percentage of overdue amount
+- Grace period gives students time before penalty applies
+- Final drop-off automatically removes students after specified days
+
+---
+
 ## Common Workflows
 
 ### Workflow 1: Enrolling a New Student (Full Payment)
@@ -1553,8 +1690,9 @@ When a payment is recorded, the system automatically:
 **Steps:**
 
 1. **Create Student Account** (if not exists)
-   - Go to Personnel → Add Personnel
-   - Create Student user
+   - Go to Manage Users → Student
+   - Click "Add Student"
+   - Fill student + guardian information (required)
    - Set Level Tag
 
 2. **Create Class** (if not exists)
@@ -1757,8 +1895,8 @@ When a payment is recorded, the system automatically:
 
 ## Document Information
 
-**Version**: 1.0
-**Last Updated**: January 2026
+**Version**: 1.2
+**Last Updated**: January 29, 2026
 **Role**: Admin
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.

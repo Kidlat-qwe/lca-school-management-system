@@ -31,7 +31,34 @@ router.get(
       const { branch_id, user_type, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
-      let sql = 'SELECT * FROM userstbl WHERE 1=1';
+      // Check if last_login column exists
+      let hasLastLoginColumn = false;
+      try {
+        const columnCheck = await query(
+          `SELECT column_name FROM information_schema.columns 
+           WHERE table_name = 'userstbl' AND column_name = 'last_login'`
+        );
+        hasLastLoginColumn = columnCheck.rows.length > 0;
+      } catch (checkError) {
+        console.warn('Could not check for last_login column:', checkError);
+      }
+
+      // Build SELECT with last_login formatted in Philippines timezone if column exists
+      // Since last_login is stored as timestamp without time zone in Philippines time,
+      // we format it directly (it's already in Philippines timezone)
+      let sql = hasLastLoginColumn
+        ? `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, 
+                  branch_id, level_tag, profile_picture_url, firebase_uid,
+                  CASE 
+                    WHEN last_login IS NOT NULL 
+                    THEN TO_CHAR(last_login, 'YYYY-MM-DD HH24:MI:SS')
+                    ELSE NULL
+                  END as last_login
+           FROM userstbl WHERE 1=1`
+        : `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, 
+                  branch_id, level_tag, profile_picture_url, firebase_uid,
+                  NULL as last_login
+           FROM userstbl WHERE 1=1`;
       const params = [];
       let paramCount = 0;
 

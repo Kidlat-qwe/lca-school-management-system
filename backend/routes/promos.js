@@ -62,6 +62,8 @@ router.get(
           p.description,
           p.created_at,
           p.updated_at,
+          p.installment_apply_scope,
+          p.installment_months_to_apply,
           pkg.package_name,
           b.branch_name
         FROM promostbl p
@@ -232,7 +234,7 @@ router.get(
     try {
       const { id } = req.params;
       const result = await query(
-        `SELECT 
+        `        SELECT 
           p.promo_id,
           p.promo_name,
           p.package_id,
@@ -251,6 +253,8 @@ router.get(
           p.description,
           p.created_at,
           p.updated_at,
+          p.installment_apply_scope,
+          p.installment_months_to_apply,
           pkg.package_name,
           b.branch_name
         FROM promostbl p
@@ -549,6 +553,8 @@ router.get(
           p.eligibility_type,
           p.status,
           p.description,
+          p.installment_apply_scope,
+          p.installment_months_to_apply,
           pkg.package_name,
           pkg.package_price,
           b.branch_name
@@ -804,6 +810,8 @@ router.post(
         status = 'Active',
         description,
         merchandise = [],
+        installment_apply_scope, // For Installment packages: downpayment, monthly, or both
+        installment_months_to_apply, // Number of months to apply promo for monthly scope
       } = req.body;
 
       // Determine which packages to use (prefer package_ids array, fall back to package_id)
@@ -909,6 +917,55 @@ router.post(
           success: false,
           message: 'Combined promo requires at least a discount or merchandise',
         });
+      }
+
+      // Validate installment scope fields if provided
+      if (installment_apply_scope !== undefined && installment_apply_scope !== null) {
+        // Check if any selected package is Installment type
+        const packageTypesResult = await client.query(
+          `SELECT DISTINCT package_type FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
+          finalPackageIds
+        );
+        const hasInstallmentPackage = packageTypesResult.rows.some(p => p.package_type === 'Installment');
+        
+        if (hasInstallmentPackage) {
+          // Validate scope value
+          if (!['downpayment', 'monthly', 'both'].includes(installment_apply_scope)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Installment apply scope must be downpayment, monthly, or both',
+            });
+          }
+          
+          // If scope includes monthly, months_to_apply is required
+          if ((installment_apply_scope === 'monthly' || installment_apply_scope === 'both') && 
+              (!installment_months_to_apply || installment_months_to_apply < 1)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'installment_months_to_apply is required and must be at least 1 when scope includes monthly',
+            });
+          }
+          
+          // If scope is downpayment only, months_to_apply should be null
+          if (installment_apply_scope === 'downpayment' && installment_months_to_apply !== null && installment_months_to_apply !== undefined) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'installment_months_to_apply should be null when scope is downpayment only',
+            });
+          }
+        } else {
+          // No Installment packages selected, clear installment scope fields
+          installment_apply_scope = null;
+          installment_months_to_apply = null;
+        }
+      } else {
+        // If scope not provided but months_to_apply is, clear months_to_apply
+        if (installment_months_to_apply !== undefined && installment_months_to_apply !== null) {
+          installment_months_to_apply = null;
+        }
       }
 
       // Create promo (use first package_id for backward compatibility, or null if using junction table only)
@@ -1077,6 +1134,14 @@ router.put(
       .withMessage('Promo code must be 4-20 characters')
       .matches(/^[A-Z0-9-]+$/)
       .withMessage('Promo code must contain only uppercase letters, numbers, and hyphens'),
+    body('installment_apply_scope')
+      .optional({ nullable: true })
+      .isIn(['downpayment', 'monthly', 'both'])
+      .withMessage('Installment apply scope must be downpayment, monthly, or both'),
+    body('installment_months_to_apply')
+      .optional({ nullable: true })
+      .isInt({ min: 1 })
+      .withMessage('Installment months to apply must be a positive integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -1100,6 +1165,8 @@ router.put(
         status,
         description,
         merchandise, // For updating merchandise
+        installment_apply_scope,
+        installment_months_to_apply,
       } = req.body;
 
       // Check if promo exists
@@ -1185,6 +1252,68 @@ router.put(
         });
       }
 
+      // Validate installment scope fields if provided
+      if (installment_apply_scope !== undefined && installment_apply_scope !== null) {
+        // Get package types for validation
+        let packageTypesToCheck = [];
+        if (finalPackageIds !== null) {
+          const packageTypesResult = await query(
+            `SELECT DISTINCT package_type FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
+            finalPackageIds
+          );
+          packageTypesToCheck = packageTypesResult.rows.map(p => p.package_type);
+        } else {
+          // Use existing promo's packages
+          const existingPackagesResult = await query(
+            `SELECT DISTINCT pkg.package_type 
+             FROM promopackagestbl pp
+             JOIN packagestbl pkg ON pp.package_id = pkg.package_id
+             WHERE pp.promo_id = $1`,
+            [id]
+          );
+          packageTypesToCheck = existingPackagesResult.rows.map(p => p.package_type);
+        }
+        
+        const hasInstallmentPackage = packageTypesToCheck.some(p => p === 'Installment');
+        
+        if (hasInstallmentPackage) {
+          // Validate scope value
+          if (!['downpayment', 'monthly', 'both'].includes(installment_apply_scope)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Installment apply scope must be downpayment, monthly, or both',
+            });
+          }
+          
+          // If scope includes monthly, months_to_apply is required
+          if ((installment_apply_scope === 'monthly' || installment_apply_scope === 'both') && 
+              (!installment_months_to_apply || installment_months_to_apply < 1)) {
+            return res.status(400).json({
+              success: false,
+              message: 'installment_months_to_apply is required and must be at least 1 when scope includes monthly',
+            });
+          }
+          
+          // If scope is downpayment only, months_to_apply should be null
+          if (installment_apply_scope === 'downpayment' && installment_months_to_apply !== null && installment_months_to_apply !== undefined) {
+            return res.status(400).json({
+              success: false,
+              message: 'installment_months_to_apply should be null when scope is downpayment only',
+            });
+          }
+        } else {
+          // No Installment packages, clear installment scope fields
+          installment_apply_scope = null;
+          installment_months_to_apply = null;
+        }
+      } else if (installment_apply_scope === null) {
+        // Explicitly clearing the scope
+        installment_months_to_apply = null;
+      } else if (installment_months_to_apply !== undefined && installment_months_to_apply !== null && installment_apply_scope === undefined) {
+        // If months_to_apply is provided but scope is not, clear months_to_apply
+        installment_months_to_apply = null;
+      }
+
       // Build update query
       const updates = [];
       const params = [];
@@ -1222,6 +1351,8 @@ router.put(
       addField('eligibility_type', eligibility_type);
       addField('status', status);
       addField('description', description);
+      addField('installment_apply_scope', installment_apply_scope);
+      addField('installment_months_to_apply', installment_months_to_apply);
       
       fields.updated_at = 'CURRENT_TIMESTAMP';
 
@@ -1542,7 +1673,9 @@ router.post(
           p.eligibility_type,
           p.status,
           p.description,
-          p.branch_id
+          p.branch_id,
+          p.installment_apply_scope,
+          p.installment_months_to_apply
         FROM promostbl p
         WHERE UPPER(p.promo_code) = $1`,
         [normalizedCode]

@@ -3996,6 +3996,16 @@ router.post(
              WHERE p.promo_id = $1 AND p.status = 'Active'`,
             [promo_id]
           );
+          
+          // Get promo scope fields
+          const promoScopeResult = await client.query(
+            `SELECT installment_apply_scope, installment_months_to_apply 
+             FROM promostbl WHERE promo_id = $1`,
+            [promo_id]
+          );
+          const promoScope = promoScopeResult.rows[0] || {};
+          const installmentApplyScope = promoScope.installment_apply_scope || 'downpayment'; // Default to downpayment for backward compatibility
+          const installmentMonthsToApply = promoScope.installment_months_to_apply || null;
 
           if (promoResult.rows.length > 0) {
             const promo = promoResult.rows[0];
@@ -4061,11 +4071,25 @@ router.post(
               }
             }
 
-            // For Installment: min_payment and discount base = downpayment amount
-            const meetsMinPayment = !promo.min_payment_amount || downpaymentAmount >= parseFloat(promo.min_payment_amount);
+            // Check if student already used this promo for this package (per package usage tracking)
+            const packageUsageCheck = await client.query(
+              'SELECT promousage_id FROM promousagetbl WHERE promo_id = $1 AND student_id = $2 AND package_id = $3',
+              [promo_id, student_id, package_id]
+            );
+            const hasAlreadyUsedForPackage = packageUsageCheck.rows.length > 0;
+
+            // For Installment: min_payment and discount base = downpayment amount (if scope includes downpayment)
+            // If scope is monthly only, skip min_payment check for downpayment
+            const meetsMinPayment = !promo.min_payment_amount || 
+              (installmentApplyScope === 'downpayment' || installmentApplyScope === 'both' 
+                ? downpaymentAmount >= parseFloat(promo.min_payment_amount)
+                : true); // For monthly-only scope, min_payment will be checked against monthly amount later
             const packageMatches = promoPackageIds && promoPackageIds.includes(package_id);
 
-            if (isDateValid && isUsageValid && packageMatches && !hasAlreadyUsed && isEligible && meetsMinPayment) {
+            // Only apply downpayment discount if scope includes downpayment
+            const shouldApplyDownpaymentDiscount = (installmentApplyScope === 'downpayment' || installmentApplyScope === 'both');
+
+            if (isDateValid && isUsageValid && packageMatches && !hasAlreadyUsedForPackage && isEligible && meetsMinPayment && shouldApplyDownpaymentDiscount) {
               if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
                 downpaymentPromoDiscount = (downpaymentAmount * parseFloat(promo.discount_percentage)) / 100;
               } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
@@ -4128,10 +4152,11 @@ router.post(
 
               downpaymentPromoApplied = promo;
 
+              // Record promo usage with package_id and scope tracking
               await client.query(
-                `INSERT INTO promousagetbl (promo_id, student_id, invoice_id, discount_applied)
-                 VALUES ($1, $2, $3, $4)`,
-                [promo_id, student_id, downpaymentInvoice.invoice_id, downpaymentPromoDiscount]
+                `INSERT INTO promousagetbl (promo_id, student_id, invoice_id, discount_applied, package_id, apply_scope, months_to_apply)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [promo_id, student_id, downpaymentInvoice.invoice_id, downpaymentPromoDiscount, package_id, installmentApplyScope, installmentMonthsToApply]
               );
               await client.query(
                 `UPDATE promostbl
@@ -4210,14 +4235,14 @@ router.post(
           );
         }
 
-        // Record promo usage if promo was applied
+        // Record promo usage if promo was applied (for fullpayment packages)
         if (promoApplied) {
           try {
-            // Insert usage record
+            // Insert usage record with package_id
             await client.query(
-              `INSERT INTO promousagetbl (promo_id, student_id, invoice_id, discount_applied)
-               VALUES ($1, $2, $3, $4)`,
-              [promo_id, student_id, newInvoice.invoice_id, promoDiscount]
+              `INSERT INTO promousagetbl (promo_id, student_id, invoice_id, discount_applied, package_id)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [promo_id, student_id, newInvoice.invoice_id, promoDiscount, package_id || null]
             );
 
             // Increment current_uses and check if max uses reached
@@ -4378,13 +4403,32 @@ router.post(
             console.log('Downpayment column check:', err.message);
           }
 
+          // Get promo scope info if promo was applied (for installment packages)
+          let promoIdForProfile = null;
+          let promoApplyScopeForProfile = null;
+          let promoMonthsToApplyForProfile = null;
+          
+          if (promo_id && packageData && packageData.package_type === 'Installment') {
+            const promoScopeCheck = await client.query(
+              `SELECT installment_apply_scope, installment_months_to_apply 
+               FROM promostbl WHERE promo_id = $1`,
+              [promo_id]
+            );
+            if (promoScopeCheck.rows.length > 0) {
+              const promoScope = promoScopeCheck.rows[0];
+              promoIdForProfile = promo_id;
+              promoApplyScopeForProfile = promoScope.installment_apply_scope || null;
+              promoMonthsToApplyForProfile = promoScope.installment_months_to_apply || null;
+            }
+          }
+
           const profileResult = await client.query(
             `INSERT INTO installmentinvoiceprofilestbl 
              (student_id, branch_id, package_id, amount, frequency, description, 
               day_of_month, is_active, bill_invoice_due_date, next_invoice_due_date, 
               first_billing_month, first_generation_date, created_by, class_id, total_phases, generated_count,
-              downpayment_paid, downpayment_invoice_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+              downpayment_paid, downpayment_invoice_id, promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
              RETURNING *`,
             [
               student_id,
@@ -4405,6 +4449,10 @@ router.post(
               0, // Start with 0 generated invoices
               downpaymentPaid, // Initially false, will be set to true when downpayment is paid
               downpaymentInvoice ? downpaymentInvoice.invoice_id : null, // Link to downpayment invoice
+              promoIdForProfile, // Store promo_id for monthly discount application
+              promoApplyScopeForProfile, // Store promo scope
+              promoMonthsToApplyForProfile, // Store months to apply
+              0, // Start with 0 months applied
             ]
           );
           installmentProfile = profileResult.rows[0];
