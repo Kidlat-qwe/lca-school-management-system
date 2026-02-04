@@ -478,18 +478,24 @@ const AdminStudent = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '800px' }}
+              style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
             >
-              <thead className="bg-white">
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '50px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {nameSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={nameSearchTerm}
@@ -514,19 +520,19 @@ const AdminStudent = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     Email
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Level Tag
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Phone Number
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     Last Login
                   </th>
-                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '50px', minWidth: '50px' }}>
                     Actions
                   </th>
                 </tr>

@@ -18,6 +18,7 @@ const AdminInvoice = () => {
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   // Removed openBranchDropdown - admin only sees their branch
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
+  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
   // Removed branches state - admin only sees their branch
@@ -170,8 +171,9 @@ const AdminInvoice = () => {
         setOpenMenuId(null);
       }
       // Removed openBranchDropdown - admin only sees their branch
-      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown')) {
+      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown') && !event.target.closest('.status-filter-dropdown-portal')) {
         setOpenStatusDropdown(false);
+        setStatusDropdownRect(null);
       }
     };
 
@@ -998,17 +1000,24 @@ const AdminInvoice = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px' }}>
-              <thead className="bg-white">
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '160px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '260px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {nameSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={nameSearchTerm}
@@ -1044,60 +1053,27 @@ const AdminInvoice = () => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setStatusDropdownRect(rect);
                           setOpenStatusDropdown(!openStatusDropdown);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Status</span>
-                        {filterStatus && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterStatus ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openStatusDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterStatus('');
-                                setOpenStatusDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Statuses
-                            </button>
-                            {getUniqueStatuses.map((status) => (
-                              <button
-                                key={status}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterStatus(status);
-                                  setOpenStatusDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {status}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     Due Date
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '260px', minWidth: '260px' }}>
                     Actions
                   </th>
                 </tr>
@@ -1328,6 +1304,53 @@ const AdminInvoice = () => {
             </div>
           </div>
         </>,
+        document.body
+      )}
+
+      {/* Status filter dropdown - portaled to avoid table overflow clipping */}
+      {openStatusDropdown && statusDropdownRect && createPortal(
+        <div
+          className="fixed status-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${statusDropdownRect.bottom + 4}px`,
+            left: `${statusDropdownRect.left}px`,
+            minWidth: `${Math.max(statusDropdownRect.width, 192)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterStatus('');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Statuses
+          </button>
+          {getUniqueStatuses.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterStatus(status);
+                setOpenStatusDropdown(false);
+                setStatusDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {status}
+            </button>
+          ))}
+        </div>,
         document.body
       )}
 

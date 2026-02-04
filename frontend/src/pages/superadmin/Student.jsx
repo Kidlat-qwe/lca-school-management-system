@@ -13,6 +13,7 @@ const Student = () => {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
+  const [branchDropdownRect, setBranchDropdownRect] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalStep, setModalStep] = useState('branch-selection');
   const [selectedBranch, setSelectedBranch] = useState(null);
@@ -52,8 +53,9 @@ const Student = () => {
       if (openMenuId && !event.target.closest('.action-menu-container') && !event.target.closest('.action-menu-overlay')) {
         setOpenMenuId(null);
       }
-      if (openBranchDropdown && !event.target.closest('.branch-filter-dropdown')) {
+      if (openBranchDropdown && !event.target.closest('.branch-filter-dropdown') && !event.target.closest('.branch-filter-dropdown-portal')) {
         setOpenBranchDropdown(false);
+        setBranchDropdownRect(null);
       }
     };
 
@@ -520,18 +522,25 @@ const Student = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '1000px' }}
+              style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}
             >
-              <thead className="bg-white">
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '150px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '90px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {nameSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={nameSearchTerm}
@@ -556,74 +565,39 @@ const Student = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     Email
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Level Tag
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
                     <div className="relative branch-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setBranchDropdownRect(rect);
                           setOpenBranchDropdown(!openBranchDropdown);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Branch</span>
-                        {filterBranch && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openBranchDropdown && (
-                        <div className="absolute left-0 mt-2 w-40 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterBranch('');
-                                setOpenBranchDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Branches
-                            </button>
-                            {uniqueBranches.map((branchId) => {
-                              const branchName = getBranchName(branchId);
-                              return (
-                                <button
-                                  key={branchId}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterBranch(branchId.toString());
-                                    setOpenBranchDropdown(false);
-                                  }}
-                                  className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                    filterBranch === branchId.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                  }`}
-                                >
-                                  {branchName || `Branch ${branchId}`}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Phone Number
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     Last Login
                   </th>
-                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
                     Actions
                   </th>
                 </tr>
@@ -801,6 +775,56 @@ const Student = () => {
             </div>
           </div>
         </>,
+        document.body
+      )}
+
+      {/* Branch filter dropdown - portaled to avoid table overflow clipping */}
+      {openBranchDropdown && branchDropdownRect && createPortal(
+        <div
+          className="fixed branch-filter-dropdown-portal w-40 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${branchDropdownRect.bottom + 4}px`,
+            left: `${branchDropdownRect.left}px`,
+            minWidth: `${Math.max(branchDropdownRect.width, 160)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterBranch('');
+              setOpenBranchDropdown(false);
+              setBranchDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Branches
+          </button>
+          {uniqueBranches.map((branchId) => {
+            const branchName = getBranchName(branchId);
+            return (
+              <button
+                key={branchId}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFilterBranch(branchId.toString());
+                  setOpenBranchDropdown(false);
+                  setBranchDropdownRect(null);
+                }}
+                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                  filterBranch === branchId.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
+                }`}
+              >
+                {branchName || `Branch ${branchId}`}
+              </button>
+            );
+          })}
+        </div>,
         document.body
       )}
 

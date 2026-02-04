@@ -13,6 +13,9 @@ const SuperfinancePaymentLogs = () => {
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
+  const [branchDropdownRect, setBranchDropdownRect] = useState(null);
+  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
+  const [paymentMethodDropdownRect, setPaymentMethodDropdownRect] = useState(null);
   const [branches, setBranches] = useState([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedExportBranches, setSelectedExportBranches] = useState([]);
@@ -26,22 +29,27 @@ const SuperfinancePaymentLogs = () => {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (!event.target.closest('.branch-filter-dropdown')) {
+      if (openBranchDropdown && !event.target.closest('.branch-filter-dropdown') && !event.target.closest('.branch-filter-dropdown-portal')) {
         setOpenBranchDropdown(false);
+        setBranchDropdownRect(null);
       }
-      if (!event.target.closest('.status-filter-dropdown')) {
+      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown') && !event.target.closest('.status-filter-dropdown-portal')) {
         setOpenStatusDropdown(false);
+        setStatusDropdownRect(null);
       }
-      if (!event.target.closest('.payment-method-filter-dropdown')) {
+      if (openPaymentMethodDropdown && !event.target.closest('.payment-method-filter-dropdown') && !event.target.closest('.payment-method-filter-dropdown-portal')) {
         setOpenPaymentMethodDropdown(false);
+        setPaymentMethodDropdownRect(null);
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
+    if (openBranchDropdown || openStatusDropdown || openPaymentMethodDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [openBranchDropdown, openStatusDropdown, openPaymentMethodDropdown]);
 
   const fetchPayments = async () => {
     try {
@@ -329,17 +337,27 @@ const SuperfinancePaymentLogs = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Table View - Horizontal Scroll on All Screens */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1400px' }}>
-              <thead className="bg-white">
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1400px', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: '180px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '180px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '180px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {searchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={searchTerm}
@@ -364,76 +382,53 @@ const SuperfinancePaymentLogs = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     INVOICE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
                     STUDENT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     <div className="relative payment-method-filter-dropdown">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setPaymentMethodDropdownRect(rect);
                           setOpenPaymentMethodDropdown(!openPaymentMethodDropdown);
+                          setOpenStatusDropdown(false);
+                          setStatusDropdownRect(null);
+                          setOpenBranchDropdown(false);
+                          setBranchDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Payment Method</span>
-                        {filterPaymentMethod && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterPaymentMethod ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openPaymentMethodDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterPaymentMethod('');
-                                setOpenPaymentMethodDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterPaymentMethod ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Methods
-                            </button>
-                            {getUniquePaymentMethods().map((method) => (
-                              <button
-                                key={method}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterPaymentMethod(method);
-                                  setOpenPaymentMethodDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterPaymentMethod === method ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {method}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     PAYMENT TYPE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     AMOUNT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     <div className="relative status-filter-dropdown">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setStatusDropdownRect(rect);
                           setOpenStatusDropdown(!openStatusDropdown);
+                          setOpenPaymentMethodDropdown(false);
+                          setPaymentMethodDropdownRect(null);
+                          setOpenBranchDropdown(false);
+                          setBranchDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
@@ -445,97 +440,35 @@ const SuperfinancePaymentLogs = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openStatusDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterStatus('');
-                                setOpenStatusDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Statuses
-                            </button>
-                            {getUniqueStatuses().map((status) => (
-                              <button
-                                key={status}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterStatus(status);
-                                  setOpenStatusDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {status}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     <div className="relative branch-filter-dropdown">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setBranchDropdownRect(rect);
                           setOpenBranchDropdown(!openBranchDropdown);
+                          setOpenPaymentMethodDropdown(false);
+                          setPaymentMethodDropdownRect(null);
+                          setOpenStatusDropdown(false);
+                          setStatusDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Branch</span>
-                        {filterBranch && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openBranchDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterBranch('');
-                                setOpenBranchDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Branches
-                            </button>
-                            {branches.map((branch) => (
-                              <button
-                                key={branch.branch_id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterBranch(branch.branch_id.toString());
-                                  setOpenBranchDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterBranch === branch.branch_id.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {branch.branch_name}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     ISSUE DATE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
                     REFERENCE
                   </th>
                 </tr>
@@ -601,6 +534,147 @@ const SuperfinancePaymentLogs = () => {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Payment Method filter dropdown - portaled to avoid table overflow clipping */}
+      {openPaymentMethodDropdown && paymentMethodDropdownRect && createPortal(
+        <div
+          className="fixed payment-method-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${paymentMethodDropdownRect.bottom + 4}px`,
+            left: `${paymentMethodDropdownRect.left}px`,
+            minWidth: `${Math.max(paymentMethodDropdownRect.width, 192)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterPaymentMethod('');
+              setOpenPaymentMethodDropdown(false);
+              setPaymentMethodDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterPaymentMethod ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Methods
+          </button>
+          {getUniquePaymentMethods().map((method) => (
+            <button
+              key={method}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterPaymentMethod(method);
+                setOpenPaymentMethodDropdown(false);
+                setPaymentMethodDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterPaymentMethod === method ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {method}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+
+      {/* Status filter dropdown - portaled to avoid table overflow clipping */}
+      {openStatusDropdown && statusDropdownRect && createPortal(
+        <div
+          className="fixed status-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${statusDropdownRect.bottom + 4}px`,
+            left: `${statusDropdownRect.left}px`,
+            minWidth: `${Math.max(statusDropdownRect.width, 192)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterStatus('');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Statuses
+          </button>
+          {getUniqueStatuses().map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterStatus(status);
+                setOpenStatusDropdown(false);
+                setStatusDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {status}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+
+      {/* Branch filter dropdown - portaled to avoid table overflow clipping */}
+      {openBranchDropdown && branchDropdownRect && createPortal(
+        <div
+          className="fixed branch-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${branchDropdownRect.bottom + 4}px`,
+            left: `${branchDropdownRect.left}px`,
+            minWidth: `${Math.max(branchDropdownRect.width, 192)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterBranch('');
+              setOpenBranchDropdown(false);
+              setBranchDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Branches
+          </button>
+          {branches.map((branch) => (
+            <button
+              key={branch.branch_id}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterBranch(branch.branch_id.toString());
+                setOpenBranchDropdown(false);
+                setBranchDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterBranch === branch.branch_id.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {branch.branch_name}
+            </button>
+          ))}
+        </div>,
+        document.body
       )}
 
       {/* Export Modal */}

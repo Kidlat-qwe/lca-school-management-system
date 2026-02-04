@@ -84,4 +84,9 @@
     scrollbar-width: thin;
     scrollbar-color: #cbd5e0 #f7fafc;
   }
+
+  /* Fixed column headers: prevent layout shift when filter content changes */
+  .table-header-stable th {
+    box-sizing: border-box;
+  }
 }

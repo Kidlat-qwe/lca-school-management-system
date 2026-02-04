@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -10,6 +11,7 @@ const TeacherStudentList = () => {
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [filterLevelTag, setFilterLevelTag] = useState('');
   const [openLevelTagDropdown, setOpenLevelTagDropdown] = useState(false);
+  const [levelTagDropdownRect, setLevelTagDropdownRect] = useState(null);
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
   const [imageErrors, setImageErrors] = useState(new Set());
 
@@ -99,8 +101,9 @@ const TeacherStudentList = () => {
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (openLevelTagDropdown && !event.target.closest('.leveltag-filter-dropdown')) {
+      if (openLevelTagDropdown && !event.target.closest('.leveltag-filter-dropdown') && !event.target.closest('.leveltag-filter-dropdown-portal')) {
         setOpenLevelTagDropdown(false);
+        setLevelTagDropdownRect(null);
       }
     };
 
@@ -165,18 +168,23 @@ const TeacherStudentList = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '800px' }}
+              style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
             >
-              <thead className="bg-white">
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '90px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ minWidth: '200px', width: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {userSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${userSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={userSearchTerm}
@@ -201,65 +209,33 @@ const TeacherStudentList = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     Email
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     <div className="relative leveltag-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setLevelTagDropdownRect(rect);
                           setOpenLevelTagDropdown(!openLevelTagDropdown);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Level Tag</span>
-                        {filterLevelTag && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterLevelTag ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openLevelTagDropdown && (
-                        <div className="absolute left-0 mt-2 w-40 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterLevelTag('');
-                                setOpenLevelTagDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterLevelTag ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Levels
-                            </button>
-                            {uniqueLevelTags.map((levelTag) => (
-                              <button
-                                key={levelTag}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterLevelTag(levelTag);
-                                  setOpenLevelTagDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterLevelTag === levelTag ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {levelTag}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Phone
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
                     Status
                   </th>
                 </tr>
@@ -331,6 +307,53 @@ const TeacherStudentList = () => {
         <div className="text-sm text-gray-500 text-center">
           Showing {filteredStudents.length} of {students.length} students
         </div>
+      )}
+
+      {/* Level Tag filter dropdown - portaled to avoid table overflow clipping */}
+      {openLevelTagDropdown && levelTagDropdownRect && createPortal(
+        <div
+          className="fixed leveltag-filter-dropdown-portal w-40 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${levelTagDropdownRect.bottom + 4}px`,
+            left: `${levelTagDropdownRect.left}px`,
+            minWidth: `${Math.max(levelTagDropdownRect.width, 160)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterLevelTag('');
+              setOpenLevelTagDropdown(false);
+              setLevelTagDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterLevelTag ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Levels
+          </button>
+          {uniqueLevelTags.map((levelTag) => (
+            <button
+              key={levelTag}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterLevelTag(levelTag);
+                setOpenLevelTagDropdown(false);
+                setLevelTagDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterLevelTag === levelTag ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {levelTag}
+            </button>
+          ))}
+        </div>,
+        document.body
       )}
     </div>
   );

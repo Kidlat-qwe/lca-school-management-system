@@ -13,6 +13,7 @@ const AdminPersonnel = () => {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openRoleDropdown, setOpenRoleDropdown] = useState(false);
+  const [roleDropdownRect, setRoleDropdownRect] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPersonnel, setEditingPersonnel] = useState(null);
   const [formData, setFormData] = useState({
@@ -64,8 +65,9 @@ const AdminPersonnel = () => {
       if (openMenuId && !event.target.closest('.action-menu-container') && !event.target.closest('.action-menu-overlay')) {
         setOpenMenuId(null);
       }
-      if (openRoleDropdown && !event.target.closest('.role-filter-dropdown')) {
+      if (openRoleDropdown && !event.target.closest('.role-filter-dropdown') && !event.target.closest('.role-filter-dropdown-portal')) {
         setOpenRoleDropdown(false);
+        setRoleDropdownRect(null);
       }
     };
 
@@ -570,18 +572,24 @@ const AdminPersonnel = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '800px' }}
+              style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
             >
-              <thead className="bg-white">
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '50px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {userSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${userSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={userSearchTerm}
@@ -606,68 +614,36 @@ const AdminPersonnel = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     Email
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     <div className="relative role-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setRoleDropdownRect(rect);
                           setOpenRoleDropdown(!openRoleDropdown);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Role</span>
-                        {filterRole && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterRole ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openRoleDropdown && (
-                        <div className="absolute left-0 mt-2 w-40 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterRole('');
-                                setOpenRoleDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterRole ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Roles
-                            </button>
-                            {uniqueRoles.map((role) => (
-                              <button
-                                key={role}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterRole(role);
-                                  setOpenRoleDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterRole === role ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {role}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Status
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     Last Login
                   </th>
-                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '50px', minWidth: '50px' }}>
                     Actions
                   </th>
                 </tr>
@@ -835,6 +811,53 @@ const AdminPersonnel = () => {
             </div>
           </div>
         </>,
+        document.body
+      )}
+
+      {/* Role filter dropdown - portaled to avoid table overflow clipping */}
+      {openRoleDropdown && roleDropdownRect && createPortal(
+        <div
+          className="fixed role-filter-dropdown-portal w-40 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          style={{
+            top: `${roleDropdownRect.bottom + 4}px`,
+            left: `${roleDropdownRect.left}px`,
+            minWidth: `${Math.max(roleDropdownRect.width, 160)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterRole('');
+              setOpenRoleDropdown(false);
+              setRoleDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              !filterRole ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            All Roles
+          </button>
+          {uniqueRoles.map((role) => (
+            <button
+              key={role}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilterRole(role);
+                setOpenRoleDropdown(false);
+                setRoleDropdownRect(null);
+              }}
+              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+                filterRole === role ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              }`}
+            >
+              {role}
+            </button>
+          ))}
+        </div>,
         document.body
       )}
 

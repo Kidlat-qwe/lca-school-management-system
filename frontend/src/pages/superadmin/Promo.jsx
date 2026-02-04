@@ -37,6 +37,9 @@ const Promo = () => {
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openPackageDropdown, setOpenPackageDropdown] = useState(false);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
+  const [branchDropdownRect, setBranchDropdownRect] = useState(null);
+  const [packageDropdownRect, setPackageDropdownRect] = useState(null);
+  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPromo, setEditingPromo] = useState(null);
   const [branches, setBranches] = useState([]);
@@ -110,14 +113,17 @@ const Promo = () => {
       if (openMenuId && !event.target.closest('.action-menu-container') && !event.target.closest('.action-menu-overlay')) {
         setOpenMenuId(null);
       }
-      if (openBranchDropdown && !event.target.closest('.branch-filter-dropdown')) {
+      if (openBranchDropdown && !event.target.closest('.branch-filter-dropdown') && !event.target.closest('.branch-filter-dropdown-portal')) {
         setOpenBranchDropdown(false);
+        setBranchDropdownRect(null);
       }
-      if (openPackageDropdown && !event.target.closest('.package-filter-dropdown')) {
+      if (openPackageDropdown && !event.target.closest('.package-filter-dropdown') && !event.target.closest('.package-filter-dropdown-portal')) {
         setOpenPackageDropdown(false);
+        setPackageDropdownRect(null);
       }
-      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown')) {
+      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown') && !event.target.closest('.status-filter-dropdown-portal')) {
         setOpenStatusDropdown(false);
+        setStatusDropdownRect(null);
       }
     };
 
@@ -738,17 +744,24 @@ const Promo = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px' }}>
-              <thead className="bg-white">
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '160px' }} />
+                <col style={{ width: '180px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '340px' }} />
+              </colgroup>
+              <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1">
-                        {nameSearchTerm && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
-                      <div className="relative">
+                      <div className="relative min-h-[28px]">
                         <input
                           type="text"
                           value={nameSearchTerm}
@@ -773,79 +786,43 @@ const Promo = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '160px', minWidth: '160px' }}>
                     <div className="relative branch-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setBranchDropdownRect(rect);
                           setOpenBranchDropdown(!openBranchDropdown);
+                          setOpenPackageDropdown(false);
+                          setOpenStatusDropdown(false);
+                          setPackageDropdownRect(null);
+                          setStatusDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Branch</span>
-                        {filterBranch && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openBranchDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterBranch('');
-                                setOpenBranchDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Branches
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterBranch('all');
-                                setOpenBranchDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                filterBranch === 'all' ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Branches (System-wide)
-                            </button>
-                            {getUniqueBranches.map((branchId) => {
-                              const branchName = getBranchName(branchId);
-                              return (
-                                <button
-                                  key={branchId}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterBranch(branchId.toString());
-                                    setOpenBranchDropdown(false);
-                                  }}
-                                  className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                    filterBranch === branchId.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                  }`}
-                                >
-                                  {branchName || `Branch ${branchId}`}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
                     <div className="relative package-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setPackageDropdownRect(rect);
                           setOpenPackageDropdown(!openPackageDropdown);
+                          setOpenBranchDropdown(false);
+                          setOpenStatusDropdown(false);
+                          setBranchDropdownRect(null);
+                          setStatusDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
@@ -857,103 +834,39 @@ const Promo = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openPackageDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterPackage('');
-                                setOpenPackageDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterPackage ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Packages
-                            </button>
-                            {getUniquePackages.map((packageId) => {
-                              const packageName = getPackageName(packageId);
-                              return (
-                                <button
-                                  key={packageId}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterPackage(packageId.toString());
-                                    setOpenPackageDropdown(false);
-                                  }}
-                                  className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                    filterPackage === packageId.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                  }`}
-                                >
-                                  {packageName || `Package ${packageId}`}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     <div className="relative status-filter-dropdown">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setStatusDropdownRect(rect);
                           setOpenStatusDropdown(!openStatusDropdown);
+                          setOpenBranchDropdown(false);
+                          setOpenPackageDropdown(false);
+                          setBranchDropdownRect(null);
+                          setPackageDropdownRect(null);
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Status</span>
-                        {filterStatus && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterStatus ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {openStatusDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterStatus('');
-                                setOpenStatusDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Status
-                            </button>
-                            {getUniqueStatuses.map((status) => (
-                              <button
-                                key={status}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFilterStatus(status);
-                                  setOpenStatusDropdown(false);
-                                }}
-                                className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                  filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                }`}
-                              >
-                                {status}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Discount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Usage
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '340px', minWidth: '340px' }}>
                     Actions
                   </th>
                 </tr>
