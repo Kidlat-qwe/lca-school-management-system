@@ -7,11 +7,8 @@ import { dirname, resolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Production (e.g. Linode): use .env on server. Development: use .env.development locally.
-const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '../.env')
-  : resolve(__dirname, '../.env.development');
-dotenv.config({ path: envFile });
+// Load .env file from backend directory (ensures consistent loading)
+dotenv.config({ path: resolve(__dirname, '../.env') });
 
 const { Pool } = pkg;
 

@@ -1,14 +1,7 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Production (Linode): use .env on server. Development: use .env.development locally.
-const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '../.env')
-  : resolve(__dirname, '../.env.development');
-dotenv.config({ path: envFile });
+dotenv.config();
 
 // AWS S3 Configuration
 const s3Config = {

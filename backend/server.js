@@ -45,15 +45,8 @@ import './config/firebase.js';
 import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
 import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
 import { startOverdueInvoiceEmailScheduler } from './jobs/overdueInvoiceEmailScheduler.js';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Production (Linode): use .env on server. Development: use .env.development locally.
-const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '.env')
-  : resolve(__dirname, '.env.development');
-dotenv.config({ path: envFile });
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
