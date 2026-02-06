@@ -1,7 +1,6 @@
 import { S3Client } from '@aws-sdk/client-s3';
-import dotenv from 'dotenv';
 
-dotenv.config();
+// Env is loaded by loadEnv.js ( .env then .env.${NODE_ENV} ) before server runs
 
 // AWS S3 Configuration
 const s3Config = {

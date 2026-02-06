@@ -1,8 +1,10 @@
+// Load env first: .env (NODE_ENV) then .env.development or .env.production
+import './config/loadEnv.js';
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -45,8 +47,6 @@ import './config/firebase.js';
 import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
 import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
 import { startOverdueInvoiceEmailScheduler } from './jobs/overdueInvoiceEmailScheduler.js';
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;

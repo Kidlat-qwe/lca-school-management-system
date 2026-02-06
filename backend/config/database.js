@@ -1,14 +1,10 @@
 import pkg from 'pg';
-import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { dirname } from 'path';
 
-// Get current directory for ES modules
+// Env is loaded by loadEnv.js ( .env then .env.${NODE_ENV} ) before this module runs
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Load .env file from backend directory (ensures consistent loading)
-dotenv.config({ path: resolve(__dirname, '../.env') });
 
 const { Pool } = pkg;
 

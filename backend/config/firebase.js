@@ -1,18 +1,11 @@
 import admin from 'firebase-admin';
-import dotenv from 'dotenv';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
-// Get current directory for ES modules
+// Env is loaded by loadEnv.js ( .env then .env.${NODE_ENV} ) before this module runs
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Load .env by NODE_ENV (same as database.js)
-const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '../.env.production')
-  : resolve(__dirname, '../.env');
-dotenv.config({ path: envFile });
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
