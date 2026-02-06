@@ -1,7 +1,13 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 
-dotenv.config();
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envFile = process.env.NODE_ENV === 'production'
+  ? resolve(__dirname, '../.env.production')
+  : resolve(__dirname, '../.env');
+dotenv.config({ path: envFile });
 
 // AWS S3 Configuration
 const s3Config = {

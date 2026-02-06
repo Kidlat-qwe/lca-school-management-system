@@ -45,8 +45,14 @@ import './config/firebase.js';
 import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
 import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
 import { startOverdueInvoiceEmailScheduler } from './jobs/overdueInvoiceEmailScheduler.js';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 
-dotenv.config();
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envFile = process.env.NODE_ENV === 'production'
+  ? resolve(__dirname, '.env.production')
+  : resolve(__dirname, '.env');
+dotenv.config({ path: envFile });
 
 const app = express();
 const PORT = process.env.PORT || 3000;

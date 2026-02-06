@@ -8,8 +8,11 @@ import { dirname, resolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load .env file from backend directory (parent of config directory)
-dotenv.config({ path: resolve(__dirname, '../.env') });
+// Load .env by NODE_ENV (same as database.js)
+const envFile = process.env.NODE_ENV === 'production'
+  ? resolve(__dirname, '../.env.production')
+  : resolve(__dirname, '../.env');
+dotenv.config({ path: envFile });
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
