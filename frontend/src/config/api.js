@@ -40,10 +40,26 @@ export const apiRequest = async (endpoint, options = {}) => {
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
-    const data = await response.json();
+    const contentType = response.headers.get('content-type');
+    const isJson = contentType && contentType.includes('application/json');
+
+    let data;
+    if (isJson) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      // 502/503/504: backend unreachable (proxy error page is often HTML)
+      if (response.status >= 502 && response.status <= 504) {
+        const error = new Error('Server unavailable. Please try again later.');
+        error.response = { status: response.status };
+        throw error;
+      }
+      const error = new Error(text || 'An error occurred');
+      error.response = { status: response.status };
+      throw error;
+    }
 
     if (!response.ok) {
-      // Create an error object that preserves the response data
       const error = new Error(data.message || 'An error occurred');
       error.response = { data, status: response.status };
       throw error;
