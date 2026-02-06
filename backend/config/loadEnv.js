@@ -16,4 +16,5 @@ const envFile = resolve(backendDir, `.env.${nodeEnv}`);
 if (existsSync(envFile)) {
   dotenv.config({ path: envFile });
 }
+console.log(`🔧 Env: ${nodeEnv} | DB: ${process.env.DB_NAME || '(not set)'}`);
 // If .env.development or .env.production is missing, process.env still has .env values
