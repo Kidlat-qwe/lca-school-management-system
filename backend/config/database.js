@@ -26,7 +26,7 @@ const useSSL = process.env.DB_SSL !== undefined
 const pool = new Pool({
   host: dbHost,
   port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'psms_production',
+  database: process.env.DB_NAME || 'psms_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD,
   ssl: useSSL ? { rejectUnauthorized: false } : false,

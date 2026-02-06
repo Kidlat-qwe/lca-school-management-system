@@ -2,8 +2,9 @@
 node_modules/
 package-lock.json
 
-# Environment variables
+# Environment variables (never commit - dev and production DB credentials)
 .env
+.env*
 .env.development
 .env.local
 .env.production
