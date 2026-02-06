@@ -4,9 +4,10 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Production (Linode): use .env on server. Development: use .env.development locally.
 const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '../.env.production')
-  : resolve(__dirname, '../.env');
+  ? resolve(__dirname, '../.env')
+  : resolve(__dirname, '../.env.development');
 dotenv.config({ path: envFile });
 
 // AWS S3 Configuration

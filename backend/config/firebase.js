@@ -8,10 +8,10 @@ import { dirname, resolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load .env by NODE_ENV (same as database.js)
+// Production (Linode): use .env on server. Development: use .env.development locally.
 const envFile = process.env.NODE_ENV === 'production'
-  ? resolve(__dirname, '../.env.production')
-  : resolve(__dirname, '../.env');
+  ? resolve(__dirname, '../.env')
+  : resolve(__dirname, '../.env.development');
 dotenv.config({ path: envFile });
 
 // Initialize Firebase Admin SDK
