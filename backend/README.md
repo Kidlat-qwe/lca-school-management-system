@@ -128,13 +128,33 @@ npm run dev
 
 This will start the server with nodemon for auto-reloading on file changes.
 
-### Production Mode
+### Production Mode (local)
 
 ```bash
 npm start
 ```
 
 The server will start on the port specified in your `.env` file (default: 3000).
+
+### Deployment on Linode (use production database)
+
+On the server, the app must run with **NODE_ENV=production** so it loads `.env.production` and uses the production database (not development).
+
+**Option 1 – start script (Linux/Linode):**
+
+```bash
+npm run start:prod
+```
+
+**Option 2 – set in backend `.env` on the server:**
+
+In `backend/.env` on Linode, set:
+
+```env
+NODE_ENV=production
+```
+
+Then start with `npm start`. Ensure `backend/.env.production` exists on the server with production DB credentials (or that `.env` has them when NODE_ENV=production).
 
 ## API Endpoints
 
