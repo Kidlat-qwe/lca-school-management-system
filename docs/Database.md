@@ -292,6 +292,10 @@ CREATE TABLE IF NOT EXISTS public.installmentinvoiceprofilestbl
     generated_count integer DEFAULT 0,
     downpayment_paid boolean DEFAULT false,
     downpayment_invoice_id integer,
+    promo_id integer,
+    promo_apply_scope character varying(50) COLLATE pg_catalog."default",
+    promo_months_to_apply integer,
+    promo_months_applied integer DEFAULT 0,
     CONSTRAINT installmentinvoiceprofilestbl_pkey PRIMARY KEY (installmentinvoiceprofiles_id)
 );
 
@@ -309,6 +313,18 @@ COMMENT ON COLUMN public.installmentinvoiceprofilestbl.downpayment_paid
 
 COMMENT ON COLUMN public.installmentinvoiceprofilestbl.downpayment_invoice_id
     IS 'Reference to the downpayment invoice. Used to track when downpayment is paid.';
+
+COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_id
+    IS 'Reference to promo applied during enrollment. Used to apply discounts to monthly invoices.';
+
+COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_apply_scope
+    IS 'Snapshot of promo scope: downpayment, monthly, or both.';
+
+COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_months_to_apply
+    IS 'Number of monthly invoices to apply promo discount.';
+
+COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_months_applied
+    IS 'Counter tracking how many monthly invoices have received promo discount.';
 
 CREATE TABLE IF NOT EXISTS public.installmentinvoicestbl
 (
@@ -370,8 +386,12 @@ CREATE TABLE IF NOT EXISTS public.invoicestudentstbl
     invoice_student_id serial NOT NULL,
     invoice_id integer,
     student_id integer,
+    overdue_email_first_sent_at timestamp without time zone,
     CONSTRAINT invoicestudentstbl_pkey PRIMARY KEY (invoice_student_id)
 );
+
+COMMENT ON COLUMN public.invoicestudentstbl.overdue_email_first_sent_at
+    IS 'Timestamp when the system first auto-sent an overdue reminder email for this invoice-student (Asia/Manila). NULL = not yet auto-sent.';
 
 CREATE TABLE IF NOT EXISTS public.merchandiserequestlogtbl
 (
@@ -584,6 +604,8 @@ CREATE TABLE IF NOT EXISTS public.promostbl
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     created_by integer,
     promo_code character varying(50) COLLATE pg_catalog."default",
+    installment_apply_scope character varying(50) COLLATE pg_catalog."default",
+    installment_months_to_apply integer,
     CONSTRAINT promostbl_pkey PRIMARY KEY (promo_id)
 );
 
@@ -605,6 +627,12 @@ COMMENT ON COLUMN public.promostbl.eligibility_type
 COMMENT ON COLUMN public.promostbl.promo_code
     IS 'Optional promo code for redemption. NULL = auto-apply promo, set value = requires code entry for redemption';
 
+COMMENT ON COLUMN public.promostbl.installment_apply_scope
+    IS 'For Installment packages: downpayment, monthly, or both. NULL for non-installment promos.';
+
+COMMENT ON COLUMN public.promostbl.installment_months_to_apply
+    IS 'Number of monthly invoices to apply promo discount. Required when scope includes monthly.';
+
 CREATE TABLE IF NOT EXISTS public.promousagetbl
 (
     promousage_id serial NOT NULL,
@@ -613,8 +641,11 @@ CREATE TABLE IF NOT EXISTS public.promousagetbl
     invoice_id integer NOT NULL,
     used_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     discount_applied numeric(10, 2),
+    package_id integer,
+    apply_scope character varying(50) COLLATE pg_catalog."default",
+    months_to_apply integer,
     CONSTRAINT promousagetbl_pkey PRIMARY KEY (promousage_id),
-    CONSTRAINT promousagetbl_unique_student_promo UNIQUE (promo_id, student_id)
+    CONSTRAINT promousagetbl_unique_student_promo_package UNIQUE (promo_id, student_id, package_id)
 );
 
 COMMENT ON TABLE public.promousagetbl
@@ -622,6 +653,15 @@ COMMENT ON TABLE public.promousagetbl
 
 COMMENT ON COLUMN public.promousagetbl.discount_applied
     IS 'Actual discount amount applied to the invoice';
+
+COMMENT ON COLUMN public.promousagetbl.package_id
+    IS 'Package ID where promo was used. Enables per-student-per-package usage tracking.';
+
+COMMENT ON COLUMN public.promousagetbl.apply_scope
+    IS 'Snapshot of promo scope when used: downpayment, monthly, or both.';
+
+COMMENT ON COLUMN public.promousagetbl.months_to_apply
+    IS 'Snapshot of months_to_apply when promo was used.';
 
 CREATE TABLE IF NOT EXISTS public.referralstbl
 (
@@ -780,10 +820,14 @@ CREATE TABLE IF NOT EXISTS public.userstbl
     level_tag character varying(100) COLLATE pg_catalog."default",
     profile_picture_url character varying(255) COLLATE pg_catalog."default",
     firebase_uid character varying(255) COLLATE pg_catalog."default",
+    last_login timestamp without time zone,
     CONSTRAINT userstbl_pkey PRIMARY KEY (user_id),
     CONSTRAINT userstbl_email_key UNIQUE (email),
     CONSTRAINT userstbl_firebase_uid_key UNIQUE (firebase_uid)
 );
+
+COMMENT ON COLUMN public.userstbl.last_login
+    IS 'Timestamp of the user''s last successful login (stored in UTC+8/Asia/Manila timezone)';
 
 ALTER TABLE IF EXISTS public.announcement_readstbl
     ADD CONSTRAINT announcement_readstbl_announcement_id_fkey FOREIGN KEY (announcement_id)
@@ -1030,6 +1074,15 @@ ALTER TABLE IF EXISTS public.installmentinvoiceprofilestbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_invoiceprofile_package_id
     ON public.installmentinvoiceprofilestbl(package_id);
+
+
+ALTER TABLE IF EXISTS public.installmentinvoiceprofilestbl
+    ADD CONSTRAINT installmentinvoiceprofilestbl_promo_id_fkey FOREIGN KEY (promo_id)
+    REFERENCES public.promostbl (promo_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_installmentprofile_promo_id
+    ON public.installmentinvoiceprofilestbl(promo_id);
 
 
 ALTER TABLE IF EXISTS public.installmentinvoiceprofilestbl
@@ -1330,6 +1383,15 @@ ALTER TABLE IF EXISTS public.promousagetbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_promousage_invoice_id
     ON public.promousagetbl(invoice_id);
+
+
+ALTER TABLE IF EXISTS public.promousagetbl
+    ADD CONSTRAINT promousagetbl_package_id_fkey FOREIGN KEY (package_id)
+    REFERENCES public.packagestbl (package_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_promousage_package_id
+    ON public.promousagetbl(package_id);
 
 
 ALTER TABLE IF EXISTS public.promousagetbl

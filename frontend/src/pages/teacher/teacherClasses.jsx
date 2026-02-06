@@ -1050,7 +1050,7 @@ const TeacherClasses = () => {
                         }`}>
                           Phase {phaseNumber}
                           {isActivePhase && (
-                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
                               Current
                             </span>
                           )}
@@ -2423,7 +2423,7 @@ const TeacherClasses = () => {
                                   </td>
                                   <td className="px-4 py-4">
                                     {isReserved ? (
-                                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                                         student.reservation_status === 'Fee Paid'
                                           ? 'bg-green-100 text-green-800'
                                           : student.reservation_status === 'Upgraded'
@@ -2435,7 +2435,7 @@ const TeacherClasses = () => {
                                         {student.reservation_status || 'Reserved'}
                                       </span>
                                     ) : (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                         Enrolled
                                       </span>
                                     )}
@@ -2447,11 +2447,11 @@ const TeacherClasses = () => {
                                   </td>
                                   <td className="px-4 py-4">
                                     {isReserved ? (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                                         Reserved
                                       </span>
                                     ) : (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                         {student.phasesDisplay || `Phase ${student.phase_number || '-'}`}
                                       </span>
                                     )}

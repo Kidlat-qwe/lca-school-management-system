@@ -245,17 +245,17 @@ const StudentPackages = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          packageItem.package_type === 'Installment'
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                          (packageItem.package_type || '').trim() === 'Installment'
                             ? 'bg-blue-100 text-blue-800'
-                            : packageItem.package_type === 'Reserved'
+                            : (packageItem.package_type || '').trim() === 'Reserved'
                             ? 'bg-yellow-100 text-yellow-800'
-                            : packageItem.package_type === 'Phase'
+                            : (packageItem.package_type || '').trim() === 'Phase'
                             ? 'bg-purple-100 text-purple-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        {packageItem.package_type || 'Fullpayment'}
+                        {(packageItem.package_type || 'Fullpayment').trim()}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -351,17 +351,17 @@ const StudentPackages = () => {
                     <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Package Type</label>
                     <p className="mt-1">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          selectedPackageForDetails.package_type === 'Installment'
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                          (selectedPackageForDetails.package_type || '').trim() === 'Installment'
                             ? 'bg-blue-100 text-blue-800'
-                            : selectedPackageForDetails.package_type === 'Reserved'
+                            : (selectedPackageForDetails.package_type || '').trim() === 'Reserved'
                             ? 'bg-yellow-100 text-yellow-800'
-                            : selectedPackageForDetails.package_type === 'Phase'
+                            : (selectedPackageForDetails.package_type || '').trim() === 'Phase'
                             ? 'bg-purple-100 text-purple-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        {selectedPackageForDetails.package_type || 'Fullpayment'}
+                        {(selectedPackageForDetails.package_type || 'Fullpayment').trim()}
                       </span>
                     </p>
                   </div>

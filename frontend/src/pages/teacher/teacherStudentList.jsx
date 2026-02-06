@@ -286,7 +286,7 @@ const TeacherStudentList = () => {
                     </td>
                     <td className="px-3 py-4">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                           student.status === 'Active' || !student.status
                             ? 'bg-green-100 text-green-800'
                             : 'bg-gray-100 text-gray-800'

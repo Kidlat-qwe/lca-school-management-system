@@ -595,7 +595,7 @@ const StudentClasses = () => {
                         }`}>
                           Phase {phaseNumber}
                           {isActivePhase && (
-                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
                               Current
                             </span>
                           )}

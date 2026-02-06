@@ -747,14 +747,14 @@ const AdminPromo = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '220px' }} />
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '120px' }} />
-                <col style={{ width: '400px' }} />
+                <col style={{ width: '100px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
@@ -900,7 +900,7 @@ const AdminPromo = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Usage
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '400px', minWidth: '400px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Actions
                   </th>
                 </tr>
@@ -912,9 +912,9 @@ const AdminPromo = () => {
                   
                   return (
                     <tr key={promo.promo_id}>
-                      <td className="px-6 py-4">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
+                      <td className="px-6 py-4" style={{ maxWidth: '220px' }}>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate" title={promo.promo_name || '-'}>
                             {promo.promo_name || '-'}
                           </div>
                           <div className="text-xs text-gray-500 mt-1">
@@ -968,7 +968,7 @@ const AdminPromo = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                             isActive
                               ? 'bg-green-100 text-green-800'
                               : isExpired

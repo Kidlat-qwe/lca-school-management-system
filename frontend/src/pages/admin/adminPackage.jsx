@@ -771,14 +771,14 @@ const AdminPackage = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '250px' }} />
                 <col style={{ width: '150px' }} />
                 <col style={{ width: '100px' }} />
                 <col style={{ width: '150px' }} />
-                <col style={{ width: '150px' }} />
-                <col style={{ width: '300px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '100px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
@@ -822,10 +822,10 @@ const AdminPackage = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
                     Price
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Details Count
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '300px', minWidth: '300px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Actions
                   </th>
                 </tr>
@@ -833,15 +833,15 @@ const AdminPackage = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
-                    <td className="px-6 py-4">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
+                    <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate" title={packageItem.package_name || '-'}>
                           {packageItem.package_name || '-'}
                         </div>
                         {packageItem.level_tag && (
                           <>
                             <div className="h-1"></div>
-                            <div className="text-xs text-gray-600 font-medium">
+                            <div className="text-xs text-gray-600 font-medium truncate" title={packageItem.level_tag}>
                               {packageItem.level_tag}
                             </div>
                           </>
@@ -849,30 +849,30 @@ const AdminPackage = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex flex-col space-y-1">
+                      <div className="flex flex-col items-start space-y-1">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            packageItem.package_type === 'Installment'
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                            (packageItem.package_type || '').trim() === 'Installment'
                               ? 'bg-blue-100 text-blue-800'
-                              : packageItem.package_type === 'Reserved'
+                              : (packageItem.package_type || '').trim() === 'Reserved'
                               ? 'bg-yellow-100 text-yellow-800'
                               : 'bg-gray-100 text-gray-800'
                           }`}
                         >
-                          {packageItem.package_type || 'Fullpayment'}
+                          {(packageItem.package_type || 'Fullpayment').trim()}
                         </span>
                       </div>
                     </td>
                     {/* Removed Branch column - admin only sees their branch */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          packageItem.status === 'Active'
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                          (packageItem.status || '').trim() === 'Active'
                             ? 'bg-green-100 text-green-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        {packageItem.status || 'Active'}
+                        {(packageItem.status || 'Active').trim()}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -881,7 +881,7 @@ const AdminPackage = () => {
                           ? `₱${parseFloat(packageItem.package_price).toFixed(2)}`
                           : '-'}
                       </div>
-                      {packageItem.package_type === 'Installment' && packageItem.downpayment_amount && (
+                      {(packageItem.package_type || '').trim() === 'Installment' && packageItem.downpayment_amount && (
                         <div className="text-xs text-gray-500 mt-1">
                           Downpayment: ₱{parseFloat(packageItem.downpayment_amount).toFixed(2)}
                         </div>

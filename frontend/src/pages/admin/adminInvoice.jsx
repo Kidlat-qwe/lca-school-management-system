@@ -1000,7 +1000,7 @@ const AdminInvoice = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '200px' }} />
@@ -1008,7 +1008,7 @@ const AdminInvoice = () => {
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '140px' }} />
-                <col style={{ width: '260px' }} />
+                <col style={{ width: '100px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
@@ -1073,7 +1073,7 @@ const AdminInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     Due Date
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '260px', minWidth: '260px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Actions
                   </th>
                 </tr>
@@ -1085,7 +1085,7 @@ const AdminInvoice = () => {
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
                         <span>INV-{invoice.invoice_id}</span>
                         {invoice.status === 'Partially Paid' && (
-                          <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">
+                          <span className="px-1.5 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">
                             Partial payment
                           </span>
                         )}
@@ -1097,16 +1097,16 @@ const AdminInvoice = () => {
                       )}
                       {invoice.reservation && (
                         <div className="mt-2 flex items-center gap-2">
-                          <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                          <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 border border-blue-200">
                             Reservation
                           </span>
                           {invoice.reservation.is_expired && (
-                            <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800 border border-red-200 font-semibold">
+                            <span className="px-1.5 py-0.5 text-xs rounded-full bg-red-100 text-red-800 border border-red-200 font-semibold">
                               Expired
                             </span>
                           )}
                           {invoice.reservation.status === 'Expired' && (
-                            <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800 border border-red-200 font-semibold">
+                            <span className="px-1.5 py-0.5 text-xs rounded-full bg-red-100 text-red-800 border border-red-200 font-semibold">
                               Reservation Expired
                             </span>
                           )}
@@ -1118,12 +1118,12 @@ const AdminInvoice = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
+                      <div className="text-sm text-gray-900 min-w-0">
                         {invoice.students && invoice.students.length > 0 ? (
                           <div className="space-y-1">
                             {invoice.students.slice(0, 2).map((student, idx) => (
-                              <div key={student.invoice_student_id || idx} className="font-medium">
+                              <div key={student.invoice_student_id || idx} className="font-medium truncate" title={student.full_name || '-'}>
                                 {student.full_name || '-'}
                               </div>
                             ))}
@@ -1138,14 +1138,14 @@ const AdminInvoice = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-6 py-4" style={{ maxWidth: '160px' }}>
+                      <div className="text-sm text-gray-900 truncate" title={selectedBranchName}>
                         {selectedBranchName}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                           invoice.status === 'Paid'
                             ? 'bg-green-100 text-green-800'
                             : invoice.status === 'Pending'
@@ -1825,7 +1825,7 @@ const AdminInvoice = () => {
                     ) : (
                       <div className="mt-1 flex items-center gap-2">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                             selectedInvoiceForDetails.status === 'Paid'
                               ? 'bg-green-100 text-green-800'
                               : selectedInvoiceForDetails.status === 'Pending'

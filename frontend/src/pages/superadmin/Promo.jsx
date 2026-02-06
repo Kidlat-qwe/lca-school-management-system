@@ -744,7 +744,7 @@ const Promo = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '160px' }} />
@@ -752,7 +752,7 @@ const Promo = () => {
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '100px' }} />
                 <col style={{ width: '100px' }} />
-                <col style={{ width: '340px' }} />
+                <col style={{ width: '100px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
@@ -866,7 +866,7 @@ const Promo = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Usage
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '340px', minWidth: '340px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Actions
                   </th>
                 </tr>
@@ -878,9 +878,9 @@ const Promo = () => {
                   
                   return (
                     <tr key={promo.promo_id}>
-                      <td className="px-6 py-4">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
+                      <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate" title={promo.promo_name || '-'}>
                             {promo.promo_name || '-'}
                           </div>
                           <div className="text-xs text-gray-500 mt-1">
@@ -907,41 +907,41 @@ const Promo = () => {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4" style={{ maxWidth: '160px' }}>
+                        <div className="text-sm text-gray-900 min-w-0">
                           {(() => {
                             const branchName = getBranchName(promo.branch_id);
                             if (!branchName || branchName === 'All Branches') {
                               return <span>All Branches</span>;
                             }
-                            // Split by " - " to separate company name and location
                             const parts = branchName.split(' - ');
                             if (parts.length >= 2) {
                               return (
-                                <div className="flex flex-col">
-                                  <span>{parts[0]}</span>
-                                  <span className="text-gray-600">{parts.slice(1).join(' - ')}</span>
+                                <div title={branchName}>
+                                  <div className="truncate" title={parts[0]}>{parts[0]}</div>
+                                  <div className="text-gray-600 truncate" title={parts.slice(1).join(' - ')}>{parts.slice(1).join(' - ')}</div>
                                 </div>
                               );
                             }
-                            return <span>{branchName}</span>;
+                            return <span className="truncate block" title={branchName}>{branchName}</span>;
                           })()}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4" style={{ maxWidth: '180px' }}>
+                        <div className="text-sm text-gray-900 min-w-0">
                           {(() => {
                             const packageIds = promo.package_ids || (promo.package_id ? [promo.package_id] : []);
                             if (packageIds.length === 0) return '-';
                             if (packageIds.length === 1) {
-                              return getPackageName(packageIds[0]) || '-';
+                              const name = getPackageName(packageIds[0]) || '-';
+                              return <span className="truncate block" title={name}>{name}</span>;
                             }
                             return (
-                              <div className="flex flex-col space-y-1">
+                              <div className="flex flex-col space-y-1 min-w-0">
                                 <span className="font-medium">{packageIds.length} packages</span>
                                 <div className="text-xs text-gray-600 space-y-0.5">
                                   {packageIds.slice(0, 2).map(id => (
-                                    <div key={id}>• {getPackageName(id) || `Package ${id}`}</div>
+                                    <div key={id} className="truncate" title={getPackageName(id) || `Package ${id}`}>• {getPackageName(id) || `Package ${id}`}</div>
                                   ))}
                                   {packageIds.length > 2 && (
                                     <div className="text-gray-500">+{packageIds.length - 2} more</div>
@@ -954,7 +954,7 @@ const Promo = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                             isActive
                               ? 'bg-green-100 text-green-800'
                               : isExpired

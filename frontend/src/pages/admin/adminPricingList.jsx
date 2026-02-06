@@ -348,12 +348,12 @@ const AdminPricingList = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Table View - Horizontal Scroll on All Screens */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '750px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '250px' }} />
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '150px' }} />
-                <col style={{ width: '200px' }} />
+                <col style={{ width: '100px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
@@ -410,7 +410,7 @@ const AdminPricingList = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
                     Price
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     Actions
                   </th>
                 </tr>
@@ -418,8 +418,8 @@ const AdminPricingList = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredPricingLists.map((pricingList) => (
                   <tr key={pricingList.pricinglist_id}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
+                    <td className="px-6 py-4" style={{ maxWidth: '250px' }}>
+                      <div className="text-sm font-medium text-gray-900 truncate" title={pricingList.name || '-'}>
                         {pricingList.name || '-'}
                       </div>
                     </td>

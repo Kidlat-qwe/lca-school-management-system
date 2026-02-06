@@ -75,7 +75,7 @@ const StudentPaymentLogs = () => {
     };
     const colorClass = statusColors[status] || 'bg-gray-100 text-gray-800';
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
         {status || 'N/A'}
       </span>
     );
@@ -93,7 +93,7 @@ const StudentPaymentLogs = () => {
     };
     const colorClass = methodColors[method] || 'bg-gray-100 text-gray-800';
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
         {method || 'N/A'}
       </span>
     );
@@ -401,9 +401,9 @@ const StudentPaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className="flex flex-col">
-                        <span className="font-medium">{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
+                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '200px' }}>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium truncate" title={payment.invoice_description || `INV-${payment.invoice_id}`}>{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
                         <span className="text-xs text-gray-500">Invoice: {formatCurrency(payment.invoice_amount)}</span>
                       </div>
                     </td>
@@ -422,8 +422,8 @@ const StudentPaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(payment.issue_date)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {payment.reference_number || '-'}
+                    <td className="px-6 py-4 text-sm text-gray-500" style={{ maxWidth: '180px' }}>
+                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
                 ))}

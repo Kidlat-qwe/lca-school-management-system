@@ -125,7 +125,7 @@ const SuperfinancePaymentLogs = () => {
     };
     const colorClass = statusColors[status] || 'bg-gray-100 text-gray-800';
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
         {status || 'N/A'}
       </span>
     );
@@ -143,7 +143,7 @@ const SuperfinancePaymentLogs = () => {
     };
     const colorClass = methodColors[method] || 'bg-gray-100 text-gray-800';
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
         {method || 'N/A'}
       </span>
     );
@@ -479,17 +479,17 @@ const SuperfinancePaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className="flex flex-col">
-                        <span className="font-medium">{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
+                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '120px' }}>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium truncate" title={payment.invoice_description || `INV-${payment.invoice_id}`}>{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
                         <span className="text-xs text-gray-500">Amount: {formatCurrency(payment.invoice_amount)}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className="flex flex-col">
-                        <span className="font-medium">{payment.student_name || 'N/A'}</span>
+                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '180px' }}>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
                         {payment.student_email && (
-                          <span className="text-xs text-gray-500">{payment.student_email}</span>
+                          <span className="text-xs text-gray-500 truncate" title={payment.student_email}>{payment.student_email}</span>
                         )}
                       </div>
                     </td>
@@ -505,18 +505,19 @@ const SuperfinancePaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       {getStatusBadge(payment.status)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '140px' }}>
                       {(() => {
                         const branchName = payment.branch_name || getBranchName(payment.branch_id);
                         if (!branchName || branchName === 'N/A') {
                           return <span className="text-gray-400">-</span>;
                         }
                         const formatted = formatBranchName(branchName);
+                        const fullText = formatted.location ? `${formatted.company} - ${formatted.location}` : formatted.company;
                         return (
-                          <div className="flex flex-col leading-tight">
-                            <span className="font-medium">{formatted.company}</span>
+                          <div className="flex flex-col leading-tight min-w-0">
+                            <span className="font-medium truncate" title={fullText}>{formatted.company}</span>
                             {formatted.location && (
-                              <span className="text-xs text-gray-500">{formatted.location}</span>
+                              <span className="text-xs text-gray-500 truncate" title={formatted.location}>{formatted.location}</span>
                             )}
                           </div>
                         );
@@ -525,8 +526,8 @@ const SuperfinancePaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(payment.issue_date)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {payment.reference_number || '-'}
+                    <td className="px-6 py-4 text-sm text-gray-500" style={{ maxWidth: '180px' }}>
+                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
                 ))}

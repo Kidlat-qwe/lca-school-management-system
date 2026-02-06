@@ -313,17 +313,17 @@ const PricingList = () => {
         <div className="bg-white rounded-lg shadow">
           {/* Table View - Horizontal Scroll on All Screens */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1150px', tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '250px' }} />
+                <col style={{ width: '220px' }} />
                 <col style={{ width: '150px' }} />
-                <col style={{ width: '200px' }} />
-                <col style={{ width: '150px' }} />
-                <col style={{ width: '250px' }} />
+                <col style={{ width: '320px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '130px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '250px', minWidth: '250px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '220px', minWidth: '220px' }}>
                     <div className="flex flex-col space-y-2">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
@@ -376,7 +376,7 @@ const PricingList = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '320px', minWidth: '320px' }}>
                     <div className="relative branch-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -397,10 +397,10 @@ const PricingList = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     Price
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '250px', minWidth: '250px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     Actions
                   </th>
                 </tr>
@@ -418,12 +418,12 @@ const PricingList = () => {
                         {pricingList.level_tag || '-'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-6 py-4" style={{ minWidth: '320px', maxWidth: '320px' }}>
+                      <div className="text-sm text-gray-900 truncate" title={getBranchName(pricingList.branch_id) || '-'}>
                         {getBranchName(pricingList.branch_id) || '-'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 whitespace-nowrap" style={{ minWidth: '130px' }}>
                       <div className="text-sm text-gray-900">
                         {pricingList.price !== null && pricingList.price !== undefined
                           ? `₱${parseFloat(pricingList.price).toFixed(2)}`

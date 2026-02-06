@@ -5350,7 +5350,7 @@ const initializePackageMerchSelections = useCallback(
                         }`}>
                           Phase {phaseNumber}
                           {isActivePhase && (
-                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
                               Current
                             </span>
                           )}
@@ -8631,7 +8631,7 @@ const initializePackageMerchSelections = useCallback(
                                   <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
                                     <span>{student.full_name}</span>
                                     {isRemovedEnrollment && (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-800">
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-800">
                                         Removed (Delinquent)
                                       </span>
                                     )}
@@ -8646,7 +8646,7 @@ const initializePackageMerchSelections = useCallback(
                                 <td className="px-4 py-4">
                                   <div className="text-sm text-gray-500">
                                     {isReserved 
-                                      ? <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                      ? <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                                           Reserved
                                         </span>
                                       : (student.phasesDisplay || (student.phase_number ? `Phase ${student.phase_number}` : '-'))
@@ -8683,12 +8683,12 @@ const initializePackageMerchSelections = useCallback(
                                 </td>
                                 <td className="px-4 py-4 whitespace-nowrap">
                                   {isRemovedEnrollment ? (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                                       Removed
                                     </span>
                                   ) : reservationStatus ? (
                                     <span
-                                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                                         reservationStatus === 'Fee Paid'
                                           ? 'bg-green-100 text-green-800'
                                           : reservationStatus === 'Upgraded'
@@ -8979,7 +8979,7 @@ const initializePackageMerchSelections = useCallback(
                                   <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                                   </svg>
-                                  <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                                  <span className="text-xs font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">
                                     {getPackageDetailDisplayCount(pkg.details)} item{getPackageDetailDisplayCount(pkg.details) !== 1 ? 's' : ''} included
                                   </span>
                                 </div>
@@ -9030,7 +9030,7 @@ const initializePackageMerchSelections = useCallback(
                         Student Selected <span className="text-red-500">*</span>
                       </label>
                       {selectedClassForEnrollment?.max_students && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-[#F7C844] bg-opacity-20 text-gray-700">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#F7C844] bg-opacity-20 text-gray-700">
                           <svg className="w-3.5 h-3.5 mr-1 text-[#F7C844]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                           </svg>
@@ -12507,7 +12507,7 @@ const initializePackageMerchSelections = useCallback(
                                 </td>
                                 <td className="px-4 py-4">
                                   {isReserved ? (
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                                       student.reservation_status === 'Fee Paid'
                                         ? 'bg-green-100 text-green-800'
                                         : student.reservation_status === 'Upgraded'
@@ -12519,7 +12519,7 @@ const initializePackageMerchSelections = useCallback(
                                       {student.reservation_status || 'Reserved'}
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                       Enrolled
                                     </span>
                                   )}
@@ -12531,11 +12531,11 @@ const initializePackageMerchSelections = useCallback(
                                 </td>
                                 <td className="px-4 py-4">
                                   {isReserved ? (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                                       Reserved
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                       Phase {student.phase_number}
                                     </span>
                                   )}
@@ -12814,7 +12814,7 @@ const initializePackageMerchSelections = useCallback(
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
                             <span
-                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                                 reservation.status === 'Fee Paid'
                                   ? 'bg-green-100 text-green-800'
                                   : reservation.status === 'Upgraded'

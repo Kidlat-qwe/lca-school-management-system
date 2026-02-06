@@ -671,7 +671,7 @@ const AdminRoom = () => {
                     {/* Removed Branch column - admin only sees their branch */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                           {room.schedule_count || 0} schedule{room.schedule_count !== 1 ? 's' : ''}
                         </span>
                       </div>

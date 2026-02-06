@@ -655,7 +655,7 @@ const AdminMerchandise = () => {
     };
     
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
         {status}
       </span>
     );
@@ -1343,7 +1343,7 @@ const AdminMerchandise = () => {
           >
             <span>My Requests</span>
             {requests.filter(r => r.status === 'Pending').length > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                 {requests.filter(r => r.status === 'Pending').length}
               </span>
             )}

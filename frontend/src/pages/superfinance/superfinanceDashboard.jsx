@@ -412,7 +412,7 @@ const SuperfinanceDashboard = () => {
                         {formatCurrency(invoice.amount)}
                       </p>
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium mt-1 ${
                           invoice.status === 'Paid'
                             ? 'bg-green-100 text-green-800'
                             : invoice.status === 'Unpaid'
@@ -459,7 +459,7 @@ const SuperfinanceDashboard = () => {
                       <p className="text-sm font-semibold text-green-600">
                         {formatCurrency(payment.payable_amount)}
                       </p>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 bg-green-100 text-green-800">
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium mt-1 bg-green-100 text-green-800">
                         {payment.status || 'Completed'}
                       </span>
                     </div>

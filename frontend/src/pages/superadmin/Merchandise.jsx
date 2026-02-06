@@ -36,6 +36,7 @@ const Merchandise = () => {
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
+  const [merchandiseCategory, setMerchandiseCategory] = useState(''); // 'uniform_school' | 'uniform_pe' | 'other' – used when creating new type
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('branches'); // 'branches' or 'requests'
@@ -174,9 +175,10 @@ const Merchandise = () => {
       });
       setEditingMerchandiseType(null);
     } else if (selectedBranchId) {
-      // If we're in merchandise types view (branch selected but not viewing stocks), pre-fill branch_id
+      // If we're in merchandise types view (branch selected but not viewing stocks), show category selection first
       setRequiresSizing(false);
-      setModalStep('form');
+      setMerchandiseCategory('');
+      setModalStep('category-selection');
       setSelectedBranch(branches.find(b => b.branch_id === selectedBranchId) || null);
       setFormData({
         merchandise_name: '',
@@ -192,8 +194,10 @@ const Merchandise = () => {
     } else {
       // If we're in branches view, show branch selection step
       setRequiresSizing(false);
+      setMerchandiseCategory('');
       setModalStep('branch-selection');
       setSelectedBranch(null);
+      setMerchandiseCategory('');
     setFormData({
       merchandise_name: '',
       size: '',
@@ -315,6 +319,7 @@ const Merchandise = () => {
     setEditingMerchandiseType(merchType);
     setError('');
     setModalStep('form');
+    setMerchandiseCategory('');
     setSelectedBranch(branches.find(b => b.branch_id === selectedBranchId) || null);
     // Get the first item of this type to get image_url
     const sampleItem = merchandise.find(
@@ -352,10 +357,26 @@ const Merchandise = () => {
 
   const handleBranchSelect = (branch) => {
     setSelectedBranch(branch);
+    setMerchandiseCategory('');
     setFormData(prev => ({
       ...prev,
       branch_id: branch.branch_id.toString(),
     }));
+    setModalStep('category-selection');
+  };
+
+  const handleCategorySelect = (category) => {
+    setMerchandiseCategory(category);
+    if (category === 'uniform_school') {
+      setFormData(prev => ({ ...prev, merchandise_name: 'School Uniform', gender: '', type: '' }));
+      setRequiresSizing(true);
+    } else if (category === 'uniform_pe') {
+      setFormData(prev => ({ ...prev, merchandise_name: 'PE Uniform', gender: '', type: '' }));
+      setRequiresSizing(true);
+    } else {
+      setFormData(prev => ({ ...prev, merchandise_name: '', gender: '', type: '' }));
+      setRequiresSizing(false);
+    }
     setModalStep('form');
   };
 
@@ -586,7 +607,7 @@ const Merchandise = () => {
     };
     
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
         {status}
       </span>
     );
@@ -602,15 +623,18 @@ const Merchandise = () => {
             onClick={closeModal}
           >
             <div 
-              className={`bg-white rounded-lg shadow-xl ${modalStep === 'branch-selection' ? 'max-w-md w-full' : 'max-w-2xl w-full'} max-h-[90vh] flex flex-col overflow-hidden`}
+              className={`bg-white rounded-lg shadow-xl ${(modalStep === 'branch-selection' || modalStep === 'category-selection') ? 'max-w-lg w-full' : 'max-w-2xl w-full'} max-h-[90vh] flex flex-col overflow-hidden`}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                    {editingMerchandiseType ? 'Edit Merchandise Image' : editingMerchandise ? 'Edit Stock' : viewingStocksFor ? 'Add Stock' : modalStep === 'branch-selection' ? 'Select Branch' : 'Create New Merchandise'}
+                    {editingMerchandiseType ? 'Edit Merchandise Image' : editingMerchandise ? 'Edit Stock' : viewingStocksFor ? 'Add Stock' : modalStep === 'branch-selection' ? 'Select Branch' : modalStep === 'category-selection' ? 'Merchandise Category' : 'Create New Merchandise'}
                   </h2>
+                  {modalStep === 'category-selection' && (
+                    <p className="text-sm text-gray-500 mt-1">Choose what type of merchandise you want to add</p>
+                  )}
                   {modalStep === 'form' && !editingMerchandise && (
                     <p className="text-sm text-gray-500 mt-1">
                       {editingMerchandiseType 
@@ -676,13 +700,63 @@ const Merchandise = () => {
                       type="button"
                       onClick={() => {
                         if (selectedBranch) {
-                          setModalStep('form');
+                          setModalStep('category-selection');
                         }
                       }}
                       disabled={!selectedBranch}
                       className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                     >
                       Continue
+                    </button>
+                  </div>
+                </div>
+              ) : modalStep === 'category-selection' ? (
+                <div className="flex flex-col overflow-hidden">
+                  <div className="p-6">
+                    <p className="text-sm text-gray-500 mb-4">What type of merchandise do you want to add?</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <button
+                        type="button"
+                        onClick={() => handleCategorySelect('uniform_school')}
+                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
+                      >
+                        <span className="text-lg font-semibold text-gray-900">Uniform (School)</span>
+                        <span className="text-xs text-gray-500 mt-1">School uniform with Top/Bottom, Size, Gender</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCategorySelect('uniform_pe')}
+                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
+                      >
+                        <span className="text-lg font-semibold text-gray-900">Uniform (PE)</span>
+                        <span className="text-xs text-gray-500 mt-1">PE uniform with Top/Bottom, Size, Gender</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCategorySelect('other')}
+                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
+                      >
+                        <span className="text-lg font-semibold text-gray-900">Other merchandise</span>
+                        <span className="text-xs text-gray-500 mt-1">Bag, kit, keychain, etc.</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end space-x-3 px-6 pb-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
+                    {!selectedBranchId && (
+                      <button
+                        type="button"
+                        onClick={() => setModalStep('branch-selection')}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                      >
+                        Back
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                    >
+                      Cancel
                     </button>
                   </div>
                 </div>
@@ -825,8 +899,8 @@ const Merchandise = () => {
                         )}
                       </div>
 
-                      {/* Gender and Type fields - only show for uniforms */}
-                      {formData.merchandise_name && formData.merchandise_name.toLowerCase().includes('uniform') && (
+                      {/* Gender and Type fields - show for Uniform (School/PE) category or when name contains "uniform" */}
+                      {((merchandiseCategory === 'uniform_school' || merchandiseCategory === 'uniform_pe') || (formData.merchandise_name && formData.merchandise_name.toLowerCase().includes('uniform'))) && (
                         <>
                           <div>
                             <label htmlFor="gender" className="label-field">
@@ -890,7 +964,7 @@ const Merchandise = () => {
                   {!editingMerchandise && !viewingStocksFor && selectedBranch && (
                     <button
                       type="button"
-                      onClick={handleBackToBranchSelection}
+                      onClick={() => setModalStep('category-selection')}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                       disabled={submitting}
                     >
@@ -1254,6 +1328,9 @@ const Merchandise = () => {
   if (viewingStocksFor) {
     const stocks = getStocksByMerchandiseName(viewingStocksFor);
     const showSizeColumn = requiresSizingForMerchandise(viewingStocksFor);
+    const showGenderTypeColumns =
+      viewingStocksFor.toLowerCase().includes('uniform') ||
+      stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
     
     return (
       <div className="space-y-6">
@@ -1296,7 +1373,15 @@ const Merchandise = () => {
         {/* Stocks Table */}
         <div className="bg-white rounded-lg shadow">
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: showSizeColumn ? '1000px' : '800px' }}>
+            <table
+              className="divide-y divide-gray-200"
+              style={{
+                width: '100%',
+                minWidth: showSizeColumn
+                  ? (showGenderTypeColumns ? '1000px' : '800px')
+                  : (showGenderTypeColumns ? '800px' : '650px'),
+              }}
+            >
               <thead className="bg-white">
                 <tr>
                   {showSizeColumn && (
@@ -1310,12 +1395,16 @@ const Merchandise = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Price
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Gender
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Type
-                  </th>
+                  {showGenderTypeColumns && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Gender
+                    </th>
+                  )}
+                  {showGenderTypeColumns && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Type
+                    </th>
+                  )}
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
@@ -1338,12 +1427,16 @@ const Merchandise = () => {
                           {stock.price ? `₱${parseFloat(stock.price).toFixed(2)}` : '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{stock.type || '-'}</div>
-                      </td>
+                      {showGenderTypeColumns && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
+                        </td>
+                      )}
+                      {showGenderTypeColumns && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">{stock.type || '-'}</div>
+                        </td>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end space-x-2">
                           <button
@@ -1367,7 +1460,15 @@ const Merchandise = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={showSizeColumn ? 5 : 4} className="px-6 py-4 text-center text-sm text-gray-500">
+                    <td
+                      colSpan={
+                        (showSizeColumn ? 1 : 0) +
+                        2 + // qty, price
+                        (showGenderTypeColumns ? 2 : 0) +
+                        1 // actions
+                      }
+                      className="px-6 py-4 text-center text-sm text-gray-500"
+                    >
                       No stock information available for this merchandise type.
                     </td>
                   </tr>
@@ -1408,7 +1509,8 @@ const Merchandise = () => {
               setEditingMerchandise(null);
               setError('');
               setRequiresSizing(false);
-              setModalStep('form');
+              setMerchandiseCategory('');
+              setModalStep('category-selection');
               setSelectedBranch(branches.find(b => b.branch_id === selectedBranchId) || null);
               setFormData({
                 merchandise_name: '',
@@ -1686,7 +1788,7 @@ const Merchandise = () => {
           >
             <span>Stock Requests</span>
             {requests.filter(r => r.status === 'Pending').length > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                 {requests.filter(r => r.status === 'Pending').length}
                       </span>
                     )}
@@ -1750,7 +1852,7 @@ const Merchandise = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                             branch.status === 'Active' || !branch.status
                               ? 'bg-green-100 text-green-800'
                               : 'bg-gray-100 text-gray-800'
