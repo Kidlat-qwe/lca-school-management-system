@@ -54,22 +54,23 @@ const PORT = process.env.PORT || 3000;
 // Security middleware
 app.use(helmet());
 
-// CORS configuration - Support Replit and local development
+// CORS configuration - Support Replit, local dev, and deployed frontend (Linode)
 const getAllowedOrigins = () => {
   const origins = [];
   
-  // Add local development origin
+  // CORS_ORIGIN: single URL or comma-separated list (e.g. on Linode set to your frontend origin)
   if (process.env.CORS_ORIGIN) {
-    origins.push(process.env.CORS_ORIGIN);
+    process.env.CORS_ORIGIN.split(',').forEach(o => { const t = o.trim(); if (t) origins.push(t); });
   }
   
-  // Add Replit frontend URL if provided
   if (process.env.REPLIT_FRONTEND_URL) {
     origins.push(process.env.REPLIT_FRONTEND_URL);
   }
   
-  // Add common Replit patterns
+  // Local and deployed origins (so deployed works even if .env on server has no CORS_ORIGIN)
   origins.push('http://localhost:5173');
+  origins.push('https://cms.little-champion.com');
+  origins.push('http://cms.little-champion.com');
   origins.push('https://*.id.repl.co');
   origins.push('https://*.repl.co');
   
