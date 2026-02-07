@@ -4,6 +4,9 @@ import { query } from '../config/database.js';
 /**
  * Middleware to verify Firebase ID token
  * Extracts the token from Authorization header and verifies it with Firebase
+ *
+ * 401 on deployed (Linode): ensure (1) Firebase Admin SDK JSON is on server (FIREBASE_ADMIN_SDK_PATH),
+ * (2) same Firebase project as frontend (psms-b9ca7), (3) server clock is correct. Check server logs for the actual error.
  */
 export const verifyFirebaseToken = async (req, res, next) => {
   try {
@@ -49,11 +52,13 @@ export const verifyFirebaseToken = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error('Token verification error:', error);
+    const code = error.code || error.codePrefix;
+    const msg = error.message || 'Unknown error';
+    console.error('Token verification error:', code || msg, error);
     return res.status(401).json({
       success: false,
       message: 'Invalid or expired token',
-      error: error.message,
+      ...(process.env.NODE_ENV === 'development' && { error: msg, code: code || undefined }),
     });
   }
 };
