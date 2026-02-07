@@ -1,8 +1,13 @@
 // API Configuration
-// Production build (deployed on Linode) always uses cms URL. Dev uses .env.development (localhost).
+// Use production API when app is opened from deployed domain (not localhost). Use localhost when running on localhost.
 const PRODUCTION_API_URL = 'https://cms.little-champion.com/api/sms';
 const DEV_API_URL = 'http://localhost:3000/api/sms';
-const API_BASE_URL = import.meta.env.MODE === 'production'
+
+const isDeployed = typeof window !== 'undefined' &&
+  window.location.hostname !== 'localhost' &&
+  !window.location.hostname.endsWith('.local');
+
+const API_BASE_URL = isDeployed
   ? PRODUCTION_API_URL
   : (import.meta.env.VITE_API_BASE_URL || DEV_API_URL);
 
