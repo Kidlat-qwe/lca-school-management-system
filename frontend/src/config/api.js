@@ -9,9 +9,12 @@ export default API_BASE_URL;
 
 /**
  * Make an API request with authentication
+ * @param {string} endpoint - API path (e.g. '/auth/verify')
+ * @param {object} options - fetch options (method, body, headers, ...)
+ * @param {string} [tokenOverride] - optional fresh token; if provided, used instead of localStorage (avoids stale/expired token)
  */
-export const apiRequest = async (endpoint, options = {}) => {
-  const token = localStorage.getItem('firebase_token');
+export const apiRequest = async (endpoint, options = {}, tokenOverride = null) => {
+  const token = tokenOverride ?? localStorage.getItem('firebase_token');
   
   const defaultHeaders = {};
 

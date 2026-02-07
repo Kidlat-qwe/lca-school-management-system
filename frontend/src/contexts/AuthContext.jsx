@@ -231,7 +231,8 @@ export const AuthProvider = ({ children }) => {
       
       if (user) {
         try {
-          const token = await user.getIdToken();
+          // Force refresh token so backend always gets a valid one (avoids 401 from expired token)
+          const token = await user.getIdToken(true);
           localStorage.setItem('firebase_token', token);
           
           // If we're creating a user (superadmin creating personnel), don't update userInfo
@@ -246,10 +247,8 @@ export const AuthProvider = ({ children }) => {
           const currentUserInfo = userInfo;
           if (!currentUserInfo || !currentUserInfo.userId) {
             try {
-              // Get user info from backend (POST request as per backend route)
-              const response = await apiRequest('/auth/verify', {
-                method: 'POST',
-              });
+              // Pass the fresh token so verify never uses a stale one from localStorage
+              const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
               if (response && response.user && isMounted) {
                 setUserInfo(response.user);
               }
