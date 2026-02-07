@@ -1,5 +1,4 @@
 import dotenv from 'dotenv';
-import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
@@ -7,17 +6,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const backendDir = resolve(__dirname, '..');
 
-// 1) Load base .env first (sets NODE_ENV and any shared vars)
+// Load single .env (holds both development and production DB config)
 dotenv.config({ path: resolve(backendDir, '.env') });
 
-// 2) Load env file by NODE_ENV (mode-specific defaults)
 const nodeEnv = process.env.NODE_ENV || 'development';
-const envFile = resolve(backendDir, `.env.${nodeEnv}`);
-if (existsSync(envFile)) {
-  dotenv.config({ path: envFile });
+const suffix = nodeEnv.toUpperCase(); // DEVELOPMENT or PRODUCTION
+
+// Map DB_*_DEVELOPMENT / DB_*_PRODUCTION to DB_* based on NODE_ENV (so you only change NODE_ENV to switch DB)
+const dbKeys = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_SSL'];
+for (const key of dbKeys) {
+  const modeValue = process.env[`${key}_${suffix}`];
+  if (modeValue !== undefined && modeValue !== '') {
+    process.env[key] = modeValue;
+  }
 }
 
-// 3) Load .env again so .env overrides .env.development/.env.production (use production DB from .env even in dev if you set it there)
-dotenv.config({ path: resolve(backendDir, '.env') });
-
-console.log(`🔧 Env: ${nodeEnv} | DB: ${process.env.DB_NAME || '(not set)'}`);
+console.log(`🔧 NODE_ENV=${nodeEnv} | DB: ${process.env.DB_NAME || '(not set)'}`);

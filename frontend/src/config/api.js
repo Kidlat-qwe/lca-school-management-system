@@ -2,8 +2,8 @@
 // When deployed (not localhost), always use production API so login/auth works even if build had wrong env
 const isLocalhost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location?.origin || '');
 const API_BASE_URL = isLocalhost
-  ? (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/sms')
-  : (import.meta.env.VITE_API_BASE_URL || 'https://cms.little-champion.com/api/sms');
+  ? 'http://localhost:3000/api/sms'
+  : 'https://cms.little-champion.com/api/sms';
 
 export default API_BASE_URL;
 

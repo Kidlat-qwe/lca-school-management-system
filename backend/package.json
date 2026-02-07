@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "start:prod": "NODE_ENV=production node server.js",
-    "dev": "nodemon server.js",
+    "start:prod": "cross-env NODE_ENV=production node server.js",
+    "dev": "cross-env NODE_ENV=development nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "migrate:sessions": "node migrations/012_generate_sessions_for_existing_classes.js",
     "migrate:currency-php": "node migrations/run_056_set_default_currency_to_php.js",
@@ -43,6 +43,7 @@
     "recharts": "^3.5.0"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "esbuild": "^0.27.2",
     "esbuild-register": "^3.6.0",
     "nodemon": "^3.0.2"

@@ -118,23 +118,38 @@ Or manually execute the SQL statements in your PostgreSQL client.
 - Generate a new private key
 - Copy the credentials to your `.env` file
 
-## Running the Server
+## NODE_ENV and database (development vs production)
 
-### Development Mode
+**Single `.env` file:** Put both database configs in `backend/.env` using suffixed keys:
+
+- **Development:** `DB_HOST_DEVELOPMENT`, `DB_NAME_DEVELOPMENT`, `DB_PORT_DEVELOPMENT`, `DB_USER_DEVELOPMENT`, `DB_PASSWORD_DEVELOPMENT`, `DB_SSL_DEVELOPMENT`
+- **Production:** `DB_HOST_PRODUCTION`, `DB_NAME_PRODUCTION`, etc.
+
+Set **`NODE_ENV=development`** or **`NODE_ENV=production`** in `.env` (or when starting). The app uses the matching set (e.g. when NODE_ENV=production it uses `DB_*_PRODUCTION`). No separate .env.development/.env.production needed.
+
+### Development Mode (development DB)
 
 ```bash
 npm run dev
 ```
 
-This will start the server with nodemon for auto-reloading on file changes.
+Runs with `NODE_ENV=development`, loads `.env.development`, uses development database. Nodemon auto-reloads on file changes.
 
-### Production Mode (local)
+### Production Mode (production DB)
+
+```bash
+npm run start:prod
+```
+
+Runs with `NODE_ENV=production`, loads `.env.production`, uses production database. Use this on Linode or when you want prod DB.
+
+### Start (uses NODE_ENV from `.env`)
 
 ```bash
 npm start
 ```
 
-The server will start on the port specified in your `.env` file (default: 3000).
+Uses `NODE_ENV` from `backend/.env` (or defaults to development). Set `NODE_ENV=development` or `NODE_ENV=production` in `.env` to choose which config/DB to use.
 
 ### Deployment on Linode (use production database)
 
