@@ -6,8 +6,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const backendDir = resolve(__dirname, '..');
 
-// Load single .env (holds both development and production DB config)
-dotenv.config({ path: resolve(backendDir, '.env') });
+// Load single .env (holds both development and production DB config).
+// override: true so .env wins over NODE_ENV set by PM2/shell/start script (e.g. on Linode).
+dotenv.config({ path: resolve(backendDir, '.env'), override: true });
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 const suffix = nodeEnv.toUpperCase(); // DEVELOPMENT or PRODUCTION
