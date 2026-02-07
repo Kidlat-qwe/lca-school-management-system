@@ -10,14 +10,16 @@ const backendDir = resolve(__dirname, '..');
 // 1) Load base .env first (sets NODE_ENV and any shared vars)
 dotenv.config({ path: resolve(backendDir, '.env') });
 
-// 2) Load env file by NODE_ENV (mode-specific defaults)
+// 2) Load env file by NODE_ENV (mode-specific)
 const nodeEnv = process.env.NODE_ENV || 'development';
 const envFile = resolve(backendDir, `.env.${nodeEnv}`);
 if (existsSync(envFile)) {
   dotenv.config({ path: envFile });
 }
 
-// 3) Load .env again so .env overrides .env.development/.env.production (use production DB from .env even in dev if you set it there)
-dotenv.config({ path: resolve(backendDir, '.env') });
+// 3) In development only: load .env again so local .env can override (e.g. use production DB from .env). In production, .env.production is final so deployed app always uses psms_production.
+if (nodeEnv !== 'production') {
+  dotenv.config({ path: resolve(backendDir, '.env') });
+}
 
 console.log(`🔧 Env: ${nodeEnv} | DB: ${process.env.DB_NAME || '(not set)'}`);
