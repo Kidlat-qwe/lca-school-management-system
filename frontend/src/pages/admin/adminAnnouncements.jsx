@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { apiRequest } from '../../config/api';
+import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 
 const RECIPIENT_GROUPS = [
@@ -54,7 +54,11 @@ const AdminAnnouncements = () => {
     branch_id: '',
     start_date: '',
     end_date: '',
+    attachment_url: '',
   });
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [attachmentFileName, setAttachmentFileName] = useState('');
+  const attachmentInputRef = useRef(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -285,7 +289,9 @@ const AdminAnnouncements = () => {
       branch_id: userBranchId ? userBranchId.toString() : '',
       start_date: '',
       end_date: '',
+      attachment_url: '',
     });
+    setAttachmentFileName('');
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -321,7 +327,9 @@ const AdminAnnouncements = () => {
       branch_id: userBranchId ? userBranchId.toString() : '',
       start_date: formatDateForInput(announcement.start_date),
       end_date: formatDateForInput(announcement.end_date),
+      attachment_url: announcement.attachment_url || '',
     });
+    setAttachmentFileName(announcement.attachment_url ? 'Attached file' : '');
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -339,7 +347,41 @@ const AdminAnnouncements = () => {
       branch_id: '',
       start_date: '',
       end_date: '',
+      attachment_url: '',
     });
+    setAttachmentFileName('');
+  };
+
+  const handleAttachmentChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttachmentUploading(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const fd = new FormData();
+      fd.append('attachment', file);
+      const res = await fetch(`${API_BASE_URL}/upload/announcement-file`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Upload failed');
+      setFormData((prev) => ({ ...prev, attachment_url: data.attachmentUrl }));
+      setAttachmentFileName(file.name);
+    } catch (err) {
+      setError(err.message || 'Failed to upload file');
+    } finally {
+      setAttachmentUploading(false);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+    }
+  };
+
+  const removeAttachment = () => {
+    setFormData((prev) => ({ ...prev, attachment_url: '' }));
+    setAttachmentFileName('');
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
   const openViewModal = (announcement) => {
@@ -447,6 +489,7 @@ const AdminAnnouncements = () => {
         branch_id: userBranchId || null,
         start_date: formData.start_date && formData.start_date.trim() !== '' ? formData.start_date : null,
         end_date: formData.end_date && formData.end_date.trim() !== '' ? formData.end_date : null,
+        attachment_url: formData.attachment_url && formData.attachment_url.trim() ? formData.attachment_url.trim() : null,
       };
 
       if (editingAnnouncement) {
@@ -1156,6 +1199,34 @@ const AdminAnnouncements = () => {
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Attachment (optional)
+                      </label>
+                      <input
+                        ref={attachmentInputRef}
+                        type="file"
+                        accept=".pdf,.doc,.docx,image/*,.txt,.csv"
+                        onChange={handleAttachmentChange}
+                        className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+                      />
+                      {attachmentUploading && (
+                        <p className="mt-1 text-sm text-gray-500">Uploading...</p>
+                      )}
+                      {attachmentFileName && !attachmentUploading && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-sm text-gray-600">{attachmentFileName}</span>
+                          <button
+                            type="button"
+                            onClick={removeAttachment}
+                            className="text-sm text-red-600 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
                         Recipient Groups <span className="text-red-500">*</span>
                       </label>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -1346,6 +1417,22 @@ const AdminAnnouncements = () => {
                       {viewingAnnouncement.body}
                     </div>
                   </div>
+
+                  {viewingAnnouncement.attachment_url && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Attachment
+                      </label>
+                      <a
+                        href={viewingAnnouncement.attachment_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-primary-600 hover:underline"
+                      >
+                        Open attached file
+                      </a>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>

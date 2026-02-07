@@ -1,6 +1,6 @@
 import express from 'express';
 import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
-import { uploadSingle, handleUploadError } from '../middleware/fileUpload.js';
+import { uploadSingle, uploadSingleAnnouncementAttachment, handleUploadError } from '../middleware/fileUpload.js';
 import { uploadToS3, deleteFromS3, validateImageFile, generateUniqueFileName } from '../utils/s3Upload.js';
 
 const router = express.Router();
@@ -136,6 +136,57 @@ router.post(
       });
     } catch (error) {
       console.error('Error uploading user avatar:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/upload/announcement-file
+ * Upload announcement attachment to S3 (psms/announcement_files/ folder)
+ * Allowed: PDF, Word, images, TXT, CSV
+ */
+router.post(
+  '/announcement-file',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin', 'Teacher'),
+  uploadSingleAnnouncementAttachment,
+  handleUploadError,
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file provided',
+        });
+      }
+
+      const userId = req.user.user_id || req.user.userId;
+      const fileName = generateUniqueFileName(
+        'psms/announcement_files',
+        req.file.originalname,
+        userId
+      );
+
+      const uploadResult = await uploadToS3(
+        req.file.buffer,
+        fileName,
+        req.file.mimetype,
+        {
+          uploadedBy: String(userId),
+          type: 'announcement_attachment',
+          originalName: req.file.originalname,
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        attachmentUrl: uploadResult.url,
+        key: uploadResult.key,
+        message: 'Announcement file uploaded successfully',
+      });
+    } catch (error) {
+      console.error('Error uploading announcement file:', error);
       next(error);
     }
   }

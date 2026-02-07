@@ -35,11 +35,38 @@ const upload = multer({
   },
 });
 
+// File filter for announcement attachments (documents + images)
+const attachmentFileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif',
+    'application/pdf',
+    'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain', 'text/csv',
+  ];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type. Allowed: PDF, Word, images, TXT, CSV. Got: ${file.mimetype}`), false);
+  }
+};
+
+const uploadAttachment = multer({
+  storage,
+  fileFilter: attachmentFileFilter,
+  limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '5242880') },
+});
+
 /**
  * Middleware for single image upload
  * Usage: upload.single('image')
  */
 export const uploadSingle = upload.single('image');
+
+/**
+ * Middleware for single announcement attachment (PDF, doc, images, etc.)
+ * Usage: uploadSingleAnnouncementAttachment (field name: 'attachment')
+ */
+export const uploadSingleAnnouncementAttachment = uploadAttachment.single('attachment');
 
 /**
  * Middleware for multiple image uploads

@@ -497,6 +497,22 @@ const StudentAnnouncements = () => {
                     </div>
                   </div>
 
+                  {viewingAnnouncement.attachment_url && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Attachment
+                      </label>
+                      <a
+                        href={viewingAnnouncement.attachment_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-primary-600 hover:underline"
+                      >
+                        Open attached file
+                      </a>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">

@@ -70,6 +70,7 @@ router.get(
           a.priority,
           a.branch_id,
           a.created_by,
+          a.attachment_url,
           TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
           TO_CHAR(a.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
@@ -244,6 +245,7 @@ router.get(
           a.priority,
           a.branch_id,
           a.created_by,
+          a.attachment_url,
           TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
           TO_CHAR(a.end_date, 'YYYY-MM-DD') as end_date,
@@ -327,6 +329,7 @@ router.get(
           a.priority,
           a.branch_id,
           a.created_by,
+          a.attachment_url,
           TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
           TO_CHAR(a.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
@@ -389,6 +392,7 @@ router.post(
       if (value === null || value === undefined || value === '') return true;
       return /^\d{4}-\d{2}-\d{2}/.test(value);
     }).withMessage('End date must be a valid date in YYYY-MM-DD format'),
+    body('attachment_url').optional().isString().trim().withMessage('Attachment URL must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -406,6 +410,7 @@ router.post(
         branch_id,
         start_date,
         end_date,
+        attachment_url,
       } = req.body;
 
       // Validate date range
@@ -437,9 +442,9 @@ router.post(
         `
         INSERT INTO announcementstbl (
           title, body, recipient_groups, status, priority, branch_id, 
-          created_by, start_date, end_date
+          created_by, start_date, end_date, attachment_url
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         `,
         [
@@ -452,6 +457,7 @@ router.post(
           createdByUserId,
           start_date || null,
           end_date || null,
+          attachment_url && attachment_url.trim() ? attachment_url.trim() : null,
         ]
       );
 
@@ -529,6 +535,7 @@ router.put(
       if (value === null || value === undefined || value === '') return true;
       return /^\d{4}-\d{2}-\d{2}/.test(value);
     }).withMessage('End date must be a valid date in YYYY-MM-DD format'),
+    body('attachment_url').optional().isString().trim().withMessage('Attachment URL must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -547,6 +554,7 @@ router.put(
         branch_id,
         start_date,
         end_date,
+        attachment_url,
       } = req.body;
 
       // Check if announcement exists
@@ -655,6 +663,12 @@ router.put(
         paramCount++;
         updates.push(`end_date = $${paramCount}`);
         params.push(end_date || null);
+      }
+
+      if (attachment_url !== undefined) {
+        paramCount++;
+        updates.push(`attachment_url = $${paramCount}`);
+        params.push(attachment_url && attachment_url.trim() ? attachment_url.trim() : null);
       }
 
       if (updates.length === 0) {

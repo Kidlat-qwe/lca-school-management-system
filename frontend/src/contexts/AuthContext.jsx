@@ -253,15 +253,16 @@ export const AuthProvider = ({ children }) => {
                 setUserInfo(response.user);
               }
             } catch (error) {
-              // Verify endpoint might fail - this is not critical
-              // User info will be set by signup/login functions, or on next page load
-              // Only log as warning, not error, since this is expected for new users
-              if (error.message && !error.message.includes('404')) {
+              const is401 = error.response?.status === 401 || error.message?.includes('Invalid or expired token');
+              if (is401 && isMounted) {
+                // Backend rejected the token (expired or server config). Sign out so user gets a clean login and can try again.
+                localStorage.removeItem('firebase_token');
+                signOut(auth).catch(() => {});
+                setUserInfo(null);
+              }
+              if (error.message && !error.message.includes('404') && !is401) {
                 console.warn('Could not verify user with backend:', error.message);
               }
-              
-              // Don't set minimal user info here - let signup/login handle it
-              // This prevents overwriting user info that was just set
             }
           }
         } catch (error) {
