@@ -9,9 +9,6 @@ package-lock.json
 .env.local
 .env.production
 
-# Server-only: when this file exists, backend uses production DB (do not commit)
-.use-production
-
 # Logs
 logs/
 *.log
