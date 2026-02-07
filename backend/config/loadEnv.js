@@ -1,19 +1,35 @@
 import dotenv from 'dotenv';
+import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const backendDir = resolve(__dirname, '..');
+const envPath = resolve(backendDir, '.env');
 
-// Load single .env (holds both development and production DB config).
-// override: true so .env wins over NODE_ENV set by PM2/shell/start script (e.g. on Linode).
-dotenv.config({ path: resolve(backendDir, '.env'), override: true });
+// Read NODE_ENV directly from .env file so DB choice always follows the file (avoids PM2/shell overriding on Linode)
+let nodeEnv = 'development';
+if (existsSync(envPath)) {
+  try {
+    const content = readFileSync(envPath, 'utf8');
+    const match = content.match(/^\s*NODE_ENV\s*=\s*(.+?)\s*$/m);
+    if (match) {
+      const val = match[1].trim().replace(/^["']|["']$/g, '');
+      if (val === 'production' || val === 'development') nodeEnv = val;
+    }
+  } catch (_) {}
+}
 
-const nodeEnv = process.env.NODE_ENV || 'development';
-const suffix = nodeEnv.toUpperCase(); // DEVELOPMENT or PRODUCTION
+// Load .env for all vars; override so .env wins over process env
+dotenv.config({ path: envPath, override: true });
 
-// Map DB_*_DEVELOPMENT / DB_*_PRODUCTION to DB_* based on NODE_ENV (so you only change NODE_ENV to switch DB)
+// Sync process.env.NODE_ENV to what we read from file (so rest of app sees it)
+process.env.NODE_ENV = nodeEnv;
+
+const suffix = nodeEnv.toUpperCase();
+
+// Map DB_*_DEVELOPMENT / DB_*_PRODUCTION to DB_* based on NODE_ENV from file
 const dbKeys = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_SSL'];
 for (const key of dbKeys) {
   const modeValue = process.env[`${key}_${suffix}`];
@@ -22,4 +38,4 @@ for (const key of dbKeys) {
   }
 }
 
-console.log(`🔧 NODE_ENV=${nodeEnv} | DB: ${process.env.DB_NAME || '(not set)'}`);
+console.log(`🔧 NODE_ENV=${nodeEnv} (from .env file) | DB: ${process.env.DB_NAME || '(not set)'}`);
