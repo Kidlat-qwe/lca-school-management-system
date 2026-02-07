@@ -1,6 +1,10 @@
 // API Configuration
-// Production build must use cms URL (Linode). Dev uses .env.development (localhost). Fallback by mode so Linode never gets localhost.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.MODE === 'production' ? 'https://cms.little-champion.com/api/sms' : 'http://localhost:3000/api/sms');
+// Production build (deployed on Linode) always uses cms URL. Dev uses .env.development (localhost).
+const PRODUCTION_API_URL = 'https://cms.little-champion.com/api/sms';
+const DEV_API_URL = 'http://localhost:3000/api/sms';
+const API_BASE_URL = import.meta.env.MODE === 'production'
+  ? PRODUCTION_API_URL
+  : (import.meta.env.VITE_API_BASE_URL || DEV_API_URL);
 
 export default API_BASE_URL;
 
