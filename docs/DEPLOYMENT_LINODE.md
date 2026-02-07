@@ -68,18 +68,28 @@ cd ..
 
 *(Adjust paths if your structure is different.)*
 
-6. **Use production database on the server**
+6. **Force production database on the server (important)**
 
-The backend on Linode must run with **NODE_ENV=production** so it uses **psms_production**, not psms_db.
+The server’s `backend/.env` is not in git, so it may still have `NODE_ENV=development` or the dev DB. Do this **once** on the server so the deployed app always uses **psms_production**:
 
-- **Option A – in backend `.env` on the server:** set `NODE_ENV=production`.
-- **Option B – start with production env:**  
-  If you use PM2, start the backend with production mode, e.g.  
-  `NODE_ENV=production node backend/server.js`  
-  or use the npm script:  
-  `cd backend && npm run start:prod`
+**Option A – use the `.use-production` file (recommended)**  
+From the project root on the server:
 
-Ensure **`backend/.env.production`** exists on the server (it is not in git) with production DB settings, including **`DB_NAME=psms_production`**.
+```bash
+touch backend/.use-production
+```
+
+When this file exists, the backend uses production mode and loads **`backend/.env.production`**.  
+Ensure **`backend/.env.production`** exists on the server (copy from your computer if needed) with **`DB_NAME=psms_production`** and the rest of your production config. This file is not in git.
+
+**Option B – set in backend `.env` on the server**  
+Edit `backend/.env` on the server (e.g. `nano backend/.env`) and set:
+
+```env
+NODE_ENV=production
+```
+
+and ensure DB vars point to **psms_production**, or that **`backend/.env.production`** exists on the server with the production DB settings.
 
 7. **Restart the app**
 
@@ -99,7 +109,7 @@ pm2 restart all
 - [ ] Server: `git pull origin main` (and `git stash` if needed)
 - [ ] Server: `npm install` (in project root and/or frontend/backend as needed)
 - [ ] Server: `cd frontend && npm run build`
-- [ ] Server: Backend runs with **NODE_ENV=production** and **backend/.env.production** has **psms_production**
+- [ ] Server: **`touch backend/.use-production`** (once) and **backend/.env.production** exists with **DB_NAME=psms_production**
 - [ ] Server: `pm2 restart all`
 
 After restart, check backend logs for: **`🔧 Env: production | DB: psms_production`**.
