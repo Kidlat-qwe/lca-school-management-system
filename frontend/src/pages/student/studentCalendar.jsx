@@ -69,6 +69,7 @@ const StudentCalendar = () => {
   const [selectedWeekStart, setSelectedWeekStart] = useState(defaultWeekStart);
   const [roomFilter, setRoomFilter] = useState('');
   const [events, setEvents] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [filterOptions, setFilterOptions] = useState({ rooms: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -85,6 +86,19 @@ const StudentCalendar = () => {
     fetchSchedules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, selectedMonth, selectedWeekStart, roomFilter]);
+
+  useEffect(() => {
+    const dateRange = viewMode === 'week' ? weekMeta : monthMeta;
+    const loadHolidays = async () => {
+      try {
+        const res = await apiRequest(`/holidays?start_date=${dateRange.start}&end_date=${dateRange.end}`);
+        setHolidays(res.data || []);
+      } catch {
+        setHolidays([]);
+      }
+    };
+    loadHolidays();
+  }, [viewMode, monthMeta.start, monthMeta.end, weekMeta.start, weekMeta.end]);
 
   const fetchSchedules = async () => {
     setLoading(true);
@@ -144,6 +158,15 @@ const StudentCalendar = () => {
       return acc;
     }, {});
   }, [events]);
+
+  const holidaysByDate = useMemo(() => {
+    const map = {};
+    holidays.forEach((h) => {
+      if (!map[h.date]) map[h.date] = [];
+      map[h.date].push(h);
+    });
+    return map;
+  }, [holidays]);
 
   const calendarCells = useMemo(() => {
     if (viewMode === 'week') {
@@ -371,11 +394,14 @@ const StudentCalendar = () => {
                       <span>Day {cell.dayNumber}</span>
                     )}
                     <span className="text-[10px] text-gray-400">
-                      {(cell.events || []).length} {cell.events.length === 1 ? 'class' : 'classes'}
+                      {((holidaysByDate[cell.dateKey] || []).length > 0 ? 0 : (cell.events || []).length)} {((holidaysByDate[cell.dateKey] || []).length > 0 ? 0 : (cell.events || []).length) === 1 ? 'class' : 'classes'}
                     </span>
                   </div>
                   <div className={`flex-1 space-y-2 overflow-y-auto rounded-lg bg-gray-50/60 p-1 ${viewMode === 'week' ? 'min-h-[450px]' : ''}`}>
-                    {(cell.events || []).length === 0 ? (
+                    {((holidaysByDate[cell.dateKey]) || []).map((h) => (
+                      <span key={h.source === 'custom' ? h.holiday_id : `${h.date}-${h.name}`} className={`block truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${h.source === 'national' ? 'bg-[#0f766e]' : 'bg-[#1d4ed8]'}`} title={h.name}>{h.name}</span>
+                    ))}
+                    {(holidaysByDate[cell.dateKey] || []).length > 0 ? null : (cell.events || []).length === 0 ? (
                       <p className="text-[11px] text-gray-400">No classes</p>
                     ) : (
                       cell.events.map((event) => (

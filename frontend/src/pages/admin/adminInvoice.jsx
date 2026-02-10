@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 
 const AdminInvoice = () => {
   const { userInfo } = useAuth();
@@ -57,7 +58,7 @@ const AdminInvoice = () => {
     payment_method: 'Cash',
     payment_type: '',
     payable_amount: '',
-    issue_date: new Date().toISOString().split('T')[0],
+    issue_date: todayManilaYMD(),
     reference_number: '',
     remarks: '',
   });
@@ -602,7 +603,7 @@ const AdminInvoice = () => {
         payment_method: 'Cash',
         payment_type: '',
         payable_amount: invoiceData.amount || '',
-        issue_date: new Date().toISOString().split('T')[0],
+        issue_date: todayManilaYMD(),
         reference_number: '',
         remarks: '',
       });
@@ -662,7 +663,7 @@ const AdminInvoice = () => {
       payment_method: 'Cash',
       payment_type: '',
       payable_amount: '',
-      issue_date: new Date().toISOString().split('T')[0],
+      issue_date: todayManilaYMD(),
       reference_number: '',
       remarks: '',
     });
@@ -672,15 +673,7 @@ const AdminInvoice = () => {
   const handlePaymentInputChange = (e) => {
     const { name, value } = e.target;
     setPaymentFormData(prev => {
-      const updated = {
-        ...prev,
-        [name]: value,
-      };
-      // Clear reference number when switching to Cash
-      if (name === 'payment_method' && value === 'Cash') {
-        updated.reference_number = '';
-      }
-      return updated;
+      return { ...prev, [name]: value };
     });
     // Clear error for this field
     if (paymentFormErrors[name]) {
@@ -2158,11 +2151,11 @@ const AdminInvoice = () => {
                   </div>
                   <div>
                     <label className="text-xs text-gray-600">Issue Date</label>
-                    <p className="text-sm font-medium text-gray-900">{selectedInvoiceForPayment.issue_date || '-'}</p>
+                    <p className="text-sm font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.issue_date)}</p>
                   </div>
                   <div>
                     <label className="text-xs text-gray-600">Due Date</label>
-                    <p className="text-sm font-medium text-gray-900">{selectedInvoiceForPayment.due_date || '-'}</p>
+                    <p className="text-sm font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.due_date)}</p>
                   </div>
                 </div>
               </div>
@@ -2275,21 +2268,17 @@ const AdminInvoice = () => {
                   </div>
                 </div>
 
-                {(paymentFormData.payment_method === 'Online Banking' || 
-                  paymentFormData.payment_method === 'Credit Card' || 
-                  paymentFormData.payment_method === 'E-wallets') && (
-                  <div>
-                    <label className="label-field text-xs">Reference Number</label>
-                    <input
-                      type="text"
-                      name="reference_number"
-                      value={paymentFormData.reference_number}
-                      onChange={handlePaymentInputChange}
-                      className="input-field text-sm"
-                      placeholder="Enter reference number"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="label-field text-xs">Reference Number</label>
+                  <input
+                    type="text"
+                    name="reference_number"
+                    value={paymentFormData.reference_number}
+                    onChange={handlePaymentInputChange}
+                    className="input-field text-sm"
+                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                  />
+                </div>
 
                 <div>
                   <label className="label-field text-xs">Remarks</label>

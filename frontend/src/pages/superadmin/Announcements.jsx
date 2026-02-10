@@ -23,6 +23,22 @@ const PRIORITY_OPTIONS = [
   { value: 'Low', label: 'Low' },
 ];
 
+/** Format date-time in Philippines time (UTC+8) for display */
+const formatInPHTime = (isoOrDateString, options = {}) => {
+  if (!isoOrDateString) return 'N/A';
+  const d = new Date(isoOrDateString);
+  if (Number.isNaN(d.getTime())) return 'N/A';
+  return d.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short', ...options });
+};
+
+/** Format date only in Philippines time (UTC+8) */
+const formatDateInPH = (isoOrDateString) => {
+  if (!isoOrDateString) return 'N/A';
+  const d = new Date(isoOrDateString);
+  if (Number.isNaN(d.getTime())) return 'N/A';
+  return d.toLocaleDateString('en-PH', { timeZone: 'Asia/Manila' });
+};
+
 const Announcements = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [announcements, setAnnouncements] = useState([]);
@@ -1006,7 +1022,7 @@ const Announcements = () => {
                       </div>
                     </td>
                     <td className="px-3 py-3 text-xs text-gray-900 whitespace-nowrap">
-                      {announcement.created_at ? new Date(announcement.created_at).toLocaleDateString() : 'N/A'}
+                      {formatDateInPH(announcement.created_at)}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusBadgeColor(announcement.status)}`}>
@@ -1493,10 +1509,10 @@ const Announcements = () => {
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Created On
+                        Created On <span className="text-gray-500 font-normal">(Philippines, UTC+8)</span>
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.created_at ? new Date(viewingAnnouncement.created_at).toLocaleString() : 'N/A'}
+                        {formatInPHTime(viewingAnnouncement.created_at)}
                       </div>
                     </div>
 
@@ -1505,7 +1521,7 @@ const Announcements = () => {
                         Start Date
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.start_date ? new Date(viewingAnnouncement.start_date).toLocaleDateString() : 'No start date'}
+                        {viewingAnnouncement.start_date ? formatDateInPH(viewingAnnouncement.start_date) : 'No start date'}
                       </div>
                     </div>
 
@@ -1514,7 +1530,7 @@ const Announcements = () => {
                         End Date
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.end_date ? new Date(viewingAnnouncement.end_date).toLocaleDateString() : 'No end date'}
+                        {viewingAnnouncement.end_date ? formatDateInPH(viewingAnnouncement.end_date) : 'No end date'}
                       </div>
                     </div>
 

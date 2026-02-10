@@ -161,23 +161,26 @@ const StudentAnnouncements = () => {
     }
   };
 
+  /** Format date in Philippines time (UTC+8) */
   const formatDate = (dateString) => {
     if (!dateString) return '-';
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      return date.toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', year: 'numeric', month: 'long', day: 'numeric' });
     } catch {
       return dateString;
     }
   };
 
+  /** Format date-time in Philippines time (UTC+8) */
   const formatDateTime = (dateString) => {
     if (!dateString) return '-';
     try {
       const date = new Date(dateString);
-      return date.toLocaleString('en-US', { 
-        year: 'numeric', 
-        month: 'short', 
+      return date.toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric',
+        month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
@@ -565,10 +568,10 @@ const StudentAnnouncements = () => {
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Created On
+                        Created On <span className="text-gray-500 font-normal">(Philippines, UTC+8)</span>
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.created_at ? new Date(viewingAnnouncement.created_at).toLocaleString() : 'N/A'}
+                        {formatDateTime(viewingAnnouncement.created_at)}
                       </div>
                     </div>
 
@@ -577,7 +580,7 @@ const StudentAnnouncements = () => {
                         Start Date
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.start_date ? new Date(viewingAnnouncement.start_date).toLocaleDateString() : 'No start date'}
+                        {viewingAnnouncement.start_date ? formatDate(viewingAnnouncement.start_date) : 'No start date'}
                       </div>
                     </div>
 
@@ -586,7 +589,7 @@ const StudentAnnouncements = () => {
                         End Date
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
-                        {viewingAnnouncement.end_date ? new Date(viewingAnnouncement.end_date).toLocaleDateString() : 'No end date'}
+                        {viewingAnnouncement.end_date ? formatDate(viewingAnnouncement.end_date) : 'No end date'}
                       </div>
                     </div>
                   </div>

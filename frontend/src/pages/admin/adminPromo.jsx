@@ -465,8 +465,21 @@ const AdminPromo = () => {
       errors.promo_name = 'Promo name is required';
     }
 
+    // Promo code is now required
+    if (!formData.promo_code || !formData.promo_code.trim()) {
+      errors.promo_code = 'Promo code is required';
+    } else {
+      const code = formData.promo_code.trim();
+      if (code.length < 4 || code.length > 20) {
+        errors.promo_code = 'Promo code must be 4-20 characters';
+      } else if (!/^[A-Z0-9-]+$/.test(code)) {
+        errors.promo_code = 'Promo code must contain only uppercase letters, numbers, and hyphens';
+      }
+    }
+
+    // At least one package is required for admin (they always have a specific branch)
     if (!formData.package_ids || formData.package_ids.length === 0) {
-      errors.package_ids = 'At least one package is required';
+      errors.package_ids = 'Please select at least one package.';
     }
 
     if (!formData.start_date) {
@@ -480,16 +493,6 @@ const AdminPromo = () => {
     if (formData.start_date && formData.end_date) {
       if (new Date(formData.start_date) > new Date(formData.end_date)) {
         errors.end_date = 'End date must be after or equal to start date';
-      }
-    }
-
-    // Validate promo code if provided
-    if (formData.promo_code && formData.promo_code.trim()) {
-      const code = formData.promo_code.trim();
-      if (code.length < 4 || code.length > 20) {
-        errors.promo_code = 'Promo code must be 4-20 characters';
-      } else if (!/^[A-Z0-9-]+$/.test(code)) {
-        errors.promo_code = 'Promo code must contain only uppercase letters, numbers, and hyphens';
       }
     }
 
@@ -650,6 +653,25 @@ const AdminPromo = () => {
     if (!merchandiseId) return null;
     const item = merchandise.find(m => m.merchandise_id === merchandiseId);
     return item ? item.merchandise_name : null;
+  };
+
+  // Build example branch-specific promo codes based on existing branches
+  const getBranchPromoCodeExamples = (baseCode) => {
+    if (!baseCode || !branches || branches.length === 0) return '';
+    const examples = branches
+      .slice(0, 3)
+      .map((branch) => {
+        const citySource = branch.city || branch.branch_name || '';
+        const cityClean = citySource
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '');
+        return `${baseCode}${cityClean}`;
+      })
+      .filter(Boolean);
+    if (examples.length === 0) return '';
+    if (examples.length === 1) return examples[0];
+    if (examples.length === 2) return `${examples[0]}, ${examples[1]}`;
+    return `${examples[0]}, ${examples[1]}, etc.`;
   };
 
   const getPromoTypeLabel = (type) => {
@@ -1163,17 +1185,14 @@ const AdminPromo = () => {
 
                     <div>
                       <label htmlFor="promo_code" className="label-field">
-                        Promo Code (Optional)
-                        <span className="text-xs text-gray-500 ml-2">
-                          Leave empty for auto-apply promos
-                        </span>
+                        Promo Code <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
                         <input
                           type="text"
                           id="promo_code"
                           name="promo_code"
-                          value={formData.promo_code}
+                          value={formData.promo_code || ''}
                           onChange={(e) => {
                             // Auto-convert to uppercase and remove spaces
                             const value = e.target.value.toUpperCase().replace(/\s/g, '').replace(/[^A-Z0-9-]/g, '');
@@ -1189,6 +1208,7 @@ const AdminPromo = () => {
                           className={`input-field font-mono ${formErrors.promo_code ? 'border-red-500' : ''}`}
                           placeholder="e.g., SUMMER2024, WELCOME10"
                           maxLength={20}
+                          required
                         />
                         {formData.promo_code && (
                           <button
@@ -1209,10 +1229,26 @@ const AdminPromo = () => {
                       {formErrors.promo_code && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.promo_code}</p>
                       )}
+                      {!editingPromo && formData.promo_code && (!formData.branch_id || formData.branch_id === '') && (
+                        <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                          <div className="flex items-start">
+                            <svg className="w-5 h-5 text-blue-600 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                            <div className="text-sm text-blue-800">
+                              <p className="font-medium mb-1">Branch-Specific Codes Will Be Generated</p>
+                              <p className="text-xs">
+                                Since "All Branches" is selected, separate promos will be created for each branch with codes like:
+                                <span className="block mt-1 font-mono text-blue-900">
+                                  {getBranchPromoCodeExamples(formData.promo_code)}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-gray-500 mt-1">
-                        💡 <strong>Auto-apply:</strong> Leave empty for automatic promos.
-                        <br />
-                        <strong>Code-based:</strong> Enter a code for flyer/campaign promos <span className="whitespace-nowrap">(4-20 chars, A-Z, 0-9, -)</span>
+                        <strong>Code-based:</strong> Enter a unique code for flyer/campaign promos <span className="whitespace-nowrap">(4-20 chars, A-Z, 0-9, -)</span>
                       </p>
                     </div>
 
@@ -1366,7 +1402,7 @@ const AdminPromo = () => {
                                   type="number"
                                   id="installment_months_to_apply"
                                   name="installment_months_to_apply"
-                                  value={formData.installment_months_to_apply}
+                                  value={formData.installment_months_to_apply || ''}
                                   onChange={handleInputChange}
                                   className={`input-field ${formErrors.installment_months_to_apply ? 'border-red-500' : ''}`}
                                   min="1"

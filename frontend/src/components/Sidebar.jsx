@@ -41,13 +41,32 @@ const Sidebar = ({ isOpen, onClose }) => {
   const allMenuItems = [
     {
       name: 'Dashboard',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Admin', 'Finance'], // Dropdown for Superadmin, Admin, Finance/Superfinance
+      children: [
+        {
+          name: 'Financial Dashboard',
+          path: basePath, // Current dashboard (financial metrics)
+        },
+        {
+          name: 'Operational Dashboard',
+          path: `${basePath}/operational-dashboard`, // New cohort retention analysis
+        },
+      ],
+    },
+    {
+      name: 'Dashboard',
       path: basePath,
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
         </svg>
       ),
-      roles: ['Superadmin', 'Admin', 'Teacher', 'Student', 'Finance'], // Available for all user types (both Finance and Superfinance)
+      roles: ['Teacher', 'Student'], // Single link for Teacher, Student
     },
     {
       name: 'Calendar',
@@ -58,6 +77,16 @@ const Sidebar = ({ isOpen, onClose }) => {
         </svg>
       ),
       roles: ['Superadmin', 'Admin', 'Teacher', 'Student'],
+    },
+    {
+      name: 'Holidays',
+      path: '/superadmin/holidays', // Will be overridden in map function for Admin
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Admin'],
     },
     {
       name: 'Announcements',
@@ -270,6 +299,12 @@ const Sidebar = ({ isOpen, onClose }) => {
           itemPath = '/teacher/calendar';
         } else if (basePath === '/student') {
           itemPath = '/student/calendar';
+        }
+      } else if (item.name === 'Holidays') {
+        if (basePath === '/superadmin') {
+          itemPath = '/superadmin/holidays';
+        } else if (basePath === '/admin') {
+          itemPath = '/admin/holidays';
         }
       } else if (item.name === 'Classes') {
         if (basePath === '/superadmin') {

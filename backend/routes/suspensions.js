@@ -181,11 +181,32 @@ router.post(
     body('affected_class_ids.*').optional().isInt().withMessage('Each class ID must be an integer'),
     body('selected_session_ids').isArray().withMessage('Selected session IDs must be an array'),
     body('selected_session_ids.*').isInt().withMessage('Each session ID must be an integer'),
-    body('makeup_schedules').isArray().withMessage('Makeup schedules must be an array'),
-    body('makeup_schedules.*.suspended_session_id').isInt().withMessage('Suspended session ID must be an integer'),
-    body('makeup_schedules.*.makeup_date').isISO8601().withMessage('Makeup date must be a valid date'),
-    body('makeup_schedules.*.makeup_start_time').notEmpty().withMessage('Makeup start time is required'),
-    body('makeup_schedules.*.makeup_end_time').notEmpty().withMessage('Makeup end time is required'),
+    // Optional strategy: 'manual' (default), 'add-last-phase'
+    body('makeup_strategy')
+      .optional()
+      .isIn(['manual', 'add-last-phase'])
+      .withMessage('Invalid makeup strategy'),
+    // For manual strategy we expect makeup_schedules; for automatic strategies it can be omitted.
+    body('makeup_schedules')
+      .optional({ nullable: true })
+      .isArray()
+      .withMessage('Makeup schedules must be an array when provided'),
+    body('makeup_schedules.*.suspended_session_id')
+      .optional()
+      .isInt()
+      .withMessage('Suspended session ID must be an integer'),
+    body('makeup_schedules.*.makeup_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Makeup date must be a valid date'),
+    body('makeup_schedules.*.makeup_start_time')
+      .optional()
+      .notEmpty()
+      .withMessage('Makeup start time is required'),
+    body('makeup_schedules.*.makeup_end_time')
+      .optional()
+      .notEmpty()
+      .withMessage('Makeup end time is required'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -205,18 +226,31 @@ router.post(
         description,
         affected_class_ids,
         selected_session_ids,
-        makeup_schedules,
+        makeup_schedules: rawMakeupSchedules,
+        makeup_strategy,
       } = req.body;
-      
-      console.log(`📝 Suspension details: name="${suspension_name}", reason=${reason}, selected sessions=${selected_session_ids.length}, makeup schedules=${makeup_schedules.length}`);
 
-      // Validate that selected_session_ids and makeup_schedules arrays have same length
-      if (selected_session_ids.length !== makeup_schedules.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Each suspended session must have a corresponding makeup schedule',
-        });
+      const makeupStrategy = makeup_strategy || 'manual'; // 'manual' | 'add-last-phase'
+      let makeupSchedules = Array.isArray(rawMakeupSchedules) ? rawMakeupSchedules : [];
+      
+      console.log(`📝 Suspension details: name="${suspension_name}", reason=${reason}, selected sessions=${selected_session_ids.length}, strategy=${makeupStrategy}, incoming makeup schedules=${makeupSchedules.length}`);
+
+      // For manual strategy, ensure there is a makeup schedule per selected session
+      if (makeupStrategy === 'manual') {
+        if (!Array.isArray(makeupSchedules) || makeupSchedules.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Makeup schedules are required for manual strategy',
+          });
+        }
+        if (selected_session_ids.length !== makeupSchedules.length) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Each suspended session must have a corresponding makeup schedule',
+          });
+        }
       }
 
       // Validate all selected sessions exist, are scheduled, and have required fields
@@ -291,7 +325,7 @@ router.post(
           description?.trim() || null,
           'Active',
           affected_class_ids && affected_class_ids.length > 0 ? affected_class_ids : null,
-          false, // No auto-reschedule
+          makeupStrategy !== 'manual', // auto_reschedule = true for automatic strategies
           createdByUserId,
         ]
       );
@@ -326,27 +360,122 @@ router.post(
       );
       const classData = classInfo.rows[0];
 
+      // --- Build makeup schedules for automatic strategy: add-last-phase ---
+      if (makeupStrategy === 'add-last-phase') {
+        console.log(`🧮 Generating automatic makeup schedules for strategy="add-last-phase"...`);
+
+        // Get current class end_date
+        const classMetaResult = await client.query(
+          `SELECT end_date FROM classestbl WHERE class_id = $1`,
+          [classData.class_id]
+        );
+        const currentEndDate = classMetaResult.rows[0]?.end_date
+          ? new Date(classMetaResult.rows[0].end_date)
+          : endDate;
+
+        // Add makeup sessions to the last phase of the class (not a new phase)
+        const maxPhaseResult = await client.query(
+          `SELECT MAX(phase_number) as max_phase FROM classsessionstbl WHERE class_id = $1`,
+          [classData.class_id]
+        );
+        const targetPhaseNumber = maxPhaseResult.rows[0]?.max_phase ?? phases[0];
+
+        // Get max phase_session_number for the last phase
+        const maxSessionResult = await client.query(
+          `SELECT MAX(phase_session_number) as max_session
+           FROM classsessionstbl
+           WHERE class_id = $1 AND phase_number = $2`,
+          [classData.class_id, targetPhaseNumber]
+        );
+        let nextSessionNumber = (maxSessionResult.rows[0]?.max_session || 0) + 1;
+
+        // Sort sessions by original date for stable ordering
+        const sortedSessions = [...sessionsCheck.rows].sort(
+          (a, b) => new Date(a.scheduled_date) - new Date(b.scheduled_date)
+        );
+
+        makeupSchedules = [];
+        let newClassEndDate = new Date(currentEndDate);
+
+        for (const session of sortedSessions) {
+          const originalDate = new Date(session.scheduled_date);
+          const originalStart = session.scheduled_start_time;
+          const originalEnd = session.scheduled_end_time;
+
+          // Start with one week after the original date
+          let makeupDate = new Date(originalDate);
+          makeupDate.setDate(makeupDate.getDate() + 7);
+
+          // Ensure makeup date is after the current class end date
+          while (makeupDate <= currentEndDate) {
+            makeupDate.setDate(makeupDate.getDate() + 7);
+          }
+
+          const yyyyMmDd = makeupDate.toISOString().split('T')[0];
+          makeupSchedules.push({
+            suspended_session_id: session.classsession_id,
+            phase_number: targetPhaseNumber,
+            phase_session_number: nextSessionNumber,
+            makeup_date: yyyyMmDd,
+            makeup_start_time: originalStart,
+            makeup_end_time: originalEnd,
+          });
+
+          if (makeupDate > newClassEndDate) {
+            newClassEndDate = makeupDate;
+          }
+
+          nextSessionNumber++;
+        }
+
+        // Update class end_date to last makeup date (classestbl has no updated_at column)
+        if (newClassEndDate > currentEndDate) {
+          await client.query(
+            `UPDATE classestbl SET end_date = $1 WHERE class_id = $2`,
+            [newClassEndDate.toISOString().split('T')[0], classData.class_id]
+          );
+          console.log(`📅 Class end_date extended to ${newClassEndDate.toISOString().split('T')[0]}`);
+        }
+      }
+
       // Get the maximum phase_session_number for this phase to continue numbering
-      const maxSessionResult = await client.query(
-        `SELECT MAX(phase_session_number) as max_session
-         FROM classsessionstbl
-         WHERE class_id = $1 AND phase_number = $2`,
-        [classData.class_id, phases[0]]
-      );
-      let nextSessionNumber = (maxSessionResult.rows[0]?.max_session || 0) + 1;
+      // For automatic strategies, phase/session numbers may already be in makeupSchedules;
+      // for manual strategy we compute them here.
+      if (makeupStrategy === 'manual') {
+        const maxSessionResult = await client.query(
+          `SELECT MAX(phase_session_number) as max_session
+           FROM classsessionstbl
+           WHERE class_id = $1 AND phase_number = $2`,
+          [classData.class_id, phases[0]]
+        );
+        let nextSessionNumber = (maxSessionResult.rows[0]?.max_session || 0) + 1;
+
+        makeupSchedules = makeupSchedules.map(schedule => ({
+          ...schedule,
+          phase_number: phases[0],
+          phase_session_number: nextSessionNumber++,
+        }));
+      }
 
       // Create makeup sessions
-      console.log(`💾 Creating ${makeup_schedules.length} makeup session(s)...`);
-      for (const makeupSchedule of makeup_schedules) {
-        const { suspended_session_id, makeup_date, makeup_start_time, makeup_end_time } = makeupSchedule;
+      console.log(`💾 Creating ${makeupSchedules.length} makeup session(s)...`);
+      for (const makeupSchedule of makeupSchedules) {
+        const {
+          suspended_session_id,
+          phase_number,
+          phase_session_number,
+          makeup_date,
+          makeup_start_time,
+          makeup_end_time,
+        } = makeupSchedule;
 
-        // Generate class code for the makeup session
+        // Generate class code for the makeup session (may be null if program_code missing)
         const classCode = generateClassCode(
           classData.program_code,
           makeup_date,
           makeup_start_time,
           classData.class_name
-        );
+        ) || null;
         console.log(`   🔖 Creating makeup for session ${suspended_session_id}: ${makeup_date} ${makeup_start_time}-${makeup_end_time}`);
 
         await client.query(
@@ -354,29 +483,27 @@ router.post(
             class_id, phasesessiondetail_id, phase_number, phase_session_number,
             scheduled_date, scheduled_start_time, scheduled_end_time,
             original_teacher_id, assigned_teacher_id, status, created_by, suspension_id, notes, class_code
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6::time, $7::time, $8, $9, $10, $11, $12, $13, $14)`,
           [
             classData.class_id,
-            null, // No specific phase session detail; treat as makeup
-            phases[0], // Same phase as suspended sessions
-            nextSessionNumber,
+            null,
+            phase_number,
+            phase_session_number,
             makeup_date,
             makeup_start_time,
             makeup_end_time,
-            classData.teacher_id || null,
-            classData.teacher_id || null,
+            classData.teacher_id ?? null,
+            classData.teacher_id ?? null,
             'Rescheduled',
-            createdByUserId,
+            createdByUserId ?? null,
             suspension.suspension_id,
             `Makeup session for suspended session ${suspended_session_id}: ${suspension_name} (${reason})`,
             classCode,
           ]
         );
-        nextSessionNumber++;
       }
-      console.log(`✅ ${makeup_schedules.length} makeup session(s) created successfully`);
+      console.log(`✅ ${makeupSchedules.length} makeup session(s) created successfully`);
 
-      // NOTE: Class end_date is NOT extended - it remains fixed
 
       // Send notifications to enrolled students
       console.log(`📢 Creating notifications for enrolled students...`);
@@ -469,12 +596,20 @@ router.post(
         data: {
           suspension: suspension,
           cancelled_sessions: selected_session_ids.length,
-          makeup_sessions: makeup_schedules.length,
+          makeup_sessions: makeupSchedules.length,
         },
       });
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       console.error('Error creating suspension period:', error);
+      console.error('DB error details:', {
+        code: error.code,
+        detail: error.detail,
+        constraint: error.constraint,
+        table: error.table,
+        column: error.column,
+        message: error.message,
+      });
       next(error);
     } finally {
       client.release();

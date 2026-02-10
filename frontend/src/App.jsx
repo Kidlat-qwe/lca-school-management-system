@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/superadmin/Dashboard';
+import OperationalDashboard from './pages/superadmin/OperationalDashboard';
 import Branch from './pages/superadmin/Branch';
 import Personnel from './pages/superadmin/Personnel';
 import Student from './pages/superadmin/Student';
@@ -21,9 +22,11 @@ import Invoice from './pages/superadmin/Invoice';
 import InstallmentInvoice from './pages/superadmin/InstallmentInvoice';
 import PaymentLogs from './pages/superadmin/PaymentLogs';
 import CalendarSchedule from './pages/superadmin/CalendarSchedule';
+import Holidays from './pages/superadmin/Holidays';
 import Announcements from './pages/superadmin/Announcements';
 import Settings from './pages/superadmin/Settings';
 import AdminDashboard from './pages/admin/adminDashboard';
+import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
 import AdminStudent from './pages/admin/adminStudent';
@@ -56,10 +59,12 @@ import StudentPackages from './pages/student/studentPackages';
 import StudentInvoice from './pages/student/studentInvoice';
 import StudentPaymentLogs from './pages/student/studentPaymentLogs';
 import FinanceDashboard from './pages/finance/financeDashboard';
+import FinanceOperationalDashboard from './pages/finance/financeOperationalDashboard';
 import FinanceInvoice from './pages/finance/financeInvoice';
 import FinanceInstallmentInvoice from './pages/finance/financeInstallmentInvoice';
 import FinancePaymentLogs from './pages/finance/financePaymentLogs';
 import SuperfinanceDashboard from './pages/superfinance/superfinanceDashboard';
+import SuperfinanceOperationalDashboard from './pages/superfinance/superfinanceOperationalDashboard';
 import SuperfinanceInvoice from './pages/superfinance/superfinanceInvoice';
 import SuperfinanceInstallmentInvoice from './pages/superfinance/superfinanceInstallmentInvoice';
 import SuperfinancePaymentLogs from './pages/superfinance/superfinancePaymentLogs';
@@ -83,6 +88,7 @@ function App() {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="operational-dashboard" element={<OperationalDashboard />} />
             <Route path="branch" element={<Branch />} />
             <Route path="personnel" element={<Personnel />} />
             <Route path="student" element={<Student />} />
@@ -99,6 +105,7 @@ function App() {
             <Route path="installment-invoice" element={<InstallmentInvoice />} />
             <Route path="payment-logs" element={<PaymentLogs />} />
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
+            <Route path="holidays" element={<Holidays />} />
             <Route path="announcements" element={<Announcements />} />
             <Route path="settings" element={<Settings />} />
           </Route>
@@ -113,7 +120,9 @@ function App() {
             }
           >
             <Route index element={<AdminDashboard />} />
+            <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
             <Route path="calendar" element={<AdminCalendar />} />
+            <Route path="holidays" element={<Holidays />} />
             <Route path="personnel" element={<AdminPersonnel />} />
             <Route path="student" element={<AdminStudent />} />
             <Route path="guardians" element={<AdminGuardians />} />
@@ -178,6 +187,7 @@ function App() {
             }
           >
             <Route index element={<FinanceDashboard />} />
+            <Route path="operational-dashboard" element={<FinanceOperationalDashboard />} />
             <Route path="invoice" element={<FinanceInvoice />} />
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
@@ -193,6 +203,7 @@ function App() {
             }
           >
             <Route index element={<SuperfinanceDashboard />} />
+            <Route path="operational-dashboard" element={<SuperfinanceOperationalDashboard />} />
             <Route path="invoice" element={<SuperfinanceInvoice />} />
             <Route path="installment-invoice" element={<SuperfinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />

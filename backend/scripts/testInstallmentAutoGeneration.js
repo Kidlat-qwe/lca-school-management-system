@@ -113,9 +113,10 @@ async function main() {
     created.invoice_id = invoiceRow.invoice_id;
     console.log('[AutoGenTest] createdInvoice', invoiceRow);
 
-    // Verify issue_date equals next_generation_date (today) and due_date is +7 days
+    // Verify issue_date equals next_generation_date (today) and due_date is 5th of next month
     const expectedDue = new Date(today);
-    expectedDue.setDate(expectedDue.getDate() + 7);
+    expectedDue.setMonth(expectedDue.getMonth() + 1);
+    expectedDue.setDate(5); // Due on 5th of next month
     const expectedDueStr = ymd(expectedDue);
 
     const issueStr = ymd(new Date(invoiceRow.issue_date));
@@ -125,7 +126,7 @@ async function main() {
       throw new Error(`Issue date mismatch: expected ${todayStr}, got ${issueStr}`);
     }
     if (dueStr !== expectedDueStr) {
-      throw new Error(`Due date mismatch: expected ${expectedDueStr}, got ${dueStr}`);
+      throw new Error(`Due date mismatch: expected ${expectedDueStr} (5th of next month), got ${dueStr}`);
     }
 
     // Verify installment record advanced

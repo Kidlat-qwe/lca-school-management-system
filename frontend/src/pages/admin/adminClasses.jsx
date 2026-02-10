@@ -107,7 +107,8 @@ const AdminClasses = () => {
   // Suspension states
   const [isSuspensionModalOpen, setIsSuspensionModalOpen] = useState(false);
   const [selectedClassForSuspension, setSelectedClassForSuspension] = useState(null);
-  const [suspensionStep, setSuspensionStep] = useState('select-sessions'); // 'select-sessions', 'schedule-makeup'
+  const [suspensionStep, setSuspensionStep] = useState('select-sessions'); // 'select-sessions', 'choose-strategy', 'schedule-makeup', 'preview-auto'
+  const [makeupStrategy, setMakeupStrategy] = useState('add-last-phase'); // 'add-last-phase' | 'manual'
   const [suspensionFormData, setSuspensionFormData] = useState({
     suspension_name: '',
     reason: 'Typhoon',
@@ -2961,45 +2962,35 @@ const initializePackageMerchSelections = useCallback(
     return 'General';
   };
 
-  // Calculate default installment invoice settings
+  // Default installment invoice settings for enrollment (downpayment: issue today, due in a week)
   const getDefaultInstallmentSettings = () => {
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const currentYear = today.getFullYear();
     const currentMonth = today.getMonth(); // 0-11 (0 = January)
     const currentDay = today.getDate();
-    
-    // Calculate next month
-    // If current month is December (11), next month is January of next year
-    let nextMonthYear = currentYear;
-    let nextMonthMonth = currentMonth + 1; // 0-11
-    
-    if (nextMonthMonth > 11) {
-      nextMonthMonth = 0; // January
-      nextMonthYear = currentYear + 1;
-    }
-    
+
     // Helper function to format date as YYYY-MM-DD without timezone conversion
     const formatDateLocal = (year, month, day) => {
-      // month is 0-11, so add 1 for display
       const monthStr = String(month + 1).padStart(2, '0');
       const dayStr = String(day).padStart(2, '0');
       return `${year}-${monthStr}-${dayStr}`;
     };
-    
-    // Invoice Issue Date: Always today
+
+    // Invoice Issue Date: today (downpayment issued on enrollment)
     const invoiceIssueDateStr = formatDateLocal(currentYear, currentMonth, currentDay);
-    
-    // Invoice Due Date: A week from today (7 days from today)
+
+    // Invoice Due Date: a week after issue date (admin can change)
     const dueDate = new Date(today);
     dueDate.setDate(dueDate.getDate() + 7);
     const invoiceDueDateStr = formatDateLocal(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-    
-    // Billing Month: Always next month in YYYY-MM format
-    const billingMonth = formatDateLocal(nextMonthYear, nextMonthMonth, 1).substring(0, 7); // Get YYYY-MM part
-    
-    // Invoice Generation Date: Every 1st of the billing month
-    const invoiceGenerationDateStr = formatDateLocal(nextMonthYear, nextMonthMonth, 1);
-    
+
+    // Billing Month: current month YYYY-MM
+    const billingMonth = formatDateLocal(currentYear, currentMonth, 1).substring(0, 7);
+
+    // Invoice Generation Date: 25th of current month (when next recurring invoice is generated)
+    const invoiceGenerationDateStr = formatDateLocal(currentYear, currentMonth, 25);
+
     return {
       invoice_issue_date: invoiceIssueDateStr,
       billing_month: billingMonth,
@@ -4844,7 +4835,7 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const handleNextToMakeupScheduling = async () => {
+  const handleNextToMakeupScheduling = () => {
     if (selectedSessionsToSuspend.length === 0) {
       alert('Please select at least one session to suspend');
       return;
@@ -4857,25 +4848,28 @@ const initializePackageMerchSelections = useCallback(
       alert('All selected sessions must be from the same phase');
       return;
     }
-    const initialMakeupSchedules = selectedSessionsToSuspend.map(session => ({
-      suspended_session_id: session.classsession_id,
-      suspended_session: session,
-      makeup_date: '',
-      makeup_start_time: session.scheduled_start_time || '',
-      makeup_end_time: session.scheduled_end_time || '',
-    }));
-    setMakeupSchedules(initialMakeupSchedules);
-    
-    // Fetch room schedules if class has a room
-    if (selectedClassForSuspension && selectedClassForSuspension.room_id) {
-      await fetchSuspensionRoomSchedules(
-        selectedClassForSuspension.room_id.toString()
-      );
+    setSuspensionStep('choose-strategy');
+  };
+
+  const handleContinueFromChooseStrategy = async () => {
+    if (makeupStrategy === 'manual') {
+      const initialMakeupSchedules = selectedSessionsToSuspend.map(session => ({
+        suspended_session_id: session.classsession_id,
+        suspended_session: session,
+        makeup_date: '',
+        makeup_start_time: session.scheduled_start_time || '',
+        makeup_end_time: session.scheduled_end_time || '',
+      }));
+      setMakeupSchedules(initialMakeupSchedules);
+      if (selectedClassForSuspension && selectedClassForSuspension.room_id) {
+        await fetchSuspensionRoomSchedules(selectedClassForSuspension.room_id.toString());
+      } else {
+        setSuspensionRoomSchedules([]);
+      }
+      setSuspensionStep('schedule-makeup');
     } else {
-      setSuspensionRoomSchedules([]);
+      setSuspensionStep('preview-auto');
     }
-    
-    setSuspensionStep('schedule-makeup');
   };
 
   // Calculate end time based on start time and original session duration
@@ -4955,10 +4949,17 @@ const initializePackageMerchSelections = useCallback(
       alert('No class selected');
       return;
     }
-    if (!validateMakeupSchedules()) return;
+    if (makeupStrategy === 'manual' && !validateMakeupSchedules()) return;
+    const strategyDescriptions = {
+      'add-last-phase': 'Makeup sessions will be auto-generated and added to the last phase; the class end date will be extended.',
+      'manual': 'Makeup sessions will be created at your specified dates and times.',
+    };
     const confirmed = window.confirm(
-      `Are you sure you want to suspend ${selectedSessionsToSuspend.length} session(s) and create makeup schedules?\n\n` +
-      `Suspended sessions will be cancelled and makeup sessions will be created at your specified dates.`
+      `Are you sure you want to suspend ${selectedSessionsToSuspend.length} session(s) using ${
+        makeupStrategy === 'add-last-phase' ? 'Add New Sessions to Last Phase' : 'Manual Scheduling'
+      } strategy?\n\n` +
+      `${strategyDescriptions[makeupStrategy]}\n\n` +
+      `Suspended sessions will be cancelled and marked with reason: ${suspensionFormData.reason}`
     );
     if (!confirmed) return;
     setCreatingSuspension(true);
@@ -4970,18 +4971,22 @@ const initializePackageMerchSelections = useCallback(
         branch_id: selectedClassForSuspension.branch_id,
         affected_class_ids: [selectedClassForSuspension.class_id],
         selected_session_ids: selectedSessionsToSuspend.map(s => s.classsession_id),
-        makeup_schedules: makeupSchedules.map(schedule => ({
-          suspended_session_id: schedule.suspended_session_id,
-          makeup_date: schedule.makeup_date,
-          makeup_start_time: schedule.makeup_start_time,
-          makeup_end_time: schedule.makeup_end_time,
-        })),
+        makeup_strategy: makeupStrategy,
+        ...(makeupStrategy === 'manual' ? {
+          makeup_schedules: makeupSchedules.map(schedule => ({
+            suspended_session_id: schedule.suspended_session_id,
+            makeup_date: schedule.makeup_date,
+            makeup_start_time: schedule.makeup_start_time,
+            makeup_end_time: schedule.makeup_end_time,
+          })),
+        } : {}),
       };
       await apiRequest('/suspensions', { method: 'POST', body: payload });
       alert('Suspension created successfully with makeup schedules!');
       setIsSuspensionModalOpen(false);
       setSelectedClassForSuspension(null);
       setSuspensionStep('select-sessions');
+      setMakeupStrategy('add-last-phase');
       setSuspensionFormData({ suspension_name: '', reason: 'Typhoon', description: '' });
       setAvailableClassSessions([]);
       setSelectedSessionsToSuspend([]);
@@ -5738,15 +5743,17 @@ const initializePackageMerchSelections = useCallback(
                   <button
                     onClick={() => {
                       setOpenSessionMenuId(null);
-                      if (selectedClassForDetails) {
+                      if (selectedClassForDetails && classSession) {
                         setSelectedClassForSuspension(selectedClassForDetails);
                         setSuspensionStep('select-sessions');
                         setSuspensionFormData({ suspension_name: '', reason: 'Typhoon', description: '' });
-                        setAvailableClassSessions([]);
-                        setSelectedSessionsToSuspend([]);
+                        // Pre-select only the clicked session
+                        setSelectedSessionsToSuspend([classSession]);
+                        // Limit available sessions to this one session in its phase
+                        setAvailableClassSessions({
+                          [parseInt(phaseNum)]: [classSession],
+                        });
                         setMakeupSchedules([]);
-                        // Fetch class sessions for suspension - only from the clicked session's phase
-                        fetchClassSessionsForSuspension(selectedClassForDetails.class_id, phaseNum);
                         setIsSuspensionModalOpen(true);
                       }
                     }}
@@ -6073,7 +6080,10 @@ const initializePackageMerchSelections = useCallback(
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">
-                    {suspensionStep === 'select-sessions' ? 'Select Sessions to Suspend' : 'Schedule Makeup Sessions'}
+                    {suspensionStep === 'select-sessions' && 'Select Sessions to Suspend'}
+                    {suspensionStep === 'choose-strategy' && 'Choose Makeup Strategy'}
+                    {suspensionStep === 'schedule-makeup' && 'Schedule Makeup Sessions'}
+                    {suspensionStep === 'preview-auto' && 'Review Automatic Makeup Schedule'}
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">
                     Class: {selectedClassForSuspension.class_name} ({selectedClassForSuspension.level_tag})
@@ -6084,6 +6094,7 @@ const initializePackageMerchSelections = useCallback(
                     setIsSuspensionModalOpen(false);
                     setSelectedClassForSuspension(null);
                     setSuspensionStep('select-sessions');
+                    setMakeupStrategy('add-last-phase');
                     setAvailableClassSessions([]);
                     setSelectedSessionsToSuspend([]);
                     setMakeupSchedules([]);
@@ -6157,6 +6168,90 @@ const initializePackageMerchSelections = useCallback(
                       )}
                     </div>
                   </>
+                )}
+
+                {suspensionStep === 'choose-strategy' && (
+                  <div className="flex-1 overflow-y-auto space-y-6">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-blue-900 mb-2">How would you like to handle makeup sessions?</h4>
+                      <p className="text-xs text-blue-700">Choose the best approach for rescheduling the {selectedSessionsToSuspend.length} suspended session(s).</p>
+                    </div>
+                    <div className="space-y-4">
+                      <label className={`block p-6 border-2 rounded-lg cursor-pointer transition-all ${makeupStrategy === 'add-last-phase' ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                        <div className="flex items-start">
+                          <input type="radio" name="makeupStrategy" value="add-last-phase" checked={makeupStrategy === 'add-last-phase'} onChange={(e) => setMakeupStrategy(e.target.value)} className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300" />
+                          <div className="ml-4 flex-1">
+                            <div className="flex items-center justify-between">
+                              <h5 className="text-base font-semibold text-gray-900">Add New Sessions to Last Phase</h5>
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Recommended</span>
+                            </div>
+                            <p className="mt-2 text-sm text-gray-600">Automatically generates makeup sessions and adds them to the last phase of the class. The class end date will be extended to accommodate the new sessions.</p>
+                            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">Automatic scheduling</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">Sessions added to last phase</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">Class end date extended</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">No new phase created</span></div>
+                            </div>
+                          </div>
+                        </div>
+                      </label>
+                      <label className={`block p-6 border-2 rounded-lg cursor-pointer transition-all ${makeupStrategy === 'manual' ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                        <div className="flex items-start">
+                          <input type="radio" name="makeupStrategy" value="manual" checked={makeupStrategy === 'manual'} onChange={(e) => setMakeupStrategy(e.target.value)} className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300" />
+                          <div className="ml-4 flex-1">
+                            <h5 className="text-base font-semibold text-gray-900">Manual Scheduling</h5>
+                            <p className="mt-2 text-sm text-gray-600">Manually pick the date and time for each makeup session. Gives you full control over when and how makeup sessions are scheduled.</p>
+                            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">Full control over schedule</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-green-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-gray-600">Flexible date/time selection</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-amber-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg><span className="text-gray-600">Requires manual input for each session</span></div>
+                              <div className="flex items-start"><svg className="w-4 h-4 text-blue-500 mt-0.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span className="text-gray-600">Best for custom arrangements</span></div>
+                            </div>
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {suspensionStep === 'preview-auto' && (
+                  <div className="flex-1 overflow-y-auto space-y-6">
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-green-900 mb-2">✓ Sessions Added to Last Phase · Class End Date Extended</h4>
+                      <p className="text-xs text-green-700">{selectedSessionsToSuspend.length} makeup session(s) will be auto-generated and added to the last phase. The class end date will be extended to accommodate them.</p>
+                    </div>
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-semibold text-gray-900">Sessions to be Suspended:</h4>
+                      {selectedSessionsToSuspend.map((session, index) => (
+                        <div key={session.classsession_id} className="border border-gray-200 rounded-lg p-4 bg-white">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <h5 className="text-sm font-semibold text-gray-900">Session {index + 1}: Phase {session.phase_number}, Session {session.phase_session_number}</h5>
+                              <p className="text-xs text-gray-600 mt-1">Original Date: {new Date(session.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                              <p className="text-xs text-gray-600">Time: {session.scheduled_start_time} - {session.scheduled_end_time}</p>
+                            </div>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Will be suspended</span>
+                          </div>
+                          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
+                            <p className="text-xs font-medium text-blue-900 mb-1">→ Will be rescheduled in the last phase</p>
+                            <p className="text-xs text-blue-700">Makeup session will be automatically scheduled at the end of the class; the class end date will be extended.</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-gray-900 mb-3">What will happen:</h4>
+                      <ul className="space-y-2 text-sm text-gray-700">
+                        <li className="flex items-start"><svg className="w-5 h-5 text-green-500 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span>Selected session(s) will be marked as &quot;Cancelled&quot; with reason: {suspensionFormData.reason}</span></li>
+                        <li className="flex items-start"><svg className="w-5 h-5 text-green-500 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span>Makeup sessions will be added to the last phase and the class end date will be extended</span></li>
+                        <li className="flex items-start"><svg className="w-5 h-5 text-green-500 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span>Makeup sessions will follow the same day(s) of week and time as the original class schedule</span></li>
+                        <li className="flex items-start"><svg className="w-5 h-5 text-green-500 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg><span>Students will be notified about the suspension and rescheduled sessions</span></li>
+                      </ul>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <p className="text-xs text-amber-800"><strong>Note:</strong> Click &quot;Create Suspension&quot; to proceed with this automatic makeup scheduling.</p>
+                    </div>
+                  </div>
                 )}
 
                 {suspensionStep === 'schedule-makeup' && (
@@ -6312,13 +6407,39 @@ const initializePackageMerchSelections = useCallback(
               </div>
 
               <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 flex-shrink-0">
-                {suspensionStep === 'schedule-makeup' && (
-                  <button onClick={() => setSuspensionStep('select-sessions')} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">Back</button>
+                {(suspensionStep === 'choose-strategy' || suspensionStep === 'schedule-makeup' || suspensionStep === 'preview-auto') && (
+                  <button
+                    onClick={() => {
+                      if (suspensionStep === 'choose-strategy') setSuspensionStep('select-sessions');
+                      else setSuspensionStep('choose-strategy');
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  >
+                    Back
+                  </button>
                 )}
-                <button onClick={() => { setIsSuspensionModalOpen(false); setSelectedClassForSuspension(null); setSuspensionStep('select-sessions'); setAvailableClassSessions([]); setSelectedSessionsToSuspend([]); setMakeupSchedules([]); setSuspensionRoomSchedules([]); }} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">Cancel</button>
-                {suspensionStep === 'select-sessions' ? (
+                <button
+                  onClick={() => {
+                    setIsSuspensionModalOpen(false);
+                    setSelectedClassForSuspension(null);
+                    setSuspensionStep('select-sessions');
+                    setMakeupStrategy('add-last-phase');
+                    setAvailableClassSessions([]);
+                    setSelectedSessionsToSuspend([]);
+                    setMakeupSchedules([]);
+                    setSuspensionRoomSchedules([]);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                {suspensionStep === 'select-sessions' && (
                   <button onClick={handleNextToMakeupScheduling} disabled={selectedSessionsToSuspend.length === 0} className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Next</button>
-                ) : (
+                )}
+                {suspensionStep === 'choose-strategy' && (
+                  <button onClick={handleContinueFromChooseStrategy} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors">Continue</button>
+                )}
+                {(suspensionStep === 'schedule-makeup' || suspensionStep === 'preview-auto') && (
                   <button onClick={handleCreateSuspension} disabled={creatingSuspension} className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors">{creatingSuspension ? 'Creating...' : 'Create Suspension'}</button>
                 )}
               </div>

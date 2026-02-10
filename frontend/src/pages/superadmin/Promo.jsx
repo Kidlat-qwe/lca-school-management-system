@@ -254,6 +254,7 @@ const Promo = () => {
       promo_name: '',
       package_ids: [],
       branch_id: '',
+      global_package_type: '',
       promo_type: 'percentage_discount',
       discount_percentage: '',
       discount_amount: '',
@@ -320,6 +321,7 @@ const Promo = () => {
         promo_name: fullPromo.promo_name || '',
         package_ids: packageIds.map(id => id.toString()),
         branch_id: fullPromo.branch_id?.toString() || '',
+        global_package_type: fullPromo.global_package_type || '',
         promo_type: fullPromo.promo_type || 'percentage_discount',
         promo_code: fullPromo.promo_code || '',
         discount_percentage: fullPromo.discount_percentage?.toString() || '',
@@ -456,8 +458,26 @@ const Promo = () => {
       errors.promo_name = 'Promo name is required';
     }
 
-    if (!formData.package_ids || formData.package_ids.length === 0) {
-      errors.package_ids = 'At least one package is required';
+    // When a specific branch is selected, at least one package is required
+    if (formData.branch_id && formData.branch_id !== '' && (!formData.package_ids || formData.package_ids.length === 0)) {
+      errors.package_ids = 'Please select at least one package for this branch.';
+    }
+
+    // Promo code is now required
+    if (!formData.promo_code || !formData.promo_code.trim()) {
+      errors.promo_code = 'Promo code is required';
+    } else {
+      const code = formData.promo_code.trim();
+      if (code.length < 4 || code.length > 20) {
+        errors.promo_code = 'Promo code must be 4-20 characters';
+      } else if (!/^[A-Z0-9-]+$/.test(code)) {
+        errors.promo_code = 'Promo code must contain only uppercase letters, numbers, and hyphens';
+      }
+    }
+
+    // When Branch is All Branches, require a package type selection
+    if (formData.branch_id === '' && !formData.global_package_type) {
+      errors.global_package_type = 'Please choose which package type this promo applies to.';
     }
 
     if (!formData.start_date) {
@@ -475,15 +495,6 @@ const Promo = () => {
     }
 
     // Validate promo code if provided
-    if (formData.promo_code && formData.promo_code.trim()) {
-      const code = formData.promo_code.trim();
-      if (code.length < 4 || code.length > 20) {
-        errors.promo_code = 'Promo code must be 4-20 characters';
-      } else if (!/^[A-Z0-9-]+$/.test(code)) {
-        errors.promo_code = 'Promo code must contain only uppercase letters, numbers, and hyphens';
-      }
-    }
-
     // Validate promo type requirements
     if (formData.promo_type === 'percentage_discount') {
       if (!formData.discount_percentage || parseFloat(formData.discount_percentage) <= 0 || parseFloat(formData.discount_percentage) > 100) {
@@ -517,7 +528,7 @@ const Promo = () => {
     const hasInstallmentPackage = formData.package_ids.some((id) => {
       const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
       return p && p.package_type === 'Installment';
-    });
+    }) || (formData.branch_id === '' && formData.global_package_type === 'installment');
     
     if (hasInstallmentPackage) {
       if (!formData.installment_apply_scope) {
@@ -544,10 +555,19 @@ const Promo = () => {
     setSubmitting(true);
     setError('');
     try {
+      // For global Installment promos, if scope is monthly and months is empty, default to 1
+      let installmentMonthsToApply = (formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && formData.installment_months_to_apply
+        ? parseInt(formData.installment_months_to_apply)
+        : null;
+      if (formData.branch_id === '' && formData.global_package_type === 'installment' && formData.installment_apply_scope === 'monthly' && !installmentMonthsToApply) {
+        installmentMonthsToApply = 1;
+      }
+
       const payload = {
         promo_name: formData.promo_name.trim(),
         package_ids: formData.package_ids.map(id => parseInt(id)), // Send array of package IDs
         branch_id: formData.branch_id && formData.branch_id !== '' ? parseInt(formData.branch_id) : null,
+        global_package_type: formData.branch_id === '' ? (formData.global_package_type || null) : null,
         promo_type: formData.promo_type,
         promo_code: formData.promo_code?.trim() || null, // Send promo code (null if empty)
         discount_percentage: formData.promo_type === 'percentage_discount' || formData.promo_type === 'combined' 
@@ -564,13 +584,13 @@ const Promo = () => {
         status: formData.status,
         description: formData.description?.trim() || null,
         merchandise: formData.selectedMerchandise,
-        installment_apply_scope: formData.package_ids.some((id) => {
+        installment_apply_scope: (formData.package_ids.some((id) => {
           const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
           return p && p.package_type === 'Installment';
-        }) ? formData.installment_apply_scope : null,
-        installment_months_to_apply: (formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && formData.installment_months_to_apply
-          ? parseInt(formData.installment_months_to_apply)
+        }) || (formData.branch_id === '' && formData.global_package_type === 'installment'))
+          ? formData.installment_apply_scope
           : null,
+        installment_months_to_apply: installmentMonthsToApply,
       };
 
       if (editingPromo) {
@@ -645,6 +665,25 @@ const Promo = () => {
     if (!merchandiseId) return null;
     const item = merchandise.find(m => m.merchandise_id === merchandiseId);
     return item ? item.merchandise_name : null;
+  };
+
+  // Build example branch-specific promo codes based on existing branches
+  const getBranchPromoCodeExamples = (baseCode) => {
+    if (!baseCode || !branches || branches.length === 0) return '';
+    const examples = branches
+      .slice(0, 3)
+      .map((branch) => {
+        const citySource = branch.city || branch.branch_name || '';
+        const cityClean = citySource
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '');
+        return `${baseCode}${cityClean}`;
+      })
+      .filter(Boolean);
+    if (examples.length === 0) return '';
+    if (examples.length === 1) return examples[0];
+    if (examples.length === 2) return `${examples[0]}, ${examples[1]}`;
+    return `${examples[0]}, ${examples[1]}, etc.`;
   };
 
   const getPromoTypeLabel = (type) => {
@@ -1149,17 +1188,14 @@ const Promo = () => {
 
                     <div>
                       <label htmlFor="promo_code" className="label-field">
-                        Promo Code (Optional)
-                        <span className="text-xs text-gray-500 ml-2">
-                          Leave empty for auto-apply promos
-                        </span>
+                        Promo Code <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
                         <input
                           type="text"
                           id="promo_code"
                           name="promo_code"
-                          value={formData.promo_code}
+                          value={formData.promo_code || ''}
                           onChange={(e) => {
                             // Auto-convert to uppercase and remove spaces
                             const value = e.target.value.toUpperCase().replace(/\s/g, '').replace(/[^A-Z0-9-]/g, '');
@@ -1175,6 +1211,7 @@ const Promo = () => {
                           className={`input-field font-mono ${formErrors.promo_code ? 'border-red-500' : ''}`}
                           placeholder="e.g., SUMMER2024, WELCOME10"
                           maxLength={20}
+                          required
                         />
                         {formData.promo_code && (
                           <button
@@ -1195,10 +1232,26 @@ const Promo = () => {
                       {formErrors.promo_code && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.promo_code}</p>
                       )}
+                      {!editingPromo && formData.promo_code && (!formData.branch_id || formData.branch_id === '') && (
+                        <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                          <div className="flex items-start">
+                            <svg className="w-5 h-5 text-blue-600 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                            <div className="text-sm text-blue-800">
+                              <p className="font-medium mb-1">Branch-Specific Codes Will Be Generated</p>
+                              <p className="text-xs">
+                                Since "All Branches" is selected, separate promos will be created for each branch with codes like:
+                                <span className="block mt-1 font-mono text-blue-900">
+                                  {getBranchPromoCodeExamples(formData.promo_code)}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-gray-500 mt-1">
-                        💡 <strong>Auto-apply:</strong> Leave empty for automatic promos.
-                        <br />
-                        <strong>Code-based:</strong> Enter a code for flyer/campaign promos <span className="whitespace-nowrap">(4-20 chars, A-Z, 0-9, -)</span>
+                        <strong>Code-based:</strong> Enter a unique code for flyer/campaign promos <span className="whitespace-nowrap">(4-20 chars, A-Z, 0-9, -)</span>
                       </p>
                     </div>
 
@@ -1223,176 +1276,266 @@ const Promo = () => {
                     </div>
 
                     <div className="md:col-span-2">
-                      <label className="label-field">
-                        Packages <span className="text-red-500">*</span>
-                      </label>
-                      <div className={`border border-gray-300 rounded-lg p-4 max-h-60 overflow-y-auto ${formErrors.package_ids ? 'border-red-500' : ''}`}>
-                        {filteredPackages.length === 0 ? (
-                          <p className="text-sm text-gray-500">
-                            {formData.branch_id && formData.branch_id !== ''
-                              ? 'No packages available for this branch'
-                              : 'No packages available'}
-                          </p>
-                        ) : (
-                          <div className="space-y-2">
-                            {filteredPackages.map((pkg) => {
-                              const isSelected = formData.package_ids.includes(pkg.package_id.toString());
-                              return (
-                                <label
-                                  key={pkg.package_id}
-                                  className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50 cursor-pointer"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        setFormData(prev => ({
-                                          ...prev,
-                                          package_ids: [...prev.package_ids, pkg.package_id.toString()],
-                                        }));
-                                      } else {
-                                        setFormData(prev => ({
-                                          ...prev,
-                                          package_ids: prev.package_ids.filter(id => id !== pkg.package_id.toString()),
-                                        }));
-                                      }
-                                      if (formErrors.package_ids) {
-                                        setFormErrors(prev => {
-                                          const newErrors = { ...prev };
-                                          delete newErrors.package_ids;
-                                          return newErrors;
-                                        });
-                                      }
-                                    }}
-                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                                  />
-                                  <div className="flex-1">
-                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                      <span className="text-sm font-medium text-gray-900">
-                                        {pkg.package_name}
-                                      </span>
-                                      {pkg.level_tag && (
-                                        <span className="text-xs text-gray-500">
-                                          ({pkg.level_tag})
-                                        </span>
-                                      )}
-                                      {pkg.package_type === 'Installment' && (
-                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                                          Installment
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-gray-600">
-                                      {pkg.package_type === 'Installment' ? (
-                                        <>
-                                          {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
-                                            <span>Down payment: ₱{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
-                                          )}
-                                          {pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
-                                            <span>Monthly: ₱{parseFloat(pkg.package_price).toFixed(2)}</span>
-                                          )}
-                                        </>
-                                      ) : (
-                                        pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
-                                          <span>₱{parseFloat(pkg.package_price).toFixed(2)}</span>
-                                        )
-                                      )}
-                                    </div>
-                                  </div>
-                                </label>
-                              );
-                            })}
+                      {formData.branch_id === '' ? (
+                        <>
+                          <label className="label-field">
+                            Package Type for All Branches <span className="text-red-500">*</span>
+                          </label>
+                          <div className={`border border-gray-300 rounded-lg p-4 space-y-2 ${formErrors.global_package_type ? 'border-red-500' : ''}`}>
+                            <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="global_package_type"
+                                value="fullpayment"
+                                checked={formData.global_package_type === 'fullpayment'}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    global_package_type: value,
+                                    installment_apply_scope: 'downpayment',
+                                    installment_months_to_apply: '',
+                                  }));
+                                  if (formErrors.global_package_type) {
+                                    setFormErrors(prev => {
+                                      const newErrors = { ...prev };
+                                      delete newErrors.global_package_type;
+                                      return newErrors;
+                                    });
+                                  }
+                                }}
+                                className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                              />
+                              <span className="text-sm text-gray-700">Fullpayment Packages</span>
+                            </label>
+                            <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="global_package_type"
+                                value="installment_downpayment"
+                                checked={formData.global_package_type === 'installment' && formData.installment_apply_scope === 'downpayment'}
+                                onChange={() => {
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    global_package_type: 'installment',
+                                    installment_apply_scope: 'downpayment',
+                                    installment_months_to_apply: '',
+                                  }));
+                                  if (formErrors.global_package_type) {
+                                    setFormErrors(prev => {
+                                      const newErrors = { ...prev };
+                                      delete newErrors.global_package_type;
+                                      return newErrors;
+                                    });
+                                  }
+                                }}
+                                className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                              />
+                              <span className="text-sm text-gray-700">Installment – Downpayment</span>
+                            </label>
+                            <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="global_package_type"
+                                value="installment_monthly"
+                                checked={formData.global_package_type === 'installment' && formData.installment_apply_scope === 'monthly'}
+                                onChange={() => {
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    global_package_type: 'installment',
+                                    installment_apply_scope: 'monthly',
+                                  }));
+                                  if (formErrors.global_package_type) {
+                                    setFormErrors(prev => {
+                                      const newErrors = { ...prev };
+                                      delete newErrors.global_package_type;
+                                      return newErrors;
+                                    });
+                                  }
+                                }}
+                                className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                              />
+                              <span className="text-sm text-gray-700">Installment – Monthly</span>
+                            </label>
                           </div>
-                        )}
-                      </div>
-                      {formErrors.package_ids && (
-                        <p className="mt-1 text-sm text-red-600">{formErrors.package_ids}</p>
-                      )}
-                      {formData.package_ids.length > 0 && (
-                        <p className="mt-1 text-xs text-gray-500">
-                          {formData.package_ids.length} package(s) selected
-                        </p>
-                      )}
-                      {formData.package_ids.length > 0 &&
-                        formData.package_ids.some((id) => {
-                          const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
-                          return p && p.package_type === 'Installment';
-                        }) && (
-                          <div className="mt-2 space-y-3">
-                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                              Configure how the promo applies to Installment packages:
-                            </p>
-                            
-                            {/* Installment Apply Scope */}
-                            <div>
-                              <label className="label-field text-sm">
-                                Apply Promo To <span className="text-red-500">*</span>
-                              </label>
+                          {formErrors.global_package_type && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.global_package_type}</p>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <label className="label-field">
+                            Packages <span className="text-red-500">*</span>
+                          </label>
+                          <div className={`border border-gray-300 rounded-lg p-4 max-h-60 overflow-y-auto ${formErrors.package_ids ? 'border-red-500' : ''}`}>
+                            {filteredPackages.length === 0 ? (
+                              <p className="text-sm text-gray-500">
+                                {formData.branch_id && formData.branch_id !== ''
+                                  ? 'No packages available for this branch'
+                                  : 'No packages available'}
+                              </p>
+                            ) : (
                               <div className="space-y-2">
-                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name="installment_apply_scope"
-                                    value="downpayment"
-                                    checked={formData.installment_apply_scope === 'downpayment'}
-                                    onChange={handleInputChange}
-                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                                  />
-                                  <span className="text-sm text-gray-700">Downpayment Only</span>
-                                </label>
-                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name="installment_apply_scope"
-                                    value="monthly"
-                                    checked={formData.installment_apply_scope === 'monthly'}
-                                    onChange={handleInputChange}
-                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                                  />
-                                  <span className="text-sm text-gray-700">Monthly Installments Only</span>
-                                </label>
-                                <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name="installment_apply_scope"
-                                    value="both"
-                                    checked={formData.installment_apply_scope === 'both'}
-                                    onChange={handleInputChange}
-                                    className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                                  />
-                                  <span className="text-sm text-gray-700">Both (Downpayment + Monthly)</span>
-                                </label>
-                              </div>
-                            </div>
-                            
-                            {/* Months to Apply (shown when scope includes monthly) */}
-                            {(formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && (
-                              <div>
-                                <label htmlFor="installment_months_to_apply" className="label-field text-sm">
-                                  Number of Monthly Invoices to Apply Promo <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="number"
-                                  id="installment_months_to_apply"
-                                  name="installment_months_to_apply"
-                                  value={formData.installment_months_to_apply}
-                                  onChange={handleInputChange}
-                                  className={`input-field ${formErrors.installment_months_to_apply ? 'border-red-500' : ''}`}
-                                  min="1"
-                                  required
-                                  placeholder="e.g., 3"
-                                />
-                                {formErrors.installment_months_to_apply && (
-                                  <p className="mt-1 text-sm text-red-600">{formErrors.installment_months_to_apply}</p>
-                                )}
-                                <p className="mt-1 text-xs text-gray-500">
-                                  Enter how many monthly installment invoices should receive the promo discount.
-                                </p>
+                                {filteredPackages.map((pkg) => {
+                                  const isSelected = formData.package_ids.includes(pkg.package_id.toString());
+                                  return (
+                                    <label
+                                      key={pkg.package_id}
+                                      className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50 cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setFormData(prev => ({
+                                              ...prev,
+                                              package_ids: [...prev.package_ids, pkg.package_id.toString()],
+                                            }));
+                                          } else {
+                                            setFormData(prev => ({
+                                              ...prev,
+                                              package_ids: prev.package_ids.filter(id => id !== pkg.package_id.toString()),
+                                            }));
+                                          }
+                                          if (formErrors.package_ids) {
+                                            setFormErrors(prev => {
+                                              const newErrors = { ...prev };
+                                              delete newErrors.package_ids;
+                                              return newErrors;
+                                            });
+                                          }
+                                        }}
+                                        className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                                      />
+                                      <div className="flex-1">
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                          <span className="text-sm font-medium text-gray-900">
+                                            {pkg.package_name}
+                                          </span>
+                                          {pkg.level_tag && (
+                                            <span className="text-xs text-gray-500">
+                                              ({pkg.level_tag})
+                                            </span>
+                                          )}
+                                          {pkg.package_type === 'Installment' && (
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                                              Installment
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-gray-600">
+                                          {pkg.package_type === 'Installment' ? (
+                                            <>
+                                              {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
+                                                <span>Down payment: ₱{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
+                                              )}
+                                              {pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
+                                                <span>Monthly: ₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                              )}
+                                            </>
+                                          ) : (
+                                            pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
+                                              <span>₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                            )
+                                          )}
+                                        </div>
+                                      </div>
+                                    </label>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
-                        )}
+                          {formErrors.package_ids && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.package_ids}</p>
+                          )}
+                          {formData.package_ids.length > 0 && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              {formData.package_ids.length} package(s) selected
+                            </p>
+                          )}
+                          {formData.package_ids.length > 0 &&
+                            formData.package_ids.some((id) => {
+                              const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
+                              return p && p.package_type === 'Installment';
+                            }) && (
+                              <div className="mt-4 space-y-3">
+                                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                  Configure how the promo applies to Installment packages:
+                                </p>
+                                
+                                {/* Installment Apply Scope */}
+                                <div>
+                                  <label className="label-field text-sm">
+                                    Apply Promo To <span className="text-red-500">*</span>
+                                  </label>
+                                  <div className="space-y-2">
+                                    <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="installment_apply_scope"
+                                        value="downpayment"
+                                        checked={formData.installment_apply_scope === 'downpayment'}
+                                        onChange={handleInputChange}
+                                        className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                      />
+                                      <span className="text-sm text-gray-700">Downpayment Only</span>
+                                    </label>
+                                    <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="installment_apply_scope"
+                                        value="monthly"
+                                        checked={formData.installment_apply_scope === 'monthly'}
+                                        onChange={handleInputChange}
+                                        className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                      />
+                                      <span className="text-sm text-gray-700">Monthly Installments Only</span>
+                                    </label>
+                                    <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="installment_apply_scope"
+                                        value="both"
+                                        checked={formData.installment_apply_scope === 'both'}
+                                        onChange={handleInputChange}
+                                        className="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                                      />
+                                      <span className="text-sm text-gray-700">Both (Downpayment + Monthly)</span>
+                                    </label>
+                                  </div>
+                                </div>
+                                
+                                {/* Months to Apply (shown when scope includes monthly) */}
+                                {(formData.installment_apply_scope === 'monthly' || formData.installment_apply_scope === 'both') && (
+                                  <div>
+                                    <label htmlFor="installment_months_to_apply" className="label-field text-sm">
+                                      Number of Monthly Invoices to Apply Promo <span className="text-red-500">*</span>
+                                    </label>
+                                    <input
+                                      type="number"
+                                      id="installment_months_to_apply"
+                                      name="installment_months_to_apply"
+                                      value={formData.installment_months_to_apply || ''}
+                                      onChange={handleInputChange}
+                                      className={`input-field ${formErrors.installment_months_to_apply ? 'border-red-500' : ''}`}
+                                      min="1"
+                                      required
+                                      placeholder="e.g., 3"
+                                    />
+                                    {formErrors.installment_months_to_apply && (
+                                      <p className="mt-1 text-sm text-red-600">{formErrors.installment_months_to_apply}</p>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      Enter how many monthly installment invoices should receive the promo discount.
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                        </>
+                      )}
                     </div>
 
                     <div>

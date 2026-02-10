@@ -561,6 +561,8 @@ router.post(
                   amount: profile.amount,
                   frequency: profile.frequency || '1 month(s)',
                   description: profile.description || 'Monthly Installment Payment',
+                  generated_count: profile.generated_count || 0,
+                  class_id: profile.class_id,
                 },
                 profileId: invoice.installmentinvoiceprofiles_id
               };
@@ -1218,6 +1220,8 @@ router.put(
                       student_id: profile.student_id,
                       branch_id: profile.branch_id || invoice.branch_id || null,
                       package_id: profile.package_id || invoice.package_id || null,
+                      generated_count: profile.generated_count || 0,
+                      class_id: profile.class_id,
                       amount: profile.amount,
                       frequency: profile.frequency || '1 month(s)',
                       description: profile.description || 'Monthly Installment Payment',

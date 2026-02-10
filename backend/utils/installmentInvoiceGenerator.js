@@ -152,9 +152,37 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
         : new Date(installmentInvoice.next_generation_date);
     
-    // Calculate due date (7 days after issue date, or use profile's bill_invoice_due_date logic)
-    const dueDate = new Date(issueDate);
-    dueDate.setDate(dueDate.getDate() + 7); // Default: 7 days after issue date
+    // Calculate due date based on whether this is the first installment or subsequent ones
+    let dueDate;
+    
+    // Check if this is the first installment invoice (generated_count = 0 before this generation)
+    const isFirstInvoice = (profile.generated_count || 0) === 0;
+    
+    if (isFirstInvoice && profile.class_id) {
+      // First installment: due date = class start date
+      // Get class start date
+      const classResult = await client.query(
+        'SELECT start_date FROM classestbl WHERE class_id = $1',
+        [profile.class_id]
+      );
+      
+      if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
+        dueDate = typeof classResult.rows[0].start_date === 'string'
+          ? parseYmdToLocalNoon(classResult.rows[0].start_date)
+          : new Date(classResult.rows[0].start_date);
+      } else {
+        // Fallback if class start date not available
+        dueDate = new Date(issueDate);
+        dueDate.setMonth(dueDate.getMonth() + 1);
+        dueDate.setDate(5);
+      }
+    } else {
+      // Subsequent invoices: due on 5th of the next month
+      // Issue date is typically the 25th of current month, due on 5th of next month
+      dueDate = new Date(issueDate);
+      dueDate.setMonth(dueDate.getMonth() + 1); // Move to next month
+      dueDate.setDate(5); // Set to 5th day of next month
+    }
     
     // Calculate final invoice amount after promo discount
     const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
@@ -175,7 +203,7 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         formatYmdLocal(dueDate),
         null, // System-generated
         installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile for phase tracking
-        shouldApplyPromoDiscount ? promoId : null, // Link promo if discount applied
+        shouldApplyPromoToMonthly ? promoId : null, // Link promo if discount applied
       ]
     );
     
@@ -438,6 +466,8 @@ export const processDueInstallmentInvoices = async () => {
           amount: installmentInvoice.profile_amount,
           frequency: installmentInvoice.profile_frequency || installmentInvoice.frequency,
           description: installmentInvoice.description,
+          generated_count: installmentInvoice.generated_count || 0,
+          class_id: installmentInvoice.class_id,
         });
         
         processed.push(invoiceData);

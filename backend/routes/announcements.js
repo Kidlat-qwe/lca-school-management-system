@@ -71,8 +71,8 @@ router.get(
           a.branch_id,
           a.created_by,
           a.attachment_url,
-          TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
-          TO_CHAR(a.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+          TO_CHAR((a.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || 'Z' as created_at,
+          TO_CHAR((a.updated_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || 'Z' as updated_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
           TO_CHAR(a.end_date, 'YYYY-MM-DD') as end_date,
           u.full_name as created_by_name,
@@ -124,14 +124,14 @@ router.get(
         params.push(created_on);
       }
 
-      // Order by priority (High first), then by created_at (newest first)
+      // Order by created_at (newest first) so new announcements appear at top, then priority as tiebreaker
       sql += ` ORDER BY 
+        a.created_at DESC,
         CASE a.priority 
           WHEN 'High' THEN 1 
           WHEN 'Medium' THEN 2 
           WHEN 'Low' THEN 3 
-        END,
-        a.created_at DESC
+        END
         LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -246,7 +246,7 @@ router.get(
           a.branch_id,
           a.created_by,
           a.attachment_url,
-          TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
+          TO_CHAR((a.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || 'Z' as created_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
           TO_CHAR(a.end_date, 'YYYY-MM-DD') as end_date,
           u.full_name as created_by_name,
@@ -274,12 +274,12 @@ router.get(
             a.end_date IS NULL OR a.end_date::date >= $4::date
           )
         ORDER BY 
+          a.created_at DESC,
           CASE a.priority 
             WHEN 'High' THEN 1 
             WHEN 'Medium' THEN 2 
             WHEN 'Low' THEN 3 
-          END,
-          a.created_at DESC
+          END
         LIMIT 20
       `;
 
@@ -330,8 +330,8 @@ router.get(
           a.branch_id,
           a.created_by,
           a.attachment_url,
-          TO_CHAR(a.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
-          TO_CHAR(a.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+          TO_CHAR((a.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || 'Z' as created_at,
+          TO_CHAR((a.updated_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || 'Z' as updated_at,
           TO_CHAR(a.start_date, 'YYYY-MM-DD') as start_date,
           TO_CHAR(a.end_date, 'YYYY-MM-DD') as end_date,
           u.full_name as created_by_name,

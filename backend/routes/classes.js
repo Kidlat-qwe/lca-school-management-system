@@ -3731,6 +3731,8 @@ router.post(
         
         if (downpaymentAmount > 0) {
           // Create downpayment invoice
+          // Due date is set by admin/user (use dueDateStr from installment_settings or issueDateStr)
+          // NOT automatically set - admin controls the downpayment due date
           const downpaymentInvoiceResult = await client.query(
             `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

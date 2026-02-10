@@ -135,42 +135,39 @@ const SuperfinanceInstallmentInvoice = () => {
     
     setSelectedInvoiceForGeneration(invoice);
     
-    // Calculate dates based on frequency
+    // Calculate dates based on frequency (for manual generation after phase 1 paid)
     const months = getFrequencyMonths(invoice.frequency);
 
-    // Current invoice defaults:
-    const issueDate = new Date();
-    issueDate.setHours(0, 0, 0, 0);
+    // Current Invoice Detail = invoice we're generating NOW (next billing month)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const issueDate = new Date(today);
+    const invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const dueDate = new Date(invoiceMonth);
+    dueDate.setMonth(dueDate.getMonth() + 1);
+    dueDate.setDate(5);
+    const generationDate = new Date(invoiceMonth);
+    generationDate.setDate(25);
 
-    const dueDate = new Date(issueDate);
-    dueDate.setDate(dueDate.getDate() + 7);
-
-    const invoiceMonth = new Date(issueDate);
-    invoiceMonth.setDate(1);
-
-    const generationDate = new Date(issueDate);
-
-    // Next invoice defaults:
-    // - next_issue_date: first day of next invoice month
-    // - next_due_date: 7th day of next invoice month
-    // - next_invoice_month: after current month (frequency-based; stored as 1st of month)
-    // - next_generation_date: first day of next invoice month
+    // Next Invoice Detail = month after current invoice month
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
     nextInvoiceMonth.setDate(1);
-
+    const nextIssueDate = new Date(nextInvoiceMonth);
+    nextIssueDate.setDate(25);
     const nextDueDate = new Date(nextInvoiceMonth);
-    nextDueDate.setDate(7);
-    
+    nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+    nextDueDate.setDate(5);
+
     setGenerateFormData({
       issue_date: formatYmd(issueDate),
       due_date: formatYmd(dueDate),
       invoice_month: formatYmd(invoiceMonth),
       generation_date: formatYmd(generationDate),
-      next_issue_date: formatYmd(nextInvoiceMonth),
+      next_issue_date: formatYmd(nextIssueDate),
       next_due_date: formatYmd(nextDueDate),
       next_invoice_month: formatYmd(nextInvoiceMonth),
-      next_generation_date: formatYmd(nextInvoiceMonth),
+      next_generation_date: formatYmd(nextIssueDate),
     });
     
     setIsGenerateModalOpen(true);
@@ -705,8 +702,10 @@ const SuperfinanceInstallmentInvoice = () => {
                             return;
                           }
 
+                          // due = issue month + 1, day 5
                           const due = new Date(issue);
-                          due.setDate(due.getDate() + 7);
+                          due.setMonth(due.getMonth() + 1);
+                          due.setDate(5);
 
                           const invoiceMonth = new Date(issue);
                           invoiceMonth.setDate(1);
@@ -716,8 +715,14 @@ const SuperfinanceInstallmentInvoice = () => {
                           nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
                           nextInvoiceMonth.setDate(1);
 
+                          // nextIssue = nextInvoiceMonth day 25
+                          const nextIssue = new Date(nextInvoiceMonth);
+                          nextIssue.setDate(25);
+
+                          // nextDue = nextInvoiceMonth + 1 month, day 5
                           const nextDue = new Date(nextInvoiceMonth);
-                          nextDue.setDate(7);
+                          nextDue.setMonth(nextDue.getMonth() + 1);
+                          nextDue.setDate(5);
 
                           setGenerateFormData({
                             ...generateFormData,
@@ -725,10 +730,10 @@ const SuperfinanceInstallmentInvoice = () => {
                             due_date: formatYmd(due),
                             invoice_month: formatYmd(invoiceMonth),
                             generation_date: formatYmd(issue),
-                            next_issue_date: formatYmd(nextInvoiceMonth),
+                            next_issue_date: formatYmd(nextIssue),
                             next_due_date: formatYmd(nextDue),
                             next_invoice_month: formatYmd(nextInvoiceMonth),
-                            next_generation_date: formatYmd(nextInvoiceMonth),
+                            next_generation_date: formatYmd(nextIssue),
                           });
                         }}
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
@@ -846,15 +851,22 @@ const SuperfinanceInstallmentInvoice = () => {
 
                           const monthFirst = new Date(picked);
                           monthFirst.setDate(1);
+                          
+                          // nextIssue = picked month day 25
+                          const nextIssue = new Date(monthFirst);
+                          nextIssue.setDate(25);
+                          
+                          // due = picked month day 1 + 1 month, day 5
                           const due = new Date(monthFirst);
-                          due.setDate(7);
+                          due.setMonth(due.getMonth() + 1);
+                          due.setDate(5);
 
                           setGenerateFormData({
                             ...generateFormData,
                             next_invoice_month: formatYmd(monthFirst),
-                            next_issue_date: formatYmd(monthFirst),
+                            next_issue_date: formatYmd(nextIssue),
                             next_due_date: formatYmd(due),
-                            next_generation_date: formatYmd(monthFirst),
+                            next_generation_date: formatYmd(nextIssue),
                           });
                         }}
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
