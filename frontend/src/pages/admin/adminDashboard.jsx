@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
@@ -495,7 +496,7 @@ const AdminDashboard = () => {
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
                         {violation.enrolled_at
-                          ? new Date(violation.enrolled_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                          ? formatDateManila(violation.enrolled_at)
                           : 'N/A'}
                       </td>
                     </tr>

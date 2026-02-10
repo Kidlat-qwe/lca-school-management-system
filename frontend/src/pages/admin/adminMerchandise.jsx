@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const AdminMerchandise = () => {
   const { userInfo } = useAuth();
@@ -1485,7 +1486,7 @@ const AdminMerchandise = () => {
                           {getStatusBadge(request.status)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {new Date(request.created_at).toLocaleDateString()}
+                          {formatDateManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && (

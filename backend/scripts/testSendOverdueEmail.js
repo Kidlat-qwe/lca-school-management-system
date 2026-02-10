@@ -66,11 +66,12 @@ async function testSendOverdueEmail() {
   }).format(testData.amount);
 
   // Format due date
-  const formattedDueDate = new Date(testData.dueDate).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
+  const d = new Date(testData.dueDate);
+  const formattedDueDate = Number.isNaN(d.getTime()) ? String(testData.dueDate) : [
+    String(d.getUTCDate()).padStart(2, '0'),
+    String(d.getUTCMonth() + 1).padStart(2, '0'),
+    d.getUTCFullYear(),
+  ].join('/');
 
   // Generate email HTML
   const emailHTML = `

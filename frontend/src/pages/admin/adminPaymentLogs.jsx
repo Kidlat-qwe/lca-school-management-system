@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const AdminPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -89,11 +90,7 @@ const AdminPaymentLogs = () => {
   // Removed fetchBranches - admin only sees their branch
   // Removed getBranchName and formatBranchName - admin only sees their branch
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString) => formatDateManila(dateString) || '-';
 
   const formatCurrency = (amount) => {
     if (!amount) return '₱0.00';

@@ -1114,7 +1114,7 @@ const Invoice = () => {
                           )}
                           {invoice.reservation.due_date && !invoice.reservation.is_expired && invoice.reservation.status !== 'Expired' && (
                             <span className="text-xs text-gray-500">
-                              Due: {new Date(invoice.reservation.due_date).toLocaleDateString()}
+                              Due: {formatDateManila(invoice.reservation.due_date)}
                             </span>
                           )}
                         </div>
@@ -1185,7 +1185,7 @@ const Invoice = () => {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.due_date
-                          ? new Date(invoice.due_date).toLocaleDateString()
+                          ? formatDateManila(invoice.due_date)
                           : '-'}
                       </div>
                     </td>
@@ -1922,7 +1922,7 @@ const Invoice = () => {
                     <span className="text-xs text-gray-500">Issue Date:</span>
                     <p className="text-sm font-medium text-gray-900 mt-1">
                       {selectedInvoiceForDetails.issue_date
-                        ? new Date(selectedInvoiceForDetails.issue_date).toLocaleDateString()
+                        ? formatDateManila(selectedInvoiceForDetails.issue_date)
                         : '-'}
                     </p>
                   </div>
@@ -1930,7 +1930,7 @@ const Invoice = () => {
                     <span className="text-xs text-gray-500">Due Date:</span>
                     <p className="text-sm font-medium text-gray-900 mt-1">
                       {selectedInvoiceForDetails.due_date
-                        ? new Date(selectedInvoiceForDetails.due_date).toLocaleDateString()
+                        ? formatDateManila(selectedInvoiceForDetails.due_date)
                         : '-'}
                     </p>
                   </div>

@@ -1,39 +1,34 @@
 /**
  * Date utilities for Asia/Manila (Philippines) timezone UTC+8.
- * Use for displaying and defaulting dates in the app.
+ * Display format across the system: DD/MM/YYYY.
  */
 
 const MANILA_TZ = 'Asia/Manila';
 
 /**
- * Format an ISO date string or Date for display in Asia/Manila (date only).
+ * Format an ISO date string or Date for display (date only) in DD/MM/YYYY, Asia/Manila.
  * @param {string|Date} dateInput - ISO date string or Date
- * @returns {string} e.g. "Feb 10, 2026" or "-" if invalid
+ * @returns {string} e.g. "10/02/2026" or "-" if invalid
  */
 export const formatDateManila = (dateInput) => {
   if (!dateInput) return '-';
   const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
   if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('en-PH', { timeZone: MANILA_TZ, year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString('en-GB', { timeZone: MANILA_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
 /**
- * Format an ISO date string or Date for display in Asia/Manila (date and time).
+ * Format an ISO date string or Date for display (date and time) in DD/MM/YYYY, HH:MM, Asia/Manila.
  * @param {string|Date} dateInput - ISO date string or Date
- * @returns {string} e.g. "Feb 10, 2026, 12:00 AM" or "-" if invalid
+ * @returns {string} e.g. "10/02/2026, 12:00" or "-" if invalid
  */
 export const formatDateTimeManila = (dateInput) => {
   if (!dateInput) return '-';
   const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
   if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleString('en-PH', {
-    timeZone: MANILA_TZ,
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const datePart = d.toLocaleDateString('en-GB', { timeZone: MANILA_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timePart = d.toLocaleTimeString('en-GB', { timeZone: MANILA_TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${datePart}, ${timePart}`;
 };
 
 /**

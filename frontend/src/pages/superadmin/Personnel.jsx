@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const Personnel = () => {
   const { signup } = useAuth();
@@ -888,12 +889,7 @@ const Personnel = () => {
                               const date = new Date(isoStr);
                               
                               // Format date: DD/MM/YYYY
-                              const formattedDate = date.toLocaleDateString('en-GB', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric',
-                                timeZone: 'Asia/Manila',
-                              });
+const formattedDate = formatDateManila(date);
                               
                               // Format time: HH:MMam/pm
                               const formattedTime = date.toLocaleTimeString('en-US', {

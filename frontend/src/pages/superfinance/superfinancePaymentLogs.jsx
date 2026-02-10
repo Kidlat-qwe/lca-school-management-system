@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import * as XLSX from 'xlsx';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const SuperfinancePaymentLogs = () => {
   const [payments, setPayments] = useState([]);
@@ -108,7 +109,7 @@ const SuperfinancePaymentLogs = () => {
   const formatDate = (dateString) => {
     if (!dateString) return '-';
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    return formatDateManila(dateString) || '-';
   };
 
   const formatCurrency = (amount) => {

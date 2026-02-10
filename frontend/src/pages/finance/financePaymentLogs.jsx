@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import * as XLSX from 'xlsx';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const FinancePaymentLogs = () => {
   const [payments, setPayments] = useState([]);
@@ -103,11 +104,7 @@ const FinancePaymentLogs = () => {
     };
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString) => formatDateManila(dateString) || '-';
 
   const formatCurrency = (amount) => {
     if (!amount) return '₱0.00';

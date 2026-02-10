@@ -421,11 +421,12 @@ export const sendOverduePaymentReminderEmail = async ({
   }).format(amount);
 
   // Format due date
-  const formattedDueDate = new Date(dueDate).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
+  const d = new Date(dueDate);
+  const formattedDueDate = Number.isNaN(d.getTime()) ? String(dueDate) : [
+    String(d.getUTCDate()).padStart(2, '0'),
+    String(d.getUTCMonth() + 1).padStart(2, '0'),
+    d.getUTCFullYear(),
+  ].join('/');
 
   const fbLink = facebookLink || 'https://www.facebook.com/littlechampionsacademy';
   const greetingName = parentName || studentName || 'Parent/Guardian';

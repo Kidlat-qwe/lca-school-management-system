@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const Classes = () => {
   const [classes, setClasses] = useState([]);
@@ -2109,9 +2110,7 @@ const initializePackageMerchSelections = useCallback(
         return '-';
       }
       
-      // Format as "Month Day, Year" (e.g., "November 20, 2025")
-      const options = { year: 'numeric', month: 'long', day: 'numeric' };
-      return date.toLocaleDateString('en-US', options);
+      return formatDateManila(date);
     } catch {
       return '-';
     }
@@ -5040,7 +5039,7 @@ const initializePackageMerchSelections = useCallback(
     for (const schedule of makeupSchedules) {
       const makeupDate = new Date(schedule.makeup_date);
       if (makeupDate < phaseStartDate || makeupDate > phaseEndDate) {
-        alert(`Makeup dates must be within the phase date range (${phaseStartDate.toLocaleDateString()} - ${phaseEndDate.toLocaleDateString()})`);
+        alert(`Makeup dates must be within the phase date range (${formatDateManila(phaseStartDate)} - ${formatDateManila(phaseEndDate)})`);
         return false;
       }
     }
@@ -6907,12 +6906,7 @@ const initializePackageMerchSelections = useCallback(
                                       Session {session.phase_session_number}
                                     </div>
                                     <div className="text-xs text-gray-600">
-                                      {new Date(session.scheduled_date).toLocaleDateString('en-US', {
-                                        weekday: 'short',
-                                        year: 'numeric',
-                                        month: 'short',
-                                        day: 'numeric'
-                                      })} • {session.scheduled_start_time} - {session.scheduled_end_time}
+                                      {formatDateManila(session.scheduled_date)} • {session.scheduled_start_time} - {session.scheduled_end_time}
                                     </div>
                                   </div>
                                 </label>
@@ -7075,7 +7069,7 @@ const initializePackageMerchSelections = useCallback(
                                   Phase {schedule.suspended_session.phase_number}, Session {schedule.suspended_session.phase_session_number}
                                 </h5>
                                 <p className="text-xs text-gray-600 mt-1">
-                                  Original: {new Date(schedule.suspended_session.scheduled_date).toLocaleDateString()} • {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}
+                                  Original: {formatDateManila(schedule.suspended_session.scheduled_date)} • {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}
                                 </p>
                               </div>
                               <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded">
@@ -7257,12 +7251,7 @@ const initializePackageMerchSelections = useCallback(
                               Session {index + 1}: Phase {session.phase_number}, Session {session.phase_session_number}
                             </h5>
                             <p className="text-xs text-gray-600 mt-1">
-                              Original Date: {new Date(session.scheduled_date).toLocaleDateString('en-US', {
-                                weekday: 'long',
-                                year: 'numeric',
-                                month: 'long',
-                                day: 'numeric'
-                              })}
+                              Original Date: {formatDateManila(session.scheduled_date)}
                             </p>
                             <p className="text-xs text-gray-600">
                               Time: {session.scheduled_start_time} - {session.scheduled_end_time}
@@ -7621,7 +7610,7 @@ const initializePackageMerchSelections = useCallback(
                       
                       // Format as "Month Day, Year" (e.g., "November 20, 2025")
                       const options = { year: 'numeric', month: 'long', day: 'numeric' };
-                      return date.toLocaleDateString('en-US', options);
+                      return formatDateManila(date);
                     } catch {
                       return '-';
                     }
@@ -8610,16 +8599,7 @@ const initializePackageMerchSelections = useCallback(
                           type="text"
                           id="end_date"
                           name="end_date"
-                          value={formData.end_date ? (() => {
-                            const [year, month, day] = formData.end_date.split('-').map(Number);
-                            const date = new Date(year, month - 1, day);
-                            return date.toLocaleDateString('en-GB', { 
-                              day: '2-digit', 
-                              month: '2-digit', 
-                              year: 'numeric',
-                              timeZone: 'Asia/Manila'
-                            });
-                          })() : ''}
+                          value={formData.end_date ? formatDateManila(formData.end_date) : ''}
                           readOnly
                           className={`input-field bg-gray-50 cursor-not-allowed ${formErrors.end_date ? 'border-red-500' : ''}`}
                           placeholder="dd/mm/yyyy"
@@ -8672,12 +8652,7 @@ const initializePackageMerchSelections = useCallback(
                               );
                               if (!calculatedDate) return 'N/A';
                               const [year, month, day] = calculatedDate.split('-').map(Number);
-                              const date = new Date(year, month - 1, day);
-                              return date.toLocaleDateString('en-GB', { 
-                                day: '2-digit', 
-                                month: '2-digit', 
-                                year: 'numeric'
-                              });
+                              return formatDateManila(calculatedDate);
                             })()}
                             readOnly
                             className="input-field bg-gray-50 cursor-not-allowed"
@@ -9226,18 +9201,10 @@ const initializePackageMerchSelections = useCallback(
                             
                             const dueDate = isReserved
                               ? (student.reservation_invoice_due_date
-                                  ? new Date(student.reservation_invoice_due_date).toLocaleDateString('en-GB', {
-                                      day: '2-digit',
-                                      month: '2-digit',
-                                      year: 'numeric',
-                                    })
+                                  ? formatDateManila(student.reservation_invoice_due_date)
                                   : '-')
                               : (reservationForStudent?.reservation_invoice_due_date
-                                  ? new Date(reservationForStudent.reservation_invoice_due_date).toLocaleDateString('en-GB', {
-                                      day: '2-digit',
-                                      month: '2-digit',
-                                      year: 'numeric',
-                                    })
+                                  ? formatDateManila(reservationForStudent.reservation_invoice_due_date)
                                   : '-');
 
                             return (
@@ -9275,18 +9242,10 @@ const initializePackageMerchSelections = useCallback(
                                   <div className="text-sm text-gray-500">
                                     {isReserved
                                       ? (student.earliestEnrollment || student.enrolled_at
-                                          ? new Date(student.earliestEnrollment || student.enrolled_at).toLocaleDateString('en-GB', {
-                                              day: '2-digit',
-                                              month: '2-digit',
-                                              year: 'numeric',
-                                            })
+? formatDateManila(student.earliestEnrollment || student.enrolled_at)
                                           : '-')
                                       : (student.earliestEnrollment || student.enrolled_at
-                                          ? new Date(student.earliestEnrollment || student.enrolled_at).toLocaleDateString('en-GB', {
-                                              day: '2-digit',
-                                              month: '2-digit',
-                                              year: 'numeric',
-                                            })
+? formatDateManila(student.earliestEnrollment || student.enrolled_at)
                                           : '-')
                                     }
                                   </div>
@@ -13166,11 +13125,7 @@ const initializePackageMerchSelections = useCallback(
                                 <td className="px-4 py-4">
                                   <div className="text-sm text-gray-500">
                                     {student.earliestEnrollment || student.enrolled_at
-                                      ? new Date(student.earliestEnrollment || student.enrolled_at).toLocaleDateString('en-GB', {
-                                          day: '2-digit',
-                                          month: '2-digit',
-                                          year: 'numeric',
-                                        })
+? formatDateManila(student.earliestEnrollment || student.enrolled_at)
                                       : '-'}
                                   </div>
                                 </td>
@@ -13455,17 +13410,9 @@ const initializePackageMerchSelections = useCallback(
                           <td className="px-4 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-900">
                               {reservation.due_date
-                                ? new Date(reservation.due_date).toLocaleDateString('en-GB', {
-                                    day: '2-digit',
-                                    month: '2-digit',
-                                    year: 'numeric',
-                                  })
+                                ? formatDateManila(reservation.due_date)
                                 : reservation.reservation_invoice_due_date
-                                ? new Date(reservation.reservation_invoice_due_date).toLocaleDateString('en-GB', {
-                                    day: '2-digit',
-                                    month: '2-digit',
-                                    year: 'numeric',
-                                  })
+                                ? formatDateManila(reservation.reservation_invoice_due_date)
                                 : '-'}
                             </div>
                             {reservation.due_date && new Date(reservation.due_date) < new Date() && reservation.status === 'Reserved' && (

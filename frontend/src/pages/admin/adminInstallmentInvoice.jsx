@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const AdminInstallmentInvoice = () => {
   const { userInfo } = useAuth();
@@ -414,21 +415,14 @@ const AdminInstallmentInvoice = () => {
                     <td className="px-3 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">
                         {invoice.next_generation_date
-                          ? new Date(invoice.next_generation_date).toLocaleDateString('en-US', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric'
-                            })
+                          ? formatDateManila(invoice.next_generation_date)
                           : '-'}
                           </div>
                         </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">
                         {invoice.next_invoice_month
-                          ? new Date(invoice.next_invoice_month).toLocaleDateString('en-US', {
-                              month: 'short',
-                              year: 'numeric'
-                            })
+                          ? formatDateManila(invoice.next_invoice_month)
                           : '-'}
                           </div>
                         </td>

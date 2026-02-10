@@ -531,17 +531,10 @@ router.post(
             ? (classNames.length === 1 ? classNames[0] : `${classNames.length} classes`)
             : 'your class';
 
-          // Format dates for display
-          const startDateFormatted = startDate.toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
-          });
-          const endDateFormatted = endDate.toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
-          });
+          // Format dates for display (DD/MM/YYYY)
+          const pad = (n) => String(n).padStart(2, '0');
+          const startDateFormatted = `${pad(startDate.getDate())}/${pad(startDate.getMonth() + 1)}/${startDate.getFullYear()}`;
+          const endDateFormatted = `${pad(endDate.getDate())}/${pad(endDate.getMonth() + 1)}/${endDate.getFullYear()}`;
 
           // Build announcement body
           let announcementBody = `Your class ${classNamesText} has ${selected_session_ids.length} session(s) suspended due to: ${suspension_name}`;

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const PROMO_TYPES = [
   { value: 'percentage_discount', label: 'Percentage Discount' },
@@ -1996,7 +1997,7 @@ const AdminPromo = () => {
                     <span className="text-xs text-gray-500">Start Date:</span>
                     <p className="text-sm font-medium text-gray-900">
                       {selectedPromoForDetails.start_date 
-                        ? new Date(selectedPromoForDetails.start_date).toLocaleDateString()
+                        ? formatDateManila(selectedPromoForDetails.start_date)
                         : 'Not set'}
                     </p>
                   </div>
@@ -2004,7 +2005,7 @@ const AdminPromo = () => {
                     <span className="text-xs text-gray-500">End Date:</span>
                     <p className="text-sm font-medium text-gray-900">
                       {selectedPromoForDetails.end_date 
-                        ? new Date(selectedPromoForDetails.end_date).toLocaleDateString()
+                        ? formatDateManila(selectedPromoForDetails.end_date)
                         : 'Not set'}
                     </p>
                   </div>

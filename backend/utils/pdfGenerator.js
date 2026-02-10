@@ -77,12 +77,11 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
     if (!dateString) return '';
     try {
       const date = new Date(dateString);
-      const months = ['January', 'February', 'March', 'April', 'May', 'June', 
-                     'July', 'August', 'September', 'October', 'November', 'December'];
-      const day = date.getDate();
-      const month = months[date.getMonth()];
-      const year = date.getFullYear();
-      return `${day.toString().padStart(2, '0')} ${month} ${year}`;
+      if (Number.isNaN(date.getTime())) return '';
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const year = date.getUTCFullYear();
+      return `${day}/${month}/${year}`;
     } catch {
       return dateString;
     }

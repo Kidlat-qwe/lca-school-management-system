@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const HOURS = Array.from({ length: 23 }, (_, i) => i + 1);
@@ -51,7 +52,7 @@ const getWeekRange = (dateYmd) => {
     end: toYmd(end),
     startDate: start,
     endDate: end,
-    label: `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+    label: `${formatDateManila(start)} – ${formatDateManila(end)}`,
   };
 };
 
@@ -63,7 +64,7 @@ const getDayLabel = (dateYmd) => {
 
 const getDayLongLabel = (dateYmd) => {
   const d = new Date(dateYmd + 'T12:00:00');
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  return formatDateManila(d) || 'Invalid date';
 };
 
 const formatTime = (time) => {
@@ -546,7 +547,7 @@ const CalendarSchedule = () => {
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Phase</label><p className="mt-1 text-sm text-gray-900">{classDetails.class_phase_number ? `Phase ${classDetails.class_phase_number}` : 'Phase 1'}</p></div>
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Branch</label><p className="mt-1 text-sm text-gray-900">{classDetails.branch_name || selectedEvent?.branch_name || 'N/A'}</p></div>
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Room</label><p className="mt-1 text-sm text-gray-900">{classDetails.room_name || selectedEvent?.room_name || 'Unassigned'}</p></div>
-                    <div><label className="text-xs font-semibold uppercase text-gray-500">Date</label><p className="mt-1 text-sm text-gray-900">{new Date(selectedEvent.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p></div>
+                    <div><label className="text-xs font-semibold uppercase text-gray-500">Date</label><p className="mt-1 text-sm text-gray-900">{formatDateManila(selectedEvent.date)}</p></div>
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Time</label><p className="mt-1 text-sm text-gray-900">{formatTime(selectedEvent.start_time)}{selectedEvent.end_time ? ` – ${formatTime(selectedEvent.end_time)}` : ''}</p></div>
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Teachers</label><p className="mt-1 text-sm text-gray-900">{selectedEvent.teachers?.length > 0 ? selectedEvent.teachers.map((t) => t.teacher_name).join(', ') : 'N/A'}</p></div>
                     <div><label className="text-xs font-semibold uppercase text-gray-500">Enrolled Students</label><p className="mt-1 text-sm text-gray-900">{classDetails.enrolled_students ?? 0}</p></div>

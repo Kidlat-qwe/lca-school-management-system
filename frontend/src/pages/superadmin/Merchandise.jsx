@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const Merchandise = () => {
   const [branches, setBranches] = useState([]);
@@ -1917,7 +1918,7 @@ const Merchandise = () => {
                           <div className="text-sm text-gray-900">{request.requested_by_name || 'N/A'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {new Date(request.created_at).toLocaleDateString()}
+                          {formatDateManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && (
