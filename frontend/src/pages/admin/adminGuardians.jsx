@@ -6,6 +6,11 @@ const AdminGuardians = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [editingGuardian, setEditingGuardian] = useState(null);
   const [editForm, setEditForm] = useState({
     guardian_name: '',
@@ -18,44 +23,49 @@ const AdminGuardians = () => {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(searchTerm), 400);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchDebounced]);
+
+  useEffect(() => {
     const fetchGuardians = async () => {
       setLoading(true);
       setError('');
       try {
-        // Backend automatically filters by admin's branch through students
-        const response = await apiRequest('/guardians');
+        const params = new URLSearchParams({
+          limit: String(itemsPerPage),
+          page: String(currentPage),
+        });
+        if (searchDebounced.trim()) params.set('search', searchDebounced.trim());
+        const response = await apiRequest(`/guardians?${params.toString()}`);
         setGuardians(response.data || []);
+        const pag = response.pagination || {};
+        setTotalItems(pag.total ?? 0);
+        setTotalPages(pag.totalPages ?? 1);
       } catch (err) {
         setError(err.response?.data?.message || err.message || 'Failed to load guardians');
       } finally {
         setLoading(false);
       }
     };
+    fetchGuardians();
+  }, [currentPage, itemsPerPage, searchDebounced]);
 
+  useEffect(() => {
     const fetchStudents = async () => {
       try {
-        // Backend automatically filters by admin's branch
         const response = await apiRequest('/students?limit=1000');
         setStudents(response.data || []);
       } catch (err) {
         console.error('Failed to load students', err);
       }
     };
-
-    fetchGuardians();
     fetchStudents();
   }, []);
-
-  const filtered = guardians.filter((g) => {
-    const term = searchTerm.toLowerCase();
-    return (
-      g.guardian_name?.toLowerCase().includes(term) ||
-      g.email?.toLowerCase().includes(term) ||
-      g.relationship?.toLowerCase().includes(term) ||
-      g.address?.toLowerCase().includes(term) ||
-      g.student_name?.toLowerCase().includes(term)
-    );
-  });
 
   return (
     <div className="space-y-6">
@@ -86,9 +96,10 @@ const AdminGuardians = () => {
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : guardians.length === 0 ? (
           <div className="p-10 text-center text-gray-500">No guardians found.</div>
         ) : (
+          <>
           <div
             className="overflow-x-auto rounded-lg"
             style={{
@@ -124,7 +135,7 @@ const AdminGuardians = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filtered.map((g) => (
+                {guardians.map((g) => (
                   <tr key={g.guardian_id || `${g.student_id}-${g.guardian_name}`}>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">{g.guardian_name || '-'}</div>
@@ -164,6 +175,52 @@ const AdminGuardians = () => {
               </tbody>
             </table>
           </div>
+          {totalItems > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+              <div className="text-sm text-gray-600">
+                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} guardians
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-sm text-gray-600 flex items-center gap-1">
+                  Per page
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="rounded border border-gray-300 px-2 py-1 text-sm"
+                  >
+                    {[10, 20, 50].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Previous
+                  </button>
+                  <span className="px-2 text-sm text-gray-600">
+                    Page {currentPage} of {totalPages || 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages || 1, p + 1))}
+                    disabled={currentPage >= (totalPages || 1)}
+                    className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 

@@ -11,6 +11,10 @@ const AdminPersonnel = () => {
   const [error, setError] = useState('');
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openRoleDropdown, setOpenRoleDropdown] = useState(false);
@@ -48,7 +52,7 @@ const AdminPersonnel = () => {
 
   useEffect(() => {
     fetchPersonnel();
-  }, []);
+  }, [currentPage, itemsPerPage]);
 
   // Auto-set branch_id when adminBranchId is available
   useEffect(() => {
@@ -128,9 +132,15 @@ const AdminPersonnel = () => {
   const fetchPersonnel = async () => {
     try {
       setLoading(true);
-      // Backend automatically filters by admin's branch
-      const response = await apiRequest('/users');
+      const params = new URLSearchParams({
+        exclude_user_type: 'Student',
+        limit: String(itemsPerPage),
+        page: String(currentPage),
+      });
+      const response = await apiRequest(`/users?${params.toString()}`);
       setPersonnel(response.data || []);
+      setTotalItems(response.pagination?.total ?? 0);
+      setTotalPages(response.pagination?.totalPages ?? 1);
     } catch (err) {
       setError(err.message || 'Failed to fetch personnel');
       console.error('Error fetching personnel:', err);
@@ -750,9 +760,49 @@ const AdminPersonnel = () => {
         </div>
       )}
 
-      {filteredPersonnel.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPersonnel.length} of {personnel.length} personnel
+      {totalItems > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+          <div className="text-sm text-gray-600">
+            Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-sm text-gray-600 flex items-center gap-1">
+              Per page
+              <select
+                value={itemsPerPage}
+                onChange={(e) => {
+                  setItemsPerPage(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="rounded border border-gray-300 px-2 py-1 text-sm"
+              >
+                {[10, 20, 50].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+              >
+                Previous
+              </button>
+              <span className="px-2 text-sm text-gray-600">
+                Page {currentPage} of {totalPages || 1}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages || 1, p + 1))}
+                disabled={currentPage >= (totalPages || 1)}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

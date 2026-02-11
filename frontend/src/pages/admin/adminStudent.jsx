@@ -12,6 +12,10 @@ const AdminStudent = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -41,7 +45,7 @@ const AdminStudent = () => {
 
   useEffect(() => {
     fetchStudents();
-  }, []);
+  }, [currentPage, itemsPerPage]);
 
   // Auto-set branch_id when adminBranchId is available
   useEffect(() => {
@@ -117,30 +121,17 @@ const AdminStudent = () => {
   const fetchStudents = async () => {
     try {
       setLoading(true);
-      // Fetch students with pagination - max limit is 100 per API
-      let allStudents = [];
-      let page = 1;
-      let hasMore = true;
-      
-      while (hasMore) {
-        const response = await apiRequest(`/users?user_type=Student&branch_id=${adminBranchId}&limit=100&page=${page}`);
-        const students = (response.data || []).filter(s => s.user_type === 'Student');
-        allStudents = [...allStudents, ...students];
-        
-        // Check if there are more pages
-        if (response.pagination) {
-          hasMore = page < response.pagination.totalPages;
-          page++;
-        } else {
-          hasMore = students.length === 100; // If no pagination info, assume more if we got exactly 100
-          page++;
-        }
-        
-        // Safety limit to prevent infinite loops
-        if (page > 50) break;
-      }
-      
-      setStudents(allStudents);
+      const params = new URLSearchParams({
+        user_type: 'Student',
+        limit: String(itemsPerPage),
+        page: String(currentPage),
+      });
+      if (adminBranchId) params.set('branch_id', String(adminBranchId));
+      const response = await apiRequest(`/users?${params.toString()}`);
+      const list = (response.data || []).filter((s) => s.user_type === 'Student');
+      setStudents(list);
+      setTotalItems(response.pagination?.total ?? 0);
+      setTotalPages(response.pagination?.totalPages ?? 1);
     } catch (err) {
       setError(err.message || 'Failed to fetch students');
       console.error('Error fetching students:', err);
@@ -630,9 +621,49 @@ const AdminStudent = () => {
       )}
 
       {/* Results Count */}
-      {filteredStudents.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredStudents.length} of {students.length} students
+      {totalItems > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+          <div className="text-sm text-gray-600">
+            Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} students
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-sm text-gray-600 flex items-center gap-1">
+              Per page
+              <select
+                value={itemsPerPage}
+                onChange={(e) => {
+                  setItemsPerPage(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="rounded border border-gray-300 px-2 py-1 text-sm"
+              >
+                {[10, 20, 50].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+              >
+                Previous
+              </button>
+              <span className="px-2 text-sm text-gray-600">
+                Page {currentPage} of {totalPages || 1}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages || 1, p + 1))}
+                disabled={currentPage >= (totalPages || 1)}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

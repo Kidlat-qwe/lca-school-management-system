@@ -19,36 +19,58 @@ router.get(
   requireRole('Superadmin', 'Admin'),
   [
     queryValidator('student_id').optional().isInt().withMessage('Student ID must be an integer'),
+    queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { student_id, page = 1, limit = 20 } = req.query;
+      const { student_id, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
-      let sql = `
-        SELECT g.*, u.full_name AS student_name, u.email AS student_email, u.branch_id AS student_branch_id
-        FROM guardianstbl g
-        LEFT JOIN userstbl u ON g.student_id = u.user_id
-        WHERE 1=1`;
       const params = [];
       let paramCount = 0;
+      let whereClause = ' WHERE 1=1';
 
       // For non-superadmin users, filter by their branch through students
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
-        sql += ` AND u.branch_id = $${paramCount}`;
+        whereClause += ` AND u.branch_id = $${paramCount}`;
         params.push(req.user.branchId);
       }
 
       if (student_id) {
         paramCount++;
-        sql += ` AND student_id = $${paramCount}`;
+        whereClause += ` AND student_id = $${paramCount}`;
         params.push(student_id);
       }
 
+      if (search && search.trim() !== '') {
+        paramCount++;
+        whereClause += ` AND (
+          LOWER(g.guardian_name) LIKE $${paramCount}
+          OR LOWER(g.email) LIKE $${paramCount}
+          OR LOWER(g.relationship) LIKE $${paramCount}
+          OR LOWER(g.address) LIKE $${paramCount}
+          OR LOWER(u.full_name) LIKE $${paramCount}
+        )`;
+        params.push(`%${search.toLowerCase().trim()}%`);
+      }
+
+      // Count total matching rows
+      const countSql = `
+        SELECT COUNT(*) FROM guardianstbl g
+        LEFT JOIN userstbl u ON g.student_id = u.user_id
+        ${whereClause}`;
+      const countResult = await query(countSql, params);
+      const total = parseInt(countResult.rows[0].count, 10);
+
+      let sql = `
+        SELECT g.*, u.full_name AS student_name, u.email AS student_email, u.branch_id AS student_branch_id
+        FROM guardianstbl g
+        LEFT JOIN userstbl u ON g.student_id = u.user_id
+        ${whereClause}`;
       sql += ` ORDER BY g.guardian_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limit, offset);
 
@@ -60,6 +82,8 @@ router.get(
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / limit) || 1,
         },
       });
     } catch (error) {

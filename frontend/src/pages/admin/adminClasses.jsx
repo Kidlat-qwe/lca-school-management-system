@@ -5474,8 +5474,8 @@ const initializePackageMerchSelections = useCallback(
 
                       return (
                         <tr key={session.phasesessiondetail_id} className={isCancelled ? 'bg-gray-100 opacity-60' : ''}>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className={`text-sm font-medium ${rowTextClass}`}>
+                          <td className="px-6 py-4 max-w-[200px]">
+                            <div className={`text-sm font-medium truncate ${rowTextClass}`} title={classSession?.class_code || ''}>
                               {classSession?.class_code || '-'}
                             </div>
                           </td>
@@ -5484,23 +5484,23 @@ const initializePackageMerchSelections = useCallback(
                               Phase {session.phase_number} - Session {displaySessionNumber}
                             </div>
                           </td>
-                          <td className="px-6 py-4">
-                            <div className={`text-sm ${rowSubTextClass}`}>
+                          <td className="px-6 py-4 max-w-[120px]">
+                            <div className={`text-sm truncate ${rowSubTextClass}`} title={session.topic || ''}>
                               {session.topic || '-'}
                             </div>
                           </td>
-                          <td className="px-6 py-4">
-                            <div className={`text-sm ${rowSubTextClass}`}>
+                          <td className="px-6 py-4 max-w-[120px]">
+                            <div className={`text-sm truncate ${rowSubTextClass}`} title={session.goal || ''}>
                               {session.goal || '-'}
                             </div>
                           </td>
-                          <td className="px-6 py-4">
-                            <div className={`text-sm ${rowSubTextClass}`}>
+                          <td className="px-6 py-4 max-w-[120px]">
+                            <div className={`text-sm truncate ${rowSubTextClass}`} title={session.agenda || ''}>
                               {session.agenda || '-'}
                             </div>
                           </td>
-                          <td className="px-6 py-4">
-                            <div className="space-y-1">
+                          <td className="px-6 py-4 max-w-[140px]">
+                            <div className="space-y-1 min-w-0">
                               {sessionDate && (() => {
                                 // Get times from database session or fallback to schedule
                                 let displayStartTime = sessionStartTime;
@@ -5580,10 +5580,10 @@ const initializePackageMerchSelections = useCallback(
                               )}
                             </div>
                           </td>
-                          <td className="px-3 py-3">
-                            <div className="space-y-1">
+                          <td className="px-3 py-3 max-w-[160px]">
+                            <div className="space-y-1 min-w-0">
                               {assignedTeacherName && (
-                                <div className="text-sm text-gray-900">
+                                <div className="text-sm text-gray-900 truncate" title={assignedTeacherName}>
                                   {assignedTeacherName}
                                   {hasSubstitute && (
                                     <span className="text-xs text-orange-600 ml-1" title="Substitute Teacher">
@@ -5593,7 +5593,7 @@ const initializePackageMerchSelections = useCallback(
                                 </div>
                               )}
                               {originalTeacherName && hasSubstitute && originalTeacherName !== assignedTeacherName && (
-                                <div className="text-xs text-gray-500">
+                                <div className="text-xs text-gray-500 truncate" title={originalTeacherName}>
                                   Original: {originalTeacherName}
                                 </div>
                               )}
@@ -7213,9 +7213,9 @@ const initializePackageMerchSelections = useCallback(
 
                   return (
                     <tr key={classItem.class_id} className={hasInactivatedSchedule ? 'bg-yellow-50' : ''}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <div className="text-sm font-medium text-gray-900">
+                      <td className="px-6 py-4 max-w-[100px]">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate" title={classItem.program_code || classItem.program_name || ''}>
                             {classItem.program_code || classItem.program_name || '-'}
                           </div>
                           {hasInactivatedSchedule && (
@@ -7236,31 +7236,34 @@ const initializePackageMerchSelections = useCallback(
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4 max-w-[220px]">
+                        <div className="text-sm text-gray-900 truncate" title={classItem.class_name || ''}>
                           {classItem.class_name || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4 max-w-[140px]">
+                        <div className="text-sm text-gray-900 truncate" title={classItem.room_name || ''}>
                           {classItem.room_name || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4 max-w-[100px]">
+                        <div className="text-sm text-gray-900 truncate" title={classItem.level_tag || ''}>
                           {classItem.level_tag || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">
+                      <td className="px-6 py-4 max-w-[180px]">
+                        <div className="text-sm text-gray-900 min-w-0">
                           {(() => {
                             // Check if we have teachers array first
                             if (classItem.teachers && Array.isArray(classItem.teachers) && classItem.teachers.length > 0) {
-                              return classItem.teachers.map((teacher, idx) => (
-                                <div key={teacher.teacher_id || idx} className={idx > 0 ? 'mt-1' : ''}>
-                                  {typeof teacher === 'object' ? (teacher.teacher_name || teacher.full_name) : teacher}
-                                </div>
-                              ));
+                              return classItem.teachers.map((teacher, idx) => {
+                                const name = typeof teacher === 'object' ? (teacher.teacher_name || teacher.full_name) : teacher;
+                                return (
+                                  <div key={teacher.teacher_id || idx} className={`truncate ${idx > 0 ? 'mt-1' : ''}`} title={name || ''}>
+                                    {name || '-'}
+                                  </div>
+                                );
+                              });
                             }
                             
                             // Check for teacher_names (comma-separated string)
@@ -7269,24 +7272,30 @@ const initializePackageMerchSelections = useCallback(
                             
                             // If it's already an array, display on separate lines
                             if (Array.isArray(teachers)) {
-                              return teachers.map((teacher, idx) => (
-                                <div key={idx} className={idx > 0 ? 'mt-1' : ''}>
-                                  {typeof teacher === 'object' ? (teacher.teacher_name || teacher.full_name) : teacher}
-                                </div>
-                              ));
+                              return teachers.map((teacher, idx) => {
+                                const name = typeof teacher === 'object' ? (teacher.teacher_name || teacher.full_name) : teacher;
+                                return (
+                                  <div key={idx} className={`truncate ${idx > 0 ? 'mt-1' : ''}`} title={name || ''}>
+                                    {name || '-'}
+                                  </div>
+                                );
+                              });
                             }
                             
                             // If it's a string with commas, split and display on separate lines
                             if (typeof teachers === 'string' && teachers.includes(',')) {
-                              return teachers.split(',').map((teacher, idx) => (
-                                <div key={idx} className={idx > 0 ? 'mt-1' : ''}>
-                                  {teacher.trim()}
-                                </div>
-                              ));
+                              return teachers.split(',').map((teacher, idx) => {
+                                const t = teacher.trim();
+                                return (
+                                  <div key={idx} className={`truncate ${idx > 0 ? 'mt-1' : ''}`} title={t}>
+                                    {t}
+                                  </div>
+                                );
+                              });
                             }
                             
                             // Single teacher
-                            return <div>{teachers}</div>;
+                            return <div className="truncate" title={teachers}>{teachers}</div>;
                           })()}
                         </div>
                       </td>
