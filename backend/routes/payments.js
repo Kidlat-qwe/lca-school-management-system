@@ -41,13 +41,17 @@ router.get(
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                         p.status, p.reference_number, p.remarks, p.created_by,
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
+                        p.approval_status, p.approved_by,
+                        TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
-                        b.branch_name
+                        b.branch_name,
+                        approver.full_name as approved_by_name
                  FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
                  LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
+                 LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  WHERE 1=1`;
       const params = [];
       let paramCount = 0;
@@ -1685,6 +1689,84 @@ router.get(
       res.json({
         success: true,
         data: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/payments/:id/approve
+ * Approve or unapprove a payment (finance team confirmation)
+ * Access: Superadmin, Superfinance can approve all; Finance can approve their branch only
+ */
+router.put(
+  '/:id/approve',
+  requireRole('Superadmin', 'Finance', 'Superfinance'),
+  [
+    param('id').isInt().withMessage('Payment ID must be an integer'),
+    body('approve').isBoolean().withMessage('approve must be a boolean'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { approve } = req.body;
+      const userId = req.user.userId;
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      // Get payment details including branch
+      const paymentCheck = await query(
+        'SELECT payment_id, branch_id FROM paymenttbl WHERE payment_id = $1',
+        [id]
+      );
+
+      if (paymentCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Payment not found',
+        });
+      }
+
+      const payment = paymentCheck.rows[0];
+
+      // Permission check: Finance can only approve payments from their branch
+      if (userType === 'Finance' && payment.branch_id !== userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only approve payments from your assigned branch',
+        });
+      }
+
+      // Superadmin and Superfinance can approve any payment (no branch restriction)
+
+      // Update approval status
+      const updateSql = approve
+        ? `UPDATE paymenttbl 
+           SET approval_status = 'Approved',
+               approved_by = $1,
+               approved_at = CURRENT_TIMESTAMP
+           WHERE payment_id = $2
+           RETURNING payment_id, approval_status, approved_by, 
+                     TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at`
+        : `UPDATE paymenttbl 
+           SET approval_status = 'Pending',
+               approved_by = NULL,
+               approved_at = NULL
+           WHERE payment_id = $1
+           RETURNING payment_id, approval_status, approved_by, approved_at`;
+
+      const result = await query(
+        updateSql,
+        approve ? [userId, id] : [id]
+      );
+
+      res.json({
+        success: true,
+        message: approve ? 'Payment approved successfully' : 'Payment approval revoked',
+        data: result.rows[0],
       });
     } catch (error) {
       next(error);

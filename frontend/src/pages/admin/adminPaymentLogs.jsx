@@ -21,6 +21,11 @@ const AdminPaymentLogs = () => {
   // Removed openBranchDropdown - admin only sees their branch
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
+  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
+  const [paymentMethodDropdownRect, setPaymentMethodDropdownRect] = useState(null);
+  const [openApprovalMenuId, setOpenApprovalMenuId] = useState(null);
+  const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
+  const [approvalLoadingId, setApprovalLoadingId] = useState(null);
   // Removed branches state - admin only sees their branch
 
   // Fetch branch name if not in userInfo
@@ -62,15 +67,37 @@ const AdminPaymentLogs = () => {
         setOpenPaymentMethodDropdown(false);
         setPaymentMethodDropdownRect(null);
       }
+      if (openApprovalMenuId && !event.target.closest('.payment-status-cell') && !event.target.closest('.payment-status-approval-portal')) {
+        setOpenApprovalMenuId(null);
+      }
     };
 
-    if (openStatusDropdown || openPaymentMethodDropdown) {
+    if (openStatusDropdown || openPaymentMethodDropdown || openApprovalMenuId) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }
-  }, [openStatusDropdown, openPaymentMethodDropdown]);
+  }, [openStatusDropdown, openPaymentMethodDropdown, openApprovalMenuId]);
+
+  const userType = userInfo?.user_type || userInfo?.userType;
+  const canApprovePayment = () => false;
+
+  const handleApprovePayment = async (paymentId, approve) => {
+    setApprovalLoadingId(paymentId);
+    setOpenApprovalMenuId(null);
+    try {
+      await apiRequest(`/payments/${paymentId}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify({ approve }),
+      });
+      await fetchPayments();
+    } catch (err) {
+      setError(err.message || (approve ? 'Failed to approve payment' : 'Failed to revoke approval'));
+    } finally {
+      setApprovalLoadingId(null);
+    }
+  };
 
   const fetchPayments = async () => {
     try {
@@ -297,7 +324,7 @@ const AdminPaymentLogs = () => {
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '100px' }} />
-                <col style={{ width: '120px' }} />
+                <col style={{ width: '140px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '180px' }} />
@@ -367,7 +394,7 @@ const AdminPaymentLogs = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
                     AMOUNT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     <div className="relative status-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -380,7 +407,7 @@ const AdminPaymentLogs = () => {
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
-                        <span>Status</span>
+                        <span>Payment Status</span>
                         <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterStatus ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -428,10 +455,45 @@ const AdminPaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-600">
                       {formatCurrency(payment.payable_amount)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {getStatusBadge(payment.status)}
+                    <td className="px-6 py-4 text-sm payment-status-cell align-top" style={{ width: '140px', maxWidth: '140px', overflow: 'hidden' }}>
+                      <div className="min-w-0 max-w-full">
+                        {approvalLoadingId === payment.payment_id ? (
+                          <span className="text-gray-400 text-xs">Updating...</span>
+                        ) : (() => {
+                          const isApproved = (payment.approval_status || 'Pending') === 'Approved';
+                          const canApprove = canApprovePayment(payment);
+                          const showDropdown = openApprovalMenuId === payment.payment_id;
+                          return (
+                            <div className="relative min-w-0 max-w-full">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!canApprove) return;
+                                  if (showDropdown) {
+                                    setOpenApprovalMenuId(null);
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
+                                    setOpenApprovalMenuId(payment.payment_id);
+                                  }
+                                }}
+                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-default focus:outline-none shrink-0 ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
+                                title="Only Superadmin, Superfinance, or Finance can approve"
+                              >
+                                <span className="truncate">{isApproved ? 'Approved' : 'Pending Approval'}</span>
+                              </button>
+                              {isApproved && payment.approved_by_name && (
+                                <div className="text-xs text-gray-500 mt-0.5 truncate" title={payment.approved_at ? `Approved at ${payment.approved_at}` : ''}>
+                                  by <span className="truncate inline-block max-w-[100px] align-bottom" title={payment.approved_by_name}>{payment.approved_by_name}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '140px' }}>
+                    <td className="px-6 py-4 text-sm text-gray-900 align-top" style={{ width: '140px', maxWidth: '140px', minWidth: '140px' }}>
                       <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
