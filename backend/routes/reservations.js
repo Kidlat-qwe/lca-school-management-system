@@ -165,6 +165,54 @@ router.get(
 
       const result = await query(sql, params);
 
+      // Add payment verification for reservations (when class_id filter used, for Students modal)
+      if (class_id && result.rows.length > 0) {
+        const client = await getClient();
+        try {
+          const reservationsWithInvoice = result.rows.filter(r => r.invoice_id);
+          // Set defaults for reservations without invoice
+          for (const r of result.rows) {
+            if (!r.invoice_id) {
+              r.is_payment_verified = false;
+              r.payment_verification_status = 'Not Verified';
+              r.unverified_payment_count = 0;
+            }
+          }
+          if (reservationsWithInvoice.length > 0) {
+            const invoiceIds = [...new Set(reservationsWithInvoice.map(r => r.invoice_id))];
+            const studentIds = [...new Set(reservationsWithInvoice.map(r => r.student_id))];
+            const classBranchResult = await client.query(
+              'SELECT branch_id FROM classestbl WHERE class_id = $1',
+              [class_id]
+            );
+            const classBranchId = classBranchResult.rows[0]?.branch_id ?? null;
+
+            const paymentsResult = await client.query(
+              `SELECT p.student_id, p.invoice_id, COALESCE(p.approval_status, 'Pending') as approval_status
+               FROM paymenttbl p
+               WHERE p.invoice_id = ANY($1::int[])
+                 AND p.student_id = ANY($2::int[])
+                 AND p.status = 'Completed'
+                 AND ($3::int IS NULL OR p.branch_id IS NULL OR p.branch_id = $3)`,
+              [invoiceIds, studentIds, classBranchId]
+            );
+
+            for (const r of reservationsWithInvoice) {
+              const payments = paymentsResult.rows.filter(
+                p => p.student_id === r.student_id && p.invoice_id === r.invoice_id
+              );
+              const unverifiedCount = payments.filter(p => p.approval_status !== 'Approved').length;
+              const isVerified = payments.length > 0 && unverifiedCount === 0;
+              r.is_payment_verified = isVerified;
+              r.payment_verification_status = isVerified ? 'Verified' : 'Not Verified';
+              r.unverified_payment_count = unverifiedCount;
+            }
+          }
+        } finally {
+          client.release();
+        }
+      }
+
       res.json({
         success: true,
         data: result.rows,

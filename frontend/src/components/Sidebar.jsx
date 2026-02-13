@@ -349,8 +349,17 @@ const Sidebar = ({ isOpen, onClose }) => {
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
       }
-      // Handle Manage Users children paths for Admin
+      // Handle Dashboard children paths for Superadmin (financial-dashboard has explicit route)
       let children = item.children;
+      if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance')) {
+        children = item.children?.map(child => {
+          if (child.name === 'Financial Dashboard') {
+            return { ...child, path: `${basePath}/financial-dashboard` };
+          }
+          return child;
+        });
+      }
+      // Handle Manage Users children paths for Admin
       if (item.name === 'Manage Users' && basePath === '/admin') {
         children = item.children?.map(child => {
           if (child.name === 'Personnel') {

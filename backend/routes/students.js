@@ -6,6 +6,127 @@ import { query, getClient } from '../config/database.js';
 
 const router = express.Router();
 
+/**
+ * Compute payment verification status for students in a class.
+ * Student is Verified only when ALL Completed payments (for this class context) are Approved.
+ * Downpayment and each phase are verified separately.
+ * @param {number} classId
+ * @param {Array<{user_id: number}>} students
+ * @param {number|null} classBranchId
+ * @returns {Promise<Map<number, {is_payment_verified: boolean, payment_verification_status: string, unverified_payment_count: number}>>}
+ */
+async function computePaymentVerificationForClass(classId, students, classBranchId) {
+  const result = new Map();
+  const studentIds = [...new Set(students.map(s => s.user_id))];
+  if (studentIds.length === 0) return result;
+
+  const client = await getClient();
+  try {
+    // 1. Get installment profiles for this class (downpayment + phase invoices per student)
+    const profileResult = await client.query(
+      `SELECT ip.installmentinvoiceprofiles_id, ip.student_id, ip.downpayment_invoice_id
+       FROM installmentinvoiceprofilestbl ip
+       WHERE ip.class_id = $1 AND ip.is_active = true
+         AND ip.student_id = ANY($2::int[])`,
+      [classId, studentIds]
+    );
+
+    // 2. Get phase invoices for these profiles (exclude downpayment - verified separately)
+    let phaseInvoiceResult = { rows: [] };
+    if (profileResult.rows.length > 0) {
+      phaseInvoiceResult = await client.query(
+        `SELECT i.invoice_id, i.installmentinvoiceprofiles_id
+         FROM invoicestbl i
+         INNER JOIN installmentinvoiceprofilestbl ip ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         WHERE ip.class_id = $1 AND ip.student_id = ANY($2::int[])
+           AND (ip.downpayment_invoice_id IS NULL OR i.invoice_id != ip.downpayment_invoice_id)`,
+        [classId, studentIds]
+      );
+    }
+
+    // Build student -> invoice IDs map for installment
+    const studentToInvoiceIds = new Map();
+    for (const row of profileResult.rows) {
+      const ids = new Set();
+      if (row.downpayment_invoice_id) ids.add(row.downpayment_invoice_id);
+      const phaseInvoices = phaseInvoiceResult.rows.filter(
+        p => p.installmentinvoiceprofiles_id === row.installmentinvoiceprofiles_id
+      );
+      phaseInvoices.forEach(p => ids.add(p.invoice_id));
+      const existing = studentToInvoiceIds.get(row.student_id) || new Set();
+      ids.forEach(id => existing.add(id));
+      studentToInvoiceIds.set(row.student_id, existing);
+    }
+
+    // 3. Get full-payment invoices for this class (remarks contain CLASS_ID, not installment)
+    const fullInvoiceResult = await client.query(
+      `SELECT i.invoice_id, ist.student_id
+       FROM invoicestbl i
+       INNER JOIN invoicestudentstbl ist ON i.invoice_id = ist.invoice_id
+       WHERE i.remarks LIKE $1
+         AND ist.student_id = ANY($2::int[])
+         AND i.installmentinvoiceprofiles_id IS NULL`,
+      [`%CLASS_ID:${classId}%`, studentIds]
+    );
+
+    for (const row of fullInvoiceResult.rows) {
+      const existing = studentToInvoiceIds.get(row.student_id) || new Set();
+      existing.add(row.invoice_id);
+      studentToInvoiceIds.set(row.student_id, existing);
+    }
+
+    // 4. Get all Completed payments for these invoices, with approval_status
+    const allInvoiceIds = [...new Set([].concat(...[...studentToInvoiceIds.values()].map(s => [...s])))];
+    if (allInvoiceIds.length === 0) {
+      for (const sid of studentIds) {
+        result.set(sid, { is_payment_verified: false, payment_verification_status: 'Not Verified', unverified_payment_count: 0 });
+      }
+      return result;
+    }
+
+    const paymentsResult = await client.query(
+      `SELECT p.payment_id, p.student_id, p.invoice_id, p.status, COALESCE(p.approval_status, 'Pending') as approval_status
+       FROM paymenttbl p
+       WHERE p.invoice_id = ANY($1::int[])
+         AND p.status = 'Completed'
+         AND p.student_id = ANY($2::int[])
+         AND ($3::int IS NULL OR p.branch_id IS NULL OR p.branch_id = $3)`,
+      [allInvoiceIds, studentIds, classBranchId]
+    );
+
+    // 5. Group payments by student, check if all are Approved
+    const paymentsByStudent = new Map();
+    for (const p of paymentsResult.rows) {
+      if (!paymentsByStudent.has(p.student_id)) {
+        paymentsByStudent.set(p.student_id, []);
+      }
+      paymentsByStudent.get(p.student_id).push(p);
+    }
+
+    for (const sid of studentIds) {
+      const invoiceIds = studentToInvoiceIds.get(sid);
+      const payments = paymentsByStudent.get(sid) || [];
+
+      if (!invoiceIds || invoiceIds.size === 0) {
+        result.set(sid, { is_payment_verified: false, payment_verification_status: 'Not Verified', unverified_payment_count: 0 });
+        continue;
+      }
+
+      const unverifiedCount = payments.filter(p => p.approval_status !== 'Approved').length;
+      const isVerified = payments.length > 0 && unverifiedCount === 0;
+
+      result.set(sid, {
+        is_payment_verified: isVerified,
+        payment_verification_status: isVerified ? 'Verified' : 'Not Verified',
+        unverified_payment_count: unverifiedCount,
+      });
+    }
+  } finally {
+    client.release();
+  }
+  return result;
+}
+
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
@@ -326,6 +447,13 @@ router.get(
     try {
       const { classId } = req.params;
 
+      // Get class branch_id for payment verification scoping
+      const classResult = await query(
+        'SELECT branch_id FROM classestbl WHERE class_id = $1',
+        [classId]
+      );
+      const classBranchId = classResult.rows[0]?.branch_id ?? null;
+
       // Get enrolled students
       const enrolledResult = await query(
         `SELECT 
@@ -393,6 +521,25 @@ router.get(
         ...enrolledResult.rows,
         ...pendingResult.rows
       ];
+
+      // Compute payment verification for each student (all Completed payments must be Approved)
+      const verificationMap = await computePaymentVerificationForClass(
+        parseInt(classId, 10),
+        allStudents,
+        classBranchId
+      );
+
+      // Add verification fields to each student
+      for (const student of allStudents) {
+        const verification = verificationMap.get(student.user_id) || {
+          is_payment_verified: false,
+          payment_verification_status: 'Not Verified',
+          unverified_payment_count: 0,
+        };
+        student.is_payment_verified = verification.is_payment_verified;
+        student.payment_verification_status = verification.payment_verification_status;
+        student.unverified_payment_count = verification.unverified_payment_count;
+      }
 
       // Sort by enrolled_at (enrolled students first, then pending)
       allStudents.sort((a, b) => {

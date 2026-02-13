@@ -14,6 +14,7 @@ const FinanceOperationalDashboard = () => {
   const [filterTeacher, setFilterTeacher] = useState('');
   const [filterRoom, setFilterRoom] = useState('');
   const [filterProgram, setFilterProgram] = useState('');
+  const [cohortYear, setCohortYear] = useState(new Date().getFullYear());
 
   useEffect(() => {
     fetchFilters();
@@ -63,19 +64,11 @@ const FinanceOperationalDashboard = () => {
     }
   };
 
-  const getAllActivityMonths = () => {
-    const monthsSet = new Set();
-    cohortData.forEach(cohort => {
-      Object.keys(cohort.months || {}).forEach(month => monthsSet.add(month));
-    });
-    return Array.from(monthsSet).sort((a, b) => {
-      const dateA = new Date(a);
-      const dateB = new Date(b);
-      return dateA - dateB;
-    });
-  };
+  // All 12 months for the matrix (display without year; backend keys use "Jan YYYY")
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const getMonthKey = (month) => `${month} ${cohortYear}`;
 
-  const activityMonths = getAllActivityMonths();
+  const cohortYears = [0, 1, 2, 3, 4].map((i) => new Date().getFullYear() - i);
 
   if (loading) {
     return (
@@ -230,41 +223,58 @@ const FinanceOperationalDashboard = () => {
 
       {/* Cohort Retention Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Cohort Retention Analysis</h3>
-        
-        {cohortData.length === 0 ? (
-          <p className="text-sm text-gray-500 text-center py-8">No cohort data available</p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table style={{ width: '100%', minWidth: `${180 + activityMonths.length * 120}px` }} className="border-collapse">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="sticky left-0 bg-gray-50 z-10 px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider border-b-2 border-gray-300" style={{ minWidth: '180px' }}>
-                    Enrollment Month
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">Cohort Retention Analysis</h3>
+          <div className="flex items-center gap-2">
+            <label htmlFor="cohort-year" className="text-sm font-medium text-gray-700">Year</label>
+            <select
+              id="cohort-year"
+              value={cohortYear}
+              onChange={(e) => setCohortYear(parseInt(e.target.value, 10))}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            >
+              {cohortYears.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+          <table style={{ width: '100%', minWidth: `${180 + MONTH_NAMES.length * 120}px` }} className="border-collapse">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="sticky left-0 bg-gray-50 z-10 px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider border-b-2 border-gray-300" style={{ minWidth: '180px' }}>
+                  Enrollment Month
+                </th>
+                {MONTH_NAMES.map((month) => (
+                  <th key={month} className="px-4 py-3 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-b-2 border-gray-300" style={{ minWidth: '120px' }}>
+                    {month}
                   </th>
-                  {activityMonths.map(month => (
-                    <th key={month} className="px-4 py-3 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-b-2 border-gray-300" style={{ minWidth: '120px' }}>
-                      {month}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {cohortData.map((cohort, index) => (
-                  <tr key={index} className="hover:bg-gray-50">
+                ))}
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {MONTH_NAMES.map((rowMonth) => {
+                const cohortLabel = getMonthKey(rowMonth);
+                const cohort = cohortData.find((c) => c.cohort_label === cohortLabel);
+                return (
+                  <tr key={rowMonth} className="hover:bg-gray-50">
                     <td className="sticky left-0 bg-white z-10 px-4 py-3 text-sm font-medium text-gray-900 border-r border-gray-200">
-                      {cohort.cohort_label}
+                      {rowMonth}
                     </td>
-                    <td className="px-4 py-3 text-sm text-center text-gray-700 font-semibold">
-                      {cohort.total}
-                    </td>
-                    {activityMonths.map(month => {
-                      const data = cohort.months[month];
+                    {MONTH_NAMES.map((colMonth) => {
+                      const colKey = getMonthKey(colMonth);
+                      const data = cohort?.months?.[colKey];
                       if (!data) {
-                        return <td key={month} className="px-4 py-3 text-sm text-center text-gray-400">-</td>;
+                        return (
+                          <td key={colMonth} className="px-4 py-3 text-sm text-center text-gray-400">
+                            -
+                          </td>
+                        );
                       }
                       return (
-                        <td key={month} className="px-4 py-3 text-sm text-center">
+                        <td key={colMonth} className="px-4 py-3 text-sm text-center">
                           <div className="flex flex-col">
                             <span className="font-semibold text-gray-900">{data.active}</span>
                             <span className="text-xs text-gray-500">({data.percentage}%)</span>
@@ -273,11 +283,11 @@ const FinanceOperationalDashboard = () => {
                       );
                     })}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

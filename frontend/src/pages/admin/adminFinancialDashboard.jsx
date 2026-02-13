@@ -51,17 +51,13 @@ const formatCurrency = (amount) => {
   return `₱${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-const AdminDashboard = () => {
+const AdminFinancialDashboard = () => {
   const { userInfo } = useAuth();
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
 
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedRoomId, setSelectedRoomId] = useState('');
-  const [rooms, setRooms] = useState([]);
-  const [roomStats, setRoomStats] = useState(null);
-  const [loadingRoomStats, setLoadingRoomStats] = useState(false);
 
   const branchName = useMemo(() => {
     return userInfo?.branch_name || userInfo?.branchName || 'Your Branch';
@@ -83,88 +79,10 @@ const AdminDashboard = () => {
     }
   };
 
-  const fetchRooms = async () => {
-    if (!adminBranchId) return;
-    try {
-      const params = new URLSearchParams();
-      params.append('branch_id', String(adminBranchId));
-      const response = await apiRequest(`/rooms?${params.toString()}`);
-      setRooms(response.data || []);
-    } catch (err) {
-      console.error('Error fetching rooms:', err);
-    }
-  };
-
-  const fetchRoomStats = async (roomId) => {
-    if (!roomId || !adminBranchId) {
-      setRoomStats(null);
-      return;
-    }
-
-    try {
-      setLoadingRoomStats(true);
-
-      // Fetch classes for this branch (pagination-safe)
-      const params = new URLSearchParams();
-      params.append('limit', '100');
-      params.append('branch_id', String(adminBranchId));
-
-      let allClasses = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        const pageParams = new URLSearchParams(params);
-        pageParams.append('page', String(page));
-        const classesResponse = await apiRequest(`/classes?${pageParams.toString()}`);
-        const classes = classesResponse.data || [];
-        allClasses = [...allClasses, ...classes];
-
-        if (classesResponse.pagination) {
-          hasMore = page < classesResponse.pagination.totalPages;
-          page += 1;
-        } else {
-          hasMore = classes.length === 100;
-          page += 1;
-        }
-        if (page > 50) break;
-      }
-
-      const classesInRoom = allClasses.filter((c) => c.room_id === parseInt(roomId, 10));
-      const totalEnrolled = classesInRoom.reduce((sum, cls) => sum + (parseInt(cls.enrolled_students, 10) || 0), 0);
-      const selectedRoom = rooms.find((r) => r.room_id === parseInt(roomId, 10));
-
-      setRoomStats({
-        room_id: parseInt(roomId, 10),
-        room_name: selectedRoom?.room_name || 'Room',
-        total_classes: classesInRoom.length,
-        total_enrolled_students: totalEnrolled,
-        classes: classesInRoom.map((cls) => ({
-          class_id: cls.class_id,
-          class_name: cls.class_name || cls.level_tag || `Class ${cls.class_id}`,
-          program_name: cls.program_name,
-          enrolled_students: parseInt(cls.enrolled_students, 10) || 0,
-        })),
-      });
-    } catch (err) {
-      console.error('Error fetching room stats:', err);
-      setRoomStats(null);
-    } finally {
-      setLoadingRoomStats(false);
-    }
-  };
-
   useEffect(() => {
     fetchDashboardData();
-    fetchRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminBranchId]);
-
-  useEffect(() => {
-    if (selectedRoomId) fetchRoomStats(selectedRoomId);
-    else setRoomStats(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRoomId, adminBranchId, rooms]);
 
   const totals = metrics?.totals || { total_branches: 0, total_students: 0, total_teachers: 0, active_classes: 0 };
 
@@ -187,28 +105,10 @@ const AdminDashboard = () => {
       <div className="mx-auto max-w-7xl space-y-8 p-6 lg:p-8">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Dashboard</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Financial Dashboard</h1>
             <p className="text-sm text-gray-500">Branch overview: {branchName}</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
-            <div className="flex-1 min-w-[220px]">
-              <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Filter by Room
-              </label>
-              <select
-                value={selectedRoomId}
-                onChange={(e) => setSelectedRoomId(e.target.value)}
-                className="w-full rounded-xl border-0 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 transition-all focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
-                disabled={loading}
-              >
-                <option value="">All Rooms</option>
-                {rooms.map((room) => (
-                  <option key={room.room_id} value={room.room_id}>
-                    {room.room_name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <button
               type="button"
               onClick={fetchDashboardData}
@@ -261,81 +161,6 @@ const AdminDashboard = () => {
             icon="💳"
           />
         </div>
-
-        {selectedRoomId && (
-          <div className="rounded-2xl border border-purple-200 bg-white shadow-sm ring-1 ring-purple-100">
-            <div className="border-b border-purple-100 bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-100">
-                    <svg className="h-6 w-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-purple-900">
-                      Room: {roomStats?.room_name || rooms.find((r) => r.room_id === parseInt(selectedRoomId, 10))?.room_name || 'Room'}
-                    </h2>
-                    <p className="text-sm text-purple-700">
-                      {loadingRoomStats
-                        ? 'Loading room statistics...'
-                        : roomStats
-                          ? `${roomStats.total_classes} class(es) • ${roomStats.total_enrolled_students} enrolled student(s)`
-                          : 'No data available'}
-                    </p>
-                  </div>
-                </div>
-                {roomStats && !loadingRoomStats && (
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-purple-900">{roomStats.total_enrolled_students}</p>
-                    <p className="text-xs text-purple-600">Total Enrolled</p>
-                  </div>
-                )}
-              </div>
-            </div>
-            {loadingRoomStats ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
-              </div>
-            ) : roomStats?.classes?.length ? (
-              <div
-                className="overflow-x-auto rounded-lg"
-                style={{
-                  scrollbarWidth: 'thin',
-                  scrollbarColor: '#cbd5e0 #f7fafc',
-                  WebkitOverflowScrolling: 'touch',
-                }}
-              >
-                <table style={{ width: '100%', minWidth: '600px' }} className="divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Class Name</th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Program</th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Enrolled Students</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
-                    {roomStats.classes.map((cls) => (
-                      <tr key={cls.class_id} className="transition-colors hover:bg-gray-50">
-                        <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-900">{cls.class_name}</td>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">{cls.program_name || 'N/A'}</td>
-                        <td className="whitespace-nowrap px-6 py-4">
-                          <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800">
-                            {cls.enrolled_students}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="px-6 py-12 text-center">
-                <p className="text-gray-500">No classes found in this room.</p>
-              </div>
-            )}
-          </div>
-        )}
 
         <div className="grid gap-6 lg:grid-cols-2">
           <ChartCard title="Monthly Enrollment Trend" subtitle="Past 6 months (branch)">
@@ -528,5 +353,4 @@ const AdminDashboard = () => {
   );
 };
 
-export default AdminDashboard;
-
+export default AdminFinancialDashboard;

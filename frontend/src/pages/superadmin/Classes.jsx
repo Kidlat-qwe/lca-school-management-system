@@ -1738,20 +1738,23 @@ const initializePackageMerchSelections = useCallback(
             enrolled_by: null,
             student_type: 'reserved',
             reservation_id: reservation.reserved_id,
-          reservation_status: reservation.status,
-          package_name: reservation.package_name,
-          reservation_fee: reservation.reservation_fee,
-          reservation_invoice_due_date: reservation.reservation_invoice_due_date,
-          due_date: reservation.due_date || reservation.reservation_invoice_due_date,
-          expired_at: reservation.expired_at,
-          invoice_id: reservation.invoice_id || reservation.reservation_invoice_id,
-          invoice_status: reservation.invoice_status,
-          phases: [],
-          phasesDisplay: 'Reserved',
-          highestPhase: null,
-          earliestEnrollment: reservation.reserved_at,
-          shouldCount: shouldCount, // Flag to indicate if this student should be counted
-        };
+            reservation_status: reservation.status,
+            package_name: reservation.package_name,
+            reservation_fee: reservation.reservation_fee,
+            reservation_invoice_due_date: reservation.reservation_invoice_due_date,
+            due_date: reservation.due_date || reservation.reservation_invoice_due_date,
+            expired_at: reservation.expired_at,
+            invoice_id: reservation.invoice_id || reservation.reservation_invoice_id,
+            invoice_status: reservation.invoice_status,
+            phases: [],
+            phasesDisplay: 'Reserved',
+            highestPhase: null,
+            earliestEnrollment: reservation.reserved_at,
+            shouldCount: shouldCount, // Flag to indicate if this student should be counted
+            is_payment_verified: reservation.is_payment_verified ?? false,
+            payment_verification_status: reservation.payment_verification_status ?? 'Not Verified',
+            unverified_payment_count: reservation.unverified_payment_count ?? 0,
+          };
       });
       
       // Combine enrolled and reserved students
@@ -13063,6 +13066,9 @@ const initializePackageMerchSelections = useCallback(
                               Status
                             </th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Payment Status
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                               Level Tag / Package
                             </th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -13082,10 +13088,14 @@ const initializePackageMerchSelections = useCallback(
                             const isPending = student.student_type === 'pending';
                             const uniqueKey = isReserved 
                               ? `reserved-${student.reservation_id}` 
-                              : `enrolled-${student.classstudent_id}`;
+                              : `enrolled-${student.classstudent_id || student.user_id}`;
+                            const isPaymentVerified = student.is_payment_verified === true;
+                            const notVerifiedHighlight = !isPaymentVerified
+                              ? 'bg-amber-50 border-l-4 border-l-amber-500'
+                              : '';
                             
                             return (
-                              <tr key={uniqueKey} className={isReserved ? 'bg-yellow-50' : ''}>
+                              <tr key={uniqueKey} className={`${isReserved ? 'bg-yellow-50' : ''} ${notVerifiedHighlight}`}>
                                 <td className="px-4 py-4">
                                   <div className="text-sm font-medium text-gray-900">{student.full_name}</div>
                                 </td>
@@ -13112,6 +13122,29 @@ const initializePackageMerchSelections = useCallback(
                                   ) : (
                                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                       Enrolled
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-4">
+                                  {isPaymentVerified ? (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700"
+                                      title="All payments verified"
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                      </svg>
+                                      Verified
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
+                                      title={student.unverified_payment_count > 0 ? `${student.unverified_payment_count} payment(s) pending verification` : 'Payment status not yet verified'}
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                      </svg>
+                                      Not Verified
                                     </span>
                                   )}
                                 </td>
