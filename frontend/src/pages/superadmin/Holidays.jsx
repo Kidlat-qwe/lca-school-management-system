@@ -347,7 +347,7 @@ const Holidays = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Holidays</h1>
           <p className="text-sm text-gray-600">
-            National holidays appear automatically. Add custom (school or branch) holidays below.
+            Manage all holidays here. Add school-wide or branch-specific holidays. These are used when scheduling classes and calculating end dates.
           </p>
         </div>
 
@@ -432,29 +432,25 @@ const Holidays = () => {
               </>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => openAddModal()}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#F7C844] px-4 py-2 text-sm font-medium text-gray-900 shadow-sm transition hover:bg-[#e6b73d]"
-          >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add holiday
-          </button>
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="flex flex-wrap gap-4 text-sm">
-        <span className="flex items-center gap-2">
-          <span className="h-4 w-5 rounded bg-[#0f766e] flex-shrink-0" />
-          <span className="text-gray-600">National holiday</span>
-        </span>
+      {/* Legend row - Holiday text on left, Add holiday button on right */}
+      <div className="flex flex-wrap items-center justify-between gap-4 text-sm">
         <span className="flex items-center gap-2">
           <span className="h-4 w-5 rounded bg-[#1d4ed8]" style={{ backgroundColor: '#1d4ed8' }} />
-          <span className="text-gray-600">Custom holiday</span>
+          <span className="text-gray-600">Holiday</span>
         </span>
+        <button
+          type="button"
+          onClick={() => openAddModal()}
+          className="inline-flex items-center gap-2 rounded-lg bg-[#F7C844] px-4 py-2 text-sm font-medium text-gray-900 shadow-sm transition hover:bg-[#e6b73d]"
+        >
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add holiday
+        </button>
       </div>
 
       {error && (

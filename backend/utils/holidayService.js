@@ -1,98 +1,37 @@
-import Holidays from 'date-holidays';
+import { query } from '../config/database.js';
 
 /**
- * Philippines national holiday helper (in-memory cached by year).
- *
- * Notes:
- * - We return dates as YYYY-MM-DD strings to avoid timezone ambiguity.
- * - `date-holidays` returns holiday entries with a `date` field that may include time + timezone;
- *   we safely normalize by taking the first 10 chars when possible.
+ * Holiday service - uses custom holidays from the database (Holidays page).
+ * No hardcoded national holidays; all holidays are managed via the Holidays page.
  */
 
-const hd = new Holidays('PH');
-
-/** @type {Map<number, Array<any>>} */
-const yearCache = new Map();
-
-function toYmd(value) {
-  if (!value) return null;
-
-  // If it's already an ISO-like string, keep only YYYY-MM-DD.
-  if (typeof value === 'string') {
-    // Common formats: '2026-12-25 00:00:00', '2026-12-25T00:00:00.000Z', etc.
-    if (value.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(value)) {
-      return value.slice(0, 10);
-    }
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) {
-      const y = parsed.getFullYear();
-      const m = String(parsed.getMonth() + 1).padStart(2, '0');
-      const d = String(parsed.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-    return null;
+/**
+ * Fetch holiday dates from custom_holidaystbl for a date range.
+ * Returns global holidays (branch_id IS NULL) + branch-specific holidays when branchId is provided.
+ *
+ * @param {string} startYmd - Start date YYYY-MM-DD
+ * @param {string} endYmd - End date YYYY-MM-DD
+ * @param {number|null} branchId - Optional branch ID; when set, includes global + branch-specific holidays
+ * @param {Function} [queryFn] - Optional query function (for migrations); defaults to config/database query
+ * @returns {Promise<Set<string>>} Set of YYYY-MM-DD date strings
+ */
+export async function getCustomHolidayDateSetForRange(startYmd, endYmd, branchId = null, queryFn = null) {
+  if (!startYmd || !endYmd || startYmd > endYmd) {
+    return new Set();
   }
 
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) return null;
-    const y = value.getFullYear();
-    const m = String(value.getMonth() + 1).padStart(2, '0');
-    const d = String(value.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+  const q = queryFn || query;
+  let sql = `
+    SELECT holiday_date::text as date
+    FROM custom_holidaystbl
+    WHERE holiday_date >= $1 AND holiday_date <= $2
+  `;
+  const params = [startYmd, endYmd];
+  if (branchId != null) {
+    sql += ' AND (branch_id IS NULL OR branch_id = $3)';
+    params.push(branchId);
   }
-
-  return null;
-}
-
-export function getNationalHolidaysForYear(year) {
-  const y = Number(year);
-  if (!Number.isInteger(y) || y < 1900 || y > 2100) return [];
-
-  if (yearCache.has(y)) return yearCache.get(y);
-
-  const list = hd.getHolidays(y) || [];
-  yearCache.set(y, list);
-  return list;
-}
-
-export function getNationalHolidaySetForYears(years) {
-  const set = new Set();
-  const meta = [];
-
-  (years || []).forEach((year) => {
-    const list = getNationalHolidaysForYear(year);
-    list.forEach((h) => {
-      const date = toYmd(h?.date);
-      if (!date) return;
-      set.add(date);
-      meta.push({
-        date,
-        name: h?.name || null,
-        type: h?.type || null,
-      });
-    });
-  });
-
-  return { dateSet: set, holidays: meta };
-}
-
-export function getNationalHolidaysInRange(startYmd, endYmd) {
-  const start = toYmd(startYmd);
-  const end = toYmd(endYmd);
-  if (!start || !end || start > end) {
-    return { dateSet: new Set(), holidays: [] };
-  }
-
-  const startYear = Number(start.slice(0, 4));
-  const endYear = Number(end.slice(0, 4));
-  const years = [];
-  for (let y = startYear; y <= endYear; y++) years.push(y);
-
-  const { dateSet, holidays } = getNationalHolidaySetForYears(years);
-
-  const filtered = holidays.filter((h) => h.date >= start && h.date <= end);
-  const filteredSet = new Set(filtered.map((h) => h.date));
-
-  return { dateSet: filteredSet, holidays: filtered };
+  const result = await q(sql, params);
+  return new Set(result.rows.map((r) => r.date).filter(Boolean));
 }
 

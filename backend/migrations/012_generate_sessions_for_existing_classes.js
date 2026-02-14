@@ -15,7 +15,7 @@
 import dotenv from 'dotenv';
 import pkg from 'pg';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
-import { getNationalHolidaySetForYears } from '../utils/holidayService.js';
+import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 
 // Load environment variables
 dotenv.config();
@@ -50,6 +50,7 @@ async function generateSessionsForAllClasses() {
     const classesResult = await client.query(
       `SELECT 
         c.class_id,
+        c.branch_id,
         TO_CHAR(c.start_date, 'YYYY-MM-DD') as start_date,
         TO_CHAR(c.end_date, 'YYYY-MM-DD') as end_date,
         c.teacher_id,
@@ -144,8 +145,11 @@ async function generateSessionsForAllClasses() {
         }));
 
         const startYear = Number(String(classData.start_date).slice(0, 4));
-        const years = Number.isInteger(startYear) ? [startYear, startYear + 1, startYear + 2, startYear + 3] : [];
-        const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(years);
+        const startYmd = Number.isInteger(startYear) ? `${startYear}-01-01` : null;
+        const endYmd = Number.isInteger(startYear) ? `${startYear + 3}-12-31` : null;
+        const holidayDateSet = startYmd && endYmd
+          ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null, client.query.bind(client))
+          : new Set();
 
         // Generate sessions using utility function
         const sessions = generateClassSessions(

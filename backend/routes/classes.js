@@ -5,15 +5,18 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
-import { getNationalHolidaySetForYears } from '../utils/holidayService.js';
+import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 
 const router = express.Router();
 
-const getDefaultHolidayYearsFromStartDate = (startDate) => {
-  if (!startDate) return [];
+const getHolidayRangeFromStartDate = (startDate) => {
+  if (!startDate) return { startYmd: null, endYmd: null };
   const y = Number(String(startDate).slice(0, 4));
-  if (!Number.isInteger(y)) return [];
-  return [y, y + 1, y + 2, y + 3];
+  if (!Number.isInteger(y)) return { startYmd: null, endYmd: null };
+  return {
+    startYmd: `${y}-01-01`,
+    endYmd: `${y + 3}-12-31`,
+  };
 };
 
 /**
@@ -341,22 +344,33 @@ router.get(
       const classesWithSchedules = await Promise.all(
         result.rows.map(async (classItem) => {
           let schedules = [];
-          if (classItem.room_id) {
-            // First try to get schedules by class_id
-            const schedulesByClass = await query(
-              'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+          const schedulesByClass = await query(
+            'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+            [classItem.class_id]
+          );
+          if (schedulesByClass.rows.length > 0) {
+            schedules = schedulesByClass.rows;
+          } else {
+            // Fallback: derive from class sessions when roomschedtbl has no class-specific entries
+            const sessionsResult = await query(
+              `SELECT DISTINCT ON (EXTRACT(DOW FROM cs.scheduled_date))
+                 CASE EXTRACT(DOW FROM cs.scheduled_date)
+                   WHEN 0 THEN 'Sunday' WHEN 1 THEN 'Monday' WHEN 2 THEN 'Tuesday'
+                   WHEN 3 THEN 'Wednesday' WHEN 4 THEN 'Thursday' WHEN 5 THEN 'Friday'
+                   WHEN 6 THEN 'Saturday'
+                 END as day_of_week,
+                 cs.scheduled_start_time::text as start_time,
+                 cs.scheduled_end_time::text as end_time
+               FROM classsessionstbl cs
+               WHERE cs.class_id = $1
+                 AND COALESCE(cs.status, 'Scheduled') != 'Cancelled'
+                 AND cs.scheduled_start_time IS NOT NULL
+                 AND cs.scheduled_end_time IS NOT NULL
+               ORDER BY EXTRACT(DOW FROM cs.scheduled_date), cs.scheduled_date`,
               [classItem.class_id]
             );
-            
-            if (schedulesByClass.rows.length > 0) {
-              schedules = schedulesByClass.rows;
-            } else {
-              // If no schedules found by class_id, try to get by room_id
-              const schedulesByRoom = await query(
-                'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE room_id = $1 ORDER BY day_of_week',
-                [classItem.room_id]
-              );
-              schedules = schedulesByRoom.rows;
+            if (sessionsResult.rows.length > 0) {
+              schedules = sessionsResult.rows;
             }
           }
           
@@ -555,24 +569,36 @@ router.get(
 
       const classData = result.rows[0];
       
-      // Fetch room schedules
+      // Fetch room schedules - class-specific from roomschedtbl first
       let schedules = [];
-      if (classData.room_id) {
-        // First try to get schedules by class_id
-        const schedulesByClass = await client.query(
-          'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+      const schedulesByClass = await client.query(
+        'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+        [id]
+      );
+      if (schedulesByClass.rows.length > 0) {
+        schedules = schedulesByClass.rows;
+      } else {
+        // Fallback: derive from class sessions when roomschedtbl has no class-specific entries
+        // (matches Class Details display and ensures Edit Class shows correct days)
+        const sessionsResult = await client.query(
+          `SELECT DISTINCT ON (EXTRACT(DOW FROM cs.scheduled_date))
+             CASE EXTRACT(DOW FROM cs.scheduled_date)
+               WHEN 0 THEN 'Sunday' WHEN 1 THEN 'Monday' WHEN 2 THEN 'Tuesday'
+               WHEN 3 THEN 'Wednesday' WHEN 4 THEN 'Thursday' WHEN 5 THEN 'Friday'
+               WHEN 6 THEN 'Saturday'
+             END as day_of_week,
+             cs.scheduled_start_time::text as start_time,
+             cs.scheduled_end_time::text as end_time
+           FROM classsessionstbl cs
+           WHERE cs.class_id = $1
+             AND COALESCE(cs.status, 'Scheduled') != 'Cancelled'
+             AND cs.scheduled_start_time IS NOT NULL
+             AND cs.scheduled_end_time IS NOT NULL
+           ORDER BY EXTRACT(DOW FROM cs.scheduled_date), cs.scheduled_date`,
           [id]
         );
-        
-        if (schedulesByClass.rows.length > 0) {
-          schedules = schedulesByClass.rows;
-        } else {
-          // If no schedules found by class_id, try to get by room_id
-          const schedulesByRoom = await client.query(
-            'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE room_id = $1 ORDER BY day_of_week',
-            [classData.room_id]
-          );
-          schedules = schedulesByRoom.rows;
+        if (sessionsResult.rows.length > 0) {
+          schedules = sessionsResult.rows;
         }
       }
       
@@ -964,8 +990,10 @@ router.post(
               enabled: day.enabled !== false
             }));
 
-          const holidayYears = getDefaultHolidayYearsFromStartDate(start_date);
-          const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+          const { startYmd, endYmd } = getHolidayRangeFromStartDate(start_date);
+          const holidayDateSet = startYmd && endYmd
+            ? await getCustomHolidayDateSetForRange(startYmd, endYmd, branch_id || null)
+            : new Set();
 
           // Generate sessions using utility function
           const sessions = generateClassSessions(
@@ -1320,8 +1348,10 @@ router.put(
                   enabled: true
                 }));
 
-                const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
-                const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+                const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
+                const holidayDateSet = startYmd && endYmd
+                  ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
+                  : new Set();
 
                 // Generate sessions using utility function
                 const sessions = generateClassSessions(
@@ -1639,22 +1669,33 @@ router.get(
 
       // Get schedules for this class
       let schedules = [];
-      if (classData.room_id) {
-        // First try to get schedules by class_id
-        const schedulesByClass = await query(
-          'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+      const schedulesByClass = await query(
+        'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
+        [id]
+      );
+      if (schedulesByClass.rows.length > 0) {
+        schedules = schedulesByClass.rows;
+      } else {
+        // Fallback: derive from class sessions when roomschedtbl has no class-specific entries
+        const sessionsResult = await query(
+          `SELECT DISTINCT ON (EXTRACT(DOW FROM cs.scheduled_date))
+             CASE EXTRACT(DOW FROM cs.scheduled_date)
+               WHEN 0 THEN 'Sunday' WHEN 1 THEN 'Monday' WHEN 2 THEN 'Tuesday'
+               WHEN 3 THEN 'Wednesday' WHEN 4 THEN 'Thursday' WHEN 5 THEN 'Friday'
+               WHEN 6 THEN 'Saturday'
+             END as day_of_week,
+             cs.scheduled_start_time::text as start_time,
+             cs.scheduled_end_time::text as end_time
+           FROM classsessionstbl cs
+           WHERE cs.class_id = $1
+             AND COALESCE(cs.status, 'Scheduled') != 'Cancelled'
+             AND cs.scheduled_start_time IS NOT NULL
+             AND cs.scheduled_end_time IS NOT NULL
+           ORDER BY EXTRACT(DOW FROM cs.scheduled_date), cs.scheduled_date`,
           [id]
         );
-        
-        if (schedulesByClass.rows.length > 0) {
-          schedules = schedulesByClass.rows;
-        } else {
-          // If no schedules found by class_id, try to get by room_id
-          const schedulesByRoom = await query(
-            'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE room_id = $1 ORDER BY day_of_week',
-            [classData.room_id]
-          );
-          schedules = schedulesByRoom.rows;
+        if (sessionsResult.rows.length > 0) {
+          schedules = sessionsResult.rows;
         }
       }
 
@@ -1706,8 +1747,10 @@ router.get(
             enabled: true
           }));
 
-          const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
-          const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+          const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
+          const holidayDateSet = startYmd && endYmd
+            ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
+            : new Set();
 
           // Generate sessions using utility function
           const sessions = generateClassSessions(
@@ -2250,8 +2293,10 @@ router.post(
         enabled: true
       }));
 
-      const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
-      const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+      const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
+      const holidayDateSet = startYmd && endYmd
+        ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
+        : new Set();
 
       // Generate sessions
       const sessions = generateClassSessions(
@@ -2629,8 +2674,10 @@ router.post(
         enabled: true
       }));
 
-      const holidayYears = getDefaultHolidayYearsFromStartDate(classData.start_date);
-      const { dateSet: holidayDateSet } = getNationalHolidaySetForYears(holidayYears);
+      const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
+      const holidayDateSet = startYmd && endYmd
+        ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
+        : new Set();
 
       // Generate sessions
       const sessions = generateClassSessions(

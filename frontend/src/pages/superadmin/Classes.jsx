@@ -3818,18 +3818,18 @@ const initializePackageMerchSelections = useCallback(
       }
     };
     
-    // Fetch full class data including days_of_week if not already present or empty
+    // Always fetch full class data when editing to ensure accurate days_of_week from roomschedtbl (class-specific)
     let classDataWithSchedule = classItem;
-    if (!classItem.days_of_week || !Array.isArray(classItem.days_of_week) || classItem.days_of_week.length === 0) {
-      try {
-        const response = await apiRequest(`/classes/${classItem.class_id}`);
-        if (response.data && response.data.class) {
-          classDataWithSchedule = response.data.class;
-        }
-      } catch (err) {
-        console.error('Error fetching class schedule:', err);
-        // Continue with original classItem if fetch fails
+    try {
+      const response = await apiRequest(`/classes/${classItem.class_id}`);
+      // GET /classes/:id returns { success, data: classObject }; phasesessions returns { data: { class, phasesessions } }
+      const fetchedClass = response.data?.class ?? response.data;
+      if (fetchedClass && (fetchedClass.days_of_week === undefined || Array.isArray(fetchedClass.days_of_week))) {
+        classDataWithSchedule = fetchedClass;
       }
+    } catch (err) {
+      console.error('Error fetching class schedule:', err);
+      // Continue with original classItem if fetch fails
     }
     
     // Initialize days_of_week from classDataWithSchedule if available, otherwise use default
@@ -3846,22 +3846,24 @@ const initializePackageMerchSelections = useCallback(
       
       // If classDataWithSchedule has days_of_week data, populate it
       if (classDataWithSchedule.days_of_week && Array.isArray(classDataWithSchedule.days_of_week) && classDataWithSchedule.days_of_week.length > 0) {
+        const abbrevToFull = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
+        const formatTimeForInput = (timeString) => {
+          if (!timeString) return '';
+          const str = String(timeString).trim();
+          if (!str) return '';
+          return str.substring(0, 5);
+        };
         classDataWithSchedule.days_of_week.forEach(dayData => {
-          // Backend returns 'day_of_week' field from roomschedtbl
-          const dayName = dayData.day_of_week || dayData.day;
-          if (dayName && defaultDays[dayName]) {
-            // Format time from HH:MM:SS to HH:MM for input fields
-            const formatTimeForInput = (timeString) => {
-              if (!timeString) return '';
-              // Extract HH:MM from HH:MM:SS format
-              return timeString.substring(0, 5);
-            };
-            
-            defaultDays[dayName] = {
-              enabled: true,
-              start_time: formatTimeForInput(dayData.start_time) || '',
-              end_time: formatTimeForInput(dayData.end_time) || '',
-            };
+          let dayName = dayData.day_of_week || dayData.day;
+          if (dayName) {
+            dayName = abbrevToFull[dayName] || dayName;
+            if (defaultDays[dayName]) {
+              defaultDays[dayName] = {
+                enabled: true,
+                start_time: formatTimeForInput(dayData.start_time) || '',
+                end_time: formatTimeForInput(dayData.end_time) || '',
+              };
+            }
           }
         });
       }
@@ -4081,7 +4083,7 @@ const initializePackageMerchSelections = useCallback(
       
       // Check if today is one of the enabled days
       if (enabledDayNumbers.includes(currentDayOfWeek)) {
-        // Skip national holidays
+        // Skip holidays (from Holidays page)
         if (!holidaySet.has(currentYmd)) {
           sessionsCompleted++;
         }
@@ -4103,7 +4105,7 @@ const initializePackageMerchSelections = useCallback(
     return `${year}-${month}-${day}`;
   };
 
-  const loadNationalHolidaysForStartDate = useCallback(async (startDateStr) => {
+  const loadHolidaysForStartDate = useCallback(async (startDateStr) => {
     if (!startDateStr || typeof startDateStr !== 'string' || startDateStr.length < 4) {
       setHolidayCacheKey('');
       setHolidayDateSet(new Set());
@@ -4128,26 +4130,26 @@ const initializePackageMerchSelections = useCallback(
     setHolidayCacheKey(key);
     setLoadingHolidays(true);
     try {
-      const response = await apiRequest(`/holidays/national?start_date=${rangeStart}&end_date=${rangeEnd}`);
+      const response = await apiRequest(`/holidays?start_date=${rangeStart}&end_date=${rangeEnd}`);
       const dates = (response?.data || []).map((h) => h?.date).filter(Boolean);
       setHolidayDateSet(new Set(dates));
     } catch (e) {
-      console.error('Error loading national holidays:', e);
+      console.error('Error loading holidays:', e);
       setHolidayDateSet(new Set());
     } finally {
       setLoadingHolidays(false);
     }
   }, [holidayCacheKey]);
 
-  // Load national holidays whenever start_date changes (used for end date calculation and scheduling UX)
+  // Load holidays whenever start_date changes (used for end date calculation and scheduling UX)
   useEffect(() => {
     if (!formData.start_date) {
       setHolidayCacheKey('');
       setHolidayDateSet(new Set());
       return;
     }
-    loadNationalHolidaysForStartDate(formData.start_date);
-  }, [formData.start_date, loadNationalHolidaysForStartDate]);
+    loadHolidaysForStartDate(formData.start_date);
+  }, [formData.start_date, loadHolidaysForStartDate]);
 
   // Recalculate end_date after holidays load (or change), as long as manual override is off.
   useEffect(() => {

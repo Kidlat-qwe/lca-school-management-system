@@ -3,7 +3,6 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
-import { getNationalHolidaysInRange } from '../utils/holidayService.js';
 
 const router = express.Router();
 
@@ -25,7 +24,7 @@ const rangeValidators = [
 
 /**
  * GET /api/sms/holidays?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&branch_id= (optional)
- * Returns combined holidays: national (Philippines) + custom. Each item has date, name, source ('national'|'custom'), and for custom: holiday_id, branch_id, description.
+ * Returns holidays from the Holidays page (custom_holidaystbl). No hardcoded national holidays.
  * Superadmin: sees all. Admin: sees only global (branch_id null) + their branch's custom holidays.
  */
 router.get(
@@ -36,14 +35,6 @@ router.get(
       const { start_date, end_date, branch_id: queryBranchId } = req.query;
       const isSuperadmin = req.user.userType === 'Superadmin';
       const userBranchId = req.user.branchId ?? req.user.branch_id;
-
-      const { holidays: nationalList } = getNationalHolidaysInRange(start_date, end_date);
-      const national = nationalList.map((h) => ({
-        date: h.date,
-        name: h.name,
-        source: 'national',
-        type: h.type || null,
-      }));
 
       let customSql = `
         SELECT holiday_id, name, holiday_date::text as date, branch_id, description, created_at
@@ -67,7 +58,7 @@ router.get(
       customSql += ' ORDER BY holiday_date, name';
 
       const customResult = await query(customSql, customParams);
-      const custom = customResult.rows.map((row) => ({
+      const data = customResult.rows.map((row) => ({
         holiday_id: row.holiday_id,
         date: row.date,
         name: row.name,
@@ -76,8 +67,6 @@ router.get(
         description: row.description || null,
       }));
 
-      const data = [...national, ...custom].sort((a, b) => a.date.localeCompare(b.date));
-
       res.json({
         success: true,
         data,
@@ -85,8 +74,6 @@ router.get(
           start_date,
           end_date,
           total: data.length,
-          national_count: national.length,
-          custom_count: custom.length,
         },
       });
     } catch (error) {
@@ -97,7 +84,7 @@ router.get(
 
 /**
  * GET /api/sms/holidays/national?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
- * Returns Philippines national holidays within the range.
+ * Returns holidays from the Holidays page (same as GET /holidays). Kept for backward compatibility.
  */
 router.get(
   '/national',
@@ -105,16 +92,27 @@ router.get(
   async (req, res, next) => {
     try {
       const { start_date, end_date } = req.query;
-      const { holidays } = getNationalHolidaysInRange(start_date, end_date);
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const userBranchId = req.user.branchId ?? req.user.branch_id;
+
+      let sql = `
+        SELECT holiday_date::text as date, name
+        FROM custom_holidaystbl
+        WHERE holiday_date >= $1 AND holiday_date <= $2
+      `;
+      const params = [start_date, end_date];
+      if (!isSuperadmin && userBranchId != null) {
+        sql += ' AND (branch_id IS NULL OR branch_id = $3)';
+        params.push(userBranchId);
+      }
+      sql += ' ORDER BY holiday_date';
+      const result = await query(sql, params);
+      const holidays = result.rows.map((r) => ({ date: r.date, name: r.name }));
 
       res.json({
         success: true,
         data: holidays,
-        meta: {
-          start_date,
-          end_date,
-          total: holidays.length,
-        },
+        meta: { start_date, end_date, total: holidays.length },
       });
     } catch (error) {
       next(error);
