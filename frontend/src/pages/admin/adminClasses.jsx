@@ -154,6 +154,14 @@ const AdminClasses = () => {
   const [conflictData, setConflictData] = useState(null); // Store conflict details from undo error
   const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
   const [pendingConflictData, setPendingConflictData] = useState(null); // Store conflict data while switching to detail view
+  // Move student to another class
+  const [isMoveStudentModalOpen, setIsMoveStudentModalOpen] = useState(false);
+  const [studentToMove, setStudentToMove] = useState(null);
+  const [moveTargetClasses, setMoveTargetClasses] = useState([]);
+  const [loadingMoveTargetClasses, setLoadingMoveTargetClasses] = useState(false);
+  const [selectedTargetClassForMove, setSelectedTargetClassForMove] = useState(null);
+  const [moveStudentSubmitting, setMoveStudentSubmitting] = useState(false);
+  const [moveSourceClass, setMoveSourceClass] = useState(null);
   const [showInstallmentSettings, setShowInstallmentSettings] = useState(false);
   const [showPackageDetails, setShowPackageDetails] = useState(true); // Default to open/expanded
   const [installmentSettings, setInstallmentSettings] = useState({
@@ -2396,6 +2404,70 @@ const initializePackageMerchSelections = useCallback(
     setViewStudentsStep('phase-selection');
     setSelectedPhaseForView(null);
     setViewEnrolledStudents([]);
+  };
+
+  const openMoveStudentModal = async (student, sourceClassOverride = null) => {
+    const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
+    if (!sourceClass) return;
+    setMoveSourceClass(sourceClass);
+    setStudentToMove(student);
+    setSelectedTargetClassForMove(null);
+    setIsMoveStudentModalOpen(true);
+    setLoadingMoveTargetClasses(true);
+    setMoveTargetClasses([]);
+    try {
+      const branchId = sourceClass.branch_id;
+      const programId = sourceClass.program_id;
+      const sourceClassId = sourceClass.class_id;
+      const response = await apiRequest(`/classes?branch_id=${branchId}&program_id=${programId}&limit=100`);
+      const allClasses = response.data || [];
+      const targets = allClasses.filter(
+        (c) => c.class_id !== sourceClassId && c.status === 'Active'
+      );
+      setMoveTargetClasses(targets);
+    } catch (err) {
+      console.error('Error fetching classes for move:', err);
+      setMoveTargetClasses([]);
+    } finally {
+      setLoadingMoveTargetClasses(false);
+    }
+  };
+
+  const closeMoveStudentModal = () => {
+    setIsMoveStudentModalOpen(false);
+    setStudentToMove(null);
+    setSelectedTargetClassForMove(null);
+    setMoveTargetClasses([]);
+    setMoveSourceClass(null);
+  };
+
+  const handleMoveStudentSubmit = async () => {
+    if (!studentToMove || !moveSourceClass || !selectedTargetClassForMove) return;
+    setMoveStudentSubmitting(true);
+    try {
+      await apiRequest('/classes/move-student', {
+        method: 'POST',
+        body: JSON.stringify({
+          student_id: studentToMove.user_id,
+          source_class_id: moveSourceClass.class_id,
+          target_class_id: selectedTargetClassForMove.class_id,
+        }),
+      });
+      const targetName = selectedTargetClassForMove.class_name || selectedTargetClassForMove.level_tag || 'the selected class';
+      closeMoveStudentModal();
+      if (selectedClassForView?.class_id === moveSourceClass.class_id) {
+        await fetchEnrolledStudentsForView(moveSourceClass.class_id, selectedPhaseForView);
+      }
+      if (selectedClassForEnrollment?.class_id === moveSourceClass.class_id) {
+        await fetchEnrolledStudents(moveSourceClass.class_id);
+      }
+      alert(`Student has been moved to "${targetName}" successfully.`);
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Failed to move student.';
+      alert(msg);
+    } finally {
+      setMoveStudentSubmitting(false);
+    }
   };
 
   const handlePhaseSelectForView = (phaseNumber) => {
@@ -12418,284 +12490,184 @@ const initializePackageMerchSelections = useCallback(
         document.body
       )}
 
-      {/* View Students Modal */}
+      {/* View Students Modal - same as superadmin: resizable, minimalist, Payment/Actions text, Move */}
       {isViewStudentsModalOpen && selectedClassForView && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-[9999] p-4"
           onClick={closeViewStudentsModal}
         >
           <div 
-            className="bg-white rounded-lg shadow-xl relative z-[101] max-w-6xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className={`bg-white rounded-xl shadow-2xl relative z-[101] max-h-[92vh] flex flex-col overflow-hidden transition-all ${
+              viewStudentsStep === 'phase-selection' ? 'w-full max-w-sm' : 'w-[92vw] max-w-[1200px]'
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
+            <div className={`flex items-center justify-between border-b border-gray-100 flex-shrink-0 ${viewStudentsStep === 'phase-selection' ? 'px-4 py-3' : 'px-5 py-4'}`}>
+              <div className="min-w-0">
+                <h2 className={`font-semibold text-gray-900 truncate ${viewStudentsStep === 'phase-selection' ? 'text-base' : 'text-lg'}`}>
                   {viewStudentsStep === 'phase-selection' ? 'Select Phase' : 'Students'}
                 </h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  {selectedClassForView.program_name} - {selectedClassForView.class_name || selectedClassForView.level_tag}
+                <p className="text-xs text-gray-400 mt-0.5 truncate" title={`${selectedClassForView.program_name} — ${selectedClassForView.class_name || selectedClassForView.level_tag}`}>
+                  {selectedClassForView.class_name || selectedClassForView.level_tag}
+                  {selectedClassForView.program_name && ` · ${selectedClassForView.program_name}`}
                 </p>
               </div>
-              <button
-                onClick={closeViewStudentsModal}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              <button onClick={closeViewStudentsModal} className="flex-shrink-0 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
 
-            {/* Modal Body */}
             {viewStudentsStep === 'phase-selection' ? (
               <div className="flex flex-col overflow-hidden">
-                <div className="p-6">
-                  <div className="mb-4">
-                    <label htmlFor="phase_select" className="label-field">
-                      Select Phase <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      id="phase_select"
-                      value={selectedPhaseForView !== null ? selectedPhaseForView : 'all'}
-                      onChange={(e) => {
-                        const phaseValue = e.target.value === 'all' ? null : parseInt(e.target.value);
-                        if (e.target.value === 'all') {
-                          setSelectedPhaseForView(null);
-                          setViewStudentsStep('students-list');
-                          if (selectedClassForView) {
-                            fetchEnrolledStudentsForView(selectedClassForView.class_id, null);
-                          }
-                        } else if (phaseValue !== null) {
-                          handlePhaseSelectForView(phaseValue);
-                        }
-                      }}
-                      className="input-field"
-                      required
-                    >
-                      <option value="all">All Phases</option>
-                      {selectedClassForView.number_of_phase && Array.from({ length: selectedClassForView.number_of_phase }, (_, i) => i + 1).map((phaseNum) => (
-                        <option key={phaseNum} value={phaseNum}>
-                          Phase {phaseNum}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedClassForView.number_of_phase && (
-                      <p className="mt-2 text-sm text-gray-500">
-                        This class has {selectedClassForView.number_of_phase} phase{selectedClassForView.number_of_phase !== 1 ? 's' : ''}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center justify-end space-x-3 px-6 pb-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
-                  <button
-                    type="button"
-                    onClick={closeViewStudentsModal}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                <div className="px-4 py-3">
+                  <label htmlFor="phase_select" className="block text-xs font-medium text-gray-500 mb-1.5">Phase</label>
+                  <select
+                    id="phase_select"
+                    value={selectedPhaseForView !== null ? selectedPhaseForView : 'all'}
+                    onChange={(e) => {
+                      const phaseValue = e.target.value === 'all' ? null : parseInt(e.target.value);
+                      if (e.target.value === 'all') {
+                        setSelectedPhaseForView(null);
+                        setViewStudentsStep('students-list');
+                        if (selectedClassForView) fetchEnrolledStudentsForView(selectedClassForView.class_id, null);
+                      } else if (phaseValue !== null) handlePhaseSelectForView(phaseValue);
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300"
+                    required
                   >
-                    Cancel
-                  </button>
+                    <option value="all">All Phases</option>
+                    {selectedClassForView.number_of_phase && Array.from({ length: selectedClassForView.number_of_phase }, (_, i) => i + 1).map((phaseNum) => (
+                      <option key={phaseNum} value={phaseNum}>Phase {phaseNum}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-100">
+                  <button type="button" onClick={closeViewStudentsModal} className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-100">Cancel</button>
                   <button
                     type="button"
                     onClick={() => {
-                      const selectElement = document.getElementById('phase_select');
-                      if (selectElement && selectElement.value !== '') {
-                        const phaseValue = selectElement.value === 'all' ? null : parseInt(selectElement.value);
-                        if (phaseValue === null) {
+                      const el = document.getElementById('phase_select');
+                      if (el?.value) {
+                        const v = el.value === 'all' ? null : parseInt(el.value);
+                        if (v === null) {
                           setSelectedPhaseForView(null);
                           setViewStudentsStep('students-list');
-                          if (selectedClassForView) {
-                            fetchEnrolledStudentsForView(selectedClassForView.class_id, null);
-                          }
-                        } else {
-                          handlePhaseSelectForView(phaseValue);
-                        }
+                          if (selectedClassForView) fetchEnrolledStudentsForView(selectedClassForView.class_id, null);
+                        } else handlePhaseSelectForView(v);
                       }
                     }}
-                    className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                    className="text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] px-3 py-1.5 rounded-lg"
                   >
                     Continue
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="p-6 overflow-y-auto flex-1">
-                <div className="space-y-4">
+              <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0">
+                <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                      Students
-                      {selectedPhaseForView !== null ? ` - Phase ${selectedPhaseForView}` : ' - All Phases'} ({getCountableStudents(viewEnrolledStudents)})
-                      {selectedClassForView.max_students && (
-                        <span className="text-sm font-normal text-gray-500 ml-2">
-                          / {selectedClassForView.max_students} max
-                        </span>
-                      )}
-                    </h3>
+                    <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {selectedPhaseForView !== null ? `Phase ${selectedPhaseForView}` : 'All Phases'}
+                      <span className="text-gray-900 font-semibold normal-case ml-1.5">
+                        {getCountableStudents(viewEnrolledStudents)}
+                        {selectedClassForView.max_students ? ` / ${selectedClassForView.max_students}` : ''}
+                      </span>
+                    </span>
                     <button
-                      onClick={() => {
-                        setViewStudentsStep('phase-selection');
-                        setViewEnrolledStudents([]);
-                      }}
-                      className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center space-x-1"
+                      onClick={() => { setViewStudentsStep('phase-selection'); setViewEnrolledStudents([]); }}
+                      className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                      </svg>
-                      <span>Change Phase</span>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                      Phase
                     </button>
                   </div>
 
                   {loadingViewStudents ? (
-                    <div className="flex items-center justify-center py-12">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                    <div className="flex items-center justify-center py-16">
+                      <div className="animate-spin rounded-full h-7 w-7 border-2 border-gray-200 border-t-gray-500"></div>
                     </div>
                   ) : viewEnrolledStudents.length === 0 ? (
-                    <div className="text-center py-12 bg-gray-50 rounded-lg border border-gray-200">
-                      <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                      <h3 className="mt-2 text-sm font-medium text-gray-900">No students found</h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        {selectedPhaseForView !== null 
-                          ? `No students found in Phase ${selectedPhaseForView}.`
-                          : 'No enrolled or reserved students in this class.'}
-                      </p>
+                    <div className="text-center py-16 text-gray-400">
+                      <p className="text-sm">No students in this phase.</p>
                     </div>
                   ) : (
-                    <div className="bg-white rounded-lg border border-gray-200">
-                      <div
-                        className="overflow-x-auto rounded-lg"
-                        style={{
-                          scrollbarWidth: 'thin',
-                          scrollbarColor: '#cbd5e0 #f7fafc',
-                          WebkitOverflowScrolling: 'touch',
-                        }}
-                      >
-                        <table
-                          className="divide-y divide-gray-200"
-                          style={{ width: '100%', minWidth: '1000px' }}
-                        >
-                        <thead className="bg-white">
-                          <tr>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Student Name
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Email
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Status
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Payment Status
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Level Tag / Package
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Phase
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Date
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Enrolled By
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                          {viewEnrolledStudents.map((student) => {
-                            const isReserved = student.student_type === 'reserved';
-                            const uniqueKey = isReserved 
-                              ? `reserved-${student.reservation_id}` 
-                              : `enrolled-${student.classstudent_id || student.user_id}`;
-                            const isPaymentVerified = student.is_payment_verified === true;
-                            const notVerifiedHighlight = !isPaymentVerified
-                              ? 'bg-amber-50 border-l-4 border-l-amber-500'
-                              : '';
-                            
-                            return (
-                              <tr key={uniqueKey} className={`${isReserved ? 'bg-yellow-50' : ''} ${notVerifiedHighlight}`}>
-                                <td className="px-4 py-4">
-                                  <div className="text-sm font-medium text-gray-900">{student.full_name}</div>
-                                </td>
-                                <td className="px-4 py-4">
-                                  <div className="text-sm text-gray-500">{student.email || '-'}</div>
-                                </td>
-                                <td className="px-4 py-4">
-                                  {isReserved ? (
-                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                                      student.reservation_status === 'Fee Paid'
-                                        ? 'bg-green-100 text-green-800'
-                                        : student.reservation_status === 'Upgraded'
-                                        ? 'bg-blue-100 text-blue-800'
-                                        : student.reservation_status === 'Cancelled'
-                                        ? 'bg-red-100 text-red-800'
-                                        : 'bg-yellow-100 text-yellow-800'
-                                    }`}>
-                                      {student.reservation_status || 'Reserved'}
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                      Enrolled
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-4">
-                                  {isPaymentVerified ? (
-                                    <span
-                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700"
-                                      title="All payments verified"
-                                    >
-                                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                      </svg>
-                                      Verified
-                                    </span>
-                                  ) : (
-                                    <span
-                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
-                                      title={student.unverified_payment_count > 0 ? `${student.unverified_payment_count} payment(s) pending verification` : 'Payment status not yet verified'}
-                                    >
-                                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                                      </svg>
-                                      Not Verified
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-4">
-                                  <div className="text-sm text-gray-500">
-                                    {isReserved ? (student.package_name || '-') : (student.level_tag || '-')}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-4">
-                                  {isReserved ? (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                                      Reserved
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                      Phase {student.phase_number}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-4">
-                                  <div className="text-sm text-gray-500">
-                                    {student.earliestEnrollment || student.enrolled_at
-                                      ? formatDateManila(student.earliestEnrollment || student.enrolled_at)
-                                      : '-'}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-4">
-                                  <div className="text-sm text-gray-500">{student.enrolled_by || '-'}</div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    <div className="rounded-lg border border-gray-100 overflow-hidden">
+                      <div className="overflow-x-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#e2e8f0 transparent', WebkitOverflowScrolling: 'touch' }}>
+                        <table className="w-full min-w-[900px] divide-y divide-gray-100">
+                          <thead>
+                            <tr className="bg-gray-50/80">
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Name</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Email</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">Payment</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Level</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Phase</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">Date</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">By</th>
+                              <th className="px-3 py-2 text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-100">
+                            {viewEnrolledStudents.map((student) => {
+                              const isReserved = student.student_type === 'reserved';
+                              const isPending = student.student_type === 'pending';
+                              const uniqueKey = isReserved ? `reserved-${student.reservation_id}` : `enrolled-${student.classstudent_id || student.user_id}`;
+                              const isPaymentVerified = student.is_payment_verified === true;
+                              const notVerifiedHighlight = !isPaymentVerified ? 'bg-amber-50/50' : '';
+                              const enrolledByRaw = student.enrolled_by || '-';
+                              const enrolledByShort = enrolledByRaw.length > 24 ? `${enrolledByRaw.slice(0, 22)}…` : enrolledByRaw;
+                              return (
+                                <tr key={uniqueKey} className={`hover:bg-gray-50/50 transition-colors ${isReserved ? 'bg-amber-50/30' : ''} ${notVerifiedHighlight}`}>
+                                  <td className="px-3 py-3"><span className="text-sm font-medium text-gray-900">{student.full_name}</span></td>
+                                  <td className="px-3 py-3 text-sm text-gray-500">{student.email || '—'}</td>
+                                  <td className="px-3 py-3">
+                                    {isReserved ? (
+                                      <span className={`inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium ${
+                                        student.reservation_status === 'Fee Paid' ? 'bg-emerald-50 text-emerald-700' :
+                                        student.reservation_status === 'Upgraded' ? 'bg-sky-50 text-sky-700' :
+                                        student.reservation_status === 'Cancelled' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'
+                                      }`}>{student.reservation_status || 'Reserved'}</span>
+                                    ) : isPending ? (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700">Pending</span>
+                                    ) : (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700">Enrolled</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3">
+                                    {isPaymentVerified ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium text-emerald-600" title="Verified">
+                                        <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                        Verified
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium text-amber-600" title={student.unverified_payment_count > 0 ? `${student.unverified_payment_count} pending` : 'Not verified'}>
+                                        <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92z" clipRule="evenodd" /></svg>
+                                        Not verified
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3 text-sm text-gray-500">{isReserved ? (student.package_name || '—') : (student.level_tag || '—')}</td>
+                                  <td className="px-3 py-3">
+                                    {isReserved ? <span className="text-[11px] text-gray-500">—</span> : (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium text-sky-600 bg-sky-50">{student.phasesDisplay || `P${student.phase_number}`}</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3 text-sm text-gray-500">
+                                    {student.earliestEnrollment || student.enrolled_at ? formatDateManila(student.earliestEnrollment || student.enrolled_at) : '—'}
+                                  </td>
+                                  <td className="px-3 py-3 text-sm text-gray-500 max-w-[120px] truncate" title={enrolledByRaw}>{enrolledByShort}</td>
+                                  <td className="px-3 py-3 whitespace-nowrap">
+                                    {!isReserved && !isPending ? (
+                                      <button type="button" onClick={() => openMoveStudentModal(student, selectedClassForView)} className="text-xs font-medium text-sky-600 hover:text-sky-800 hover:underline" title="Move to another class (same program)">Move</button>
+                                    ) : (
+                                      <span className="text-xs text-gray-400">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   )}
@@ -12703,18 +12675,68 @@ const initializePackageMerchSelections = useCallback(
               </div>
             )}
 
-            {/* Modal Footer - Only show when viewing students list */}
             {viewStudentsStep === 'students-list' && (
-              <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
-                <button
-                  type="button"
-                  onClick={closeViewStudentsModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                >
-                  Close
-                </button>
+              <div className="flex items-center justify-end px-5 py-3 border-t border-gray-100 flex-shrink-0">
+                <button type="button" onClick={closeViewStudentsModal} className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors">Close</button>
               </div>
             )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Move Student to Another Class Modal (admin) */}
+      {isMoveStudentModalOpen && studentToMove && moveSourceClass && createPortal(
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" onClick={closeMoveStudentModal}>
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Move to Another Class</h2>
+              <button type="button" onClick={closeMoveStudentModal} className="text-gray-400 hover:text-gray-500 p-1.5 rounded-lg hover:bg-gray-100">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">
+              <p className="text-sm text-gray-600">
+                Move <span className="font-semibold text-gray-900">{studentToMove.full_name}</span> from this class to another (same program). Phase preserved.
+              </p>
+              <div>
+                <label htmlFor="move-target-class-admin" className="block text-sm font-medium text-gray-700 mb-1">Target class <span className="text-red-500">*</span></label>
+                {loadingMoveTargetClasses ? (
+                  <div className="py-3 text-sm text-gray-500">Loading classes...</div>
+                ) : moveTargetClasses.length === 0 ? (
+                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">No other active classes in the same program and branch.</div>
+                ) : (
+                  <select
+                    id="move-target-class-admin"
+                    value={selectedTargetClassForMove?.class_id ?? ''}
+                    onChange={(e) => {
+                      const id = parseInt(e.target.value, 10);
+                      setSelectedTargetClassForMove(moveTargetClasses.find((c) => c.class_id === id) || null);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
+                  >
+                    <option value="">— Select class —</option>
+                    {moveTargetClasses.map((c) => (
+                      <option key={c.class_id} value={c.class_id}>
+                        {c.class_name || c.level_tag || `Class ${c.class_id}`}
+                        {c.level_tag && c.class_name ? ` (${c.level_tag})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3 bg-gray-50 rounded-b-xl">
+              <button type="button" onClick={closeMoveStudentModal} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">Cancel</button>
+              <button
+                type="button"
+                onClick={handleMoveStudentSubmit}
+                disabled={!selectedTargetClassForMove || moveStudentSubmitting}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {moveStudentSubmitting ? 'Moving...' : 'Move Student'}
+              </button>
+            </div>
           </div>
         </div>,
         document.body

@@ -417,6 +417,173 @@ router.get(
 );
 
 /**
+ * POST /api/sms/classes/move-student
+ * Move an enrolled student from one class to another (same program only, phase preserved).
+ * Body: { student_id, source_class_id, target_class_id }
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/move-student',
+  [
+    body('student_id').isInt().withMessage('student_id must be an integer'),
+    body('source_class_id').isInt().withMessage('source_class_id must be an integer'),
+    body('target_class_id').isInt().withMessage('target_class_id must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { student_id, source_class_id, target_class_id } = req.body;
+
+      if (source_class_id === target_class_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Source and target class must be different.',
+        });
+      }
+
+      await client.query('BEGIN');
+
+      const [sourceClassResult, targetClassResult, studentResult] = await Promise.all([
+        client.query(
+          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students
+           FROM classestbl c
+           WHERE c.class_id = $1`,
+          [source_class_id]
+        ),
+        client.query(
+          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students
+           FROM classestbl c
+           WHERE c.class_id = $1`,
+          [target_class_id]
+        ),
+        client.query(
+          `SELECT user_id, full_name, branch_id FROM userstbl WHERE user_id = $1 AND user_type = 'Student'`,
+          [student_id]
+        ),
+      ]);
+
+      if (sourceClassResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Source class not found.' });
+      }
+      if (targetClassResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Target class not found.' });
+      }
+      if (studentResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Student not found.' });
+      }
+
+      const sourceClass = sourceClassResult.rows[0];
+      const targetClass = targetClassResult.rows[0];
+      const student = studentResult.rows[0];
+
+      if (sourceClass.program_id !== targetClass.program_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Can only move to a class with the same program.',
+        });
+      }
+
+      if (sourceClass.branch_id !== targetClass.branch_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Source and target class must be in the same branch.',
+        });
+      }
+
+      const studentBranchId = student.branch_id;
+      if (studentBranchId != null && targetClass.branch_id != null && studentBranchId !== targetClass.branch_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Student branch does not match target class branch.',
+        });
+      }
+
+      const enrollmentsResult = await client.query(
+        `SELECT classstudent_id, student_id, class_id, phase_number, enrollment_status
+         FROM classstudentstbl
+         WHERE student_id = $1 AND class_id = $2 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+        [student_id, source_class_id]
+      );
+
+      if (enrollmentsResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Student is not enrolled in the source class (or has no active enrollment).',
+        });
+      }
+
+      const existingInTarget = await client.query(
+        `SELECT classstudent_id FROM classstudentstbl
+         WHERE student_id = $1 AND class_id = $2 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+        [student_id, target_class_id]
+      );
+      if (existingInTarget.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'Student is already enrolled in the target class.',
+        });
+      }
+
+      const moveCount = enrollmentsResult.rows.length;
+      if (targetClass.max_students != null) {
+        const targetEnrollmentCount = await client.query(
+          `SELECT COUNT(DISTINCT student_id) as count
+           FROM classstudentstbl
+           WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+          [target_class_id]
+        );
+        const currentCount = parseInt(targetEnrollmentCount.rows[0].count, 10);
+        const uniqueStudentsMoving = 1;
+        if (currentCount + uniqueStudentsMoving > targetClass.max_students) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Target class is full (${currentCount}/${targetClass.max_students} students).`,
+          });
+        }
+      }
+
+      for (const row of enrollmentsResult.rows) {
+        await client.query(
+          `UPDATE classstudentstbl SET class_id = $1 WHERE classstudent_id = $2`,
+          [target_class_id, row.classstudent_id]
+        );
+      }
+
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET class_id = $1
+         WHERE student_id = $2 AND class_id = $3 AND is_active = true`,
+        [target_class_id, student_id, source_class_id]
+      );
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: `Student moved to the other class successfully (${moveCount} enrollment(s), phase preserved).`,
+        data: { student_id, source_class_id, target_class_id, enrollments_moved: moveCount },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * GET /api/v1/classes/:id
  * Get class by ID
  */
