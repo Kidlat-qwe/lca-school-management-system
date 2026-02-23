@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -26,6 +26,7 @@ const AdminPaymentLogs = () => {
   const [openApprovalMenuId, setOpenApprovalMenuId] = useState(null);
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
+  const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
   // Removed branches state - admin only sees their branch
 
   // Fetch branch name if not in userInfo
@@ -49,11 +50,20 @@ const AdminPaymentLogs = () => {
   }, [userInfo, adminBranchId]);
 
   useEffect(() => {
-    // Don't fetch branches for admin - they only see their branch
     if (adminBranchId) {
-      fetchPayments();
+      fetchPayments(1);
     }
   }, [adminBranchId]);
+
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (!adminBranchId) return;
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    fetchPayments(1);
+  }, [filterStatus]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -91,7 +101,7 @@ const AdminPaymentLogs = () => {
         method: 'PUT',
         body: JSON.stringify({ approve }),
       });
-      await fetchPayments();
+      await fetchPayments(pagination.page);
     } catch (err) {
       setError(err.message || (approve ? 'Failed to approve payment' : 'Failed to revoke approval'));
     } finally {
@@ -99,11 +109,22 @@ const AdminPaymentLogs = () => {
     }
   };
 
-  const fetchPayments = async () => {
+  const fetchPayments = async (page = 1) => {
     try {
       setLoading(true);
-      const response = await apiRequest('/payments');
+      const limit = 100;
+      const params = new URLSearchParams({ limit: String(limit), page: String(page) });
+      if (filterStatus) params.set('status', filterStatus);
+      const response = await apiRequest(`/payments?${params.toString()}`);
       setPayments(response.data || []);
+      if (response.pagination) {
+        setPagination({
+          page: response.pagination.page,
+          limit: response.pagination.limit,
+          total: response.pagination.total,
+          totalPages: response.pagination.totalPages ?? Math.ceil((response.pagination.total || 0) / limit),
+        });
+      }
       setError('');
     } catch (err) {
       console.error('Error fetching payments:', err);
@@ -507,6 +528,34 @@ const AdminPaymentLogs = () => {
               </tbody>
             </table>
           </div>
+          {pagination.totalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+              <p className="text-sm text-gray-600">
+                Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} payments
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fetchPayments(pagination.page - 1)}
+                  disabled={pagination.page <= 1}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-gray-600">
+                  Page {pagination.page} of {pagination.totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => fetchPayments(pagination.page + 1)}
+                  disabled={pagination.page >= pagination.totalPages}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
