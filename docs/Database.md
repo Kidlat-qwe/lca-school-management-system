@@ -3,6 +3,38 @@
 BEGIN;
 
 
+CREATE TABLE IF NOT EXISTS public.acknowledgement_receiptstbl
+(
+    ack_receipt_id serial NOT NULL,
+    ack_receipt_number character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    status character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Pending'::character varying,
+    prospect_student_name character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    prospect_student_contact character varying(255) COLLATE pg_catalog."default",
+    prospect_student_notes text COLLATE pg_catalog."default",
+    student_id integer,
+    branch_id integer,
+    package_id integer NOT NULL,
+    package_name_snapshot character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    package_amount_snapshot numeric(10, 2) NOT NULL,
+    payment_amount numeric(10, 2) NOT NULL,
+    issue_date date NOT NULL,
+    invoice_id integer,
+    payment_id integer,
+    created_by integer,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    installment_option character varying(50) COLLATE pg_catalog."default" DEFAULT NULL::character varying,
+    reference_number character varying(255) COLLATE pg_catalog."default" DEFAULT NULL::character varying,
+    payment_attachment_url text COLLATE pg_catalog."default",
+    level_tag character varying(100) COLLATE pg_catalog."default",
+    CONSTRAINT acknowledgement_receiptstbl_pkey PRIMARY KEY (ack_receipt_id)
+);
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.installment_option
+    IS 'For installment packages: downpayment_only | downpayment_plus_phase1. NULL for non-installment packages.';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.level_tag
+    IS 'Level/program tag for the prospect (e.g. from package or manual).';
+
 CREATE TABLE IF NOT EXISTS public.announcement_readstbl
 (
     announcement_read_id serial NOT NULL,
@@ -39,6 +71,7 @@ CREATE TABLE IF NOT EXISTS public.announcementstbl
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     start_date date,
     end_date date,
+    attachment_url text COLLATE pg_catalog."default",
     CONSTRAINT announcementstbl_pkey PRIMARY KEY (announcement_id)
 );
 
@@ -71,6 +104,9 @@ COMMENT ON COLUMN public.announcementstbl.start_date
 
 COMMENT ON COLUMN public.announcementstbl.end_date
     IS 'Optional end date. Announcement will be hidden after this date. NULL means no expiration.';
+
+COMMENT ON COLUMN public.announcementstbl.attachment_url
+    IS 'Optional S3 URL for attached file (e.g. PDF, document). Stored under psms/announcement_files/ in bucket.';
 
 CREATE TABLE IF NOT EXISTS public.attendancetbl
 (
@@ -125,6 +161,7 @@ CREATE TABLE IF NOT EXISTS public.branchestbl
     state_province_region character varying(100) COLLATE pg_catalog."default",
     locale character varying(10) COLLATE pg_catalog."default",
     currency character varying(10) COLLATE pg_catalog."default" DEFAULT 'PHP'::character varying,
+    branch_nickname character varying(100) COLLATE pg_catalog."default",
     CONSTRAINT branchestbl_pkey PRIMARY KEY (branch_id),
     CONSTRAINT branchestbl_branch_email_key UNIQUE (branch_email)
 );
@@ -175,11 +212,19 @@ CREATE TABLE IF NOT EXISTS public.classestbl
     phase_number integer,
     session_number integer,
     status character varying(50) COLLATE pg_catalog."default" DEFAULT 'Active'::character varying,
+    skip_holidays boolean NOT NULL DEFAULT false,
+    is_vip boolean NOT NULL DEFAULT false,
     CONSTRAINT classestbl_pkey PRIMARY KEY (class_id)
 );
 
 COMMENT ON COLUMN public.classestbl.class_name
     IS 'The name of the class (e.g., "Morning Class", "Section A")';
+
+COMMENT ON COLUMN public.classestbl.skip_holidays
+    IS 'When true, classes are skipped on holidays';
+
+COMMENT ON COLUMN public.classestbl.is_vip
+    IS 'When true, class is displayed with VIP tag on details page';
 
 CREATE TABLE IF NOT EXISTS public.classsessionstbl
 (
@@ -252,6 +297,24 @@ CREATE TABLE IF NOT EXISTS public.curriculumstbl
     status character varying(50) COLLATE pg_catalog."default",
     CONSTRAINT curriculumstbl_pkey PRIMARY KEY (curriculum_id)
 );
+
+CREATE TABLE IF NOT EXISTS public.custom_holidaystbl
+(
+    holiday_id serial NOT NULL,
+    name character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    holiday_date date NOT NULL,
+    branch_id integer,
+    description text COLLATE pg_catalog."default",
+    created_by integer,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT custom_holidaystbl_pkey PRIMARY KEY (holiday_id)
+);
+
+COMMENT ON TABLE public.custom_holidaystbl
+    IS 'School/branch-specific holidays (non-national). National holidays are provided by date-holidays (PH).';
+
+COMMENT ON COLUMN public.custom_holidaystbl.branch_id
+    IS 'NULL = applies to all branches; non-NULL = branch-specific holiday.';
 
 CREATE TABLE IF NOT EXISTS public.guardianstbl
 (
@@ -510,8 +573,24 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     remarks text COLLATE pg_catalog."default",
     created_by integer,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    approval_status character varying(50) COLLATE pg_catalog."default" DEFAULT 'Pending'::character varying,
+    approved_by integer,
+    approved_at timestamp without time zone,
+    payment_attachment_url text COLLATE pg_catalog."default",
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
+
+COMMENT ON COLUMN public.paymenttbl.approval_status
+    IS 'Internal approval status for finance team confirmation: Pending (default), Approved. Does not affect student payment status.';
+
+COMMENT ON COLUMN public.paymenttbl.approved_by
+    IS 'User ID of the finance team member (Superadmin/Superfinance/Finance) who approved the payment';
+
+COMMENT ON COLUMN public.paymenttbl.approved_at
+    IS 'Timestamp when the payment was approved by finance team';
+
+COMMENT ON COLUMN public.paymenttbl.payment_attachment_url
+    IS 'S3 URL of attached image (e.g. receipt/proof) for this payment record';
 
 CREATE TABLE IF NOT EXISTS public.phasesessionstbl
 (
@@ -587,7 +666,7 @@ CREATE TABLE IF NOT EXISTS public.promostbl
 (
     promo_id serial NOT NULL,
     promo_name character varying(255) COLLATE pg_catalog."default" NOT NULL,
-    package_id integer NOT NULL,
+    package_id integer,
     branch_id integer,
     promo_type character varying(50) COLLATE pg_catalog."default" NOT NULL,
     discount_percentage numeric(5, 2),
@@ -606,6 +685,7 @@ CREATE TABLE IF NOT EXISTS public.promostbl
     promo_code character varying(50) COLLATE pg_catalog."default",
     installment_apply_scope character varying(50) COLLATE pg_catalog."default",
     installment_months_to_apply integer,
+    global_package_type character varying(50) COLLATE pg_catalog."default",
     CONSTRAINT promostbl_pkey PRIMARY KEY (promo_id)
 );
 
@@ -632,6 +712,9 @@ COMMENT ON COLUMN public.promostbl.installment_apply_scope
 
 COMMENT ON COLUMN public.promostbl.installment_months_to_apply
     IS 'Number of monthly invoices to apply promo discount. Required when scope includes monthly.';
+
+COMMENT ON COLUMN public.promostbl.global_package_type
+    IS 'When promo has no specific package bindings, controls which package types it applies to: NULL=all, fullpayment, installment.';
 
 CREATE TABLE IF NOT EXISTS public.promousagetbl
 (
@@ -829,6 +912,50 @@ CREATE TABLE IF NOT EXISTS public.userstbl
 COMMENT ON COLUMN public.userstbl.last_login
     IS 'Timestamp of the user''s last successful login (stored in UTC+8/Asia/Manila timezone)';
 
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_ack_receipts_branch_id
+    ON public.acknowledgement_receiptstbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_created_by_fkey FOREIGN KEY (created_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_invoice_id_fkey FOREIGN KEY (invoice_id)
+    REFERENCES public.invoicestbl (invoice_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_package_id_fkey FOREIGN KEY (package_id)
+    REFERENCES public.packagestbl (package_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE RESTRICT;
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_payment_id_fkey FOREIGN KEY (payment_id)
+    REFERENCES public.paymenttbl (payment_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT ack_receipts_student_id_fkey FOREIGN KEY (student_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
 ALTER TABLE IF EXISTS public.announcement_readstbl
     ADD CONSTRAINT announcement_readstbl_announcement_id_fkey FOREIGN KEY (announcement_id)
     REFERENCES public.announcementstbl (announcement_id) MATCH SIMPLE
@@ -860,7 +987,7 @@ ALTER TABLE IF EXISTS public.announcementstbl
     ADD CONSTRAINT announcementstbl_created_by_fkey FOREIGN KEY (created_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_announcement_created_by
     ON public.announcementstbl(created_by);
 
@@ -946,7 +1073,7 @@ ALTER TABLE IF EXISTS public.classestbl
     ADD CONSTRAINT classestbl_teacher_id_fkey FOREIGN KEY (teacher_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_class_teacher_id
     ON public.classestbl(teacher_id);
 
@@ -1012,7 +1139,7 @@ ALTER TABLE IF EXISTS public.classstudentstbl
     ADD CONSTRAINT classstudentstbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_classstudent_student_id
     ON public.classstudentstbl(student_id);
 
@@ -1031,11 +1158,27 @@ ALTER TABLE IF EXISTS public.classteacherstbl
     ON DELETE CASCADE;
 
 
+ALTER TABLE IF EXISTS public.custom_holidaystbl
+    ADD CONSTRAINT custom_holidaystbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_custom_holiday_branch_id
+    ON public.custom_holidaystbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.custom_holidaystbl
+    ADD CONSTRAINT custom_holidaystbl_created_by_fkey FOREIGN KEY (created_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
 ALTER TABLE IF EXISTS public.guardianstbl
     ADD CONSTRAINT guardianstbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_guardian_student_id
     ON public.guardianstbl(student_id);
 
@@ -1089,7 +1232,7 @@ ALTER TABLE IF EXISTS public.installmentinvoiceprofilestbl
     ADD CONSTRAINT installmentinvoiceprofilestbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_invoiceprofile_student_id
     ON public.installmentinvoiceprofilestbl(student_id);
 
@@ -1125,7 +1268,7 @@ ALTER TABLE IF EXISTS public.invoicestbl
     ADD CONSTRAINT invoicestbl_created_by_fkey FOREIGN KEY (created_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_invoice_created_by
     ON public.invoicestbl(created_by);
 
@@ -1170,7 +1313,7 @@ ALTER TABLE IF EXISTS public.invoicestudentstbl
     ADD CONSTRAINT invoicestudentstbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_invoicestudent_student_id
     ON public.invoicestudentstbl(student_id);
 
@@ -1197,7 +1340,7 @@ ALTER TABLE IF EXISTS public.merchandiserequestlogtbl
     ADD CONSTRAINT merchandiserequestlogtbl_requested_by_fkey FOREIGN KEY (requested_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_merchrequest_requested_by
     ON public.merchandiserequestlogtbl(requested_by);
 
@@ -1255,6 +1398,13 @@ CREATE INDEX IF NOT EXISTS idx_package_branch_id
 
 
 ALTER TABLE IF EXISTS public.paymenttbl
+    ADD CONSTRAINT paymenttbl_approved_by_fkey FOREIGN KEY (approved_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.paymenttbl
     ADD CONSTRAINT paymenttbl_branch_id_fkey FOREIGN KEY (branch_id)
     REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
     ON UPDATE NO ACTION
@@ -1267,7 +1417,7 @@ ALTER TABLE IF EXISTS public.paymenttbl
     ADD CONSTRAINT paymenttbl_created_by_fkey FOREIGN KEY (created_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.paymenttbl
@@ -1283,7 +1433,7 @@ ALTER TABLE IF EXISTS public.paymenttbl
     ADD CONSTRAINT paymenttbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_payment_student_id
     ON public.paymenttbl(student_id);
 
@@ -1364,7 +1514,7 @@ ALTER TABLE IF EXISTS public.promostbl
     ADD CONSTRAINT promostbl_created_by_fkey FOREIGN KEY (created_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.promostbl
@@ -1407,7 +1557,7 @@ ALTER TABLE IF EXISTS public.promousagetbl
     ADD CONSTRAINT promousagetbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_promousage_student_id
     ON public.promousagetbl(student_id);
 
@@ -1416,7 +1566,7 @@ ALTER TABLE IF EXISTS public.referralstbl
     ADD CONSTRAINT referralstbl_referred_student_id_fkey FOREIGN KEY (referred_student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS referralstbl_unique_referred
     ON public.referralstbl(referred_student_id);
 
@@ -1425,7 +1575,7 @@ ALTER TABLE IF EXISTS public.referralstbl
     ADD CONSTRAINT referralstbl_referrer_student_id_fkey FOREIGN KEY (referrer_student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_referral_referrer
     ON public.referralstbl(referrer_student_id);
 
@@ -1466,7 +1616,7 @@ ALTER TABLE IF EXISTS public.reservedstudentstbl
     ADD CONSTRAINT reservedstudentstbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_reservedstudent_student_id
     ON public.reservedstudentstbl(student_id);
 
@@ -1507,7 +1657,7 @@ ALTER TABLE IF EXISTS public.suspensionperiodstbl
     ADD CONSTRAINT suspensionperiodstbl_created_by_fkey FOREIGN KEY (created_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
-    ON DELETE NO ACTION;
+    ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_suspension_created_by
     ON public.suspensionperiodstbl(created_by);
 

@@ -127,21 +127,21 @@ router.put(
 
       for (const u of updates) {
         if (targetBranchId === null) {
-          // Global default upsert (matches partial unique index WHERE branch_id IS NULL)
-          await client.query(
-            `INSERT INTO system_settingstbl
-              (setting_key, setting_value, setting_type, category, description, branch_id, updated_by, updated_at)
-             VALUES ($1, $2, $3, $4, $5, NULL, $6, CURRENT_TIMESTAMP)
-             ON CONFLICT (setting_key) WHERE branch_id IS NULL
-             DO UPDATE SET
-               setting_value = EXCLUDED.setting_value,
-               setting_type = EXCLUDED.setting_type,
-               category = EXCLUDED.category,
-               description = EXCLUDED.description,
-               updated_by = EXCLUDED.updated_by,
-               updated_at = CURRENT_TIMESTAMP`,
-            [u.key, u.storedValue, u.type, u.category, u.description, updatedBy]
+          // Global default upsert: update if row exists, else insert (avoids reliance on partial unique index syntax)
+          const updateRes = await client.query(
+            `UPDATE system_settingstbl
+             SET setting_value = $1, setting_type = $2, category = $3, description = $4, updated_by = $5, updated_at = CURRENT_TIMESTAMP
+             WHERE setting_key = $6 AND branch_id IS NULL`,
+            [u.storedValue, u.type, u.category, u.description, updatedBy, u.key]
           );
+          if (updateRes.rowCount === 0) {
+            await client.query(
+              `INSERT INTO system_settingstbl
+                (setting_key, setting_value, setting_type, category, description, branch_id, updated_by, updated_at)
+               VALUES ($1, $2, $3, $4, $5, NULL, $6, CURRENT_TIMESTAMP)`,
+              [u.key, u.storedValue, u.type, u.category, u.description, updatedBy]
+            );
+          }
         } else {
           // Branch override upsert
           await client.query(
