@@ -459,11 +459,6 @@ const Promo = () => {
       errors.promo_name = 'Promo name is required';
     }
 
-    // When a specific branch is selected, at least one package is required
-    if (formData.branch_id && formData.branch_id !== '' && (!formData.package_ids || formData.package_ids.length === 0)) {
-      errors.package_ids = 'Please select at least one package for this branch.';
-    }
-
     // Promo code is now required
     if (!formData.promo_code || !formData.promo_code.trim()) {
       errors.promo_code = 'Promo code is required';
@@ -474,11 +469,6 @@ const Promo = () => {
       } else if (!/^[A-Z0-9-]+$/.test(code)) {
         errors.promo_code = 'Promo code must contain only uppercase letters, numbers, and hyphens';
       }
-    }
-
-    // When Branch is All Branches, require a package type selection
-    if (formData.branch_id === '' && !formData.global_package_type) {
-      errors.global_package_type = 'Please choose which package type this promo applies to.';
     }
 
     if (!formData.start_date) {
@@ -652,8 +642,9 @@ const Promo = () => {
   // Helper functions
   const getBranchName = (branchId) => {
     if (!branchId) return 'All Branches';
-    const branch = branches.find(b => b.branch_id === branchId);
-    return branch ? branch.branch_name : null;
+    const branch = branches.find((b) => b.branch_id === branchId);
+    if (!branch) return null;
+    return branch.branch_nickname || branch.branch_name || null;
   };
 
   const getPackageName = (packageId) => {
@@ -674,7 +665,7 @@ const Promo = () => {
     const examples = branches
       .slice(0, 3)
       .map((branch) => {
-        const citySource = branch.city || branch.branch_name || '';
+        const citySource = branch.city || branch.branch_nickname || branch.branch_name || '';
         const cityClean = citySource
           .toUpperCase()
           .replace(/[^A-Z0-9]/g, '');
@@ -1270,7 +1261,7 @@ const Promo = () => {
                         <option value="">All Branches (System-wide)</option>
                         {branches.map((branch) => (
                           <option key={branch.branch_id} value={branch.branch_id}>
-                            {branch.branch_name}
+                            {branch.branch_nickname || branch.branch_name}
                           </option>
                         ))}
                       </select>
@@ -1280,7 +1271,7 @@ const Promo = () => {
                       {formData.branch_id === '' ? (
                         <>
                           <label className="label-field">
-                            Package Type for All Branches <span className="text-red-500">*</span>
+                            Package Type for All Branches
                           </label>
                           <div className={`border border-gray-300 rounded-lg p-4 space-y-2 ${formErrors.global_package_type ? 'border-red-500' : ''}`}>
                             <label className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
@@ -1366,7 +1357,7 @@ const Promo = () => {
                       ) : (
                         <>
                           <label className="label-field">
-                            Packages <span className="text-red-500">*</span>
+                            Packages
                           </label>
                           <div className={`border border-gray-300 rounded-lg p-4 max-h-60 overflow-y-auto ${formErrors.package_ids ? 'border-red-500' : ''}`}>
                             {filteredPackages.length === 0 ? (

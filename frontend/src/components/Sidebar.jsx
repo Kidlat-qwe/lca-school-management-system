@@ -54,7 +54,11 @@ const Sidebar = ({ isOpen, onClose }) => {
         },
         {
           name: 'Operational Dashboard',
-          path: `${basePath}/operational-dashboard`, // New cohort retention analysis
+          path: `${basePath}/operational-dashboard`,
+        },
+        {
+          name: 'Enrollment Dashboard',
+          path: `${basePath}/enrollment-dashboard`,
         },
       ],
     },
@@ -77,16 +81,6 @@ const Sidebar = ({ isOpen, onClose }) => {
         </svg>
       ),
       roles: ['Superadmin', 'Admin', 'Teacher', 'Student'],
-    },
-    {
-      name: 'Holidays',
-      path: '/superadmin/holidays', // Will be overridden in map function for Admin
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-        </svg>
-      ),
-      roles: ['Superadmin', 'Admin'],
     },
     {
       name: 'Announcements',
@@ -160,6 +154,16 @@ const Sidebar = ({ isOpen, onClose }) => {
         </svg>
       ),
       roles: ['Superadmin', 'Admin', 'Teacher', 'Student'], // For Superadmin, Admin, Teacher, and Student
+    },
+    {
+      name: 'Report',
+      path: '/superadmin/report', // Will be overridden in map function for Admin
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Admin'],
     },
     {
       name: 'Student List',
@@ -259,7 +263,21 @@ const Sidebar = ({ isOpen, onClose }) => {
       name: 'Payment Logs',
       path: '/superadmin/payment-logs', // Will be overridden in map function for Admin and Finance
         },
+        {
+          name: 'Acknowledgement Receipts',
+          path: '/superadmin/acknowledgement-receipts', // Will be overridden in map function for Admin and Finance
+        },
       ],
+    },
+    {
+      name: 'Holidays',
+      path: '/superadmin/holidays', // Will be overridden in map function for Admin
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Admin'],
     },
     {
       name: 'Settings',
@@ -346,6 +364,8 @@ const Sidebar = ({ isOpen, onClose }) => {
         }
       } else if (item.name === 'Room' && basePath === '/admin') {
         itemPath = '/admin/room';
+      } else if (item.name === 'Report' && basePath === '/admin') {
+        itemPath = '/admin/report';
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
       }
@@ -404,6 +424,9 @@ const Sidebar = ({ isOpen, onClose }) => {
           if (child.name === 'Payment Logs') {
             return { ...child, path: '/admin/payment-logs' };
           }
+          if (child.name === 'Acknowledgement Receipts') {
+            return { ...child, path: '/admin/acknowledgement-receipts' };
+          }
           return child;
         });
       }
@@ -419,6 +442,9 @@ const Sidebar = ({ isOpen, onClose }) => {
           if (child.name === 'Payment Logs') {
             return { ...child, path: '/finance/payment-logs' };
           }
+          if (child.name === 'Acknowledgement Receipts') {
+            return { ...child, path: '/finance/acknowledgement-receipts' };
+          }
           return child;
         });
       }
@@ -433,6 +459,9 @@ const Sidebar = ({ isOpen, onClose }) => {
           }
           if (child.name === 'Payment Logs') {
             return { ...child, path: '/superfinance/payment-logs' };
+          }
+          if (child.name === 'Acknowledgement Receipts') {
+            return { ...child, path: '/superfinance/acknowledgement-receipts' };
           }
           return child;
         });

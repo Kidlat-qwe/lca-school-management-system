@@ -35,6 +35,45 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     min: 0,
     max: 365,
   },
+
+  // --- Installment Invoice Schedule ---
+  installment_invoice_issue_date: {
+    key: 'installment_invoice_issue_date',
+    type: 'string',
+    category: 'installment_schedule',
+    description: 'Default invoice issue date for installment enrollments (YYYY-MM-DD).',
+    defaultValue: '',
+  },
+  installment_billing_month: {
+    key: 'installment_billing_month',
+    type: 'string',
+    category: 'installment_schedule',
+    description: 'Default billing month for installment invoices (YYYY-MM).',
+    defaultValue: '',
+  },
+  installment_invoice_due_date: {
+    key: 'installment_invoice_due_date',
+    type: 'string',
+    category: 'installment_schedule',
+    description: 'Default invoice due date for installment enrollments (YYYY-MM-DD).',
+    defaultValue: '',
+  },
+  installment_invoice_generation_date: {
+    key: 'installment_invoice_generation_date',
+    type: 'string',
+    category: 'installment_schedule',
+    description: 'Default invoice auto-generation date for installment invoices (YYYY-MM-DD).',
+    defaultValue: '',
+  },
+  installment_frequency_months: {
+    key: 'installment_frequency_months',
+    type: 'int',
+    category: 'installment_schedule',
+    description: 'How often (in months) installment invoices are generated. Fixed at 1.',
+    defaultValue: 1,
+    min: 1,
+    max: 12,
+  },
 });
 
 export const SETTINGS_KEYS = Object.freeze(Object.keys(SETTINGS_DEFINITIONS));

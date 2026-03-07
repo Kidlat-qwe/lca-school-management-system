@@ -275,7 +275,10 @@ router.put(
     body('full_name').optional().notEmpty().withMessage('Full name cannot be empty'),
     body('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
-    body('phone_number').optional().isString().withMessage('Phone number must be a string'),
+    body('phone_number')
+      .optional()
+      .custom((value) => value === null || value === undefined || typeof value === 'string')
+      .withMessage('Phone number must be a string or empty'),
     handleValidationErrors,
   ],
   async (req, res, next) => {

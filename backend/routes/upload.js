@@ -142,6 +142,66 @@ router.post(
 );
 
 /**
+ * POST /api/sms/upload/invoice-payment-image
+ * Upload payment attachment image (e.g. receipt) to S3.
+ * Path: psms/invoice-image/ (or S3_INVOICE_IMAGE_PREFIX). Bucket from AWS_S3_BUCKET_NAME (e.g. zoom-recording-2025 or invoice-image).
+ *
+ * Request body (multipart/form-data):
+ * - image: File (required)
+ *
+ * Response:
+ * - success: boolean
+ * - imageUrl: string (S3 URL)
+ * - key: string
+ * - message: string
+ */
+const S3_INVOICE_IMAGE_PREFIX = process.env.S3_INVOICE_IMAGE_PREFIX || 'psms/invoice-image';
+
+router.post(
+  '/invoice-payment-image',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  uploadSingle,
+  handleUploadError,
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No image file provided',
+        });
+      }
+      validateImageFile(req.file);
+      const userId = req.user?.user_id || req.user?.userId || 'user';
+      const fileName = generateUniqueFileName(
+        S3_INVOICE_IMAGE_PREFIX,
+        req.file.originalname,
+        userId
+      );
+      const uploadResult = await uploadToS3(
+        req.file.buffer,
+        fileName,
+        req.file.mimetype,
+        {
+          uploadedBy: String(userId),
+          type: 'invoice_payment_attachment',
+          originalName: req.file.originalname,
+        }
+      );
+      return res.status(200).json({
+        success: true,
+        imageUrl: uploadResult.url,
+        key: uploadResult.key,
+        message: 'Payment attachment image uploaded successfully',
+      });
+    } catch (error) {
+      console.error('Error uploading invoice payment image:', error);
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/sms/upload/announcement-file
  * Upload announcement attachment to S3 (psms/announcement_files/ folder)
  * Allowed: PDF, Word, images, TXT, CSV

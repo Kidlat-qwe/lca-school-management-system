@@ -286,7 +286,7 @@ router.get(
                         TO_CHAR(c.start_date, 'YYYY-MM-DD') as start_date,
                         TO_CHAR(c.end_date, 'YYYY-MM-DD') as end_date,
                         u.full_name as teacher_name,
-                        b.branch_name,
+                        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         p.program_name,
                         p.program_code,
                         p.curriculum_id,
@@ -697,7 +697,9 @@ router.get(
                 TO_CHAR(c.start_date, 'YYYY-MM-DD') as start_date,
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') as end_date,
                 c.phase_number as class_phase_number,
-                b.branch_name,
+                COALESCE(c.skip_holidays, false) as skip_holidays,
+                COALESCE(c.is_vip, false) as is_vip,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 p.program_name,
                 p.program_code,
                 p.curriculum_id,
@@ -849,7 +851,7 @@ router.post(
     try {
       await client.query('BEGIN');
       
-      const { branch_id, room_id, program_id, teacher_id, teacher_ids, level_tag, class_name, max_students, start_date, end_date, days_of_week } = req.body;
+      const { branch_id, room_id, program_id, teacher_id, teacher_ids, level_tag, class_name, max_students, start_date, end_date, days_of_week, skip_holidays, is_vip } = req.body;
       
       // Support both teacher_id (single) and teacher_ids (array) for backward compatibility
       const teacherIdsArray = teacher_ids && Array.isArray(teacher_ids) && teacher_ids.length > 0 
@@ -858,6 +860,9 @@ router.post(
       
       // Use first teacher_id for the main classestbl.teacher_id field (backward compatibility)
       const primaryTeacherId = teacherIdsArray.length > 0 ? teacherIdsArray[0] : null;
+      
+      const skipHolidaysBool = skip_holidays === true || skip_holidays === 'true';
+      const isVipBool = is_vip === true || is_vip === 'true';
       
       console.log('📥 Received class creation request:', {
         branch_id,
@@ -976,8 +981,8 @@ router.post(
         const result = await client.query(
           `INSERT INTO classestbl (
             branch_id, room_id, program_id, teacher_id, level_tag, class_name,
-            max_students, start_date, end_date, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            max_students, start_date, end_date, status, skip_holidays, is_vip
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING *`,
           [
             branch_id,
@@ -989,7 +994,9 @@ router.post(
             max_students || null,
             start_date || null,
             end_date || null,
-            'Active'
+            'Active',
+            skipHolidaysBool,
+            isVipBool
           ]
         );
       
@@ -1158,7 +1165,7 @@ router.post(
             }));
 
           const { startYmd, endYmd } = getHolidayRangeFromStartDate(start_date);
-          const holidayDateSet = startYmd && endYmd
+          const holidayDateSet = (skipHolidaysBool && startYmd && endYmd)
             ? await getCustomHolidayDateSetForRange(startYmd, endYmd, branch_id || null)
             : new Set();
 
@@ -1265,7 +1272,7 @@ router.put(
       await client.query('BEGIN');
       
       const { id } = req.params;
-      const { branch_id, room_id, program_id, teacher_id, teacher_ids, level_tag, class_name, max_students, start_date, end_date, days_of_week } = req.body;
+      const { branch_id, room_id, program_id, teacher_id, teacher_ids, level_tag, class_name, max_students, start_date, end_date, days_of_week, skip_holidays, is_vip } = req.body;
       
       // Support both teacher_id (single) and teacher_ids (array) for backward compatibility
       const teacherIdsArray = teacher_ids && Array.isArray(teacher_ids) && teacher_ids.length > 0 
@@ -1334,6 +1341,18 @@ router.put(
           params.push(value);
         }
       });
+      
+      // Handle skip_holidays and is_vip (optional booleans)
+      if (skip_holidays !== undefined) {
+        paramCount++;
+        updates.push(`skip_holidays = $${paramCount}`);
+        params.push(skip_holidays === true || skip_holidays === 'true');
+      }
+      if (is_vip !== undefined) {
+        paramCount++;
+        updates.push(`is_vip = $${paramCount}`);
+        params.push(is_vip === true || is_vip === 'true');
+      }
       
       // Handle teacher_id update
       if (primaryTeacherId !== undefined) {
@@ -1516,7 +1535,8 @@ router.put(
                 }));
 
                 const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
-                const holidayDateSet = startYmd && endYmd
+                const skipHolidays = classData.skip_holidays === true || classData.skip_holidays === 'true';
+                const holidayDateSet = (skipHolidays && startYmd && endYmd)
                   ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
                   : new Set();
 
@@ -1811,10 +1831,12 @@ router.get(
                 c.class_name,
                 c.max_students,
                 c.status,
+                COALESCE(c.skip_holidays, false) as skip_holidays,
                 TO_CHAR(c.start_date, 'YYYY-MM-DD') as start_date,
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') as end_date,
                 p.curriculum_id, 
                 p.program_name, 
+                p.session_duration_hours,
                 cu.curriculum_name, 
                 cu.number_of_phase, 
                 cu.number_of_session_per_phase
@@ -1915,7 +1937,8 @@ router.get(
           }));
 
           const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
-          const holidayDateSet = startYmd && endYmd
+          const skipHolidays = classData.skip_holidays === true || classData.skip_holidays === 'true';
+          const holidayDateSet = (skipHolidays && startYmd && endYmd)
             ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
             : new Set();
 
@@ -2461,7 +2484,8 @@ router.post(
       }));
 
       const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
-      const holidayDateSet = startYmd && endYmd
+      const skipHolidays = classData.skip_holidays === true || classData.skip_holidays === 'true';
+      const holidayDateSet = (skipHolidays && startYmd && endYmd)
         ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
         : new Set();
 
@@ -2842,7 +2866,8 @@ router.post(
       }));
 
       const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
-      const holidayDateSet = startYmd && endYmd
+      const skipHolidays = classData.skip_holidays === true || classData.skip_holidays === 'true';
+      const holidayDateSet = (skipHolidays && startYmd && endYmd)
         ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
         : new Set();
 
@@ -2958,7 +2983,8 @@ router.post(
       // Verify class exists and get branch_id, phase, start date, and level_tag
       const classCheck = await client.query(
         `SELECT c.class_id, c.branch_id, c.max_students, c.start_date, c.phase_number, c.level_tag,
-                b.branch_name, p.program_name, p.curriculum_id, cu.number_of_phase, cu.number_of_session_per_phase
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                p.program_name, p.curriculum_id, cu.number_of_phase, cu.number_of_session_per_phase
          FROM classestbl c
          LEFT JOIN branchestbl b ON c.branch_id = b.branch_id
          LEFT JOIN programstbl p ON c.program_id = p.program_id
@@ -3284,7 +3310,7 @@ router.post(
             );
             const reservedCount = await client.query(
               `SELECT COUNT(DISTINCT student_id) as count FROM reservedstudentstbl 
-               WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired')`,
+               WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired', 'Upgraded')`,
               [class_id]
             );
             const currentEnrolled = parseInt(enrolledCount.rows[0].count) || 0;
@@ -3549,7 +3575,7 @@ router.post(
         );
         const reservedCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count FROM reservedstudentstbl 
-           WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired')`,
+           WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired', 'Upgraded')`,
           [class_id]
         );
         const currentEnrolled = parseInt(enrolledCount.rows[0].count) || 0;
@@ -4109,7 +4135,8 @@ router.post(
             const meetsMinPayment = !promo.min_payment_amount || packagePrice >= parseFloat(promo.min_payment_amount);
             
             // Check if package_id is in promo's package_ids array
-            const packageMatches = promo.package_ids && promo.package_ids.includes(package_id);
+            // If promo has no packages (empty array), it applies to ALL packages
+            const packageMatches = promo.package_ids.length === 0 || (package_id && promo.package_ids.includes(package_id));
             
             if (isDateValid && isUsageValid && packageMatches && !hasAlreadyUsed && isEligible && meetsMinPayment) {
               // Calculate discount
@@ -4200,6 +4227,15 @@ router.post(
           console.error('Error applying promo:', promoError);
           // Don't fail enrollment if promo fails, just log it
         }
+      }
+
+      // Update main invoice amount when promo was applied (invoice was created with full amount)
+      if (newInvoice && promoApplied && promoDiscount > 0) {
+        await client.query(
+          `UPDATE invoicestbl SET amount = $1, promo_id = $2 WHERE invoice_id = $3`,
+          [totalAmount, promo_id, newInvoice.invoice_id]
+        );
+        newInvoice.amount = totalAmount;
       }
 
       // Apply promo to downpayment only when package is Installment (promo applies to downpayment only)
@@ -4300,7 +4336,8 @@ router.post(
               (installmentApplyScope === 'downpayment' || installmentApplyScope === 'both' 
                 ? downpaymentAmount >= parseFloat(promo.min_payment_amount)
                 : true); // For monthly-only scope, min_payment will be checked against monthly amount later
-            const packageMatches = promoPackageIds && promoPackageIds.includes(package_id);
+            // If promo has no packages, it applies to ALL packages
+            const packageMatches = promoPackageIds.length === 0 || (package_id && promoPackageIds.includes(package_id));
 
             // Only apply downpayment discount if scope includes downpayment
             const shouldApplyDownpaymentDiscount = (installmentApplyScope === 'downpayment' || installmentApplyScope === 'both');
@@ -5271,12 +5308,12 @@ router.post(
         }
       }
 
-      // Create merged class
+      // Create merged class (inherit skip_holidays and is_vip from source class)
       const mergedClassResult = await client.query(
         `INSERT INTO classestbl (
           branch_id, room_id, program_id, teacher_id, level_tag, class_name,
-          max_students, start_date, end_date, phase_number, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          max_students, start_date, end_date, phase_number, status, skip_holidays, is_vip
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *`,
         [
           sourceClass.branch_id,
@@ -5289,7 +5326,9 @@ router.post(
           mergedStartDate,
           mergedEndDate,
           sourceClass.phase_number, // Same phase_number as all classes
-          'Active'
+          'Active',
+          sourceClass.skip_holidays === true,
+          sourceClass.is_vip === true
         ]
       );
 

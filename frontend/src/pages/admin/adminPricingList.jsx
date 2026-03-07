@@ -7,7 +7,7 @@ const AdminPricingList = () => {
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
-  const selectedBranchName = userInfo?.branch_name || 'Your Branch';
+  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [pricingLists, setPricingLists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,14 +37,15 @@ const AdminPricingList = () => {
       if (!userInfo?.branch_name && adminBranchId) {
         try {
           const response = await apiRequest(`/branches/${adminBranchId}`);
-          if (response && response.data && response.data.branch_name) {
-            setSelectedBranchName(response.data.branch_name);
+          if (response?.data) {
+            const d = response.data;
+            setSelectedBranchName(d.branch_nickname || d.branch_name || 'Your Branch');
           }
         } catch (err) {
           console.error('Error fetching branch name:', err);
         }
-      } else if (userInfo?.branch_name) {
-        setSelectedBranchName(userInfo.branch_name);
+      } else if (userInfo?.branch_name || userInfo?.branch_nickname) {
+        setSelectedBranchName(userInfo.branch_nickname || userInfo.branch_name);
       }
     };
 

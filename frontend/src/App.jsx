@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import FinancialDashboard from './pages/superadmin/FinancialDashboard';
 import OperationalDashboard from './pages/superadmin/OperationalDashboard';
+import EnrollmentDashboard from './pages/superadmin/EnrollmentDashboard';
 import Branch from './pages/superadmin/Branch';
 import Personnel from './pages/superadmin/Personnel';
 import Student from './pages/superadmin/Student';
@@ -21,6 +22,8 @@ import Room from './pages/superadmin/Room';
 import Invoice from './pages/superadmin/Invoice';
 import InstallmentInvoice from './pages/superadmin/InstallmentInvoice';
 import PaymentLogs from './pages/superadmin/PaymentLogs';
+import AcknowledgementReceipts from './pages/superadmin/AcknowledgementReceipts';
+import Report from './pages/superadmin/Report';
 import CalendarSchedule from './pages/superadmin/CalendarSchedule';
 import Holidays from './pages/superadmin/Holidays';
 import Announcements from './pages/superadmin/Announcements';
@@ -43,6 +46,8 @@ import AdminRoom from './pages/admin/adminRoom';
 import AdminInvoice from './pages/admin/adminInvoice';
 import AdminInstallmentInvoice from './pages/admin/adminInstallmentInvoice';
 import AdminPaymentLogs from './pages/admin/adminPaymentLogs';
+import AdminAcknowledgementReceipts from './pages/admin/adminAcknowledgementReceipts';
+import AdminReport from './pages/admin/adminReport';
 import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
 import TeacherCalendar from './pages/teacher/teacherCalendar';
@@ -63,11 +68,13 @@ import FinanceOperationalDashboard from './pages/finance/financeOperationalDashb
 import FinanceInvoice from './pages/finance/financeInvoice';
 import FinanceInstallmentInvoice from './pages/finance/financeInstallmentInvoice';
 import FinancePaymentLogs from './pages/finance/financePaymentLogs';
+import FinanceAcknowledgementReceipts from './pages/finance/financeAcknowledgementReceipts';
 import SuperfinanceFinancialDashboard from './pages/superfinance/superfinanceFinancialDashboard';
 import SuperfinanceOperationalDashboard from './pages/superfinance/superfinanceOperationalDashboard';
 import SuperfinanceInvoice from './pages/superfinance/superfinanceInvoice';
 import SuperfinanceInstallmentInvoice from './pages/superfinance/superfinanceInstallmentInvoice';
 import SuperfinancePaymentLogs from './pages/superfinance/superfinancePaymentLogs';
+import SuperfinanceAcknowledgementReceipts from './pages/superfinance/superfinanceAcknowledgementReceipts';
 
 function App() {
   return (
@@ -90,6 +97,7 @@ function App() {
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<FinancialDashboard />} />
             <Route path="operational-dashboard" element={<OperationalDashboard />} />
+            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
             <Route path="branch" element={<Branch />} />
             <Route path="personnel" element={<Personnel />} />
             <Route path="student" element={<Student />} />
@@ -105,6 +113,8 @@ function App() {
             <Route path="invoice" element={<Invoice />} />
             <Route path="installment-invoice" element={<InstallmentInvoice />} />
             <Route path="payment-logs" element={<PaymentLogs />} />
+            <Route path="acknowledgement-receipts" element={<AcknowledgementReceipts />} />
+            <Route path="report" element={<Report />} />
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="announcements" element={<Announcements />} />
@@ -123,6 +133,7 @@ function App() {
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<AdminFinancialDashboard />} />
             <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
+            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
             <Route path="calendar" element={<AdminCalendar />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="personnel" element={<AdminPersonnel />} />
@@ -140,6 +151,8 @@ function App() {
             <Route path="invoice" element={<AdminInvoice />} />
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
+            <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
+            <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
           
@@ -191,9 +204,11 @@ function App() {
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<FinanceFinancialDashboard />} />
             <Route path="operational-dashboard" element={<FinanceOperationalDashboard />} />
+            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
             <Route path="invoice" element={<FinanceInvoice />} />
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
+            <Route path="acknowledgement-receipts" element={<FinanceAcknowledgementReceipts />} />
           </Route>
           
           {/* Superfinance Routes - Finance role with no branch (manages all branches) */}
@@ -208,9 +223,11 @@ function App() {
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<SuperfinanceFinancialDashboard />} />
             <Route path="operational-dashboard" element={<SuperfinanceOperationalDashboard />} />
+            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
             <Route path="invoice" element={<SuperfinanceInvoice />} />
             <Route path="installment-invoice" element={<SuperfinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />
+            <Route path="acknowledgement-receipts" element={<SuperfinanceAcknowledgementReceipts />} />
           </Route>
           
           {/* Default redirect */}

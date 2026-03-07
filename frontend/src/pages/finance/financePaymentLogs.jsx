@@ -27,6 +27,10 @@ const FinancePaymentLogs = () => {
   const [openApprovalMenuId, setOpenApprovalMenuId] = useState(null);
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
+  const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
+  const [referenceModalInput, setReferenceModalInput] = useState('');
+  const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
 
   useEffect(() => {
@@ -118,6 +122,59 @@ const FinancePaymentLogs = () => {
     return false;
   };
 
+  const openReferenceModal = (payment) => {
+    setSelectedPaymentForReference(payment);
+    setReferenceModalInput(''); // Finance must retype the reference number from the image
+    setShowReferenceModal(true);
+  };
+
+  const closeReferenceModal = () => {
+    setShowReferenceModal(false);
+    setSelectedPaymentForReference(null);
+    setReferenceModalInput('');
+  };
+
+  const handleUpdateReferenceNumber = async (e) => {
+    e.preventDefault();
+    if (!selectedPaymentForReference) return;
+    const enteredRef = referenceModalInput.trim();
+    const originalRef = (selectedPaymentForReference.reference_number || '').trim();
+
+    if (!originalRef) {
+      alert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
+      return;
+    }
+    if (!enteredRef) {
+      alert('Please enter the reference number exactly as shown on the receipt image.');
+      return;
+    }
+
+    if (enteredRef !== originalRef) {
+      alert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
+      return;
+    }
+
+    const paymentId = selectedPaymentForReference.payment_id;
+    setReferenceModalUpdating(true);
+    try {
+      await apiRequest(`/payments/${paymentId}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify({ approve: true }),
+      });
+      setPayments((prev) =>
+        prev.map((p) =>
+          p.payment_id === paymentId ? { ...p, approval_status: 'Approved' } : p
+        )
+      );
+      closeReferenceModal();
+      await fetchPayments(pagination.page);
+    } catch (err) {
+      alert(err.message || 'Failed to save and approve payment.');
+    } finally {
+      setReferenceModalUpdating(false);
+    }
+  };
+
   const handleApprovePayment = async (paymentId, approve) => {
     setApprovalLoadingId(paymentId);
     setOpenApprovalMenuId(null);
@@ -135,8 +192,10 @@ const FinancePaymentLogs = () => {
   };
 
   const getBranchName = (branchId) => {
-    const branch = branches.find(b => b.branch_id === branchId);
-    return branch ? branch.branch_name : 'N/A';
+    if (!branchId) return null;
+    const branch = branches.find((b) => b.branch_id === branchId);
+    if (!branch) return 'N/A';
+    return branch.branch_nickname || branch.branch_name || 'N/A';
   };
 
   const formatBranchName = (branchName) => {
@@ -296,7 +355,7 @@ const FinancePaymentLogs = () => {
         'Payment Type': payment.payment_type || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
-        'Branch': payment.branch_name || 'N/A',
+        'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
         'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
@@ -327,7 +386,7 @@ const FinancePaymentLogs = () => {
 
       // Generate filename
       const branchName = selectedExportBranches.length === 1
-        ? branches.find(b => b.branch_id === selectedExportBranches[0])?.branch_name.replace(/[^a-zA-Z0-9]/g, '_') || 'Selected_Branch'
+        ? (() => { const b = branches.find(b => b.branch_id === selectedExportBranches[0]); return (b?.branch_nickname || b?.branch_name || '').replace(/[^a-zA-Z0-9]/g, '_') || 'Selected_Branch'; })()
         : 'Selected_Branches';
       const date = new Date().toISOString().split('T')[0];
       const filename = `Payment_Logs_${branchName}_${date}.xlsx`;
@@ -390,25 +449,23 @@ const FinancePaymentLogs = () => {
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow">
-          {/* Table View - Horizontal Scroll on All Screens */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1400px', tableLayout: 'fixed' }}>
+          <div className="rounded-lg overflow-hidden">
+            <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '100px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '180px' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '14%' }} />
               </colgroup>
-              <thead className="bg-white table-header-stable">
+              <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
-                    <div className="flex flex-col space-y-2">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                    <div className="flex flex-col space-y-2 max-w-[160px]">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
@@ -418,7 +475,7 @@ const FinancePaymentLogs = () => {
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                           placeholder="Search payments..."
-                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
+                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full max-w-full"
                           onClick={(e) => e.stopPropagation()}
                         />
                         {searchTerm && (
@@ -437,13 +494,10 @@ const FinancePaymentLogs = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    INVOICE
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     STUDENT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -466,13 +520,13 @@ const FinancePaymentLogs = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    PAYMENT TYPE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
+                    TYPE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     AMOUNT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -497,7 +551,7 @@ const FinancePaymentLogs = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
                     <div className="relative branch-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -520,27 +574,21 @@ const FinancePaymentLogs = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    ISSUE DATE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                    DATE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     REFERENCE
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.map((payment) => (
-                  <tr key={payment.payment_id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                  <tr key={payment.payment_id} className="hover:bg-gray-50/80">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '120px' }}>
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-medium truncate" title={payment.invoice_description || `INV-${payment.invoice_id}`}>{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
-                        <span className="text-xs text-gray-500">Amount: {formatCurrency(payment.invoice_amount)}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '180px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
                         <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
                         {payment.student_email && (
@@ -548,16 +596,16 @@ const FinancePaymentLogs = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
                       {payment.payment_type || '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-600">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
                       {formatCurrency(payment.payable_amount)}
                     </td>
-                    <td className="px-6 py-4 text-sm payment-status-cell align-top" style={{ width: '140px', maxWidth: '140px', overflow: 'hidden' }}>
+                    <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
                         {approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
@@ -571,20 +619,26 @@ const FinancePaymentLogs = () => {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!canApprove) return;
-                                  if (showDropdown) {
-                                    setOpenApprovalMenuId(null);
+                                  if (isApproved) {
+                                    if (!canApprove) return;
+                                    if (showDropdown) {
+                                      setOpenApprovalMenuId(null);
+                                    } else {
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
+                                      setOpenApprovalMenuId(payment.payment_id);
+                                    }
                                   } else {
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
-                                    setOpenApprovalMenuId(payment.payment_id);
+                                    openReferenceModal(payment);
                                   }
                                 }}
-                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 shrink-0 ${canApprove ? 'hover:ring-2 hover:ring-primary-300' : 'cursor-default'} ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
-                                title={canApprove ? (isApproved ? 'Click to change approval' : 'Click to approve') : 'No permission'}
+                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 shrink-0 ${
+                                  isApproved ? (canApprove ? 'hover:ring-2 hover:ring-primary-300' : 'cursor-default') : 'hover:ring-2 hover:ring-primary-300'
+                                } ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
+                                title={isApproved ? (canApprove ? 'Click to change approval' : 'No permission') : 'Click to update reference number'}
                               >
                                 <span className="truncate">{isApproved ? 'Approved' : 'Pending Approval'}</span>
-                                {canApprove && (
+                                {(isApproved ? canApprove : true) && (
                                   <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                   </svg>
@@ -600,9 +654,9 @@ const FinancePaymentLogs = () => {
                         })()}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 align-top" style={{ width: '140px', maxWidth: '140px', minWidth: '140px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
                       {(() => {
-                        const branchName = payment.branch_name || getBranchName(payment.branch_id);
+                        const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
                         if (!branchName || branchName === 'N/A') {
                           return <span className="text-gray-400">-</span>;
                         }
@@ -618,10 +672,10 @@ const FinancePaymentLogs = () => {
                         );
                       })()}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
                       {formatDate(payment.issue_date)}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500" style={{ maxWidth: '180px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
@@ -754,6 +808,83 @@ const FinancePaymentLogs = () => {
         document.body
       )}
 
+      {/* Reference Number modal - for Pending payments */}
+      {showReferenceModal && selectedPaymentForReference && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+          onClick={closeReferenceModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">Payment Status info</h2>
+                <button
+                  type="button"
+                  onClick={closeReferenceModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Payment INV-{selectedPaymentForReference.invoice_id} · {selectedPaymentForReference.student_name || 'N/A'}
+              </p>
+              {selectedPaymentForReference.payment_attachment_url && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
+                  <a
+                    href={selectedPaymentForReference.payment_attachment_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block"
+                  >
+                    <img
+                      src={selectedPaymentForReference.payment_attachment_url}
+                      alt="Payment attachment"
+                      className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain"
+                    />
+                  </a>
+                </div>
+              )}
+              <form onSubmit={handleUpdateReferenceNumber}>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference Number</label>
+                  <input
+                    type="text"
+                    value={referenceModalInput}
+                    onChange={(e) => setReferenceModalInput(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeReferenceModal}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                    disabled={referenceModalUpdating}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={referenceModalUpdating}
+                  >
+                    {referenceModalUpdating ? 'Saving...' : 'Done'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Payment Status approval dropdown - portaled */}
       {openApprovalMenuId && createPortal(
         (() => {
@@ -833,7 +964,7 @@ const FinancePaymentLogs = () => {
                 filterBranch === branch.branch_id.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
               }`}
             >
-              {branch.branch_name}
+              {branch.branch_nickname || branch.branch_name}
             </button>
           ))}
         </div>,
@@ -892,7 +1023,7 @@ const FinancePaymentLogs = () => {
                           disabled={exportLoading}
                           className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
                         />
-                        <span className="text-gray-900">{branch.branch_name}</span>
+                        <span className="text-gray-900">{branch.branch_nickname || branch.branch_name}</span>
                       </label>
                     ))
                   )}

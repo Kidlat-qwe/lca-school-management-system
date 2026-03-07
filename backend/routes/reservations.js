@@ -561,7 +561,7 @@ router.put(
         );
         const reservedCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count FROM reservedstudentstbl 
-           WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired') AND reserved_id != $2`,
+           WHERE class_id = $1 AND status NOT IN ('Cancelled', 'Expired', 'Upgraded') AND reserved_id != $2`,
           [reservation.class_id, id] // Exclude current reservation since it's being converted
         );
         const currentEnrolled = parseInt(enrolledCount.rows[0].count) || 0;
@@ -577,7 +577,8 @@ router.put(
             try {
               const alternativesResult = await client.query(
                 `SELECT DISTINCT c.class_id, c.class_name, c.level_tag, c.max_students,
-                        p.program_name, b.branch_name,
+                        p.program_name,
+                        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         COALESCE(enrolled_counts.enrolled_count, 0) as enrolled_students,
                         COALESCE(reserved_counts.reserved_count, 0) as reserved_students,
                         (COALESCE(enrolled_counts.enrolled_count, 0) + COALESCE(reserved_counts.reserved_count, 0)) as total_occupied,
@@ -593,7 +594,7 @@ router.put(
                  LEFT JOIN (
                    SELECT class_id, COUNT(DISTINCT student_id) as reserved_count
                    FROM reservedstudentstbl
-                   WHERE status NOT IN ('Cancelled', 'Expired')
+                   WHERE status NOT IN ('Cancelled', 'Expired', 'Upgraded')
                    GROUP BY class_id
                  ) reserved_counts ON c.class_id = reserved_counts.class_id
                  WHERE c.status = 'Active'
@@ -873,7 +874,8 @@ router.put(
                 const meetsMinPayment = !promo.min_payment_amount || originalPackageAmount >= parseFloat(promo.min_payment_amount);
                 
                 // Check if package_id is in promo's package_ids array
-                const packageMatches = promo.package_ids && promo.package_ids.includes(package_id);
+                // If promo has no packages (empty array), it applies to ALL packages
+                const packageMatches = promo.package_ids.length === 0 || (package_id && promo.package_ids.includes(package_id));
                 
                 if (isDateValid && isUsageValid && packageMatches && !hasAlreadyUsed && isEligible && meetsMinPayment) {
                   // Calculate discount
@@ -1675,7 +1677,9 @@ router.get(
       const alternativesResult = await query(
         `SELECT DISTINCT c.class_id, c.class_name, c.level_tag, c.max_students,
                 c.start_date, c.end_date, c.status,
-                p.program_name, b.branch_name, r.room_name,
+                p.program_name,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                r.room_name,
                 COALESCE(enrolled_counts.enrolled_count, 0) as enrolled_students,
                 COALESCE(reserved_counts.reserved_count, 0) as reserved_students,
                 (COALESCE(enrolled_counts.enrolled_count, 0) + COALESCE(reserved_counts.reserved_count, 0)) as total_occupied,
@@ -1692,7 +1696,7 @@ router.get(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as reserved_count
            FROM reservedstudentstbl
-           WHERE status NOT IN ('Cancelled', 'Expired')
+           WHERE status NOT IN ('Cancelled', 'Expired', 'Upgraded')
            GROUP BY class_id
          ) reserved_counts ON c.class_id = reserved_counts.class_id
          WHERE c.status = 'Active'

@@ -9,7 +9,7 @@ const AdminPaymentLogs = () => {
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
-  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [exportLoading, setExportLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,6 +26,10 @@ const AdminPaymentLogs = () => {
   const [openApprovalMenuId, setOpenApprovalMenuId] = useState(null);
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
+  const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
+  const [referenceModalInput, setReferenceModalInput] = useState('');
+  const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
   // Removed branches state - admin only sees their branch
 
@@ -35,14 +39,15 @@ const AdminPaymentLogs = () => {
       if (!userInfo?.branch_name && adminBranchId) {
         try {
           const response = await apiRequest(`/branches/${adminBranchId}`);
-          if (response && response.data && response.data.branch_name) {
-            setSelectedBranchName(response.data.branch_name);
+          if (response?.data) {
+            const d = response.data;
+            setSelectedBranchName(d.branch_nickname || d.branch_name || 'Your Branch');
           }
         } catch (err) {
           console.error('Error fetching branch name:', err);
         }
-      } else if (userInfo?.branch_name) {
-        setSelectedBranchName(userInfo.branch_name);
+      } else if (userInfo?.branch_name || userInfo?.branch_nickname) {
+        setSelectedBranchName(userInfo.branch_nickname || userInfo.branch_name);
       }
     };
 
@@ -92,6 +97,59 @@ const AdminPaymentLogs = () => {
 
   const userType = userInfo?.user_type || userInfo?.userType;
   const canApprovePayment = () => false;
+
+  const openReferenceModal = (payment) => {
+    setSelectedPaymentForReference(payment);
+    setReferenceModalInput(''); // Re-typing enforces that the image is checked
+    setShowReferenceModal(true);
+  };
+
+  const closeReferenceModal = () => {
+    setShowReferenceModal(false);
+    setSelectedPaymentForReference(null);
+    setReferenceModalInput('');
+  };
+
+  const handleUpdateReferenceNumber = async (e) => {
+    e.preventDefault();
+    if (!selectedPaymentForReference) return;
+    const enteredRef = referenceModalInput.trim();
+    const originalRef = (selectedPaymentForReference.reference_number || '').trim();
+
+    if (!originalRef) {
+      alert('This payment has no reference number recorded yet. Please update it from the Record Payment modal.');
+      return;
+    }
+    if (!enteredRef) {
+      alert('Please enter the reference number exactly as shown on the receipt image.');
+      return;
+    }
+
+    if (enteredRef !== originalRef) {
+      alert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and correct it before saving.');
+      return;
+    }
+
+    const paymentId = selectedPaymentForReference.payment_id;
+    setReferenceModalUpdating(true);
+    try {
+      await apiRequest(`/payments/${paymentId}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify({ approve: true }),
+      });
+      setPayments((prev) =>
+        prev.map((p) =>
+          p.payment_id === paymentId ? { ...p, approval_status: 'Approved' } : p
+        )
+      );
+      closeReferenceModal();
+      await fetchPayments(pagination.page);
+    } catch (err) {
+      alert(err.message || 'Failed to save and approve payment.');
+    } finally {
+      setReferenceModalUpdating(false);
+    }
+  };
 
   const handleApprovePayment = async (paymentId, approve) => {
     setApprovalLoadingId(paymentId);
@@ -335,25 +393,23 @@ const AdminPaymentLogs = () => {
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow">
-          {/* Table View - Horizontal Scroll on All Screens */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1400px', tableLayout: 'fixed' }}>
+          <div className="rounded-lg overflow-hidden">
+            <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '100px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '180px' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '14%' }} />
               </colgroup>
-              <thead className="bg-white table-header-stable">
+              <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
-                    <div className="flex flex-col space-y-2">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                    <div className="flex flex-col space-y-2 max-w-[160px]">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                       </div>
@@ -363,7 +419,7 @@ const AdminPaymentLogs = () => {
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                           placeholder="Search payments..."
-                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
+                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full max-w-full"
                           onClick={(e) => e.stopPropagation()}
                         />
                         {searchTerm && (
@@ -382,13 +438,10 @@ const AdminPaymentLogs = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    INVOICE
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     STUDENT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -409,13 +462,13 @@ const AdminPaymentLogs = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    PAYMENT TYPE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
+                    TYPE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     AMOUNT
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
                       <button
                         onClick={(e) => {
@@ -436,30 +489,24 @@ const AdminPaymentLogs = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
                     Branch
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    ISSUE DATE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                    DATE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     REFERENCE
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.map((payment) => (
-                  <tr key={payment.payment_id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                  <tr key={payment.payment_id} className="hover:bg-gray-50/80">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '120px' }}>
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-medium truncate" title={payment.invoice_description || `INV-${payment.invoice_id}`}>{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
-                        <span className="text-xs text-gray-500">Amount: {formatCurrency(payment.invoice_amount)}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '180px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
                         <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
                         {payment.student_email && (
@@ -467,16 +514,16 @@ const AdminPaymentLogs = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
                       {payment.payment_type || '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-600">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
                       {formatCurrency(payment.payable_amount)}
                     </td>
-                    <td className="px-6 py-4 text-sm payment-status-cell align-top" style={{ width: '140px', maxWidth: '140px', overflow: 'hidden' }}>
+                    <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
                         {approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
@@ -490,19 +537,28 @@ const AdminPaymentLogs = () => {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!canApprove) return;
-                                  if (showDropdown) {
-                                    setOpenApprovalMenuId(null);
+                                  if (isApproved) {
+                                    if (!canApprove) return;
+                                    if (showDropdown) {
+                                      setOpenApprovalMenuId(null);
+                                    } else {
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
+                                      setOpenApprovalMenuId(payment.payment_id);
+                                    }
                                   } else {
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
-                                    setOpenApprovalMenuId(payment.payment_id);
+                                    openReferenceModal(payment);
                                   }
                                 }}
-                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-default focus:outline-none shrink-0 ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
-                                title="Only Superadmin, Superfinance, or Finance can approve"
+                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 shrink-0 hover:ring-2 hover:ring-primary-300 ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
+                                title={isApproved ? 'Only Superadmin, Superfinance, or Finance can approve' : 'Click to update reference number'}
                               >
                                 <span className="truncate">{isApproved ? 'Approved' : 'Pending Approval'}</span>
+                                {!isApproved && (
+                                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                )}
                               </button>
                               {isApproved && payment.approved_by_name && (
                                 <div className="text-xs text-gray-500 mt-0.5 truncate" title={payment.approved_at ? `Approved at ${payment.approved_at}` : ''}>
@@ -514,13 +570,13 @@ const AdminPaymentLogs = () => {
                         })()}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 align-top" style={{ width: '140px', maxWidth: '140px', minWidth: '140px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
                       <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
                       {formatDate(payment.issue_date)}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500" style={{ maxWidth: '180px' }}>
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
@@ -556,6 +612,83 @@ const AdminPaymentLogs = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Reference Number modal - for Pending payments */}
+      {showReferenceModal && selectedPaymentForReference && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+          onClick={closeReferenceModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">Payment Status info</h2>
+                <button
+                  type="button"
+                  onClick={closeReferenceModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Payment INV-{selectedPaymentForReference.invoice_id} · {selectedPaymentForReference.student_name || 'N/A'}
+              </p>
+              {selectedPaymentForReference.payment_attachment_url && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
+                  <a
+                    href={selectedPaymentForReference.payment_attachment_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block"
+                  >
+                    <img
+                      src={selectedPaymentForReference.payment_attachment_url}
+                      alt="Payment attachment"
+                      className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain"
+                    />
+                  </a>
+                </div>
+              )}
+              <form onSubmit={handleUpdateReferenceNumber}>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference Number</label>
+                  <input
+                    type="text"
+                    value={referenceModalInput}
+                    onChange={(e) => setReferenceModalInput(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeReferenceModal}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                    disabled={referenceModalUpdating}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={referenceModalUpdating}
+                  >
+                    {referenceModalUpdating ? 'Saving...' : 'Done'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       )}
 

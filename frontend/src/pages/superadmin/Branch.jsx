@@ -10,6 +10,7 @@ const Branch = () => {
   const [editingBranch, setEditingBranch] = useState(null);
   const [formData, setFormData] = useState({
     branch_name: '',
+    branch_nickname: '',
     branch_email: '',
     branch_address: '',
     branch_phone_number: '',
@@ -130,6 +131,7 @@ const Branch = () => {
     setError('');
     setFormData({
       branch_name: '',
+      branch_nickname: '',
       branch_email: '',
       branch_address: '',
       branch_phone_number: '',
@@ -154,6 +156,7 @@ const Branch = () => {
     setError('');
     setFormData({
       branch_name: branch.branch_name || '',
+      branch_nickname: branch.branch_nickname || '',
       branch_email: branch.branch_email || '',
       branch_address: branch.branch_address || '',
       branch_phone_number: branch.branch_phone_number || '',
@@ -316,9 +319,14 @@ const Branch = () => {
               </div>
 
               {/* Branch Title */}
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 pr-12">
+              <h3 className="text-lg font-semibold text-gray-900 pr-12">
                 {branch.branch_name}
               </h3>
+              {branch.branch_nickname && (
+                <p className="text-xs font-medium text-gray-500 mb-4 pr-12">
+                  Nickname: {branch.branch_nickname}
+                </p>
+              )}
 
               {/* Status Badge */}
               <div className="mb-4">
@@ -439,6 +447,21 @@ const Branch = () => {
                       {formErrors.branch_name && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.branch_name}</p>
                       )}
+                    </div>
+
+                    <div>
+                      <label htmlFor="branch_nickname" className="label-field">
+                        Nickname
+                      </label>
+                      <input
+                        type="text"
+                        id="branch_nickname"
+                        name="branch_nickname"
+                        value={formData.branch_nickname}
+                        onChange={handleInputChange}
+                        className="input-field"
+                        placeholder="Optional short name"
+                      />
                     </div>
 
                     <div>

@@ -30,7 +30,7 @@ const AdminPromo = () => {
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
-  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [promos, setPromos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -83,14 +83,15 @@ const AdminPromo = () => {
       if (!userInfo?.branch_name && adminBranchId) {
         try {
           const response = await apiRequest(`/branches/${adminBranchId}`);
-          if (response && response.data && response.data.branch_name) {
-            setSelectedBranchName(response.data.branch_name);
+          if (response?.data) {
+            const d = response.data;
+            setSelectedBranchName(d.branch_nickname || d.branch_name || 'Your Branch');
           }
         } catch (err) {
           console.error('Error fetching branch name:', err);
         }
-      } else if (userInfo?.branch_name) {
-        setSelectedBranchName(userInfo.branch_name);
+      } else if (userInfo?.branch_name || userInfo?.branch_nickname) {
+        setSelectedBranchName(userInfo.branch_nickname || userInfo.branch_name);
       }
     };
 
@@ -478,11 +479,6 @@ const AdminPromo = () => {
       }
     }
 
-    // At least one package is required for admin (they always have a specific branch)
-    if (!formData.package_ids || formData.package_ids.length === 0) {
-      errors.package_ids = 'Please select at least one package.';
-    }
-
     if (!formData.start_date) {
       errors.start_date = 'Start date is required';
     }
@@ -662,7 +658,7 @@ const AdminPromo = () => {
     const examples = branches
       .slice(0, 3)
       .map((branch) => {
-        const citySource = branch.city || branch.branch_name || '';
+        const citySource = branch.city || branch.branch_nickname || branch.branch_name || '';
         const cityClean = citySource
           .toUpperCase()
           .replace(/[^A-Z0-9]/g, '');
@@ -1255,7 +1251,7 @@ const AdminPromo = () => {
 
                     <div className="md:col-span-2">
                       <label className="label-field">
-                        Packages <span className="text-red-500">*</span>
+                        Packages
                       </label>
                       <div className={`border border-gray-300 rounded-lg p-4 max-h-60 overflow-y-auto ${formErrors.package_ids ? 'border-red-500' : ''}`}>
                         {packages.length === 0 ? (

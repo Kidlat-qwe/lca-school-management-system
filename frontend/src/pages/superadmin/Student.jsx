@@ -430,8 +430,9 @@ const Student = () => {
 
   const getBranchName = (branchId) => {
     if (!branchId) return null;
-    const branch = branches.find(b => b.branch_id === branchId);
-    return branch ? branch.branch_name : null;
+    const branch = branches.find((b) => b.branch_id === branchId);
+    if (!branch) return null;
+    return branch.branch_nickname || branch.branch_name || null;
   };
 
   const formatBranchName = (branchName) => {

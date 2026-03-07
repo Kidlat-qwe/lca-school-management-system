@@ -21,6 +21,7 @@ import merchandiseRoutes from './routes/merchandise.js';
 import merchandiseRequestsRoutes from './routes/merchandiserequests.js';
 import invoicesRoutes from './routes/invoices.js';
 import installmentInvoicesRoutes from './routes/installmentinvoices.js';
+import acknowledgementReceiptsRoutes from './routes/acknowledgementreceipts.js';
 import guardiansRoutes from './routes/guardians.js';
 import phasesessionsRoutes from './routes/phasesessions.js';
 import paymentsRoutes from './routes/payments.js';
@@ -35,6 +36,7 @@ import suspensionsRoutes from './routes/suspensions.js';
 import uploadRoutes from './routes/upload.js';
 import holidaysRoutes from './routes/holidays.js';
 import settingsRoutes from './routes/settings.js';
+import reportsRoutes from './routes/reports.js';
 
 // Import middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -146,6 +148,7 @@ app.use(`${API_VERSION}/merchandise`, merchandiseRoutes);
 app.use(`${API_VERSION}/merchandise-requests`, merchandiseRequestsRoutes);
 app.use(`${API_VERSION}/invoices`, invoicesRoutes);
 app.use(`${API_VERSION}/installment-invoices`, installmentInvoicesRoutes);
+app.use(`${API_VERSION}/acknowledgement-receipts`, acknowledgementReceiptsRoutes);
 app.use(`${API_VERSION}/guardians`, guardiansRoutes);
 app.use(`${API_VERSION}/phasesessions`, phasesessionsRoutes);
 app.use(`${API_VERSION}/payments`, paymentsRoutes);
@@ -160,6 +163,7 @@ app.use(`${API_VERSION}/suspensions`, suspensionsRoutes);
 app.use(`${API_VERSION}/upload`, uploadRoutes);
 app.use(`${API_VERSION}/holidays`, holidaysRoutes);
 app.use(`${API_VERSION}/settings`, settingsRoutes);
+app.use(`${API_VERSION}/reports`, reportsRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

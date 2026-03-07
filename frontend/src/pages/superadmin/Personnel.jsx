@@ -599,11 +599,12 @@ const Personnel = () => {
   const uniqueRoles = [...new Set(personnel.filter(p => p.user_type !== 'Student').map(p => getDisplayRole(p)).filter(Boolean))];
   const uniqueBranches = [...new Set(personnel.map(p => p.branch_id).filter(Boolean))].sort((a, b) => a - b);
   
-  // Helper function to get branch name by ID
+  // Helper function to get branch display name by ID (prefer nickname)
   const getBranchName = (branchId) => {
     if (!branchId) return null;
-    const branch = branches.find(b => b.branch_id === branchId);
-    return branch ? branch.branch_name : null;
+    const branch = branches.find((b) => b.branch_id === branchId);
+    if (!branch) return null;
+    return branch.branch_nickname || branch.branch_name || null;
   };
 
   // Helper function to format branch name for display (two lines)
@@ -1212,7 +1213,7 @@ const formattedDate = formatDateManila(date);
                       <option value="">Choose a branch...</option>
                       {branches.map((branch) => (
                         <option key={branch.branch_id} value={branch.branch_id}>
-                          {branch.branch_name}
+                          {branch.branch_nickname || branch.branch_name}
                         </option>
                       ))}
                     </select>
@@ -1381,7 +1382,7 @@ const formattedDate = formatDateManila(date);
                             <div>
                               <input
                                 type="text"
-                                value={selectedBranch.branch_name}
+                                value={selectedBranch.branch_nickname || selectedBranch.branch_name}
                                 readOnly
                                 className="input-field bg-gray-50 cursor-not-allowed"
                               />
@@ -1399,7 +1400,7 @@ const formattedDate = formatDateManila(date);
                               <option value="">Select Branch</option>
                               {branches.map((branch) => (
                                 <option key={branch.branch_id} value={branch.branch_id}>
-                                  {branch.branch_name}
+                                  {branch.branch_nickname || branch.branch_name}
                                 </option>
                               ))}
                             </select>

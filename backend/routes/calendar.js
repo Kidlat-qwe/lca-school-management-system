@@ -3,6 +3,7 @@ import { query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
+import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 
 const router = express.Router();
 
@@ -125,14 +126,15 @@ router.get(
           TO_CHAR(c.end_date, 'YYYY-MM-DD') AS class_end_date,
           p.program_name,
           p.program_code,
-          b.branch_name,
+          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           rm.room_name,
           rs.day_of_week,
           rs.start_time,
           rs.end_time,
           c.teacher_id AS primary_teacher_id,
           primary_teacher.full_name AS primary_teacher_name,
-          le.phase_number AS enrollment_phase
+          le.phase_number AS enrollment_phase,
+          COALESCE(c.skip_holidays, false) AS skip_holidays
         FROM latest_enrollment le
         INNER JOIN classestbl c ON le.class_id = c.class_id
         INNER JOIN roomschedtbl rs ON rs.class_id = c.class_id
@@ -164,6 +166,15 @@ router.get(
 
       const schedulesResult = await query(schedulesQuery, params);
       const scheduleRows = schedulesResult.rows;
+
+      const rangeStartYmd = formatDate(rangeStart);
+      const rangeEndYmd = formatDate(rangeEnd);
+      const branchIdsForHolidays = [...new Set(scheduleRows.map((r) => r.branch_id))];
+      const holidaySetByBranch = new Map();
+      for (const bid of branchIdsForHolidays) {
+        const holidaySet = await getCustomHolidayDateSetForRange(rangeStartYmd, rangeEndYmd, bid);
+        holidaySetByBranch.set(bid, holidaySet);
+      }
 
       // Get teacher associations for classes
       const classIds = [...new Set(scheduleRows.map((row) => row.class_id))];
@@ -257,6 +268,10 @@ router.get(
           currentDate.setDate(currentDate.getDate() + 7)
         ) {
           const dateStr = formatDate(currentDate);
+          if (row.skip_holidays) {
+            const branchHolidays = holidaySetByBranch.get(row.branch_id);
+            if (branchHolidays && branchHolidays.has(dateStr)) continue;
+          }
 
           events.push({
             event_id: `${row.class_id}-${dateStr}-${row.start_time}-${row.day_of_week}`,
@@ -384,7 +399,8 @@ router.get(
           rs.start_time,
           rs.end_time,
           c.teacher_id AS primary_teacher_id,
-          primary_teacher.full_name AS primary_teacher_name
+          primary_teacher.full_name AS primary_teacher_name,
+          COALESCE(c.skip_holidays, false) AS skip_holidays
         FROM roomschedtbl rs
         INNER JOIN classestbl c ON rs.class_id = c.class_id
         LEFT JOIN roomstbl rm ON COALESCE(rs.room_id, c.room_id) = rm.room_id
@@ -448,6 +464,15 @@ router.get(
 
       const schedulesResult = await query(schedulesQuery, params);
       const scheduleRows = schedulesResult.rows;
+
+      const rangeStartYmd = formatDate(rangeStart);
+      const rangeEndYmd = formatDate(rangeEnd);
+      const branchIdsForHolidays = [...new Set(scheduleRows.map((r) => r.branch_id))];
+      const holidaySetByBranch = new Map();
+      for (const bid of branchIdsForHolidays) {
+        const holidaySet = await getCustomHolidayDateSetForRange(rangeStartYmd, rangeEndYmd, bid);
+        holidaySetByBranch.set(bid, holidaySet);
+      }
 
       // Get all branches (always unfiltered)
       let allBranchesQuery = `
@@ -796,6 +821,11 @@ router.get(
           currentDate.setDate(currentDate.getDate() + 7)
         ) {
           const dateStr = formatDate(currentDate);
+          if (row.skip_holidays) {
+            const branchHolidays = holidaySetByBranch.get(row.branch_id);
+            if (branchHolidays && branchHolidays.has(dateStr)) continue;
+          }
+
           const sessionKey = `${row.class_id}-${dateStr}-${row.start_time}`;
           const classCode = sessionMap.get(sessionKey);
 

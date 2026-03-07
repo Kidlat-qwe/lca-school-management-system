@@ -621,8 +621,9 @@ const Package = () => {
   // Helper functions
   const getBranchName = (branchId) => {
     if (!branchId) return null;
-    const branch = branches.find(b => b.branch_id === branchId);
-    return branch ? branch.branch_name : null;
+    const branch = branches.find((b) => b.branch_id === branchId);
+    if (!branch) return null;
+    return branch.branch_nickname || branch.branch_name || null;
   };
 
   const getPricingListName = (pricingListId) => {
@@ -1086,7 +1087,7 @@ const Package = () => {
                         <option value="">Select Branch (Optional)</option>
                         {branches.map((branch) => (
                           <option key={branch.branch_id} value={branch.branch_id}>
-                            {branch.branch_name}
+                            {branch.branch_nickname || branch.branch_name}
                           </option>
                         ))}
                       </select>

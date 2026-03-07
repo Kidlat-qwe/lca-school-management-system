@@ -13,7 +13,7 @@ const StudentPackages = () => {
   const [filterLevelTag, setFilterLevelTag] = useState('');
   const [selectedPackageForDetails, setSelectedPackageForDetails] = useState(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
 
   const studentBranchId = userInfo?.branch_id || userInfo?.branchId;
 
@@ -28,12 +28,15 @@ const StudentPackages = () => {
     if (studentBranchId && !userInfo?.branch_name) {
       try {
         const response = await apiRequest(`/branches/${studentBranchId}`);
-        if (response.data?.branch_name) {
-          setSelectedBranchName(response.data.branch_name);
+        if (response?.data) {
+          const d = response.data;
+          setSelectedBranchName(d.branch_nickname || d.branch_name || 'Your Branch');
         }
       } catch (err) {
         console.error('Error fetching branch name:', err);
       }
+    } else if (userInfo?.branch_nickname || userInfo?.branch_name) {
+      setSelectedBranchName(userInfo.branch_nickname || userInfo.branch_name);
     }
   };
 

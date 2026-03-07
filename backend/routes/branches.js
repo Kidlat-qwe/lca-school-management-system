@@ -93,6 +93,7 @@ router.post(
   [
     body('branch_name').notEmpty().withMessage('Branch name is required'),
     body('branch_email').optional().isEmail().withMessage('Valid email is required'),
+    body('branch_nickname').optional().isString().withMessage('Nickname must be a string'),
     body('branch_address').optional().isString().withMessage('Address must be a string'),
     body('branch_phone_number').optional().isString().withMessage('Phone number must be a string'),
     body('status').optional().isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
@@ -104,6 +105,7 @@ router.post(
       const {
         branch_name,
         branch_email,
+        branch_nickname,
         branch_address,
         branch_phone_number,
         status,
@@ -120,14 +122,15 @@ router.post(
 
       const result = await query(
         `INSERT INTO branchestbl (
-          branch_name, branch_email, branch_address, branch_phone_number, status,
+          branch_name, branch_email, branch_nickname, branch_address, branch_phone_number, status,
           city, postal_code, business_registration_number, registered_tax_id,
           establishment_date, country, state_province_region, locale, currency
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *`,
         [
           branch_name,
           branch_email || null,
+          branch_nickname || null,
           branch_address || null,
           branch_phone_number || null,
           status || 'Active',
@@ -183,6 +186,7 @@ router.put(
       const {
         branch_name,
         branch_email,
+        branch_nickname,
         branch_address,
         branch_phone_number,
         status,
@@ -214,6 +218,7 @@ router.put(
       const fields = {
         branch_name,
         branch_email,
+        branch_nickname,
         branch_address,
         branch_phone_number,
         status,
@@ -233,7 +238,7 @@ router.put(
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           // Convert empty strings to null for optional fields (except branch_name which is required)
-          const optionalFields = ['branch_email', 'branch_address', 'branch_phone_number', 'city', 'postal_code', 
+          const optionalFields = ['branch_email', 'branch_nickname', 'branch_address', 'branch_phone_number', 'city', 'postal_code', 
                                   'business_registration_number', 'registered_tax_id', 'establishment_date', 
                                   'country', 'state_province_region', 'locale', 'currency'];
           if (optionalFields.includes(key) && value === '') {

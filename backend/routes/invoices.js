@@ -191,10 +191,17 @@ router.get(
               }
             }
 
+            const items = itemsResult.rows || [];
+            // Use effective amount from items when present (e.g. downpayment with promo discount)
+            const effectiveAmount = items.length > 0
+              ? Math.max(0, items.reduce((sum, i) => sum + (Number(i.amount) || 0) - (Number(i.discount_amount) || 0) + (Number(i.penalty_amount) || 0), 0))
+              : invoice.amount;
+
             return {
               ...invoice,
+              amount: effectiveAmount,
               status: invoice.computed_status || invoice.status, // Use computed status if available
-              items: itemsResult.rows || [],
+              items,
               students: studentsResult.rows || [],
               reservation: reservation ? {
                 reserved_id: reservation.reserved_id,
@@ -292,11 +299,18 @@ router.get(
         }
       }
 
+      const items = itemsResult.rows || [];
+      const invoiceRow = result.rows[0];
+      const effectiveAmount = items.length > 0
+        ? Math.max(0, items.reduce((sum, i) => sum + (Number(i.amount) || 0) - (Number(i.discount_amount) || 0) + (Number(i.penalty_amount) || 0), 0))
+        : invoiceRow.amount;
+
       res.json({
         success: true,
         data: {
-          ...result.rows[0],
-          items: itemsResult.rows,
+          ...invoiceRow,
+          amount: effectiveAmount,
+          items,
           students: studentsResult.rows,
           reservation: reservation ? {
             reserved_id: reservation.reserved_id,
@@ -352,7 +366,7 @@ router.get(
       let branchInfo = null;
       if (invoice.branch_id) {
         const branchResult = await query(
-          'SELECT branch_name, branch_address FROM branchestbl WHERE branch_id = $1',
+          'SELECT COALESCE(branch_nickname, branch_name) AS branch_name, branch_address FROM branchestbl WHERE branch_id = $1',
           [invoice.branch_id]
         );
         if (branchResult.rows.length > 0) {
@@ -723,7 +737,7 @@ router.post(
 
       // Get invoice details
       const invoiceResult = await client.query(
-        `SELECT i.*, b.branch_name
+        `SELECT i.*, COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM invoicestbl i
          LEFT JOIN branchestbl b ON i.branch_id = b.branch_id
          WHERE i.invoice_id = $1`,

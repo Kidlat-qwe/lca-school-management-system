@@ -794,15 +794,6 @@ const AdminAnnouncements = () => {
       {/* Table Section */}
       <div className="bg-white rounded-lg shadow-sm p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-          <button
-            onClick={openCreateModal}
-            className="btn-primary flex items-center justify-center space-x-2 w-full sm:w-auto"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Create</span>
-          </button>
           <div className="relative options-menu-container">
             <button
               onClick={handleOptionsMenuClick}
@@ -1005,15 +996,7 @@ const AdminAnnouncements = () => {
                       </span>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap text-sm">
-                      {(() => {
-                        const currentUserId = userInfo?.user_id || userInfo?.userId;
-                        const isOwner = announcement.created_by === currentUserId;
-                        
-                        if (!isOwner) {
-                          return <span className="text-xs text-gray-400">-</span>;
-                        }
-                        
-                        return (
+                      {(() => (
                           <div className="relative action-menu-container">
                             <button
                               onClick={(e) => handleMenuClick(announcement.announcement_id, e)}
@@ -1049,28 +1032,13 @@ const AdminAnnouncements = () => {
                                     >
                                       View Details
                                     </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => openEditModal(announcement)}
-                                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDelete(announcement.announcement_id)}
-                                      className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                                    >
-                                      Delete
-                                    </button>
                                   </div>,
                                   document.body
                                 )}
                               </>
                             )}
                           </div>
-                        );
-                      })()}
+                      ))()}
                     </td>
                   </tr>
                 ))

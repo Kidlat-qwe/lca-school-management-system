@@ -8,11 +8,12 @@ const AdminInvoice = () => {
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
-  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [studentNameSearch, setStudentNameSearch] = useState('');
   // Removed filterBranch - admin only sees their branch
   const [filterStatus, setFilterStatus] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -61,9 +62,11 @@ const AdminInvoice = () => {
     issue_date: todayManilaYMD(),
     reference_number: '',
     remarks: '',
+    attachment_url: '',
   });
   const [paymentFormErrors, setPaymentFormErrors] = useState({});
   const [submittingPayment, setSubmittingPayment] = useState(false);
+  const [paymentAttachmentUploading, setPaymentAttachmentUploading] = useState(false);
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -71,14 +74,15 @@ const AdminInvoice = () => {
       if (!userInfo?.branch_name && adminBranchId) {
         try {
           const response = await apiRequest(`/branches/${adminBranchId}`);
-          if (response && response.data && response.data.branch_name) {
-            setSelectedBranchName(response.data.branch_name);
+          if (response?.data) {
+            const d = response.data;
+            setSelectedBranchName(d.branch_nickname || d.branch_name || 'Your Branch');
           }
         } catch (err) {
           console.error('Error fetching branch name:', err);
         }
-      } else if (userInfo?.branch_name) {
-        setSelectedBranchName(userInfo.branch_name);
+      } else if (userInfo?.branch_name || userInfo?.branch_nickname) {
+        setSelectedBranchName(userInfo.branch_nickname || userInfo.branch_name);
       }
     };
 
@@ -666,8 +670,49 @@ const AdminInvoice = () => {
       issue_date: todayManilaYMD(),
       reference_number: '',
       remarks: '',
+      attachment_url: '',
     });
     setPaymentFormErrors({});
+  };
+
+  const handlePaymentAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      alert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image must be 5MB or less.');
+      return;
+    }
+    setPaymentAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Upload failed');
+      }
+      setPaymentFormData((prev) => ({ ...prev, attachment_url: data.imageUrl || '' }));
+    } catch (err) {
+      console.error('Payment attachment upload error:', err);
+      alert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setPaymentAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearPaymentAttachment = () => {
+    setPaymentFormData((prev) => ({ ...prev, attachment_url: '' }));
   };
 
   const handlePaymentInputChange = (e) => {
@@ -701,7 +746,11 @@ const AdminInvoice = () => {
     if (!paymentFormData.issue_date) {
       errors.issue_date = 'Issue date is required';
     }
-    
+    const refNum = (paymentFormData.reference_number || '').trim();
+    if (!refNum) {
+      errors.reference_number = 'Reference number is required';
+    }
+
     setPaymentFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -723,16 +772,16 @@ const AdminInvoice = () => {
         payment_type: paymentFormData.payment_type,
         payable_amount: parseFloat(paymentFormData.payable_amount),
         issue_date: paymentFormData.issue_date,
+        reference_number: (paymentFormData.reference_number || '').trim(),
       };
-
-      if (paymentFormData.reference_number && paymentFormData.reference_number.trim() !== '') {
-        payload.reference_number = paymentFormData.reference_number.trim();
-      }
 
       if (paymentFormData.remarks && paymentFormData.remarks.trim() !== '') {
         payload.remarks = paymentFormData.remarks.trim();
       }
-      
+      if (paymentFormData.attachment_url && paymentFormData.attachment_url.trim() !== '') {
+        payload.attachment_url = paymentFormData.attachment_url.trim();
+      }
+
       await apiRequest('/payments', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -934,18 +983,19 @@ const AdminInvoice = () => {
 
   const filteredInvoices = invoices.filter((invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
-    const matchesSearch = !nameSearchTerm || 
+    const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
+    const matchesSearch = !nameSearchTerm ||
       invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_id?.toString().includes(nameSearchTerm) ||
-      invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase());
-    
-    // Removed matchesBranch - admin only sees their branch
+      invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      studentNames.includes(nameSearchTerm.toLowerCase());
+    const matchesStudentName = !studentNameSearch ||
+      (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
     // Show all invoices by default, including Paid (needed for PDF download)
     const matchesStatus = filterStatus
       ? invoice.status === filterStatus
       : true;
-    
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStudentName && matchesStatus;
   });
 
   const calculateItemTotal = (item) => {
@@ -984,7 +1034,7 @@ const AdminInvoice = () => {
       {filteredInvoices.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-12 text-center">
           <p className="text-gray-500">
-            {nameSearchTerm || filterStatus
+            {nameSearchTerm || studentNameSearch || filterStatus
               ? 'No invoices found matching your criteria.'
               : 'No invoices found. Add your first invoice to get started.'}
           </p>
@@ -1015,7 +1065,7 @@ const AdminInvoice = () => {
                           type="text"
                           value={nameSearchTerm}
                           onChange={(e) => setNameSearchTerm(e.target.value)}
-                          placeholder="Search invoice..."
+                          placeholder="Search invoice or student..."
                           className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
                           onClick={(e) => e.stopPropagation()}
                         />
@@ -1035,8 +1085,35 @@ const AdminInvoice = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    STUDENT NAME
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
+                    <div className="flex flex-col space-y-2">
+                      <div className="flex items-center space-x-1 min-h-[6px]">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${studentNameSearch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
+                      </div>
+                      <div className="relative min-h-[28px]">
+                        <input
+                          type="text"
+                          value={studentNameSearch}
+                          onChange={(e) => setStudentNameSearch(e.target.value)}
+                          placeholder="Search student..."
+                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        {studentNameSearch && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setStudentNameSearch('');
+                            }}
+                            className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Branch
@@ -1257,14 +1334,20 @@ const AdminInvoice = () => {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (selectedInvoice.status === 'Paid') return;
                         setOpenMenuId(null);
                         setMenuPosition({ top: 0, right: 0 });
                         handleOpenPaymentModal(selectedInvoice);
                       }}
-                      className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-green-600 hover:bg-green-50 transition-colors"
+                      disabled={selectedInvoice.status === 'Paid'}
+                      className={`flex items-center justify-between w-full text-left px-4 py-2 text-sm transition-colors ${
+                        selectedInvoice.status === 'Paid'
+                          ? 'text-gray-400 cursor-not-allowed opacity-60'
+                          : 'text-green-600 hover:bg-green-50'
+                      }`}
                     >
                       <span>Pay</span>
-                      <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className={`w-4 h-4 ${selectedInvoice.status === 'Paid' ? 'text-gray-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>
                     </button>
@@ -2269,15 +2352,59 @@ const AdminInvoice = () => {
                 </div>
 
                 <div>
-                  <label className="label-field text-xs">Reference Number</label>
+                  <label className="label-field text-xs">Attachment (image)</label>
+                  <p className="text-xs text-gray-500 mb-1">Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 5MB)</p>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={handlePaymentAttachmentChange}
+                    disabled={paymentAttachmentUploading}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                  />
+                  {paymentAttachmentUploading && (
+                    <p className="text-xs text-amber-600 mt-1">Uploading…</p>
+                  )}
+                  {paymentFormData.attachment_url && !paymentAttachmentUploading && (
+                    <div className="mt-2">
+                      <img
+                        src={paymentFormData.attachment_url}
+                        alt="Payment attachment preview"
+                        className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
+                      />
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <a
+                          href={paymentFormData.attachment_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-primary-600 hover:underline"
+                        >
+                          View attached image
+                        </a>
+                        <button
+                          type="button"
+                          onClick={clearPaymentAttachment}
+                          className="text-xs text-red-600 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">Reference Number *</label>
                   <input
                     type="text"
                     name="reference_number"
                     value={paymentFormData.reference_number}
                     onChange={handlePaymentInputChange}
-                    className="input-field text-sm"
+                    className={`input-field text-sm ${paymentFormErrors.reference_number ? 'border-red-500' : ''}`}
                     placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
                   />
+                  {paymentFormErrors.reference_number && (
+                    <p className="text-xs text-red-500 mt-1">{paymentFormErrors.reference_number}</p>
+                  )}
                 </div>
 
                 <div>

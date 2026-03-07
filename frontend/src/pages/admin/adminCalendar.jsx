@@ -414,25 +414,25 @@ const AdminCalendar = () => {
               return (
                 <div
                   key={cell.key}
-                  className={`flex flex-col rounded-xl border border-gray-200 bg-white p-2 shadow-sm ${
-                    viewMode === 'week' ? 'min-h-[500px]' : 'h-32'
+                  className={`flex min-h-0 flex-col rounded-xl border border-gray-200 bg-white p-2 shadow-sm ${
+                    viewMode === 'week' ? 'min-h-[500px]' : 'h-32 max-h-32'
                   }`}
                 >
-                  <div className="mb-2 flex items-center justify-between text-xs font-semibold text-gray-700">
+                  <div className="mb-2 flex flex-shrink-0 items-center justify-between text-xs font-semibold text-gray-700">
                     {viewMode === 'week' ? (
                       <span>{cell.dayName} {cell.dayNumber}</span>
                     ) : (
                       <span>Day {cell.dayNumber}</span>
                     )}
                     <span className="text-[10px] text-gray-400">
-                      {((holidaysByDate[cell.dateKey] || []).length > 0 ? 0 : (cell.events || []).length)} {((holidaysByDate[cell.dateKey] || []).length > 0 ? 0 : (cell.events || []).length) === 1 ? 'class' : 'classes'}
+                      {(cell.events || []).length} {(cell.events || []).length === 1 ? 'class' : 'classes'}
                     </span>
                   </div>
-                  <div className={`flex-1 space-y-2 overflow-y-auto rounded-lg bg-gray-50/60 p-1 ${viewMode === 'week' ? 'min-h-[450px]' : ''}`}>
+                  <div className={`min-h-0 flex-1 space-y-2 overflow-y-auto rounded-lg bg-gray-50/60 p-1 ${viewMode === 'week' ? 'min-h-[450px]' : ''}`} style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc' }}>
                     {((holidaysByDate[cell.dateKey]) || []).map((h) => (
                       <span key={h.source === 'custom' ? h.holiday_id : `${h.date}-${h.name}`} className={`block truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${h.source === 'national' ? 'bg-[#0f766e]' : 'bg-[#1d4ed8]'}`} title={h.name}>{h.name}</span>
                     ))}
-                    {(holidaysByDate[cell.dateKey] || []).length > 0 ? null : (cell.events || []).length === 0 ? (
+                    {(cell.events || []).length === 0 ? (
                       <p className="text-[11px] text-gray-400">No classes</p>
                     ) : (
                       cell.events.map((event) => (

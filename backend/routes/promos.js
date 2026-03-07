@@ -598,7 +598,7 @@ router.get(
 
       // Filter promos by eligibility and check if student already used it
       const eligiblePromos = [];
-      for (const promo of filteredRows) {
+      for (const promo of result.rows) {
         // Check if student already used this promo
         const usageCheck = await query(
           'SELECT promousage_id FROM promousagetbl WHERE promo_id = $1 AND student_id = $2',
@@ -841,16 +841,7 @@ router.post(
       const hasPackageRestriction = finalPackageIds.length > 0;
 
       // If specific packages are selected, validate they all exist.
-      // If no packages are selected AND branch is null (All Branches), this promo will be treated as "global" (applies to all packages of a type).
-      // If branch is specified, at least one package is required.
-      if (!hasPackageRestriction && branch_id !== null && branch_id !== undefined && branch_id !== '') {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'At least one package is required when a specific branch is selected',
-        });
-      }
-
+      // If no packages are selected, promo can still be created (applies to all packages or can be assigned later).
       if (hasPackageRestriction) {
         const packagePlaceholders = finalPackageIds.map((_, i) => `$${i + 1}`).join(', ');
         const packageCheck = await client.query(
@@ -1833,6 +1824,7 @@ router.post(
         `SELECT 
           p.promo_id,
           p.promo_name,
+          p.package_id,
           p.promo_type,
           p.promo_code,
           p.discount_percentage,
@@ -1879,6 +1871,7 @@ router.post(
               `SELECT 
                 p.promo_id,
                 p.promo_name,
+                p.package_id,
                 p.promo_type,
                 p.promo_code,
                 p.discount_percentage,
@@ -1962,8 +1955,12 @@ router.post(
         // Promos that use global_package_type are treated as \"global\" and
         // should NOT be considered as having specific package bindings here.
         // They will be validated using global_package_type vs package_type.
+        // Promo applies to specific packages only if it has rows in promopackagestbl or legacy package_id set.
+        // No packages + no global type = promo applies to ALL packages.
+        const bindingsCount = parseInt(bindingsResult.rows[0].cnt, 10);
+        const hasLegacyPackage = promo.package_id != null && promo.package_id !== '';
         const hasSpecificPackages = !promo.global_package_type && (
-          parseInt(bindingsResult.rows[0].cnt, 10) > 0 || promo.package_id !== null
+          bindingsCount > 0 || hasLegacyPackage
         );
 
         // When promo has specific package bindings, ensure this package is one of them

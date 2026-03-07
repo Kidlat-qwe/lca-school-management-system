@@ -167,9 +167,13 @@ export const processInstallmentDelinquencies = async () => {
         const graceDays = Number(effective.installment_penalty_grace_days?.value);
         const finalDropoffDays = Number(effective.installment_final_dropoff_days?.value);
 
-        // Penalty applies when CURRENT_DATE > due_date + graceDays
-        const graceThreshold = addDaysLocalNoon(dueDate, graceDays);
-        const isPenaltyEligible = graceThreshold ? isAfterDate(today, graceThreshold) : true;
+        // Penalty applies only after a full extra day beyond (due_date + graceDays)
+        // Example:
+        //  - due_date = 5th, graceDays = 0  -> earliest penalty day = 6th
+        //  - due_date = 5th, graceDays = 2  -> earliest penalty day = 8th
+        const effectiveGraceDays = Number.isFinite(graceDays) ? graceDays : 0;
+        const graceThreshold = addDaysLocalNoon(dueDate, effectiveGraceDays + 1);
+        const isPenaltyEligible = graceThreshold ? isOnOrAfterDate(today, graceThreshold) : true;
 
         // Removal applies when CURRENT_DATE >= due_date + finalDropoffDays
         const dropoffThreshold = addDaysLocalNoon(dueDate, finalDropoffDays);

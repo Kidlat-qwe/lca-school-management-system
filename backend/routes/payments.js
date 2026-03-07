@@ -39,13 +39,13 @@ router.get(
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                         p.payment_method, p.payment_type, p.payable_amount, 
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
-                        p.status, p.reference_number, p.remarks, p.created_by,
+                        p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                         p.approval_status, p.approved_by,
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
-                        b.branch_name,
+                        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name
                  FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -161,11 +161,11 @@ router.get(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                 p.payment_method, p.payment_type, p.payable_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
-                p.status, p.reference_number, p.remarks, p.created_by,
+                p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
-                b.branch_name
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -254,7 +254,7 @@ router.post(
     body('payable_amount').isFloat({ min: 0.01 }).withMessage('Payable amount is required and must be greater than 0'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('status').optional().isString().withMessage('Status must be a string'),
-    body('reference_number').optional().isString().withMessage('Reference number must be a string'),
+    body('reference_number').notEmpty().trim().isString().withMessage('Reference number is required'),
     body('remarks').optional().isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
   ],
@@ -274,6 +274,7 @@ router.post(
         status = 'Completed',
         reference_number,
         remarks,
+        attachment_url,
       } = req.body;
 
       // Verify invoice exists (include installmentinvoiceprofiles_id for phase tracking)
@@ -335,8 +336,8 @@ router.post(
       // Create payment
       const paymentResult = await client.query(
         `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
-                                 payable_amount, issue_date, status, reference_number, remarks, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                 payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
         [
           invoice_id,
@@ -350,6 +351,7 @@ router.post(
           reference_number || null,
           remarks || null,
           createdBy,
+          attachment_url || null,
         ]
       );
 
@@ -795,11 +797,11 @@ router.post(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                 p.payment_method, p.payment_type, p.payable_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
-                p.status, p.reference_number, p.remarks, p.created_by,
+                p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
-                b.branch_name
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -855,7 +857,7 @@ router.post(
 /**
  * PUT /api/sms/payments/:id
  * Update payment
- * Access: Superadmin, Admin
+ * Access: Superadmin, Admin, Finance, Superfinance
  */
 router.put(
   '/:id',
@@ -870,14 +872,14 @@ router.put(
     body('remarks').optional().isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Finance'),
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
   async (req, res, next) => {
     const client = await getClient();
     try {
       await client.query('BEGIN');
 
       const { id } = req.params;
-      const { payment_method, payment_type, payable_amount, issue_date, status, reference_number, remarks } = req.body;
+      const { payment_method, payment_type, payable_amount, issue_date, status, reference_number, remarks, attachment_url } = req.body;
 
       // Check if payment exists
       const existingPayment = await client.query('SELECT * FROM paymenttbl WHERE payment_id = $1', [id]);
@@ -913,6 +915,11 @@ router.put(
           params.push(value);
         }
       });
+      if (attachment_url !== undefined) {
+        paramCount++;
+        updates.push(`payment_attachment_url = $${paramCount}`);
+        params.push(attachment_url || null);
+      }
 
       if (updates.length === 0) {
         await client.query('ROLLBACK');
@@ -1353,11 +1360,11 @@ router.put(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                 p.payment_method, p.payment_type, p.payable_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
-                p.status, p.reference_number, p.remarks, p.created_by,
+                p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
-                b.branch_name
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -1672,11 +1679,11 @@ router.get(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                 p.payment_method, p.payment_type, p.payable_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
-                p.status, p.reference_number, p.remarks, p.created_by,
+                p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
-                b.branch_name
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id

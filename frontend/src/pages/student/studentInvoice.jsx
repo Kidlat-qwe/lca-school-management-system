@@ -257,13 +257,13 @@ const StudentInvoice = () => {
 
   const filteredInvoices = invoices.filter((invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
-    const matchesSearch = !nameSearchTerm || 
+    const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
+    const matchesSearch = !nameSearchTerm ||
       invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_id?.toString().includes(nameSearchTerm) ||
-      invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase());
-    
+      invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
-    
     return matchesSearch && matchesStatus;
   });
 
@@ -310,7 +310,7 @@ const StudentInvoice = () => {
               type="text"
               value={nameSearchTerm}
               onChange={(e) => setNameSearchTerm(e.target.value)}
-              placeholder="Search by invoice ID or description..."
+              placeholder="Search by invoice or student name..."
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
             />
             {nameSearchTerm && (

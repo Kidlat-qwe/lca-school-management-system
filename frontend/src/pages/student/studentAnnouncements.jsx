@@ -345,12 +345,15 @@ const StudentAnnouncements = () => {
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '16%' }}>
                   VALIDITY PERIOD
                 </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '10%' }}>
+                  ACTIONS
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredAnnouncements.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan="8" className="px-4 py-8 text-center text-gray-500">
                     No announcements found.
                   </td>
                 </tr>
@@ -410,6 +413,18 @@ const StudentAnnouncements = () => {
                           'No limit'
                         )}
                       </div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openViewModal(announcement);
+                        }}
+                        className="text-sm font-medium text-[#F7C844] hover:text-[#F5B82E] focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#F7C844]"
+                      >
+                        View
+                      </button>
                     </td>
                   </tr>
                 ))

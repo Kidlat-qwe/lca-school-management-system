@@ -242,8 +242,6 @@ const CalendarSchedule = () => {
   const eventsForDayByHour = useMemo(() => {
     const byHour = {};
     HOURS.forEach((h) => { byHour[h] = []; });
-    const dayHasHoliday = holidays.some((h) => h.date === selectedDate);
-    if (dayHasHoliday) return byHour;
     const dayEvents = events.filter((e) => e.date === selectedDate);
     dayEvents.forEach((ev) => {
       const hour = Math.floor(startTimeToHour(ev.start_time));
@@ -402,16 +400,16 @@ const CalendarSchedule = () => {
               </div>
               <div className="grid grid-cols-7 gap-px bg-gray-200">
                 {calendarCells.map((cell) => {
-                  if (cell.type === 'placeholder') return <div key={cell.key} className="min-h-[100px] bg-gray-50 sm:min-h-[120px]" />;
+                  if (cell.type === 'placeholder') return <div key={cell.key} className="h-[160px] min-h-[100px] bg-gray-50 sm:h-[180px] sm:min-h-[120px]" />;
                   const isToday = cell.dateKey === todayYmd;
                   return (
-                    <div key={cell.key} className="min-h-[100px] flex flex-col bg-white p-1 sm:min-h-[120px]">
-                      <span className={`text-sm font-medium self-start ${isToday ? 'flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white' : 'text-gray-700'}`}>{cell.dayNumber}</span>
-                      <div className="mt-1 flex flex-1 flex-col gap-1 overflow-y-auto">
+                    <div key={cell.key} className="h-[160px] min-h-0 flex flex-col bg-white p-1 sm:h-[180px]">
+                      <span className={`text-sm font-medium self-start flex-shrink-0 ${isToday ? 'flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white' : 'text-gray-700'}`}>{cell.dayNumber}</span>
+                      <div className="mt-1 min-h-0 flex-1 flex flex-col gap-1 overflow-y-auto rounded border border-gray-100" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc' }}>
                         {((holidaysByDate[cell.dateKey]) || []).map((h) => (
                           <span key={h.source === 'custom' ? h.holiday_id : `${h.date}-${h.name}`} className={`truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${h.source === 'national' ? 'bg-[#0f766e]' : 'bg-[#1d4ed8]'}`} title={h.name}>{h.name}</span>
                         ))}
-                        {((holidaysByDate[cell.dateKey] || []).length > 0 ? [] : (cell.events || [])).map((ev) => (
+                        {(cell.events || []).map((ev) => (
                           <div key={ev.event_id} onClick={() => handleEventClick(ev)} className="rounded border border-yellow-100 bg-yellow-50/80 px-1.5 py-1 text-[11px] leading-snug text-gray-700 cursor-pointer hover:bg-yellow-100">
                             <p className="font-semibold text-gray-900 truncate">{ev.class_code || ev.program_code || ev.title || 'N/A'}</p>
                             {ev.room_name && <p className="text-[10px] text-gray-500">{ev.room_name}</p>}
@@ -456,8 +454,7 @@ const CalendarSchedule = () => {
                 {weekDays.map((wd) => (
                   <div key={wd.dateKey} className="border-l border-gray-100 relative">
                     {HOURS.map((h) => {
-                      const isHoliday = (holidaysByDate[wd.dateKey] || []).length > 0;
-                      const hourEvents = isHoliday ? [] : (wd.events || []).filter((e) => Math.floor(startTimeToHour(e.start_time)) === h);
+                      const hourEvents = (wd.events || []).filter((e) => Math.floor(startTimeToHour(e.start_time)) === h);
                       return (
                         <div key={h} className="h-12 border-b border-gray-50 relative">
                           {hourEvents.slice(0, 2).map((ev) => (

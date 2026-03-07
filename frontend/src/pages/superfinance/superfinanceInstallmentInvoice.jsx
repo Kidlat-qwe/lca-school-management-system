@@ -313,7 +313,7 @@ const SuperfinanceInstallmentInvoice = () => {
               }}
               className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center space-x-2"
             >
-              <span>Branch: {filterBranch ? branches.find(b => b.branch_id === parseInt(filterBranch))?.branch_name : 'All Branches'}</span>
+              <span>Branch: {filterBranch ? (() => { const b = branches.find(b => b.branch_id === parseInt(filterBranch)); return b ? (b.branch_nickname || b.branch_name) : 'All Branches'; })() : 'All Branches'}</span>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
@@ -345,7 +345,7 @@ const SuperfinanceInstallmentInvoice = () => {
                         filterBranch === branch.branch_id.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
                       }`}
                     >
-                      {branch.branch_name}
+                      {branch.branch_nickname || branch.branch_name}
                     </button>
                   ))}
                 </div>

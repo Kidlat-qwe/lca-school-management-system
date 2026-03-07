@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 
 const AdminClasses = () => {
   const { userInfo } = useAuth();
@@ -42,6 +42,8 @@ const AdminClasses = () => {
     max_students: '',
     start_date: '',
     end_date: '',
+    skip_holidays: false,
+    is_vip: false,
     days_of_week: {
       Monday: { enabled: false, start_time: '', end_time: '' },
       Tuesday: { enabled: false, start_time: '', end_time: '' },
@@ -84,9 +86,14 @@ const AdminClasses = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [agendaDraft, setAgendaDraft] = useState('');
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'package-selection', 'student-selection', 'review'
+  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'student-selection', 'review'
   const [selectedClassForEnrollment, setSelectedClassForEnrollment] = useState(null);
-  const [selectedEnrollmentOption, setSelectedEnrollmentOption] = useState(null); // 'package', 'per-phase'
+  const [selectedEnrollmentOption, setSelectedEnrollmentOption] = useState(null); // 'package', 'per-phase', 'reservation', 'ack-receipt'
+  const [ackReceipts, setAckReceipts] = useState([]);
+  const [ackReceiptsLoading, setAckReceiptsLoading] = useState(false);
+  const [ackReceiptsError, setAckReceiptsError] = useState('');
+  const [ackSearchTerm, setAckSearchTerm] = useState('');
+  const [selectedAckReceipt, setSelectedAckReceipt] = useState(null);
   const [isViewStudentsModalOpen, setIsViewStudentsModalOpen] = useState(false);
   const [viewStudentsStep, setViewStudentsStep] = useState('phase-selection'); // 'phase-selection' or 'students-list'
   const [selectedClassForView, setSelectedClassForView] = useState(null);
@@ -413,6 +420,26 @@ const initializePackageMerchSelections = useCallback(
       setPricingLists(response.data || []);
     } catch (err) {
       console.error('Error fetching pricing lists:', err);
+    }
+  };
+
+  const fetchAckReceiptsForEnrollment = async (branchId, search = '') => {
+    try {
+      setAckReceiptsLoading(true);
+      setAckReceiptsError('');
+      const params = new URLSearchParams();
+      params.set('status', 'Pending,Paid');
+      if (branchId) params.set('branch_id', String(branchId));
+      if (search && search.trim()) params.set('search', search.trim());
+      params.set('limit', '50');
+
+      const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+      setAckReceipts(response.data || []);
+    } catch (err) {
+      console.error('Error fetching acknowledgement receipts for enrollment:', err);
+      setAckReceiptsError('Failed to load acknowledgement receipts. Please try again.');
+    } finally {
+      setAckReceiptsLoading(false);
     }
   };
 
@@ -1216,7 +1243,8 @@ const initializePackageMerchSelections = useCallback(
       const classDetailsResponse = await apiRequest(`/classes/${classItem.class_id}`);
       const isMergedClass = classDetailsResponse.data?.is_merged_class || false;
       
-      // Update selectedClassForDetails with fresh data including schedules
+      // Update selectedClassForDetails with fresh data including schedules (include is_vip, skip_holidays from API)
+      const apiData = classDetailsResponse.data || {};
       let classDetails;
       if (phaseResponse.data?.class) {
         classDetails = {
@@ -1225,14 +1253,18 @@ const initializePackageMerchSelections = useCallback(
           // Preserve days_of_week from response or fallback to classItem
           days_of_week: phaseResponse.data.class.days_of_week || classItem.days_of_week || [],
           is_merged_class: isMergedClass,
-          merge_history_id: classDetailsResponse.data?.merge_history_id || null,
+          merge_history_id: apiData.merge_history_id ?? null,
+          is_vip: apiData.is_vip === true,
+          skip_holidays: apiData.skip_holidays === true,
         };
         setSelectedClassForDetails(classDetails);
       } else {
         classDetails = {
           ...classItem,
           is_merged_class: isMergedClass,
-          merge_history_id: classDetailsResponse.data?.merge_history_id || null,
+          merge_history_id: apiData.merge_history_id ?? null,
+          is_vip: apiData.is_vip === true,
+          skip_holidays: apiData.skip_holidays === true,
         };
         setSelectedClassForDetails(classDetails);
       }
@@ -2542,6 +2574,15 @@ const initializePackageMerchSelections = useCallback(
     } else if (selectedEnrollmentOption === 'reservation') {
       // For reservation, go to package selection (will be filtered to Reserved packages only)
       setEnrollStep('package-selection');
+    } else if (selectedEnrollmentOption === 'ack-receipt') {
+      setSelectedAckReceipt(null);
+      const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
+      if (branchId) {
+        fetchAckReceiptsForEnrollment(branchId, ackSearchTerm);
+      } else {
+        fetchAckReceiptsForEnrollment(null, ackSearchTerm);
+      }
+      setEnrollStep('ack-receipt-selection');
     }
   };
 
@@ -2616,8 +2657,8 @@ const initializePackageMerchSelections = useCallback(
     // Hide installment settings for Reserved packages (settings will be configured during upgrade)
     if (packageItem.package_type === 'Installment' && !hasFullpaymentPricing) {
       setShowInstallmentSettings(true);
-      const defaultSettings = getDefaultInstallmentSettings();
-      setInstallmentSettings(defaultSettings);
+      const branchId = selectedClassForEnrollment?.branch_id ?? selectedClassForEnrollment?.branchId ?? null;
+      fetchInstallmentScheduleSettings(branchId).then(setInstallmentSettings);
     } else {
       // Reset installment settings when package changes to non-installment, fullpayment, or Reserved
       setShowInstallmentSettings(false);
@@ -3038,42 +3079,52 @@ const initializePackageMerchSelections = useCallback(
     return 'General';
   };
 
-  // Default installment invoice settings for enrollment (downpayment: issue today, due in a week)
-  const getDefaultInstallmentSettings = () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth(); // 0-11 (0 = January)
-    const currentDay = today.getDate();
+  // Fetch installment invoice schedule from system settings.
+  // branchId optional; Admin backend uses their branch anyway; pass for consistency/Superadmin reuse.
+  const fetchInstallmentScheduleSettings = async (branchId = null) => {
+    try {
+      const params = new URLSearchParams({ category: 'installment_schedule' });
+      if (branchId != null && branchId !== '') params.set('branch_id', String(branchId));
+      const res = await apiRequest(`/settings/effective?${params.toString()}`, { method: 'GET' });
+      const settings = res?.data?.settings || {};
 
-    // Helper function to format date as YYYY-MM-DD without timezone conversion
-    const formatDateLocal = (year, month, day) => {
-      const monthStr = String(month + 1).padStart(2, '0');
-      const dayStr = String(day).padStart(2, '0');
-      return `${year}-${monthStr}-${dayStr}`;
-    };
+      const today = new Date();
+      const fmt = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    // Invoice Issue Date: today (downpayment issued on enrollment)
-    const invoiceIssueDateStr = formatDateLocal(currentYear, currentMonth, currentDay);
+      const issueDate = settings?.installment_invoice_issue_date?.value ||
+        fmt(today.getFullYear(), today.getMonth(), today.getDate());
 
-    // Invoice Due Date: a week after issue date (admin can change)
-    const dueDate = new Date(today);
-    dueDate.setDate(dueDate.getDate() + 7);
-    const invoiceDueDateStr = formatDateLocal(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      const bMonth = settings?.installment_billing_month?.value ||
+        `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-    // Billing Month: current month YYYY-MM
-    const billingMonth = formatDateLocal(currentYear, currentMonth, 1).substring(0, 7);
+      const dueD = new Date(today);
+      dueD.setDate(dueD.getDate() + 7);
+      const dueDate = settings?.installment_invoice_due_date?.value ||
+        fmt(dueD.getFullYear(), dueD.getMonth(), dueD.getDate());
 
-    // Invoice Generation Date: 25th of current month (when next recurring invoice is generated)
-    const invoiceGenerationDateStr = formatDateLocal(currentYear, currentMonth, 25);
+      const genDate = settings?.installment_invoice_generation_date?.value ||
+        fmt(today.getFullYear(), today.getMonth(), 25);
 
-    return {
-      invoice_issue_date: invoiceIssueDateStr,
-      billing_month: billingMonth,
-      invoice_due_date: invoiceDueDateStr,
-      invoice_generation_date: invoiceGenerationDateStr,
-      frequency_months: 1, // Fixed at 1 month
-    };
+      return {
+        invoice_issue_date: issueDate,
+        billing_month: bMonth,
+        invoice_due_date: dueDate,
+        invoice_generation_date: genDate,
+        frequency_months: 1,
+      };
+    } catch {
+      const today = new Date();
+      const fmt = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const due = new Date(today);
+      due.setDate(due.getDate() + 7);
+      return {
+        invoice_issue_date: fmt(today.getFullYear(), today.getMonth(), today.getDate()),
+        billing_month: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`,
+        invoice_due_date: fmt(due.getFullYear(), due.getMonth(), due.getDate()),
+        invoice_generation_date: fmt(today.getFullYear(), today.getMonth(), 25),
+        frequency_months: 1,
+      };
+    }
   };
 
   // Wrapper function to ensure frequency_months is always 1
@@ -3081,7 +3132,7 @@ const initializePackageMerchSelections = useCallback(
     setInstallmentSettings(prev => ({
       ...prev,
       ...updates,
-      frequency_months: 1, // Always enforce frequency_months to be 1
+      frequency_months: 1,
     }));
   };
 
@@ -3263,6 +3314,17 @@ const initializePackageMerchSelections = useCallback(
     if (selectedStudents.length === 0) {
       alert('Please select a student');
       return;
+    }
+
+    if (selectedEnrollmentOption === 'ack-receipt') {
+      if (!selectedAckReceipt) {
+        alert('Please select an acknowledgement receipt.');
+        return;
+      }
+      if (selectedStudents.length !== 1) {
+        alert('With Acknowledgement Receipt currently supports enrolling one student at a time. Please select exactly one student.');
+        return;
+      }
     }
 
     // Validate per-phase enrollment
@@ -3680,6 +3742,32 @@ const initializePackageMerchSelections = useCallback(
             student: student,
             invoice: response.data.invoice,
           });
+
+          // If enrollment is using an acknowledgement receipt, attach it now
+          if (selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt && response.data?.invoice) {
+            try {
+              await apiRequest(
+                `/acknowledgement-receipts/${selectedAckReceipt.ack_receipt_id}/attach-to-invoice`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    invoice_id: response.data.invoice.invoice_id,
+                    student_id: student.user_id,
+                  }),
+                }
+              );
+            } catch (attachErr) {
+              console.error('Error attaching acknowledgement receipt to invoice:', attachErr);
+              const attachMessage =
+                attachErr.response?.data?.message ||
+                attachErr.message ||
+                'Failed to attach acknowledgement receipt to invoice.';
+              errors.push({
+                student: student,
+                error: `Enrollment succeeded but attachment of acknowledgement receipt failed: ${attachMessage}`,
+              });
+            }
+          }
         } catch (err) {
           console.error(`Error enrolling student ${student.full_name}:`, err);
           console.error('Full error object:', err);
@@ -3763,6 +3851,8 @@ const initializePackageMerchSelections = useCallback(
       max_students: '',
       start_date: '',
       end_date: '',
+      skip_holidays: false,
+      is_vip: false,
       days_of_week: {
         Monday: { enabled: false, start_time: '', end_time: '' },
         Tuesday: { enabled: false, start_time: '', end_time: '' },
@@ -3897,7 +3987,7 @@ const initializePackageMerchSelections = useCallback(
       teacherIds = [classDataWithSchedule.teacher_id.toString()];
     }
     
-    setFormData({
+setFormData({
       branch_id: classDataWithSchedule.branch_id?.toString() || '',
       room_id: classDataWithSchedule.room_id?.toString() || '',
       program_id: classDataWithSchedule.program_id?.toString() || '',
@@ -3907,15 +3997,17 @@ const initializePackageMerchSelections = useCallback(
       max_students: classDataWithSchedule.max_students?.toString() || '',
       start_date: formatDateForInput(classDataWithSchedule.start_date),
       end_date: formatDateForInput(classDataWithSchedule.end_date),
+      skip_holidays: classDataWithSchedule.skip_holidays === true,
+      is_vip: classDataWithSchedule.is_vip === true,
       days_of_week: initializeDaysOfWeek(),
     });
     setFormErrors({});
-    
+
     // Fetch room schedules if room is already selected
     if (classDataWithSchedule.room_id) {
       fetchRoomSchedules(classDataWithSchedule.room_id.toString());
     }
-    
+
     setIsModalOpen(true);
   };
 
@@ -4765,6 +4857,8 @@ const initializePackageMerchSelections = useCallback(
         end_date: manualEndDateAdjustment.enabled && manualEndDateAdjustment.adjustedDate
           ? manualEndDateAdjustment.adjustedDate
           : (formData.end_date && formData.end_date !== '' ? formData.end_date : null),
+        skip_holidays: formData.skip_holidays === true,
+        is_vip: formData.is_vip === true,
         days_of_week: formData.days_of_week ? Object.entries(formData.days_of_week)
           .filter(([_, data]) => data.enabled)
           .map(([day, data]) => ({
@@ -5236,8 +5330,31 @@ const initializePackageMerchSelections = useCallback(
             </button>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Class Details</h1>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-2">
                 {selectedClassForDetails.program_name} - {selectedClassForDetails.class_name || selectedClassForDetails.level_tag}
+                {(() => {
+                  const firstSessionCode = classSessions?.[0]?.class_code;
+                  return (
+                    <>
+                      {firstSessionCode && (
+                        <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-gray-100 text-gray-700 border border-gray-200">
+                          {firstSessionCode}
+                        </span>
+                      )}
+                      {selectedClassForDetails.is_vip && (
+                        <span
+                          className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-semibold text-white border border-white/30 shadow-sm"
+                          style={{
+                            background: 'linear-gradient(90deg, #1e3a5f 0%, #4a1a6b 25%, #b91c7a 50%, #ea580c 75%, #eab308 100%)',
+                            backgroundSize: '200% 100%',
+                          }}
+                        >
+                          VIP
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
               </p>
             </div>
           </div>
@@ -5456,7 +5573,7 @@ const initializePackageMerchSelections = useCallback(
                             <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      CLASS CODE
+                      SESSION CODE
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       PHASE AND SESSION
@@ -5542,6 +5659,16 @@ const initializePackageMerchSelections = useCallback(
                       // Use database session time if available, otherwise use schedule
                       const sessionStartTime = classSession?.scheduled_start_time || null;
                       const sessionEndTime = classSession?.scheduled_end_time || null;
+                      // Fallback time for session code when session not yet in DB
+                      let sessionStartTimeForCode = sessionStartTime;
+                      if (!sessionStartTimeForCode && sessionDate && daysOfWeek?.length) {
+                        const dateObj = new Date(sessionDate + 'T12:00:00');
+                        const dayOfWeekIndex = dateObj.getDay();
+                        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                        const dayOfWeekName = dayNames[dayOfWeekIndex];
+                        const daySchedule = daysOfWeek.find(day => day && (day.day_of_week === dayOfWeekName || day.day === dayOfWeekName));
+                        sessionStartTimeForCode = daySchedule?.start_time || null;
+                      }
 
                       // Get teacher info
                       const originalTeacherName = classSession?.original_teacher_name || selectedClassForDetails.teacher_name || null;
@@ -5551,9 +5678,9 @@ const initializePackageMerchSelections = useCallback(
 
                       return (
                         <tr key={session.phasesessiondetail_id} className={isCancelled ? 'bg-gray-100 opacity-60' : ''}>
-                          <td className="px-6 py-4 max-w-[200px]">
-                            <div className={`text-sm font-medium truncate ${rowTextClass}`} title={classSession?.class_code || ''}>
-                              {classSession?.class_code || '-'}
+                          <td className="px-6 py-4 max-w-[180px]">
+                            <div className={`text-sm font-medium truncate ${rowTextClass}`} title={formatSessionCode(session.phase_number, session.phase_session_number, sessionDate, sessionStartTimeForCode)}>
+                              {formatSessionCode(session.phase_number, session.phase_session_number, sessionDate, sessionStartTimeForCode)}
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
@@ -7698,6 +7825,30 @@ const initializePackageMerchSelections = useCallback(
                           <p className="mt-1 text-sm text-red-600">{formErrors.max_students}</p>
                         )}
                       </div>
+
+                      {/* Skip holidays & VIP checkboxes - Step 1 */}
+                      <div className="flex flex-wrap gap-6">
+                        <label className="inline-flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            name="skip_holidays"
+                            checked={formData.skip_holidays === true}
+                            onChange={(e) => setFormData(prev => ({ ...prev, skip_holidays: e.target.checked }))}
+                            className="rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
+                          />
+                          <span className="text-sm font-medium text-gray-700">Skip classes on holidays</span>
+                        </label>
+                        <label className="inline-flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            name="is_vip"
+                            checked={formData.is_vip === true}
+                            onChange={(e) => setFormData(prev => ({ ...prev, is_vip: e.target.checked }))}
+                            className="rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
+                          />
+                          <span className="text-sm font-medium text-gray-700">VIP</span>
+                        </label>
+                      </div>
                     </>
                   ) : (
                   /* STEP 2 or EDIT MODE: Class Name, Room, Days of Week, Teachers, Start Date, End Date */
@@ -8656,6 +8807,7 @@ const initializePackageMerchSelections = useCallback(
                 <h2 className="text-lg font-bold text-gray-900">
                   {enrollStep === 'view' && 'Enrolled Students'}
                   {enrollStep === 'enrollment-option' && 'Select Enrollment Option'}
+                  {enrollStep === 'ack-receipt-selection' && 'Select Acknowledgement Receipt'}
                   {enrollStep === 'package-selection' && 'Select Package'}
                   {enrollStep === 'student-selection' && 'Select Student'}
                   {enrollStep === 'review' && 'Review & Enroll'}
@@ -8999,6 +9151,7 @@ const initializePackageMerchSelections = useCallback(
                           <option value="per-phase">Enroll per Phase</option>
                         )}
                         <option value="reservation">Student Class Reservation</option>
+                        <option value="ack-receipt">With Acknowledgement Receipt</option>
                       </select>
                       <p className="mt-2 text-sm text-gray-500">
                         Choose how you want to enroll students. You can select a package or enroll students per phase.
@@ -9021,6 +9174,160 @@ const initializePackageMerchSelections = useCallback(
                     >
                       Continue
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Acknowledgement Receipt Selection (when applicable) */}
+              {enrollStep === 'ack-receipt-selection' && (
+                <div className="space-y-6">
+                  <div className="text-center mb-4">
+                    <h3 className="text-xl font-bold text-gray-900 mb-1">Select Acknowledgement Receipt</h3>
+                    <p className="text-sm text-gray-500">
+                      Choose a pending or paid acknowledgement receipt (not yet attached to an invoice). The package from the receipt will be applied automatically.
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
+                        fetchAckReceiptsForEnrollment(branchId, ackSearchTerm);
+                      }}
+                      className="flex flex-col md:flex-row gap-3 md:items-end"
+                    >
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+                        <input
+                          type="text"
+                          value={ackSearchTerm}
+                          onChange={(e) => setAckSearchTerm(e.target.value)}
+                          className="input-field text-sm"
+                          placeholder="Search by AR number, name, reference no."
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        >
+                          Search
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAckSearchTerm('');
+                            const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
+                            fetchAckReceiptsForEnrollment(branchId, '');
+                          }}
+                          className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </form>
+
+                    <div className="mt-2">
+                      {ackReceiptsLoading ? (
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                      ) : ackReceiptsError ? (
+                        <p className="text-sm text-red-600">{ackReceiptsError}</p>
+                      ) : ackReceipts.length === 0 ? (
+                        <p className="text-sm text-gray-600">
+                          No attachable acknowledgement receipts found (pending or paid). Create one first from the Manage Invoice section.
+                        </p>
+                      ) : (
+                        <div
+                          className="overflow-x-auto rounded-lg"
+                          style={{
+                            scrollbarWidth: 'thin',
+                            scrollbarColor: '#cbd5e0 #f7fafc',
+                            WebkitOverflowScrolling: 'touch',
+                          }}
+                        >
+                          <table
+                            className="min-w-full divide-y divide-gray-200 text-sm"
+                            style={{ width: '100%', minWidth: '900px' }}
+                          >
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">AR Number</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Payer</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Reference No.</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {ackReceipts.map((ar) => (
+                                <tr key={ar.ack_receipt_id}>
+                                  <td className="px-4 py-3 whitespace-nowrap text-gray-900 font-medium">
+                                    {ar.ack_receipt_number}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="text-gray-900">{ar.prospect_student_name}</div>
+                                    {ar.prospect_student_contact && (
+                                      <div className="text-xs text-gray-500 truncate">
+                                        {ar.prospect_student_contact}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="text-gray-900">
+                                      {ar.package_name_snapshot || ar.package_name || 'N/A'}
+                                    </div>
+                                    <div className="text-xs text-gray-500">
+                                      ₱
+                                      {Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-900">
+                                    ₱
+                                    {Number(ar.payment_amount || 0).toLocaleString('en-US', {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-900">
+                                    {ar.reference_number || '-'}
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-900">
+                                    {ar.issue_date ? formatDateManila(ar.issue_date) : '-'}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedAckReceipt(ar);
+                                        const pkg = packages.find(
+                                          (p) => p.package_id === ar.package_id
+                                        );
+                                        if (!pkg) {
+                                          alert(
+                                            'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
+                                          );
+                                          return;
+                                        }
+                                        handlePackageSelect(pkg);
+                                        setEnrollStep('student-selection');
+                                      }}
+                                      className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                                    >
+                                      Use This Receipt
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -10397,15 +10704,14 @@ const initializePackageMerchSelections = useCallback(
                           </div>
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={async () => {
                               const newState = !showInstallmentSettings;
                               setShowInstallmentSettings(newState);
                               if (newState) {
-                                // Auto-populate default settings when toggling on
-                                const defaultSettings = getDefaultInstallmentSettings();
-                                setInstallmentSettings(defaultSettings);
+                                const branchId = selectedClassForEnrollment?.branch_id ?? selectedClassForEnrollment?.branchId ?? null;
+                                const systemSettings = await fetchInstallmentScheduleSettings(branchId);
+                                setInstallmentSettings(systemSettings);
                               } else {
-                                // Reset settings when toggling off
                                 updateInstallmentSettings({
                                   invoice_issue_date: '',
                                   billing_month: '',
@@ -10427,93 +10733,41 @@ const initializePackageMerchSelections = useCallback(
                         </div>
                       </div>
 
-                      {/* Installment Settings Form */}
+                      {/* Installment Settings — loaded from system Settings > Invoice Schedule */}
                       {showInstallmentSettings && (
                         <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                           <div className="mb-2">
                             <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>
                             <p className="text-xs text-gray-600 mt-0.5">
-                              Configure the details for the first invoices that will be generated regularly.
+                              Loaded from{' '}
+                              <span className="font-medium text-blue-700">Settings › Invoice Schedule</span>.
+                              Update dates there to change the billing cycle.
                             </p>
                           </div>
-                          
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                            {/* Invoice Issue Date */}
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                             <div>
-                              <label htmlFor="invoice_issue_date" className="label-field">
-                                Invoice Issue Date <span className="text-red-500">*</span>
-                              </label>
-                              <input
-                                type="date"
-                                id="invoice_issue_date"
-                                value={installmentSettings.invoice_issue_date}
-                                onChange={(e) => updateInstallmentSettings({ invoice_issue_date: e.target.value })}
-                                className="input-field"
-                                required
-                              />
+                              <span className="font-medium text-gray-600">Invoice Issue Date</span>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_issue_date || '—'}</p>
                             </div>
-
-                            {/* Billing Month */}
                             <div>
-                              <label htmlFor="billing_month" className="label-field flex items-center space-x-2">
-                                <span>Billing Month</span>
-                                <span className="text-red-500">*</span>
-                                <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                              </label>
-                              <input
-                                type="month"
-                                id="billing_month"
-                                value={installmentSettings.billing_month}
-                                onChange={(e) => updateInstallmentSettings({ billing_month: e.target.value })}
-                                className="input-field"
-                                required
-                              />
+                              <span className="font-medium text-gray-600">Billing Month</span>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.billing_month || '—'}</p>
                             </div>
-
-                            {/* Invoice Due Date */}
                             <div>
-                              <label htmlFor="invoice_due_date" className="label-field">
-                                Invoice Due Date <span className="text-red-500">*</span>
-                              </label>
-                              <input
-                                type="date"
-                                id="invoice_due_date"
-                                value={installmentSettings.invoice_due_date}
-                                onChange={(e) => updateInstallmentSettings({ invoice_due_date: e.target.value })}
-                                className="input-field"
-                                required
-                              />
+                              <span className="font-medium text-gray-600">Invoice Due Date</span>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_due_date || '—'}</p>
                             </div>
-
-                            {/* Invoice Generation Date */}
                             <div>
-                              <label htmlFor="invoice_generation_date" className="label-field">
-                                Invoice Generation Date <span className="text-red-500">*</span>
-                              </label>
-                              <input
-                                type="date"
-                                id="invoice_generation_date"
-                                value={installmentSettings.invoice_generation_date}
-                                onChange={(e) => updateInstallmentSettings({ invoice_generation_date: e.target.value })}
-                                className="input-field"
-                                required
-                              />
+                              <span className="font-medium text-gray-600">Invoice Generation Date</span>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_generation_date || '—'}</p>
                             </div>
                           </div>
-
-                          {/* Frequency - Fixed at 1 month */}
                           <div className="mt-2 pt-2 border-t border-blue-200">
-                            <div className="flex items-center justify-between">
                             <p className="text-xs text-gray-700">
-                                Invoice will be generated every
-                                <span className="inline-block w-8 px-1 py-0.5 text-xs text-blue-900 font-semibold text-center bg-blue-50 ml-1 mr-1">
-                                  1
-                                </span>
+                              Invoice will be generated every
+                              <span className="inline-block px-1 py-0.5 text-xs text-blue-900 font-semibold bg-blue-50 mx-1">1</span>
                               <span className="text-blue-900 font-semibold">Month(s)</span>
                             </p>
-                            </div>
                           </div>
                         </div>
                       )}
@@ -11318,7 +11572,11 @@ const initializePackageMerchSelections = useCallback(
                   Back
                 </button>
               )}
-              {enrollStep !== 'view' && enrollStep !== 'enrollment-option' && enrollStep !== 'package-selection' && !(enrollStep === 'review' && generatedInvoices.length > 0) && (
+              {enrollStep !== 'view' &&
+                enrollStep !== 'enrollment-option' &&
+                enrollStep !== 'package-selection' &&
+                enrollStep !== 'ack-receipt-selection' &&
+                !(enrollStep === 'review' && generatedInvoices.length > 0) && (
                 <div className="flex items-center gap-3">
                   {/* Total Amount Display - For per-phase enrollment in student-selection and review steps */}
                   {(enrollStep === 'student-selection' || enrollStep === 'review') && (
@@ -11386,16 +11644,7 @@ const initializePackageMerchSelections = useCallback(
                       }
                     }
                     
-                    // Validate installment settings if toggle is enabled
-                    if (showInstallmentSettings) {
-                      if (!installmentSettings.invoice_issue_date || 
-                          !installmentSettings.billing_month || 
-                          !installmentSettings.invoice_due_date || 
-                          !installmentSettings.invoice_generation_date) {
-                        alert('Please fill in all installment settings fields');
-                        return;
-                      }
-                    }
+                    // Installment settings are loaded from system Settings › Invoice Schedule
                     
                     // Validate uniform size selection if package includes uniforms
                     if (selectedPackage && selectedStudents.length > 0) {
@@ -13175,8 +13424,9 @@ const initializePackageMerchSelections = useCallback(
                               
                               if (pkg.package_type === 'Installment' && !hasFullpaymentPricing) {
                                 setUpgradeShowInstallmentSettings(true);
-                                const defaultSettings = getDefaultInstallmentSettings();
-                                setUpgradeInstallmentSettings(defaultSettings);
+                                const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
+                                const systemSettings = await fetchInstallmentScheduleSettings(branchId);
+                                setUpgradeInstallmentSettings(systemSettings);
                               } else {
                                 setUpgradeShowInstallmentSettings(false);
                                 setUpgradeInstallmentSettings({
@@ -13659,12 +13909,13 @@ const initializePackageMerchSelections = useCallback(
                             </div>
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 const newState = !upgradeShowInstallmentSettings;
                                 setUpgradeShowInstallmentSettings(newState);
                                 if (newState) {
-                                  const defaultSettings = getDefaultInstallmentSettings();
-                                  setUpgradeInstallmentSettings(defaultSettings);
+                                  const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
+                                  const systemSettings = await fetchInstallmentScheduleSettings(branchId);
+                                  setUpgradeInstallmentSettings(systemSettings);
                                 } else {
                                   setUpgradeInstallmentSettings({
                                     invoice_issue_date: '',
@@ -13688,73 +13939,38 @@ const initializePackageMerchSelections = useCallback(
                           </div>
                         </div>
 
-                        {/* Installment Settings Form */}
+                        {/* Installment Settings — loaded from system Settings > Invoice Schedule */}
                         {upgradeShowInstallmentSettings && (
                           <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                             <div className="mb-2">
                               <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>
                               <p className="text-xs text-gray-600 mt-0.5">
-                                Configure the details for the first invoices that will be generated regularly.
+                                Loaded from{' '}
+                                <span className="font-medium text-blue-700">Settings › Invoice Schedule</span>.
                               </p>
                             </div>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                               <div>
-                                <label className="label-field">
-                                  Invoice Issue Date <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="date"
-                                  value={upgradeInstallmentSettings.invoice_issue_date}
-                                  onChange={(e) => setUpgradeInstallmentSettings(prev => ({ ...prev, invoice_issue_date: e.target.value }))}
-                                  className="input-field"
-                                  required
-                                />
+                                <span className="font-medium text-gray-600">Invoice Issue Date</span>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_issue_date || '—'}</p>
                               </div>
                               <div>
-                                <label className="label-field flex items-center space-x-2">
-                                  <span>Billing Month</span>
-                                  <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="month"
-                                  value={upgradeInstallmentSettings.billing_month}
-                                  onChange={(e) => setUpgradeInstallmentSettings(prev => ({ ...prev, billing_month: e.target.value }))}
-                                  className="input-field"
-                                  required
-                                />
+                                <span className="font-medium text-gray-600">Billing Month</span>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.billing_month || '—'}</p>
                               </div>
                               <div>
-                                <label className="label-field">
-                                  Invoice Due Date <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="date"
-                                  value={upgradeInstallmentSettings.invoice_due_date}
-                                  onChange={(e) => setUpgradeInstallmentSettings(prev => ({ ...prev, invoice_due_date: e.target.value }))}
-                                  className="input-field"
-                                  required
-                                />
+                                <span className="font-medium text-gray-600">Invoice Due Date</span>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_due_date || '—'}</p>
                               </div>
                               <div>
-                                <label className="label-field">
-                                  Invoice Generation Date <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                  type="date"
-                                  value={upgradeInstallmentSettings.invoice_generation_date}
-                                  onChange={(e) => setUpgradeInstallmentSettings(prev => ({ ...prev, invoice_generation_date: e.target.value }))}
-                                  className="input-field"
-                                  required
-                                />
+                                <span className="font-medium text-gray-600">Invoice Generation Date</span>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_generation_date || '—'}</p>
                               </div>
                             </div>
                             <div className="mt-2 pt-2 border-t border-blue-200">
                               <p className="text-xs text-gray-700">
                                 Invoice will be generated every
-                                <span className="inline-block w-8 px-1 py-0.5 text-xs text-blue-900 font-semibold text-center bg-blue-50 ml-1 mr-1">
-                                  {upgradeInstallmentSettings.frequency_months}
-                                </span>
+                                <span className="inline-block px-1 py-0.5 text-xs text-blue-900 font-semibold bg-blue-50 mx-1">1</span>
                                 <span className="text-blue-900 font-semibold">Month(s)</span>
                               </p>
                             </div>
@@ -14164,16 +14380,7 @@ const initializePackageMerchSelections = useCallback(
                 {upgradeStep === 'package-config' && (
                   <button
                     onClick={() => {
-                      if (upgradeShowInstallmentSettings && upgradeSelectedPackage.package_type === 'Installment') {
-                        // Validate installment settings before proceeding
-                        if (!upgradeInstallmentSettings.invoice_issue_date || 
-                            !upgradeInstallmentSettings.billing_month || 
-                            !upgradeInstallmentSettings.invoice_due_date || 
-                            !upgradeInstallmentSettings.invoice_generation_date) {
-                          alert('Please fill in all installment settings fields');
-                          return;
-                        }
-                      }
+                      // Installment settings are loaded from system Settings › Invoice Schedule
                       
                       // Validate uniform size selection if package includes uniforms
                       if (upgradeSelectedPackage && selectedReservationForUpgrade) {

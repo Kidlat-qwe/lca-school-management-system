@@ -138,23 +138,23 @@ router.get(
         ? `
           SELECT
             b.branch_id,
-            b.branch_name,
+            COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
             COUNT(u.user_id) FILTER (WHERE u.user_type = 'Student') AS student_count
           FROM branchestbl b
           LEFT JOIN userstbl u ON u.branch_id = b.branch_id AND u.user_type = 'Student'
           WHERE b.branch_id = $1
-          GROUP BY b.branch_id, b.branch_name
-          ORDER BY student_count DESC NULLS LAST, b.branch_name
+          GROUP BY b.branch_id, b.branch_nickname, b.branch_name
+          ORDER BY student_count DESC NULLS LAST, COALESCE(b.branch_nickname, b.branch_name)
         `
         : `
           SELECT
             b.branch_id,
-            b.branch_name,
+            COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
             COUNT(u.user_id) FILTER (WHERE u.user_type = 'Student') AS student_count
           FROM branchestbl b
           LEFT JOIN userstbl u ON u.branch_id = b.branch_id AND u.user_type = 'Student'
-          GROUP BY b.branch_id, b.branch_name
-          ORDER BY student_count DESC NULLS LAST, b.branch_name
+          GROUP BY b.branch_id, b.branch_nickname, b.branch_name
+          ORDER BY student_count DESC NULLS LAST, COALESCE(b.branch_nickname, b.branch_name)
         `;
       const studentsByBranchResult = await query(studentsByBranchQuery, branchParams);
 
@@ -198,9 +198,11 @@ router.get(
 
       // Get all branches for filter dropdown
       const branchesResult = await query(`
-        SELECT branch_id, branch_name
+        SELECT 
+          branch_id, 
+          COALESCE(branch_nickname, branch_name) AS branch_name
         FROM branchestbl
-        ORDER BY branch_name
+        ORDER BY COALESCE(branch_nickname, branch_name)
       `);
 
       // Get crossing procedures data (students enrolled in classes from different branches)
@@ -211,12 +213,12 @@ router.get(
             u.user_id as student_id,
             u.full_name as student_name,
             u.branch_id as student_branch_id,
-            b_student.branch_name as student_branch_name,
+            COALESCE(b_student.branch_nickname, b_student.branch_name) as student_branch_name,
             c.class_id,
             c.class_name,
             c.level_tag,
             c.branch_id as class_branch_id,
-            b_class.branch_name as class_branch_name,
+            COALESCE(b_class.branch_nickname, b_class.branch_name) as class_branch_name,
             p.program_name,
             cs.enrolled_at,
             cs.phase_number
@@ -240,12 +242,12 @@ router.get(
             u.user_id as student_id,
             u.full_name as student_name,
             u.branch_id as student_branch_id,
-            b_student.branch_name as student_branch_name,
+            COALESCE(b_student.branch_nickname, b_student.branch_name) as student_branch_name,
             c.class_id,
             c.class_name,
             c.level_tag,
             c.branch_id as class_branch_id,
-            b_class.branch_name as class_branch_name,
+            COALESCE(b_class.branch_nickname, b_class.branch_name) as class_branch_name,
             p.program_name,
             cs.enrolled_at,
             cs.phase_number
@@ -313,6 +315,171 @@ router.get(
           },
           selected_branch_id: branchFilter,
           updated_at: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/enrollment
+ * Enrollment dashboard: active/inactive students, reserved-only, monthly enrollments, charts data.
+ * Active = student with at least one enrollment where enrollment_status = 'Active' and removed_at IS NULL.
+ * Inactive = student with no active enrollments (includes reserved-only and never enrolled).
+ * Access: Superadmin, Admin, Finance (Admin/Finance see their branch only)
+ */
+router.get(
+  '/enrollment',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    try {
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const isFinanceNoBranch = req.user.userType === 'Finance' && (req.user.branchId == null);
+      const branchFilter = isSuperadmin || isFinanceNoBranch
+        ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
+        : (req.user.branchId || null);
+      const branchParams = branchFilter ? [branchFilter] : [];
+
+      const studentWhere = branchFilter
+        ? 'WHERE u.user_type = \'Student\' AND u.branch_id = $1'
+        : 'WHERE u.user_type = \'Student\'';
+      const classJoin = branchFilter
+        ? 'INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1'
+        : 'INNER JOIN classestbl c ON cs.class_id = c.class_id';
+      const activeEnrollment = "COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL";
+
+      // Total students (by branch if filter)
+      const totalStudentsResult = await query(
+        `SELECT COUNT(*) AS count FROM userstbl u ${studentWhere}`,
+        branchParams
+      );
+      const totalStudents = parseInt(totalStudentsResult.rows[0]?.count, 10) || 0;
+
+      // Active students: distinct students with at least one active enrollment
+      const activeQuery = branchFilter
+        ? `
+          SELECT COUNT(DISTINCT cs.student_id) AS count
+          FROM classstudentstbl cs
+          INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
+          WHERE ${activeEnrollment}
+        `
+        : `
+          SELECT COUNT(DISTINCT cs.student_id) AS count
+          FROM classstudentstbl cs
+          INNER JOIN classestbl c ON cs.class_id = c.class_id
+          WHERE ${activeEnrollment}
+        `;
+      const activeResult = await query(activeQuery, branchParams);
+      const activeStudents = parseInt(activeResult.rows[0]?.count, 10) || 0;
+
+      // Inactive = total students - active (students with no active enrollment)
+      const inactiveStudents = Math.max(0, totalStudents - activeStudents);
+
+      // Reserved-only: students who have at least one reservation and zero active enrollments
+      const reservedOnlyQuery = branchFilter
+        ? `
+          SELECT COUNT(DISTINCT r.student_id) AS count
+          FROM reservedstudentstbl r
+          WHERE r.branch_id = $1
+            AND r.status = 'Reserved'
+            AND NOT EXISTS (
+              SELECT 1 FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = r.branch_id
+              WHERE cs.student_id = r.student_id AND ${activeEnrollment}
+            )
+        `
+        : `
+          SELECT COUNT(DISTINCT r.student_id) AS count
+          FROM reservedstudentstbl r
+          WHERE r.status = 'Reserved'
+            AND NOT EXISTS (
+              SELECT 1 FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE cs.student_id = r.student_id AND ${activeEnrollment}
+            )
+        `;
+      const reservedOnlyResult = await query(reservedOnlyQuery, branchParams);
+      const reservedOnlyCount = parseInt(reservedOnlyResult.rows[0]?.count, 10) || 0;
+
+      // Monthly enrollments (last 6 months) for bar chart
+      const monthSequence = buildMonthSequence(6);
+      const monthKeys = monthSequence.map((m) => m.key);
+      const enrollmentsByMonthQuery = branchFilter
+        ? `
+          SELECT TO_CHAR(DATE_TRUNC('month', cs.enrolled_at), 'YYYY-MM') AS month, COUNT(*) AS count
+          FROM classstudentstbl cs
+          INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
+          WHERE cs.enrolled_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          GROUP BY 1 ORDER BY 1
+        `
+        : `
+          SELECT TO_CHAR(DATE_TRUNC('month', cs.enrolled_at), 'YYYY-MM') AS month, COUNT(*) AS count
+          FROM classstudentstbl cs
+          INNER JOIN classestbl c ON cs.class_id = c.class_id
+          WHERE cs.enrolled_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          GROUP BY 1 ORDER BY 1
+        `;
+      const enrollmentsByMonthResult = await query(enrollmentsByMonthQuery, branchParams);
+      const enrollmentMap = enrollmentsByMonthResult.rows.reduce((acc, row) => {
+        acc[row.month] = parseInt(row.count, 10);
+        return acc;
+      }, {});
+      const monthly_enrollments = monthSequence.map((m) => ({
+        month: m.label,
+        count: enrollmentMap[m.key] || 0,
+      }));
+
+      // Active vs Inactive by branch (for bar chart when no branch filter)
+      let active_inactive_by_branch = [];
+      if (!branchFilter) {
+        const byBranchQuery = `
+          SELECT
+            b.branch_id,
+            COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+            COUNT(DISTINCT u.user_id) AS total,
+            COUNT(DISTINCT CASE WHEN EXISTS (
+              SELECT 1 FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = b.branch_id
+              WHERE cs.student_id = u.user_id AND ${activeEnrollment}
+            ) THEN u.user_id END) AS active_count
+          FROM branchestbl b
+          LEFT JOIN userstbl u ON u.branch_id = b.branch_id AND u.user_type = 'Student'
+          GROUP BY b.branch_id, b.branch_nickname, b.branch_name
+          ORDER BY COALESCE(b.branch_nickname, b.branch_name)
+        `;
+        const byBranchResult = await query(byBranchQuery);
+        active_inactive_by_branch = byBranchResult.rows.map((row) => ({
+          branch_id: row.branch_id,
+          branch_name: row.branch_name || 'Unassigned',
+          total: parseInt(row.total, 10) || 0,
+          active: parseInt(row.active_count, 10) || 0,
+          inactive: Math.max(0, (parseInt(row.total, 10) || 0) - (parseInt(row.active_count, 10) || 0)),
+        }));
+      }
+
+      // Branches list for filter
+      const branchesResult = await query(`
+        SELECT branch_id, COALESCE(branch_nickname, branch_name) AS branch_name
+        FROM branchestbl ORDER BY COALESCE(branch_nickname, branch_name)
+      `);
+
+      res.json({
+        success: true,
+        data: {
+          total_students: totalStudents,
+          active_students: activeStudents,
+          inactive_students: inactiveStudents,
+          reserved_only_count: reservedOnlyCount,
+          monthly_enrollments,
+          active_inactive_by_branch,
+          branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
+          selected_branch_id: branchFilter,
         },
       });
     } catch (error) {
@@ -521,7 +688,7 @@ router.get(
       const [perClassResult, perTeacherResult, perRoomResult] = await Promise.all([
         query(
           `SELECT c.class_id, c.class_name, c.level_tag, p.program_name, c.branch_id,
-                  COUNT(cs.student_id) AS student_count
+                  COUNT(DISTINCT cs.student_id) AS student_count
            FROM classestbl c
            LEFT JOIN classstudentstbl cs ON c.class_id = cs.class_id AND ${activeEnrollment}
            LEFT JOIN programstbl p ON c.program_id = p.program_id
