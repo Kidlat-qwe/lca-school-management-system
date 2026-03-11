@@ -18,10 +18,10 @@ const Layout = () => {
           </div>
         </main>
       </div>
-      {/* Overlay for mobile */}
+      {/* Overlay for mobile - same semi-blur as modals */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}

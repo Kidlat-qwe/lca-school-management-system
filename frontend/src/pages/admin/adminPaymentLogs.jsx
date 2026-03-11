@@ -30,6 +30,8 @@ const AdminPaymentLogs = () => {
   const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
   const [referenceModalInput, setReferenceModalInput] = useState('');
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
+  const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
+  const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
   // Removed branches state - admin only sees their branch
 
@@ -615,10 +617,10 @@ const AdminPaymentLogs = () => {
         </div>
       )}
 
-      {/* Reference Number modal - for Pending payments */}
-      {showReferenceModal && selectedPaymentForReference && (
+      {/* Reference Number modal (portaled so overlay covers header) */}
+      {showReferenceModal && selectedPaymentForReference && createPortal(
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
           onClick={closeReferenceModal}
         >
           <div
@@ -644,18 +646,20 @@ const AdminPaymentLogs = () => {
               {selectedPaymentForReference.payment_attachment_url && (
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
-                  <a
-                    href={selectedPaymentForReference.payment_attachment_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentViewerUrl(selectedPaymentForReference.payment_attachment_url);
+                      setShowAttachmentViewer(true);
+                    }}
+                    className="block cursor-pointer text-left rounded-lg border border-gray-200 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1"
                   >
                     <img
                       src={selectedPaymentForReference.payment_attachment_url}
                       alt="Payment attachment"
-                      className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain"
+                      className="max-h-48 w-auto rounded-lg object-contain"
                     />
-                  </a>
+                  </button>
                 </div>
               )}
               <form onSubmit={handleUpdateReferenceNumber}>
@@ -689,7 +693,51 @@ const AdminPaymentLogs = () => {
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Attachment viewer modal (portaled so overlay covers header) */}
+      {showAttachmentViewer && attachmentViewerUrl && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+          onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center px-4 py-2 border-b border-gray-200">
+              <span className="text-sm font-medium text-gray-700">Payment attachment</span>
+              <button
+                type="button"
+                onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
+                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 p-4 overflow-auto flex items-center justify-center">
+              {/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(attachmentViewerUrl) ? (
+                <img
+                  src={attachmentViewerUrl}
+                  alt="Payment attachment"
+                  className="max-w-full max-h-[75vh] w-auto object-contain rounded-lg"
+                />
+              ) : (
+                <iframe
+                  src={attachmentViewerUrl}
+                  title="Payment attachment"
+                  className="w-full min-h-[70vh] border-0 rounded-lg bg-gray-100"
+                />
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* Payment Method filter dropdown - portaled to avoid table overflow clipping */}

@@ -439,11 +439,11 @@ const SuperfinanceInstallmentInvoice = () => {
                         {invoice.total_amount_excluding_tax !== null && invoice.total_amount_excluding_tax !== undefined
                           ? `₱${parseFloat(invoice.total_amount_excluding_tax).toFixed(2)}`
                           : '-'}
-                        </div>
-                      </td>
-                      <td className="px-3 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900 font-medium">
-                          {invoice.total_amount_including_tax !== null && invoice.total_amount_including_tax !== undefined
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900 font-medium">
+                        {invoice.total_amount_including_tax !== null && invoice.total_amount_including_tax !== undefined
                           ? `₱${parseFloat(invoice.total_amount_including_tax).toFixed(2)}`
                           : '-'}
                       </div>
@@ -641,7 +641,7 @@ const SuperfinanceInstallmentInvoice = () => {
       {/* Generate Invoice Modal */}
       {isGenerateModalOpen && selectedInvoiceForGeneration && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeGenerateModal}
         >
           <div 

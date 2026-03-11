@@ -1503,7 +1503,9 @@ const initializePackageMerchSelections = useCallback(
         .filter(reservation => {
           // Exclude if already enrolled
           if (enrolledStudentIds.has(reservation.student_id)) return false;
-          return true; // Include all reservations for display, even expired/unpaid
+          // Exclude Upgraded: they were converted to enrollment; if now unenrolled, don't show in modal
+          if (reservation.status === 'Upgraded') return false;
+          return true; // Include all other reservations for display, even expired/unpaid
         })
         .map(reservation => {
           const shouldCount = shouldCountReservedStudent(reservation);
@@ -1724,10 +1726,17 @@ const initializePackageMerchSelections = useCallback(
       
       // Convert reserved students to match enrolled students format
       // Include ALL reserved students for display, but mark which ones should be counted
+      const enrolledStudentIds = new Set(uniqueEnrolledStudents.map(s => s.user_id));
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
-      const formattedReservedStudents = reservedStudents.map(reservation => {
+      const formattedReservedStudents = reservedStudents
+        .filter(reservation => {
+          if (enrolledStudentIds.has(reservation.student_id)) return false;
+          if (reservation.status === 'Upgraded') return false;
+          return true;
+        })
+        .map(reservation => {
         const shouldCount = shouldCountReservedStudent(reservation);
         
         return {
@@ -3332,7 +3341,7 @@ const initializePackageMerchSelections = useCallback(
       const isPhasePackage = selectedPackage && selectedPackage.package_type === 'Phase';
       
       // When using Phase packages, phase and amount come from the package,
-      // and included pricing/merchandise are defined by the package — no extra selections needed.
+      // and included pricing/merchandise are defined by the package ? no extra selections needed.
       if (!isPhasePackage) {
         if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
           alert('Please select a phase for per-phase enrollment');
@@ -3784,7 +3793,7 @@ const initializePackageMerchSelections = useCallback(
             if (responseData.errors) {
               if (Array.isArray(responseData.errors) && responseData.errors.length > 0) {
                 // Combine all error messages into a readable format
-                errorMessage = `Validation Errors:\n  • ${responseData.errors.join('\n  • ')}`;
+                errorMessage = `Validation Errors:\n  ? ${responseData.errors.join('\n  ? ')}`;
               } else if (typeof responseData.errors === 'string') {
                 errorMessage = responseData.errors;
               }
@@ -5974,7 +5983,7 @@ setFormData({
 
         {/* Merge History Modal - Accessible from detail view */}
         {isMergeHistoryModalOpen && selectedClassForHistory && createPortal(
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -6112,7 +6121,7 @@ setFormData({
 
         {/* Schedule Conflicts Modal - Only shown in detail view */}
         {isConflictModalOpen && conflictData && viewMode === 'detail' && createPortal(
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col">
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -6152,10 +6161,10 @@ setFormData({
                       </p>
                       {conflictData.details && (
                         <div className="text-xs text-red-700 space-y-1">
-                          <p>• Room conflicts: {conflictData.details.room_conflicts || 0}</p>
-                          <p>• Missing rooms: {conflictData.details.missing_room_conflicts || 0}</p>
+                          <p>? Room conflicts: {conflictData.details.room_conflicts || 0}</p>
+                          <p>? Missing rooms: {conflictData.details.missing_room_conflicts || 0}</p>
                           {conflictData.details.conflicting_class_ids && conflictData.details.conflicting_class_ids.length > 0 && (
-                            <p>• Conflicting class IDs: {conflictData.details.conflicting_class_ids.join(', ')}</p>
+                            <p>? Conflicting class IDs: {conflictData.details.conflicting_class_ids.join(', ')}</p>
                           )}
                         </div>
                       )}
@@ -6280,7 +6289,7 @@ setFormData({
 
         {/* Suspension Modal - Two-Step Process */}
         {isSuspensionModalOpen && selectedClassForSuspension && createPortal(
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
             <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
                 <div>
@@ -6341,7 +6350,7 @@ setFormData({
                     </div>
                     <div className="mt-6 flex-1 min-h-0 flex flex-col">
                       <h4 className="text-sm font-semibold text-gray-900 mb-3">Select Sessions to Suspend ({selectedSessionsToSuspend.length} selected)</h4>
-                      <p className="text-xs text-amber-600 mb-3">⚠️ All selected sessions must be from the same phase</p>
+                      <p className="text-xs text-amber-600 mb-3">?? All selected sessions must be from the same phase</p>
                       {loadingClassSessions ? (
                         <div className="text-center py-8">
                           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -6361,7 +6370,7 @@ setFormData({
                                     <div className="ml-3 flex-1">
                                       <div className="text-sm font-medium text-gray-900">Session {session.phase_session_number}</div>
                                       <div className="text-xs text-gray-600">
-                                        {formatDateManila(session.scheduled_date)} • {session.scheduled_start_time} - {session.scheduled_end_time}
+                                        {formatDateManila(session.scheduled_date)} ? {session.scheduled_start_time} - {session.scheduled_end_time}
                                       </div>
                                     </div>
                                   </label>
@@ -6422,7 +6431,7 @@ setFormData({
                 {suspensionStep === 'preview-auto' && (
                   <div className="flex-1 overflow-y-auto space-y-6">
                     <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <h4 className="text-sm font-semibold text-green-900 mb-2">✓ Sessions Added to Last Phase · Class End Date Extended</h4>
+                      <h4 className="text-sm font-semibold text-green-900 mb-2">? Sessions Added to Last Phase ? Class End Date Extended</h4>
                       <p className="text-xs text-green-700">{selectedSessionsToSuspend.length} makeup session(s) will be auto-generated and added to the last phase. The class end date will be extended to accommodate them.</p>
                     </div>
                     <div className="space-y-4">
@@ -6438,7 +6447,7 @@ setFormData({
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Will be suspended</span>
                           </div>
                           <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
-                            <p className="text-xs font-medium text-blue-900 mb-1">→ Will be rescheduled in the last phase</p>
+                            <p className="text-xs font-medium text-blue-900 mb-1">? Will be rescheduled in the last phase</p>
                             <p className="text-xs text-blue-700">Makeup session will be automatically scheduled at the end of the class; the class end date will be extended.</p>
                           </div>
                         </div>
@@ -6476,7 +6485,7 @@ setFormData({
                               <div className="flex items-start justify-between mb-3">
                                 <div>
                                   <h5 className="font-semibold text-gray-900">Phase {schedule.suspended_session.phase_number}, Session {schedule.suspended_session.phase_session_number}</h5>
-                                  <p className="text-xs text-gray-600 mt-1">Original: {formatDateManila(schedule.suspended_session.scheduled_date)} • {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}</p>
+                                  <p className="text-xs text-gray-600 mt-1">Original: {formatDateManila(schedule.suspended_session.scheduled_date)} ? {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}</p>
                                 </div>
                                 <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded">Suspended</span>
                               </div>
@@ -6507,7 +6516,7 @@ setFormData({
                       <div className="flex items-center justify-between mb-3">
                         <div>
                           <h4 className="text-sm font-semibold text-blue-900">
-                            📅 Existing Schedules
+                            ?? Existing Schedules
                           </h4>
                           <p className="text-xs text-blue-700 mt-0.5">
                             {selectedClassForSuspension?.room_id ? 
@@ -6656,7 +6665,7 @@ setFormData({
         {/* Attendance Modal */}
         {isAttendanceModalOpen && createPortal(
           <div 
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+            className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
             onClick={closeAttendanceModal}
             style={{ zIndex: 9999, position: 'fixed' }}
           >
@@ -6687,7 +6696,7 @@ setFormData({
                     </span>
                     {attendanceData?.session?.scheduled_start_time && attendanceData?.session?.scheduled_end_time && (
                       <>
-                        <span className="mx-2">•</span>
+                        <span className="mx-2">?</span>
                         <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -6708,7 +6717,7 @@ setFormData({
                     <span className="font-medium">{attendanceData?.session?.program_name || selectedClassForDetails?.program_name || ''}</span>
                     {selectedSessionForAttendance?.phase_number && selectedSessionForAttendance?.phase_session_number && (
                       <>
-                        <span className="mx-2">•</span>
+                        <span className="mx-2">?</span>
                         <span className="px-2 py-0.5 bg-white bg-opacity-30 rounded text-gray-900 font-semibold">
                           Phase {selectedSessionForAttendance.phase_number} Session {selectedSessionForAttendance.phase_session_number}
                         </span>
@@ -7143,7 +7152,7 @@ setFormData({
         {/* Attendance Note Modal */}
         {isAttendanceModalOpen && isNoteModalOpen && !isAttendanceLocked && createPortal(
           <div
-            className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+            className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
             onClick={() => setIsNoteModalOpen(false)}
           >
             <div
@@ -7197,7 +7206,7 @@ setFormData({
         {/* Attendance Agenda Modal */}
         {isAttendanceModalOpen && isAgendaModalOpen && !isAttendanceLocked && createPortal(
           <div
-            className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+            className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
             onClick={() => setIsAgendaModalOpen(false)}
           >
             <div
@@ -7675,7 +7684,7 @@ setFormData({
       {/* Create/Edit Class Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div className="flex items-center justify-center gap-4 w-full max-w-7xl">
@@ -7771,7 +7780,7 @@ setFormData({
                           {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && (
                             <p className="mt-1 text-xs text-gray-500">
                               Curriculum: {selectedProgram.curriculum_name || 'N/A'} - 
-                              {selectedProgram.number_of_phase} phase(s) × {selectedProgram.number_of_session_per_phase} session(s) = 
+                              {selectedProgram.number_of_phase} phase(s) ? {selectedProgram.number_of_session_per_phase} session(s) = 
                               {selectedProgram.number_of_phase * selectedProgram.number_of_session_per_phase} total sessions
                             </p>
                           )}
@@ -7926,7 +7935,7 @@ setFormData({
                           {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && (
                             <p className="mt-1 text-xs text-gray-500">
                               Curriculum: {selectedProgram.curriculum_name || 'N/A'} - 
-                              {selectedProgram.number_of_phase} phase(s) × {selectedProgram.number_of_session_per_phase} session(s) = 
+                              {selectedProgram.number_of_phase} phase(s) ? {selectedProgram.number_of_session_per_phase} session(s) = 
                               {selectedProgram.number_of_phase * selectedProgram.number_of_session_per_phase} total sessions
                             </p>
                           )}
@@ -8161,14 +8170,14 @@ setFormData({
                       )}
                       {teacherConflicts.length > 0 && (
                         <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                          <p className="text-sm font-medium text-yellow-800 mb-2">⚠️ Schedule Conflicts Detected:</p>
+                          <p className="text-sm font-medium text-yellow-800 mb-2">?? Schedule Conflicts Detected:</p>
                           {teacherConflicts.map((conflict) => (
                             <div key={conflict.teacher_id} className="mb-2 last:mb-0">
                               <p className="text-sm font-medium text-yellow-900">{conflict.teacher_name}:</p>
                               <ul className="ml-4 mt-1 space-y-1">
                                 {conflict.conflicts.map((c, idx) => (
                                   <li key={idx} className="text-xs text-yellow-800">
-                                    • {c.message}
+                                    ? {c.message}
                                   </li>
                                 ))}
                               </ul>
@@ -8389,7 +8398,7 @@ setFormData({
                       )}
                       {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && formData.start_date && !editingClass && (
                         <p className="mt-1 text-xs text-gray-500">
-                          End date is automatically calculated based on curriculum ({selectedProgram.number_of_phase} phases × {selectedProgram.number_of_session_per_phase} sessions) and selected days
+                          End date is automatically calculated based on curriculum ({selectedProgram.number_of_phase} phases ? {selectedProgram.number_of_session_per_phase} sessions) and selected days
                         </p>
                       )}
                       {formErrors.end_date && (
@@ -8624,7 +8633,7 @@ setFormData({
               <div className="flex items-center justify-between p-4 border-b border-gray-200 flex-shrink-0 bg-blue-50">
                 <div>
                   <h3 className="text-sm font-semibold text-blue-900">
-                    📅 Existing Schedules
+                    ?? Existing Schedules
                   </h3>
                   <p className="text-xs text-blue-700 mt-0.5">
                     {rooms.find(r => r.room_id === parseInt(formData.room_id))?.room_name || 'Selected Room'}
@@ -8794,7 +8803,7 @@ setFormData({
       {/* Enroll Student Modal */}
       {isEnrollModalOpen && selectedClassForEnrollment && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeEnrollModal}
         >
           <div 
@@ -9229,7 +9238,7 @@ setFormData({
 
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts?</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -9279,7 +9288,7 @@ setFormData({
                                       {ar.package_name_snapshot || ar.package_name || 'N/A'}
                                     </div>
                                     <div className="text-xs text-gray-500">
-                                      ₱
+                                      ?
                                       {Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2,
@@ -9287,7 +9296,7 @@ setFormData({
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-gray-900">
-                                    ₱
+                                    ?
                                     {Number(ar.payment_amount || 0).toLocaleString('en-US', {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
@@ -9815,7 +9824,7 @@ setFormData({
                               <p className="mt-1 text-sm text-red-600">{promoCodeError}</p>
                             )}
                             {validatedPromoFromCode && !promoCodeError && (
-                              <p className="mt-1 text-sm text-green-600">✓ Valid promo code found!</p>
+                              <p className="mt-1 text-sm text-green-600">? Valid promo code found!</p>
                             )}
                           </div>
 
@@ -9876,7 +9885,7 @@ setFormData({
                                         )}
                                         {validatedPromoFromCode.merchandise && validatedPromoFromCode.merchandise.length > 0 && (
                                           <span className="text-xs font-bold bg-purple-100 text-purple-800 px-2.5 py-1 rounded-full">
-                                            🎁 Free Items ({validatedPromoFromCode.merchandise.length})
+                                            ?? Free Items ({validatedPromoFromCode.merchandise.length})
                                           </span>
                                         )}
                                       </div>
@@ -9884,13 +9893,13 @@ setFormData({
                                         <div className="mt-2 pt-2 border-t border-gray-200">
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-xs text-gray-500 line-through">
-                                              ₱{(selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                              ?{(selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                                 ? parseFloat(selectedPackage.downpayment_amount)
                                                 : parseFloat(selectedPackage?.package_price || 0)
                                               ).toFixed(2)}
                                             </span>
                                             <span className="text-lg font-bold text-green-600">
-                                              ₱{validatedPromoFromCode.final_price.toFixed(2)}
+                                              ?{validatedPromoFromCode.final_price.toFixed(2)}
                                             </span>
                                             <span className="text-xs text-gray-600">
                                               {selectedPackage?.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
@@ -9954,7 +9963,7 @@ setFormData({
                                           )}
                                           {promo.merchandise && promo.merchandise.length > 0 && (
                                             <span className="text-xs font-bold bg-purple-100 text-purple-800 px-2.5 py-1 rounded-full">
-                                              🎁 Free Items ({promo.merchandise.length})
+                                              ?? Free Items ({promo.merchandise.length})
                                             </span>
                                           )}
                                         </div>
@@ -9962,10 +9971,10 @@ setFormData({
                                           <div className="mt-2 pt-2 border-t border-gray-200">
                                             <div className="flex items-baseline space-x-2">
                                               <span className="text-xs text-gray-500 line-through">
-                                                ₱{baseAmount.toFixed(2)}
+                                                ?{baseAmount.toFixed(2)}
                                               </span>
                                               <span className="text-lg font-bold text-green-600">
-                                                ₱{finalPrice.toFixed(2)}
+                                                ?{finalPrice.toFixed(2)}
                                               </span>
                                               <span className="text-xs text-gray-600">
                                                 {selectedPackage.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
@@ -10228,7 +10237,7 @@ setFormData({
                                                       {currentSize && (
                                                         <div className="mt-1.5">
                                                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
-                                                            ✓ {currentSize}
+                                                            ? {currentSize}
                                                           </span>
                                                         </div>
                                                       )}
@@ -10281,8 +10290,8 @@ setFormData({
                                                       {selectedStudents.length > 1 && (
                                                         <span className="ml-1">
                                                           (Need: {inventory.needed})
-                                                          {inventory.isLowStock && ' ⚠ Low stock'}
-                                                          {inventory.isOutOfStock && ' ✗ Out of stock'}
+                                                          {inventory.isLowStock && ' ? Low stock'}
+                                                          {inventory.isOutOfStock && ' ? Out of stock'}
                                                         </span>
                                                       )}
                                                     </div>
@@ -10492,8 +10501,8 @@ setFormData({
                                               {selectedStudents.length > 1 && (
                                                 <span className="ml-1">
                                                   (Need: {inventory.needed})
-                                                  {inventory.isLowStock && ' ⚠ Low stock'}
-                                                  {inventory.isOutOfStock && ' ✗ Out of stock'}
+                                                  {inventory.isLowStock && ' ? Low stock'}
+                                                  {inventory.isOutOfStock && ' ? Out of stock'}
                                                 </span>
                                               )}
                                             </div>
@@ -10631,7 +10640,7 @@ setFormData({
                                                           {currentSize && (
                                                             <div className="mt-1.5">
                                                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
-                                                                ✓ {currentSize}
+                                                                ? {currentSize}
                                                               </span>
                                                             </div>
                                                           )}
@@ -10733,33 +10742,33 @@ setFormData({
                         </div>
                       </div>
 
-                      {/* Installment Settings — loaded from system Settings > Invoice Schedule */}
+                      {/* Installment Settings ? loaded from system Settings > Invoice Schedule */}
                       {showInstallmentSettings && (
                         <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                           <div className="mb-2">
                             <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>
                             <p className="text-xs text-gray-600 mt-0.5">
                               Loaded from{' '}
-                              <span className="font-medium text-blue-700">Settings › Invoice Schedule</span>.
+                              <span className="font-medium text-blue-700">Settings ? Invoice Schedule</span>.
                               Update dates there to change the billing cycle.
                             </p>
                           </div>
                           <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                             <div>
                               <span className="font-medium text-gray-600">Invoice Issue Date</span>
-                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_issue_date || '—'}</p>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_issue_date || '?'}</p>
                             </div>
                             <div>
                               <span className="font-medium text-gray-600">Billing Month</span>
-                              <p className="text-gray-900 mt-0.5">{installmentSettings.billing_month || '—'}</p>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.billing_month || '?'}</p>
                             </div>
                             <div>
                               <span className="font-medium text-gray-600">Invoice Due Date</span>
-                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_due_date || '—'}</p>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_due_date || '?'}</p>
                             </div>
                             <div>
                               <span className="font-medium text-gray-600">Invoice Generation Date</span>
-                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_generation_date || '—'}</p>
+                              <p className="text-gray-900 mt-0.5">{installmentSettings.invoice_generation_date || '?'}</p>
                             </div>
                           </div>
                           <div className="mt-2 pt-2 border-t border-blue-200">
@@ -11087,7 +11096,7 @@ setFormData({
                                                 inventory?.isLowStock ? 'bg-orange-100 text-orange-800' :
                                                 'bg-green-100 text-green-800'
                                               }`}>
-                                                ✓ Selected: {currentSize}
+                                                ? Selected: {currentSize}
                                               </span>
                                             </div>
                                           )}
@@ -11386,7 +11395,7 @@ setFormData({
                                     <li key={pricing.pricinglist_id} className="flex justify-between items-center text-sm">
                                       <span className="text-gray-700">{pricing.name}</span>
                                       <span className="text-gray-900 font-semibold">
-                                        ₱{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        ?{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                       </span>
                                 </li>
                                   );
@@ -11644,7 +11653,7 @@ setFormData({
                       }
                     }
                     
-                    // Installment settings are loaded from system Settings › Invoice Schedule
+                    // Installment settings are loaded from system Settings ? Invoice Schedule
                     
                     // Validate uniform size selection if package includes uniforms
                     if (selectedPackage && selectedStudents.length > 0) {
@@ -11772,7 +11781,7 @@ setFormData({
       {/* Merge Class Modal */}
       {isMergeModalOpen && selectedClassForMerge && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeMergeModal}
         >
           <div className="flex items-start justify-center gap-4 w-full max-w-7xl">
@@ -12561,7 +12570,7 @@ setFormData({
               <div className="flex items-center justify-between p-4 border-b border-gray-200 flex-shrink-0 bg-blue-50">
                 <div>
                   <h3 className="text-sm font-semibold text-blue-900">
-                    📅 Existing Schedules
+                    ?? Existing Schedules
                   </h3>
                   <p className="text-xs text-blue-700 mt-0.5">
                     {rooms.find(r => r.room_id === parseInt(mergeFormData.room_id))?.room_name || 'Selected Room'}
@@ -12742,7 +12751,7 @@ setFormData({
       {/* View Students Modal - same as superadmin: resizable, minimalist, Payment/Actions text, Move */}
       {isViewStudentsModalOpen && selectedClassForView && createPortal(
         <div 
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeViewStudentsModal}
         >
           <div 
@@ -12756,9 +12765,9 @@ setFormData({
                 <h2 className={`font-semibold text-gray-900 truncate ${viewStudentsStep === 'phase-selection' ? 'text-base' : 'text-lg'}`}>
                   {viewStudentsStep === 'phase-selection' ? 'Select Phase' : 'Students'}
                 </h2>
-                <p className="text-xs text-gray-400 mt-0.5 truncate" title={`${selectedClassForView.program_name} — ${selectedClassForView.class_name || selectedClassForView.level_tag}`}>
+                <p className="text-xs text-gray-400 mt-0.5 truncate" title={`${selectedClassForView.program_name} ? ${selectedClassForView.class_name || selectedClassForView.level_tag}`}>
                   {selectedClassForView.class_name || selectedClassForView.level_tag}
-                  {selectedClassForView.program_name && ` · ${selectedClassForView.program_name}`}
+                  {selectedClassForView.program_name && ` ? ${selectedClassForView.program_name}`}
                 </p>
               </div>
               <button onClick={closeViewStudentsModal} className="flex-shrink-0 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
@@ -12864,11 +12873,11 @@ setFormData({
                               const isPaymentVerified = student.is_payment_verified === true;
                               const notVerifiedHighlight = !isPaymentVerified ? 'bg-amber-50/50' : '';
                               const enrolledByRaw = student.enrolled_by || '-';
-                              const enrolledByShort = enrolledByRaw.length > 24 ? `${enrolledByRaw.slice(0, 22)}…` : enrolledByRaw;
+                              const enrolledByShort = enrolledByRaw.length > 24 ? `${enrolledByRaw.slice(0, 22)}?` : enrolledByRaw;
                               return (
                                 <tr key={uniqueKey} className={`hover:bg-gray-50/50 transition-colors ${isReserved ? 'bg-amber-50/30' : ''} ${notVerifiedHighlight}`}>
                                   <td className="px-3 py-3"><span className="text-sm font-medium text-gray-900">{student.full_name}</span></td>
-                                  <td className="px-3 py-3 text-sm text-gray-500">{student.email || '—'}</td>
+                                  <td className="px-3 py-3 text-sm text-gray-500">{student.email || '?'}</td>
                                   <td className="px-3 py-3">
                                     {isReserved ? (
                                       <span className={`inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium ${
@@ -12895,21 +12904,21 @@ setFormData({
                                       </span>
                                     )}
                                   </td>
-                                  <td className="px-3 py-3 text-sm text-gray-500">{isReserved ? (student.package_name || '—') : (student.level_tag || '—')}</td>
+                                  <td className="px-3 py-3 text-sm text-gray-500">{isReserved ? (student.package_name || '?') : (student.level_tag || '?')}</td>
                                   <td className="px-3 py-3">
-                                    {isReserved ? <span className="text-[11px] text-gray-500">—</span> : (
+                                    {isReserved ? <span className="text-[11px] text-gray-500">?</span> : (
                                       <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium text-sky-600 bg-sky-50">{student.phasesDisplay || `P${student.phase_number}`}</span>
                                     )}
                                   </td>
                                   <td className="px-3 py-3 text-sm text-gray-500">
-                                    {student.earliestEnrollment || student.enrolled_at ? formatDateManila(student.earliestEnrollment || student.enrolled_at) : '—'}
+                                    {student.earliestEnrollment || student.enrolled_at ? formatDateManila(student.earliestEnrollment || student.enrolled_at) : '?'}
                                   </td>
                                   <td className="px-3 py-3 text-sm text-gray-500 max-w-[120px] truncate" title={enrolledByRaw}>{enrolledByShort}</td>
                                   <td className="px-3 py-3 whitespace-nowrap">
                                     {!isReserved && !isPending ? (
                                       <button type="button" onClick={() => openMoveStudentModal(student, selectedClassForView)} className="text-xs font-medium text-sky-600 hover:text-sky-800 hover:underline" title="Move to another class (same program)">Move</button>
                                     ) : (
-                                      <span className="text-xs text-gray-400">—</span>
+                                      <span className="text-xs text-gray-400">?</span>
                                     )}
                                   </td>
                                 </tr>
@@ -12936,7 +12945,7 @@ setFormData({
 
       {/* Move Student to Another Class Modal (admin) */}
       {isMoveStudentModalOpen && studentToMove && moveSourceClass && createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" onClick={closeMoveStudentModal}>
+        <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4" onClick={closeMoveStudentModal}>
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">Move to Another Class</h2>
@@ -12964,7 +12973,7 @@ setFormData({
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
                   >
-                    <option value="">— Select class —</option>
+                    <option value="">? Select class ?</option>
                     {moveTargetClasses.map((c) => (
                       <option key={c.class_id} value={c.class_id}>
                         {c.class_name || c.level_tag || `Class ${c.class_id}`}
@@ -12994,7 +13003,7 @@ setFormData({
       {/* Substitute Teacher Assignment Modal */}
       {isSubstituteModalOpen && selectedSessionForSubstitute && selectedClassForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsSubstituteModalOpen(false)}
         >
           <div 
@@ -13135,7 +13144,7 @@ setFormData({
       {/* Reserved Students Modal */}
       {isReservedStudentsModalOpen && selectedClassForReservations && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeReservedStudentsModal}
         >
           <div 
@@ -13287,7 +13296,7 @@ setFormData({
       {/* Upgrade Reservation Modal */}
       {isUpgradeModalOpen && selectedReservationForUpgrade && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsUpgradeModalOpen(false)}
         >
           <div 
@@ -13939,32 +13948,32 @@ setFormData({
                           </div>
                         </div>
 
-                        {/* Installment Settings — loaded from system Settings > Invoice Schedule */}
+                        {/* Installment Settings ? loaded from system Settings > Invoice Schedule */}
                         {upgradeShowInstallmentSettings && (
                           <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                             <div className="mb-2">
                               <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>
                               <p className="text-xs text-gray-600 mt-0.5">
                                 Loaded from{' '}
-                                <span className="font-medium text-blue-700">Settings › Invoice Schedule</span>.
+                                <span className="font-medium text-blue-700">Settings ? Invoice Schedule</span>.
                               </p>
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                               <div>
                                 <span className="font-medium text-gray-600">Invoice Issue Date</span>
-                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_issue_date || '—'}</p>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_issue_date || '?'}</p>
                               </div>
                               <div>
                                 <span className="font-medium text-gray-600">Billing Month</span>
-                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.billing_month || '—'}</p>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.billing_month || '?'}</p>
                               </div>
                               <div>
                                 <span className="font-medium text-gray-600">Invoice Due Date</span>
-                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_due_date || '—'}</p>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_due_date || '?'}</p>
                               </div>
                               <div>
                                 <span className="font-medium text-gray-600">Invoice Generation Date</span>
-                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_generation_date || '—'}</p>
+                                <p className="text-gray-900 mt-0.5">{upgradeInstallmentSettings.invoice_generation_date || '?'}</p>
                               </div>
                             </div>
                             <div className="mt-2 pt-2 border-t border-blue-200">
@@ -14143,19 +14152,19 @@ setFormData({
                               }
                               return promoDiscount > 0 ? (
                                 <p className="text-sm text-blue-700">
-                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               ) : null;
                             })()}
                             {reservationFeePaid > 0 && (
                               <p className="text-sm text-green-700">
-                                Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                             )}
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                               <div className="pt-2 border-t border-gray-300">
                                 <p className="text-sm font-semibold text-gray-900">
-                                  Final Down payment Amount: <span className="text-lg">₱{(() => {
+                                  Final Down payment Amount: <span className="text-lg">?{(() => {
                                     const baseAmount = parseFloat(upgradeSelectedPackage.downpayment_amount);
                                     let promoDiscount = 0;
                                     if (upgradeSelectedPromo) {
@@ -14188,18 +14197,18 @@ setFormData({
                                 }
                                 return promoDiscount > 0 ? (
                                   <p className="text-sm text-blue-700">
-                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 ) : null;
                               })()}
                               {reservationFeePaid > 0 && (
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               )}
                               <div className="pt-2 border-t border-gray-300">
                                 <p className="text-sm font-semibold text-gray-900">
-                                  Final Amount: <span className="text-lg">₱{(() => {
+                                  Final Amount: <span className="text-lg">?{(() => {
                                     const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
                                     let promoDiscount = 0;
                                     if (upgradeSelectedPromo) {
@@ -14256,11 +14265,11 @@ setFormData({
                             {reservationFeePaid > 0 && (
                               <>
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                                 <div className="pt-2 border-t border-gray-300">
                                   <p className="text-sm font-semibold text-gray-900">
-                                    Final Amount: <span className="text-lg">₱{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Final Amount: <span className="text-lg">?{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 </div>
                               </>
@@ -14280,7 +14289,7 @@ setFormData({
                           <ul className="text-sm text-blue-800 space-y-1">
                             {upgradeSelectedPricingLists.map(id => {
                               const pricing = pricingLists.find(p => p.pricinglist_id === id);
-                              return pricing ? <li key={id}>• {pricing.name}</li> : null;
+                              return pricing ? <li key={id}>? {pricing.name}</li> : null;
                             })}
                           </ul>
                         </div>
@@ -14292,7 +14301,7 @@ setFormData({
                           <ul className="text-sm text-green-800 space-y-1">
                             {upgradeSelectedMerchandise.map(id => {
                               const merch = merchandise.find(m => m.merchandise_id === id);
-                              return merch ? <li key={id}>• {merch.merchandise_name}</li> : null;
+                              return merch ? <li key={id}>? {merch.merchandise_name}</li> : null;
                             })}
                           </ul>
                         </div>
@@ -14380,7 +14389,7 @@ setFormData({
                 {upgradeStep === 'package-config' && (
                   <button
                     onClick={() => {
-                      // Installment settings are loaded from system Settings › Invoice Schedule
+                      // Installment settings are loaded from system Settings ? Invoice Schedule
                       
                       // Validate uniform size selection if package includes uniforms
                       if (upgradeSelectedPackage && selectedReservationForUpgrade) {
@@ -14484,7 +14493,7 @@ setFormData({
 
       {/* Merge History Modal */}
       {isMergeHistoryModalOpen && selectedClassForHistory && createPortal(
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -14623,7 +14632,7 @@ setFormData({
       {/* Alternative Classes Modal - Shown when class is full during upgrade */}
       {isAlternativeClassesModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsAlternativeClassesModalOpen(false)}
         >
           <div 

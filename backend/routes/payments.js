@@ -1739,8 +1739,14 @@ router.put(
 
       const payment = paymentCheck.rows[0];
 
-      // Permission check: Finance can only approve payments from their branch
-      if (userType === 'Finance' && payment.branch_id !== userBranchId) {
+      // Permission check: branch-bound Finance can only approve payments from their own branch
+      // Superfinance is represented as Finance with no branch_id and should NOT be restricted here
+      if (
+        userType === 'Finance' &&
+        userBranchId !== null &&
+        userBranchId !== undefined &&
+        payment.branch_id !== userBranchId
+      ) {
         return res.status(403).json({
           success: false,
           message: 'You can only approve payments from your assigned branch',

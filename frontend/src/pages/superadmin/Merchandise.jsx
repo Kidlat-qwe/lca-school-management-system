@@ -620,7 +620,7 @@ const Merchandise = () => {
         {/* Create/Edit Merchandise Modal */}
       {isModalOpen && createPortal(
           <div 
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
             onClick={closeModal}
           >
             <div 
@@ -1008,7 +1008,7 @@ const Merchandise = () => {
       {/* Review Request Modal */}
       {isReviewModalOpen && selectedRequest && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeReviewModal}
         >
           <div 
@@ -1170,7 +1170,7 @@ const Merchandise = () => {
       {/* View Request Details Modal (For Approved/Rejected Requests) */}
       {isViewModalOpen && selectedRequest && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeViewModal}
         >
           <div 

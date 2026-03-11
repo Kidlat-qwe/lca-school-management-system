@@ -298,10 +298,10 @@ const Header = ({ onMenuClick }) => {
       currentProfilePicture={userInfo?.profile_picture_url}
     />
 
-    {/* Password Reset Modal */}
+    {/* Password Reset Modal - same semi-blur as page modals */}
     {isPasswordResetModalOpen && (
       <div 
-        className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+        className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
         onClick={() => {
           setIsPasswordResetModalOpen(false);
           setResetEmail('');

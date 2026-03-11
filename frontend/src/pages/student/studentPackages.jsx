@@ -312,7 +312,7 @@ const StudentPackages = () => {
       {/* Package Details Modal */}
       {isDetailsModalOpen && selectedPackageForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeDetailsModal}
         >
           <div 
@@ -435,7 +435,7 @@ const StudentPackages = () => {
                                           )}
                                           {detail.pricing_price && (
                                             <span className="ml-2 text-sm text-gray-600">
-                                              - ₱{parseFloat(detail.pricing_price).toFixed(2)}
+                                              - ?±{parseFloat(detail.pricing_price).toFixed(2)}
                                             </span>
                                           )}
                                         </div>

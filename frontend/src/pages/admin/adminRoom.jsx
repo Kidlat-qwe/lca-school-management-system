@@ -443,13 +443,13 @@ const AdminRoom = () => {
       return;
     }
 
-    console.log('📅 Saving schedules for room:', roomId, 'Enabled schedules:', enabledSchedules);
+    console.log('?? Saving schedules for room:', roomId, 'Enabled schedules:', enabledSchedules);
 
     // Validate that all enabled schedules have required fields
     for (const schedule of enabledSchedules) {
       if (!schedule.start_time || !schedule.end_time) {
         const errorMsg = `Please fill in start time and end time for ${schedule.day}`;
-        console.error('❌ Validation error:', errorMsg);
+        console.error('??Validation error:', errorMsg);
         throw new Error(errorMsg);
       }
     }
@@ -459,35 +459,35 @@ const AdminRoom = () => {
     
     if (!branchId) {
       const errorMsg = 'No branch ID available. Cannot create schedules.';
-      console.error('❌', errorMsg);
+      console.error('No branch ID available:', errorMsg);
       throw new Error(errorMsg);
     }
     
-    console.log('🔍 Looking for classes with branch_id:', branchId);
-    console.log('📚 Available classes:', classes);
+    console.log('Looking for classes with branch_id:', branchId);
+    console.log('Available classes:', classes);
     
     // Get available classes for this branch
     const availableClasses = classes.filter(c => c.branch_id === branchId);
     
-    console.log('✅ Found classes for branch:', availableClasses);
+    console.log('??Found classes for branch:', availableClasses);
     
     // Use the first available class if exists, otherwise use null
     // This allows creating room schedules even without classes
     const defaultClassId = availableClasses.length > 0 ? availableClasses[0].class_id : null;
-    console.log('📝 Using class_id:', defaultClassId || 'null (no class assigned)');
+    console.log('?? Using class_id:', defaultClassId || 'null (no class assigned)');
 
     // Delete existing schedules for this room first (if editing)
     if (editingRoom && schedules.length > 0) {
-      console.log('🗑️ Deleting existing schedules...');
+      console.log('??�?Deleting existing schedules...');
       for (const schedule of schedules) {
         if (schedule.day_of_week) {
           try {
             await apiRequest(`/rooms/${roomId}/schedules/${schedule.day_of_week}`, {
               method: 'DELETE',
             });
-            console.log(`✅ Deleted schedule for ${schedule.day_of_week}`);
+            console.log(`??Deleted schedule for ${schedule.day_of_week}`);
           } catch (err) {
-            console.error(`❌ Error deleting schedule for ${schedule.day_of_week}:`, err);
+            console.error(`??Error deleting schedule for ${schedule.day_of_week}:`, err);
             // Continue even if deletion fails
           }
         }
@@ -511,17 +511,17 @@ const AdminRoom = () => {
           schedulePayload.class_id = defaultClassId;
         }
         
-        console.log(`💾 Saving schedule for ${schedule.day}:`, schedulePayload);
+        console.log(`?�� Saving schedule for ${schedule.day}:`, schedulePayload);
         
         const response = await apiRequest(`/rooms/${roomId}/schedules`, {
           method: 'POST',
           body: JSON.stringify(schedulePayload),
         });
         
-        console.log(`✅ Successfully saved schedule for ${schedule.day}:`, response);
+        console.log(`??Successfully saved schedule for ${schedule.day}:`, response);
         savedSchedules.push(schedule.day);
       } catch (err) {
-        console.error(`❌ Error saving schedule for ${schedule.day}:`, err);
+        console.error(`??Error saving schedule for ${schedule.day}:`, err);
         console.error('Error details:', {
           message: err.message,
           response: err.response,
@@ -530,7 +530,7 @@ const AdminRoom = () => {
         
         // If it's a database error about missing column, log it clearly
         if (err.message && (err.message.includes('day_of_week') || err.message.includes('migration'))) {
-          console.error('⚠️ Database migration may not have been run. Please run: backend/migrations/002_add_day_of_week_to_roomschedtbl.sql');
+          console.error('?��? Database migration may not have been run. Please run: backend/migrations/002_add_day_of_week_to_roomschedtbl.sql');
         }
         
         failedSchedules.push({ day: schedule.day, error: err.message });
@@ -539,10 +539,10 @@ const AdminRoom = () => {
     
     // Log summary
     if (savedSchedules.length > 0) {
-      console.log(`✅ Successfully saved ${savedSchedules.length} schedule(s):`, savedSchedules);
+      console.log(`??Successfully saved ${savedSchedules.length} schedule(s):`, savedSchedules);
     }
     if (failedSchedules.length > 0) {
-      console.error(`❌ Failed to save ${failedSchedules.length} schedule(s):`, failedSchedules);
+      console.error(`??Failed to save ${failedSchedules.length} schedule(s):`, failedSchedules);
       throw new Error(`Failed to save schedules for: ${failedSchedules.map(s => s.day).join(', ')}`);
     }
   };
@@ -763,7 +763,7 @@ const AdminRoom = () => {
       {/* Create/Edit Room Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 

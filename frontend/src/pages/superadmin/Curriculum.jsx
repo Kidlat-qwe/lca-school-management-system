@@ -619,7 +619,7 @@ const Curriculum = () => {
       {/* Create/Edit Curriculum Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 
@@ -770,7 +770,7 @@ const Curriculum = () => {
       {/* Manage Details Modal */}
       {isDetailsModalOpen && selectedCurriculumForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeDetailsModal}
         >
           <div 

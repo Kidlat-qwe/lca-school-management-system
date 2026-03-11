@@ -1577,7 +1577,9 @@ const initializePackageMerchSelections = useCallback(
         .filter(reservation => {
           // Exclude if already enrolled
           if (enrolledStudentIds.has(reservation.student_id)) return false;
-          return true; // Include all reservations for display, even expired/unpaid
+          // Exclude Upgraded: they were converted to enrollment; if now unenrolled, don't show in modal
+          if (reservation.status === 'Upgraded') return false;
+          return true; // Include all other reservations for display, even expired/unpaid
         })
         .map(reservation => {
           const shouldCount = shouldCountReservedStudent(reservation);
@@ -1808,11 +1810,13 @@ const initializePackageMerchSelections = useCallback(
         .filter(reservation => {
           // Exclude if already enrolled
           if (enrolledStudentIds.has(reservation.student_id)) return false;
-          return true; // Include all reservations for display, even expired/unpaid
+          // Exclude Upgraded: they were converted to enrollment; if now unenrolled, don't show in modal
+          if (reservation.status === 'Upgraded') return false;
+          return true; // Include all other reservations for display, even expired/unpaid
         })
         .map(reservation => {
           const shouldCount = shouldCountReservedStudent(reservation);
-          
+
           return {
             user_id: reservation.student_id,
             full_name: reservation.student_name,
@@ -6081,7 +6085,7 @@ const initializePackageMerchSelections = useCallback(
 
         {/* Merge History Modal - Accessible from detail view */}
         {isMergeHistoryModalOpen && selectedClassForHistory && createPortal(
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -6219,7 +6223,7 @@ const initializePackageMerchSelections = useCallback(
 
         {/* Schedule Conflicts Modal - Only shown in detail view */}
         {isConflictModalOpen && conflictData && viewMode === 'detail' && createPortal(
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col">
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -6388,7 +6392,7 @@ const initializePackageMerchSelections = useCallback(
         {/* Attendance Modal */}
         {isAttendanceModalOpen && createPortal(
           <div 
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+            className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
             onClick={closeAttendanceModal}
             style={{ zIndex: 9999, position: 'fixed' }}
           >
@@ -6891,7 +6895,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Attendance Note Modal */}
       {isAttendanceModalOpen && isNoteModalOpen && !isAttendanceLocked && createPortal(
         <div
-          className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
           onClick={() => setIsNoteModalOpen(false)}
         >
           <div
@@ -6945,7 +6949,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Attendance Agenda Modal */}
       {isAttendanceModalOpen && isAgendaModalOpen && !isAttendanceLocked && createPortal(
         <div
-          className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
           onClick={() => setIsAgendaModalOpen(false)}
         >
           <div
@@ -6998,7 +7002,7 @@ const initializePackageMerchSelections = useCallback(
 
       {/* Suspension Modal - Two-Step Process */}
       {isSuspensionModalOpen && selectedClassForSuspension && createPortal(
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -8086,7 +8090,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Create/Edit Class Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div className="flex items-center justify-center gap-4 w-full max-w-7xl">
@@ -9278,7 +9282,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Enroll Student Modal */}
       {isEnrollModalOpen && selectedClassForEnrollment && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeEnrollModal}
         >
           <div 
@@ -12245,7 +12249,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Merge Class Modal */}
       {isMergeModalOpen && selectedClassForMerge && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeMergeModal}
         >
           <div className="flex items-start justify-center gap-4 w-full max-w-7xl">
@@ -13215,7 +13219,7 @@ const initializePackageMerchSelections = useCallback(
       {/* View Students Modal */}
       {isViewStudentsModalOpen && selectedClassForView && createPortal(
         <div 
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeViewStudentsModal}
         >
           <div 
@@ -13455,7 +13459,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Move Student to Another Class Modal */}
       {isMoveStudentModalOpen && studentToMove && moveSourceClass && createPortal(
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeMoveStudentModal}
         >
           <div
@@ -13534,7 +13538,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Substitute Teacher Assignment Modal */}
       {isSubstituteModalOpen && selectedSessionForSubstitute && selectedClassForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsSubstituteModalOpen(false)}
         >
           <div 
@@ -13675,7 +13679,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Reserved Students Modal */}
       {isReservedStudentsModalOpen && selectedClassForReservations && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeReservedStudentsModal}
         >
           <div 
@@ -13827,7 +13831,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Upgrade Reservation Modal */}
       {isUpgradeModalOpen && selectedReservationForUpgrade && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsUpgradeModalOpen(false)}
         >
           <div 
@@ -15024,7 +15028,7 @@ const initializePackageMerchSelections = useCallback(
 
       {/* Merge History Modal */}
       {isMergeHistoryModalOpen && selectedClassForHistory && createPortal(
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
@@ -15163,7 +15167,7 @@ const initializePackageMerchSelections = useCallback(
       {/* Alternative Classes Modal - Shown when class is full during upgrade */}
       {isAlternativeClassesModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={() => setIsAlternativeClassesModalOpen(false)}
         >
           <div 

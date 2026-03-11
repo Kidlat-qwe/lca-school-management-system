@@ -716,7 +716,7 @@ const Student = () => {
       {totalItems > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
           <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1}â€“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} students
+            Showing {(currentPage - 1) * itemsPerPage + 1}?“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} students
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-sm text-gray-600 flex items-center gap-1">
@@ -866,7 +866,7 @@ const Student = () => {
       {/* Create/Edit Student Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 

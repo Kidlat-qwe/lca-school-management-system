@@ -418,18 +418,18 @@ const Personnel = () => {
           ? formData.level_tag.trim() 
           : null;
         
-        console.log('ðŸ“¤ Updating user payload:', payload);
-        console.log('ðŸ“¤ User ID:', editingPersonnel.user_id);
+        console.log('?“¤ Updating user payload:', payload);
+        console.log('?“¤ User ID:', editingPersonnel.user_id);
         
         try {
           const updateResponse = await apiRequest(`/users/${editingPersonnel.user_id}`, {
             method: 'PUT',
             body: JSON.stringify(payload),
           });
-          console.log('âœ… User updated successfully:', updateResponse);
+          console.log('??User updated successfully:', updateResponse);
         } catch (updateErr) {
-          console.error('âŒ Error updating user:', updateErr);
-          console.error('âŒ Error response:', updateErr.response?.data);
+          console.error('??Error updating user:', updateErr);
+          console.error('??Error response:', updateErr.response?.data);
           throw updateErr; // Re-throw to be caught by outer catch
         }
 
@@ -438,7 +438,7 @@ const Personnel = () => {
           try {
             if (existingGuardian && existingGuardian.guardian_id) {
               // Update existing guardian
-              console.log('ðŸ”„ Updating guardian:', existingGuardian.guardian_id);
+              console.log('?? Updating guardian:', existingGuardian.guardian_id);
               const updatePayload = {
                 guardian_name: formData.guardian_name.trim(),
                 email: formData.guardian_email?.trim() || null,
@@ -451,17 +451,17 @@ const Personnel = () => {
                 country: formData.guardian_country?.trim() || null,
                 state_province_region: formData.guardian_state_province_region?.trim() || null,
               };
-              console.log('ðŸ“¤ Guardian update payload:', updatePayload);
+              console.log('?“¤ Guardian update payload:', updatePayload);
               
               const guardianResponse = await apiRequest(`/guardians/${existingGuardian.guardian_id}`, {
                 method: 'PUT',
                 body: JSON.stringify(updatePayload),
               });
               
-              console.log('âœ… Guardian updated successfully:', guardianResponse);
+              console.log('??Guardian updated successfully:', guardianResponse);
             } else {
               // Create new guardian
-              console.log('âž• Creating new guardian for student:', editingPersonnel.user_id);
+              console.log('??Creating new guardian for student:', editingPersonnel.user_id);
               const createPayload = {
                 student_id: editingPersonnel.user_id,
                 guardian_name: formData.guardian_name.trim(),
@@ -475,17 +475,17 @@ const Personnel = () => {
                 country: formData.guardian_country?.trim() || null,
                 state_province_region: formData.guardian_state_province_region?.trim() || null,
               };
-              console.log('ðŸ“¤ Guardian create payload:', createPayload);
+              console.log('?“¤ Guardian create payload:', createPayload);
               
               const guardianResponse = await apiRequest('/guardians', {
                 method: 'POST',
                 body: JSON.stringify(createPayload),
               });
               
-              console.log('âœ… Guardian created successfully:', guardianResponse);
+              console.log('??Guardian created successfully:', guardianResponse);
             }
           } catch (guardianErr) {
-            console.error('âŒ Error saving guardian:', guardianErr);
+            console.error('??Error saving guardian:', guardianErr);
             // Try to extract detailed error message
             let errorMessage = guardianErr.message || 'Unknown error';
             if (guardianErr.response?.data?.errors) {
@@ -498,13 +498,13 @@ const Personnel = () => {
           }
         } else if (formData.user_type === 'Student' && !formData.guardian_name.trim()) {
           // If student but no guardian name, log a warning
-          console.warn('âš ï¸ Student selected but no guardian name provided');
+          console.warn('? ï? Student selected but no guardian name provided');
         }
       } else {
         // Create new personnel - Use Firebase signup which handles both Firebase and PostgreSQL
         // Step 1: Firebase creates the user account and handles password encryption
         // Step 2: Backend syncs user data to PostgreSQL
-        console.log('ðŸ‘¤ Creating new personnel...', { 
+        console.log('?‘¤ Creating new personnel...', { 
           email: formData.email, 
           user_type: formData.user_type,
           branch_id: formData.branch_id 
@@ -521,13 +521,13 @@ const Personnel = () => {
         // Pass false as the last parameter to indicate this is NOT the current user signing up
         // This prevents the superadmin from being logged out
         const result = await signup(formData.email, formData.password, userData, false);
-        console.log('âœ… Personnel created successfully:', result.user);
+        console.log('??Personnel created successfully:', result.user);
 
         // Create guardian if user is a student and guardian data is provided
         // The superadmin's token is still active since we used Admin SDK
         if (formData.user_type === 'Student' && formData.guardian_name.trim() && result.user?.user_id) {
           try {
-            console.log('ðŸ‘¨â€ðŸ‘©â€ðŸ‘§ Creating guardian for student:', result.user.user_id);
+            console.log('?‘¨?ð?©â€ð??Creating guardian for student:', result.user.user_id);
             await apiRequest('/guardians', {
               method: 'POST',
               body: JSON.stringify({
@@ -544,7 +544,7 @@ const Personnel = () => {
                 state_province_region: formData.guardian_state_province_region?.trim() || null,
               }),
             });
-            console.log('âœ… Guardian created successfully');
+            console.log('??Guardian created successfully');
           } catch (guardianErr) {
             console.error('Error creating guardian:', guardianErr);
             setError(prev => prev ? `${prev}. Guardian creation failed: ${guardianErr.message}` : `Guardian creation failed: ${guardianErr.message}`);
@@ -953,7 +953,7 @@ const formattedDate = formatDateManila(date);
       {totalItems > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
           <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1}â€“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
+            Showing {(currentPage - 1) * itemsPerPage + 1}?“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-sm text-gray-600 flex items-center gap-1">
@@ -1153,7 +1153,7 @@ const formattedDate = formatDateManila(date);
       {/* Create/Edit Personnel Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 

@@ -1250,11 +1250,11 @@ const SuperfinanceInvoice = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {invoice.amount !== null && invoice.amount !== undefined
-                          ? `₱${parseFloat(invoice.amount).toFixed(2)}`
-                          : '-'}
-                      </div>
+                        <div className="text-sm text-gray-900">
+                          {invoice.amount !== null && invoice.amount !== undefined
+                            ? `₱${parseFloat(invoice.amount).toFixed(2)}`
+                            : '-'}
+                        </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
@@ -1502,7 +1502,7 @@ const SuperfinanceInvoice = () => {
       {/* Create/Edit Invoice Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 
@@ -1679,7 +1679,7 @@ const SuperfinanceInvoice = () => {
                                     {item.tax_percentage && (
                                       <div>
                                         <span className="text-gray-500">Tax ({item.tax_percentage}%):</span>
-                                        <span className="ml-1 font-medium">₱{(parseFloat(item.amount || 0) * parseFloat(item.tax_percentage) / 100).toFixed(2)}</span>
+                                        <span className="ml-1 font-medium">?{(parseFloat(item.amount || 0) * parseFloat(item.tax_percentage) / 100).toFixed(2)}</span>
                                       </div>
                                     )}
                                     {item.discount_amount && (
@@ -1697,7 +1697,7 @@ const SuperfinanceInvoice = () => {
                                   </div>
                                   <div>
                                     <span className="text-xs text-gray-500">Total:</span>
-                                    <span className="ml-2 text-sm font-bold text-gray-900">₱{calculateItemTotal(item).toFixed(2)}</span>
+                                    <span className="ml-2 text-sm font-bold text-gray-900">?{calculateItemTotal(item).toFixed(2)}</span>
                                   </div>
                                 </div>
                                 <button
@@ -1892,7 +1892,7 @@ const SuperfinanceInvoice = () => {
       {/* Manage Details Modal */}
       {showDetailsModal && selectedInvoiceForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeDetailsModal}
         >
           <div 
@@ -2051,7 +2051,7 @@ const SuperfinanceInvoice = () => {
                                   )}
                                   <div>
                                     <span className="text-xs text-gray-500">Total:</span>
-                                    <span className="ml-2 text-sm font-bold text-gray-900">₱{calculateItemTotal(item).toFixed(2)}</span>
+                                    <span className="ml-2 text-sm font-bold text-gray-900">?{calculateItemTotal(item).toFixed(2)}</span>
                                   </div>
                                 </>
                               )}
@@ -2090,7 +2090,7 @@ const SuperfinanceInvoice = () => {
                             )}
                             <div>
                               <span className="text-xs text-gray-500">Total:</span>
-                              <span className="ml-2 text-sm font-bold text-gray-900">₱{calculateItemTotal(item).toFixed(2)}</span>
+                              <span className="ml-2 text-sm font-bold text-gray-900">?{calculateItemTotal(item).toFixed(2)}</span>
                             </div>
                           </div>
                           <button
@@ -2270,7 +2270,7 @@ const SuperfinanceInvoice = () => {
 
       {/* Payment Modal */}
       {showPaymentModal && selectedInvoiceForPayment && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
               <h2 className="text-xl font-semibold text-gray-900">Record Payment</h2>
@@ -2427,7 +2427,7 @@ const SuperfinanceInvoice = () => {
                     className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                   />
                   {paymentAttachmentUploading && (
-                    <p className="text-xs text-amber-600 mt-1">Uploading…</p>
+                    <p className="text-xs text-amber-600 mt-1">Uploading?</p>
                   )}
                   {paymentFormData.attachment_url && !paymentAttachmentUploading && (
                     <div className="mt-2">

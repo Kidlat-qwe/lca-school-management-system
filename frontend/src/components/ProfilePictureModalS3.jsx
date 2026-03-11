@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Cropper from 'react-easy-crop';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -196,11 +197,11 @@ const ProfilePictureModalS3 = ({ isOpen, onClose, currentProfilePicture }) => {
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] overflow-y-auto">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+        className="fixed inset-0 backdrop-blur-sm bg-black/5"
         onClick={handleCancel}
       />
 
@@ -360,7 +361,8 @@ const ProfilePictureModalS3 = ({ isOpen, onClose, currentProfilePicture }) => {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

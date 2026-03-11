@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 
 const Guardians = () => {
@@ -225,9 +226,9 @@ const Guardians = () => {
         )}
       </div>
 
-      {/* Edit Modal */}
-      {editingGuardian && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4" onClick={() => setEditingGuardian(null)}>
+      {/* Edit Modal (portaled so overlay covers header) */}
+      {editingGuardian && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4" onClick={() => setEditingGuardian(null)}>
           <div
             className="bg-white rounded-lg shadow-xl max-w-lg w-full overflow-hidden"
             onClick={(e) => e.stopPropagation()}
@@ -345,7 +346,8 @@ const Guardians = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

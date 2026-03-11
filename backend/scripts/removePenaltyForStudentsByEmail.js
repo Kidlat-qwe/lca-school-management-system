@@ -13,18 +13,8 @@ import '../config/loadEnv.js';
 import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
-  'rubybengoa@gmail.com',
-  'jomabellea@gmail.com',
-  'siervaemillete2@gmail.com',
-  'carlosgeline26@gmail.com',
+  // Target single student as requested
   'cuevasdaniella9@gmail.com',
-  'myktvillar@gmail.com',
-  'kikayferrer101115@gmail.com',
-  'ernanjosephpalo@gmail.com',
-  'luisgee42096@gmail.com',
-  'sheenakrentzviandra@gmail.com',
-  'wenniebaldonado@gmail.com',
-  'msleesabilla@yahoo.com',
 ];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

@@ -428,7 +428,7 @@ const AcknowledgementReceiptsPage = () => {
 
         <div className="mt-2">
           {loading ? (
-            <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+            <p className="text-sm text-gray-600">Loading acknowledgement receipts?</p>
           ) : error ? (
             <p className="text-sm text-red-600">{error}</p>
           ) : receipts.length === 0 ? (
@@ -469,7 +469,7 @@ const AcknowledgementReceiptsPage = () => {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-900">
-                        {r.prospect_student_contact || <span className="text-gray-300">—</span>}
+                        {r.prospect_student_contact || <span className="text-gray-300">?</span>}
                       </td>
                       <td className="px-4 py-3">
                         <div className="text-gray-900">
@@ -484,7 +484,7 @@ const AcknowledgementReceiptsPage = () => {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-700">
-                        {r.level_tag || <span className="text-gray-300">—</span>}
+                        {r.level_tag || <span className="text-gray-300">?</span>}
                       </td>
                       <td className="px-4 py-3 text-gray-900">
                         ₱
@@ -510,7 +510,7 @@ const AcknowledgementReceiptsPage = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-sm">
-                        {r.reference_number || <span className="text-gray-300">—</span>}
+                        {r.reference_number || <span className="text-gray-300">?</span>}
                       </td>
                       <td className="px-4 py-3">
                         {r.payment_attachment_url ? (
@@ -527,7 +527,7 @@ const AcknowledgementReceiptsPage = () => {
                             View
                           </a>
                         ) : (
-                          <span className="text-gray-300">—</span>
+                          <span className="text-gray-300">?</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-900">
@@ -544,7 +544,7 @@ const AcknowledgementReceiptsPage = () => {
         {pagination.totalPages > 1 && (
           <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-gray-200">
             <p className="text-sm text-gray-600">
-              Showing {(pagination.page - 1) * pagination.limit + 1}–
+              Showing {(pagination.page - 1) * pagination.limit + 1}?
               {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} receipts
             </p>
             <div className="flex items-center gap-2">
@@ -576,7 +576,7 @@ const AcknowledgementReceiptsPage = () => {
         showBranchModal &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
             onClick={() => setShowBranchModal(false)}
           >
             <div
@@ -647,7 +647,7 @@ const AcknowledgementReceiptsPage = () => {
       {showCreateModal &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
             onClick={closeCreateModal}
           >
             <div
@@ -705,7 +705,7 @@ const AcknowledgementReceiptsPage = () => {
                       className={`input-field text-sm ${createFormErrors.branch_id ? 'border-red-500' : ''}`}
                       disabled={branchesLoading}
                     >
-                      <option value="">Select branch…</option>
+                      <option value="">Select branch?</option>
                       {branches.map((b) => (
                         <option key={b.branch_id} value={b.branch_id}>
                           {b.branch_nickname || b.branch_name}
@@ -806,7 +806,7 @@ const AcknowledgementReceiptsPage = () => {
                       }`}
                       disabled={packagesLoading}
                     >
-                      <option value="">Select package…</option>
+                      <option value="">Select package?</option>
                       {packages.map((pkg) => (
                         <option key={pkg.package_id} value={pkg.package_id}>
                           {pkg.package_name}
@@ -915,7 +915,7 @@ const AcknowledgementReceiptsPage = () => {
                 <div>
                   <label className="label-field text-xs">Attachment (image)</label>
                   <p className="text-xs text-gray-500 mb-1">
-                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF — max 5 MB)
+                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF ? max 5 MB)
                   </p>
                   <input
                     type="file"
@@ -925,7 +925,7 @@ const AcknowledgementReceiptsPage = () => {
                     className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                   />
                   {attachmentUploading && (
-                    <p className="text-xs text-amber-600 mt-1">Uploading…</p>
+                    <p className="text-xs text-amber-600 mt-1">Uploading?</p>
                   )}
                   {createFormData.payment_attachment_url && !attachmentUploading && (
                     <div className="mt-2">
@@ -969,7 +969,7 @@ const AcknowledgementReceiptsPage = () => {
                     className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={creating || attachmentUploading}
                   >
-                    {creating ? 'Saving…' : 'Done'}
+                    {creating ? 'Saving?' : 'Done'}
                   </button>
                 </div>
               </form>

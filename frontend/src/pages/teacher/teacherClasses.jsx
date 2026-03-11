@@ -1349,7 +1349,7 @@ const TeacherClasses = () => {
         {/* Attendance Modal */}
         {isAttendanceModalOpen && createPortal(
           <div 
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+            className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
             onClick={closeAttendanceModal}
             style={{ zIndex: 9999, position: 'fixed' }}
           >
@@ -1380,7 +1380,7 @@ const TeacherClasses = () => {
                     </span>
                     {attendanceData?.session?.scheduled_start_time && attendanceData?.session?.scheduled_end_time && (
                       <>
-                        <span className="mx-2">•</span>
+                        <span className="mx-2">|</span>
                         <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -1401,7 +1401,7 @@ const TeacherClasses = () => {
                     <span className="font-medium">{attendanceData?.session?.program_name || selectedClassForDetails?.program_name || ''}</span>
                     {selectedSessionForAttendance?.phase_number && selectedSessionForAttendance?.phase_session_number && (
                       <>
-                        <span className="mx-2">•</span>
+                        <span className="mx-2">|</span>
                         <span className="px-2 py-0.5 bg-white bg-opacity-30 rounded text-gray-900 font-semibold">
                           Phase {selectedSessionForAttendance.phase_number} Session {selectedSessionForAttendance.phase_session_number}
                         </span>
@@ -1836,7 +1836,7 @@ const TeacherClasses = () => {
         {/* Attendance Note Modal */}
         {isAttendanceModalOpen && isNoteModalOpen && !isAttendanceLocked && createPortal(
           <div
-            className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+            className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
             onClick={() => setIsNoteModalOpen(false)}
           >
             <div
@@ -1890,7 +1890,7 @@ const TeacherClasses = () => {
         {/* Attendance Agenda Modal */}
         {isAttendanceModalOpen && isAgendaModalOpen && !isAttendanceLocked && createPortal(
           <div
-            className="fixed inset-0 z-[10000] bg-black bg-opacity-40 flex items-center justify-center p-4"
+            className="fixed inset-0 z-[10000] backdrop-blur-sm bg-black/5 flex items-center justify-center p-4"
             onClick={() => setIsAgendaModalOpen(false)}
           >
             <div
@@ -2238,7 +2238,7 @@ const TeacherClasses = () => {
       {/* View Students Modal */}
       {isViewStudentsModalOpen && selectedClassForView && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeViewStudentsModal}
         >
           <div 

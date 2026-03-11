@@ -974,7 +974,7 @@ const AdminPromo = () => {
                                 <span className="font-medium">{packageIds.length} packages</span>
                                 <div className="text-xs text-gray-600 space-y-0.5">
                                   {packageIds.slice(0, 2).map(id => (
-                                    <div key={id}>• {getPackageName(id) || `Package ${id}`}</div>
+                                    <div key={id}>??{getPackageName(id) || `Package ${id}`}</div>
                                   ))}
                                   {packageIds.length > 2 && (
                                     <div className="text-gray-500">+{packageIds.length - 2} more</div>
@@ -1009,7 +1009,7 @@ const AdminPromo = () => {
                             : promo.promo_type === 'free_merchandise'
                             ? 'Free Items'
                             : promo.promo_type === 'combined'
-                            ? `${promo.discount_percentage ? promo.discount_percentage + '%' : ''}${promo.discount_amount ? '₱' + parseFloat(promo.discount_amount).toFixed(2) : ''} + Free Items`
+                            ? `${promo.discount_percentage ? promo.discount_percentage + '%' : ''}${promo.discount_amount ? '?' + parseFloat(promo.discount_amount).toFixed(2) : ''} + Free Items`
                             : '-'}
                         </div>
                       </td>
@@ -1123,7 +1123,7 @@ const AdminPromo = () => {
       {/* Create/Edit Promo Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 
@@ -1310,15 +1310,15 @@ const AdminPromo = () => {
                                       {pkg.package_type === 'Installment' ? (
                                         <>
                                           {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
-                                            <span>Down payment: ₱{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
+                                            <span>Down payment: ?�{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
                                           )}
                                           {pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
-                                            <span>Monthly: ₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                            <span>Monthly: ?�{parseFloat(pkg.package_price).toFixed(2)}</span>
                                           )}
                                         </>
                                       ) : (
                                         pkg.package_price != null && parseFloat(pkg.package_price) > 0 && (
-                                          <span>₱{parseFloat(pkg.package_price).toFixed(2)}</span>
+                                          <span>?�{parseFloat(pkg.package_price).toFixed(2)}</span>
                                         )
                                       )}
                                     </div>
@@ -1463,7 +1463,7 @@ const AdminPromo = () => {
                       )}
                       {formData.promo_type === 'combined' && (
                         <p className="mt-1 text-xs text-gray-600">
-                          💡 You can combine: Percentage discount OR Fixed discount + Free merchandise
+                          ?�� You can combine: Percentage discount OR Fixed discount + Free merchandise
                         </p>
                       )}
                     </div>
@@ -1492,7 +1492,7 @@ const AdminPromo = () => {
                       {formData.promo_type === 'combined' && (
                         <div className="mb-4 space-y-2">
                           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <p className="text-sm font-semibold text-blue-900 mb-1">💡 Combined Promo Options:</p>
+                            <p className="text-sm font-semibold text-blue-900 mb-1">?�� Combined Promo Options:</p>
                             <ul className="text-xs text-blue-800 space-y-1 ml-4 list-disc">
                               <li><strong>Option 1:</strong> Percentage Discount + Free Merchandise</li>
                               <li><strong>Option 2:</strong> Fixed Amount Discount + Free Merchandise</li>
@@ -1606,7 +1606,7 @@ const AdminPromo = () => {
                                   }
                                   
                                   return base != null && base > 0
-                                    ? `Discount amount (${firstPackage.package_name}${label ? `, ${label}` : ''}): ₱${((base * parseFloat(formData.discount_percentage)) / 100).toFixed(2)}`
+                                    ? `Discount amount (${firstPackage.package_name}${label ? `, ${label}` : ''}): ??{((base * parseFloat(formData.discount_percentage)) / 100).toFixed(2)}`
                                     : '';
                                 })()}
                               </p>
@@ -1644,14 +1644,14 @@ const AdminPromo = () => {
                         {formData.promo_type === 'combined' && (
                           <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                             <p className="text-xs text-green-800 font-medium mb-1">
-                              ✓ Combined Promo Configuration:
+                              ??Combined Promo Configuration:
                             </p>
                             <ul className="text-xs text-green-700 space-y-0.5 ml-4 list-disc">
                               {formData.discount_percentage && parseFloat(formData.discount_percentage) > 0 && (
                                 <li>Percentage Discount: {formData.discount_percentage}%</li>
                               )}
                               {formData.discount_amount && parseFloat(formData.discount_amount) > 0 && (
-                                <li>Fixed Discount: ₱{parseFloat(formData.discount_amount).toFixed(2)}</li>
+                                <li>Fixed Discount: ?�{parseFloat(formData.discount_amount).toFixed(2)}</li>
                               )}
                               {formData.selectedMerchandise && formData.selectedMerchandise.length > 0 && (
                                 <li>Free Merchandise: {formData.selectedMerchandise.length} item(s)</li>
@@ -1659,7 +1659,7 @@ const AdminPromo = () => {
                               {(!formData.discount_percentage || parseFloat(formData.discount_percentage) <= 0) && 
                                (!formData.discount_amount || parseFloat(formData.discount_amount) <= 0) && 
                                (!formData.selectedMerchandise || formData.selectedMerchandise.length === 0) && (
-                                <li className="text-yellow-700">⚠️ Add at least one discount or merchandise</li>
+                                <li className="text-yellow-700">?��? Add at least one discount or merchandise</li>
                               )}
                             </ul>
                           </div>
@@ -1916,7 +1916,7 @@ const AdminPromo = () => {
       {/* View Details Modal */}
       {showDetailsModal && selectedPromoForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeDetailsModal}
         >
           <div 
@@ -1957,7 +1957,7 @@ const AdminPromo = () => {
                         return (
                           <div className="space-y-1">
                             {packageIds.map(id => (
-                              <div key={id}>• {getPackageName(id) || `Package ${id}`}</div>
+                              <div key={id}>??{getPackageName(id) || `Package ${id}`}</div>
                             ))}
                           </div>
                         );
@@ -2017,7 +2017,7 @@ const AdminPromo = () => {
                     <div>
                       <span className="text-xs text-gray-500">Minimum Payment:</span>
                       <p className="text-sm font-medium text-gray-900">
-                        ₱{parseFloat(selectedPromoForDetails.min_payment_amount).toFixed(2)}
+                        ?�{parseFloat(selectedPromoForDetails.min_payment_amount).toFixed(2)}
                       </p>
                     </div>
                   )}
@@ -2035,7 +2035,7 @@ const AdminPromo = () => {
                       )}
                       {selectedPromoForDetails.discount_amount && (
                         <p className="text-sm text-blue-700">
-                          <strong>Fixed Amount:</strong> ₱{parseFloat(selectedPromoForDetails.discount_amount).toFixed(2)} off
+                          <strong>Fixed Amount:</strong> ?�{parseFloat(selectedPromoForDetails.discount_amount).toFixed(2)} off
                         </p>
                       )}
                     </div>

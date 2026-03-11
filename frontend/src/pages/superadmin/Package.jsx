@@ -1017,7 +1017,7 @@ const Package = () => {
       {/* Create/Edit Package Modal */}
       {isModalOpen && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeModal}
         >
           <div 
@@ -1296,7 +1296,7 @@ const Package = () => {
                                       <span className="ml-2 text-xs text-gray-500">({pricing.level_tag})</span>
                                     )}
                                     {pricing.price && (
-                                      <span className="ml-2 text-xs text-gray-600">- ₱{parseFloat(pricing.price).toFixed(2)}</span>
+                                      <span className="ml-2 text-xs text-gray-600">- ?±{parseFloat(pricing.price).toFixed(2)}</span>
                                     )}
                                   </div>
                                 </label>
@@ -1421,7 +1421,7 @@ const Package = () => {
       {/* Manage Details Modal */}
       {showDetailsModal && selectedPackageForDetails && createPortal(
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
           onClick={closeDetailsModal}
         >
           <div 

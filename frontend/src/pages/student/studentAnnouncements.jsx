@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -475,11 +476,11 @@ const StudentAnnouncements = () => {
         )}
       </div>
 
-      {/* View Details Modal */}
-      {isViewModalOpen && viewingAnnouncement && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
+      {/* View Details Modal (portaled so overlay covers header) */}
+      {isViewModalOpen && viewingAnnouncement && createPortal(
+        <div className="fixed inset-0 z-[9999] overflow-y-auto">
           <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" onClick={closeViewModal}></div>
+            <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeViewModal}></div>
             <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                 <div className="flex items-center justify-between mb-4">
@@ -622,7 +623,8 @@ const StudentAnnouncements = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
