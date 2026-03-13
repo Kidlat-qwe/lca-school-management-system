@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 
 const AdminStudent = () => {
   const { signup, userInfo } = useAuth();
@@ -171,7 +172,7 @@ const AdminStudent = () => {
     setFormData({
       full_name: '',
       email: '',
-      password: '',
+      password: DEFAULT_PASSWORD_STUDENT,
       phone_number: '',
       branch_id: adminBranchId ? adminBranchId.toString() : '',
       level_tag: '',
@@ -275,7 +276,8 @@ const AdminStudent = () => {
       const errors = {};
       if (!formData.full_name.trim()) errors.full_name = 'Full name is required';
       if (!formData.email.trim()) errors.email = 'Email is required';
-      if (!editingStudent && !formData.password.trim()) errors.password = 'Password is required';
+      const passwordToUse = (formData.password && formData.password.trim()) || DEFAULT_PASSWORD_STUDENT;
+      if (!editingStudent && passwordToUse.length < 6) errors.password = 'Password must be at least 6 characters';
       if (!formData.branch_id) errors.branch_id = 'Branch is required';
       if (!formData.level_tag) errors.level_tag = 'Level tag is required';
       // Guardian fields - ALL REQUIRED
@@ -362,7 +364,7 @@ const AdminStudent = () => {
           level_tag: formData.level_tag,
         };
 
-        const result = await signup(formData.email, formData.password, userData, false);
+        const result = await signup(formData.email, (formData.password && formData.password.trim()) || DEFAULT_PASSWORD_STUDENT, userData, false);
 
         // Create guardian
         if (result.user?.user_id) {
@@ -449,26 +451,17 @@ const AdminStudent = () => {
       )}
 
       {/* Student List */}
-      {filteredStudents.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm
-              ? 'No students found matching your search.'
-              : 'No students found. Add your first student to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          {/* Table View - Responsive */}
-          <div
-            className="overflow-x-auto rounded-lg"
-            style={{
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#cbd5e0 #f7fafc',
-              WebkitOverflowScrolling: 'touch',
-            }}
-          >
-            <table
+      <div className="bg-white rounded-lg shadow">
+        {/* Table View - Responsive */}
+        <div
+          className="overflow-x-auto rounded-lg"
+          style={{
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#cbd5e0 #f7fafc',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          <table
               className="divide-y divide-gray-200"
               style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
             >
@@ -530,7 +523,18 @@ const AdminStudent = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredStudents.map((student) => (
+                {filteredStudents.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm
+                          ? 'No matching students. Try adjusting your search.'
+                          : 'No students yet. Add your first student to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredStudents.map((student) => (
                   <tr key={student.user_id}>
                     <td className="px-3 py-4">
                       <div className="flex items-center min-w-0">
@@ -613,15 +617,15 @@ const AdminStudent = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
-      {totalItems > 0 && (
+      {totalItems > 0 && filteredStudents.length > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
           <div className="text-sm text-gray-600">
             Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} students
@@ -804,7 +808,7 @@ const AdminStudent = () => {
                           Password <span className="text-red-500">*</span>
                         </label>
                         <input
-                          type="password"
+                          type={formData.password === DEFAULT_PASSWORD_STUDENT ? 'text' : 'password'}
                           id="password"
                           name="password"
                           value={formData.password}
@@ -812,6 +816,9 @@ const AdminStudent = () => {
                           className={`input-field ${formErrors.password ? 'border-red-500' : ''}`}
                           required
                         />
+                        {formData.password === DEFAULT_PASSWORD_STUDENT && (
+                          <p className="mt-1 text-xs text-gray-500">Default password — visible for sharing with the student.</p>
+                        )}
                         {formErrors.password && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.password}</p>
                         )}

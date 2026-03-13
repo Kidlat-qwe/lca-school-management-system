@@ -186,17 +186,8 @@ const StudentPackages = () => {
       </div>
 
       {/* Packages List */}
-      {filteredPackages.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterPackageType || filterLevelTag
-              ? 'No packages found matching your criteria.'
-              : 'No available packages found for your branch.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
+      <div className="bg-white rounded-lg shadow">
+        <div
             className="overflow-x-auto rounded-lg"
             style={{
               scrollbarWidth: 'thin',
@@ -234,7 +225,18 @@ const StudentPackages = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPackages.map((packageItem) => (
+                {filteredPackages.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterPackageType || filterLevelTag
+                          ? 'No matching packages. Try adjusting your search or filters.'
+                          : 'No available packages found for your branch.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">
@@ -296,12 +298,12 @@ const StudentPackages = () => {
                       </button>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {filteredPackages.length > 0 && (
         <div className="text-sm text-gray-500 text-center">

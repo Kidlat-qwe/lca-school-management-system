@@ -337,19 +337,10 @@ const AdminPricingList = () => {
       )}
 
       {/* Pricing Lists List */}
-      {filteredPricingLists.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm
-              ? 'No pricing lists found matching your criteria.'
-              : 'No pricing lists found. Add your first pricing list to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          {/* Table View - Horizontal Scroll on All Screens */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '750px', tableLayout: 'fixed' }}>
+      <div className="bg-white rounded-lg shadow">
+        {/* Table View - Horizontal Scroll on All Screens */}
+        <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '750px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '250px' }} />
                 <col style={{ width: '200px' }} />
@@ -417,7 +408,18 @@ const AdminPricingList = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPricingLists.map((pricingList) => (
+                {filteredPricingLists.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm
+                          ? 'No matching pricing lists. Try adjusting your search.'
+                          : 'No pricing lists yet. Add your first pricing list to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPricingLists.map((pricingList) => (
                   <tr key={pricingList.pricinglist_id}>
                     <td className="px-6 py-4" style={{ maxWidth: '250px' }}>
                       <div className="text-sm font-medium text-gray-900 truncate" title={pricingList.name || '-'}>
@@ -450,12 +452,12 @@ const AdminPricingList = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredPricingLists.length > 0 && (

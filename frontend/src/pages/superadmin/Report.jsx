@@ -119,10 +119,6 @@ const Report = () => {
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600" />
         </div>
-      ) : students.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">No students found for the selected filters.</p>
-        </div>
       ) : (
         <div className="bg-white rounded-lg shadow">
           <div
@@ -203,8 +199,10 @@ const Report = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan={isSuperadmin ? 6 : 5} className="px-4 py-8 text-center text-sm text-gray-500">
-                      No students match your search.
+                    <td colSpan={isSuperadmin ? 6 : 5} className="px-4 py-12 text-center text-sm text-gray-500">
+                      {students.length === 0
+                        ? 'No students found for the selected filters.'
+                        : 'No matching students. Try adjusting your search or filters.'}
                     </td>
                   </tr>
                 ) : (

@@ -300,7 +300,7 @@ const Branch = () => {
 
       {branches.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">No branches found. Create your first branch to get started.</p>
+          <p className="text-gray-500">No branches yet. Add your first branch to get started.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

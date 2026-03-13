@@ -37,6 +37,7 @@ import uploadRoutes from './routes/upload.js';
 import holidaysRoutes from './routes/holidays.js';
 import settingsRoutes from './routes/settings.js';
 import reportsRoutes from './routes/reports.js';
+import dailySummarySalesRoutes from './routes/dailySummarySales.js';
 
 // Import middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -164,6 +165,7 @@ app.use(`${API_VERSION}/upload`, uploadRoutes);
 app.use(`${API_VERSION}/holidays`, holidaysRoutes);
 app.use(`${API_VERSION}/settings`, settingsRoutes);
 app.use(`${API_VERSION}/reports`, reportsRoutes);
+app.use(`${API_VERSION}/daily-summary-sales`, dailySummarySalesRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

@@ -1326,7 +1326,8 @@ router.put(
 
         // Create first installment invoice record
         const nextGenerationDate = new Date(generationDate);
-        const nextInvoiceMonth = new Date(nextInvoiceDueDate);
+        // next_invoice_month must always be the first day of the SAME month as next_generation_date
+        const nextInvoiceMonth = new Date(nextGenerationDate.getFullYear(), nextGenerationDate.getMonth(), 1);
         
         await client.query(
           `INSERT INTO installmentinvoicestbl 

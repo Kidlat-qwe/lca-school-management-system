@@ -754,19 +754,10 @@ const AdminPromo = () => {
       )}
 
       {/* Promos List */}
-      {filteredPromos.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterPackage || filterStatus
-              ? 'No promos found matching your criteria.'
-              : 'No promos found. Add your first promo to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          {/* Desktop Table View */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
+      <div className="bg-white rounded-lg shadow">
+        {/* Desktop Table View */}
+        <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '220px' }} />
                 <col style={{ width: '200px' }} />
@@ -925,7 +916,18 @@ const AdminPromo = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPromos.map((promo) => {
+                {filteredPromos.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterPackage || filterStatus
+                          ? 'No matching promos. Try adjusting your search or filters.'
+                          : 'No promos yet. Add your first promo to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPromos.map((promo) => {
                   const isActive = isPromoActive(promo);
                   const isExpired = isPromoExpired(promo);
                   
@@ -1034,12 +1036,12 @@ const AdminPromo = () => {
                       </td>
                     </tr>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredPromos.length > 0 && (

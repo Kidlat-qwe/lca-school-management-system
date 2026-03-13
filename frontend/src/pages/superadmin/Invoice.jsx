@@ -1019,16 +1019,7 @@ const Invoice = () => {
       )}
 
       {/* Invoices List */}
-      {filteredInvoices.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || studentNameSearch || filterBranch || filterStatus
-              ? 'No invoices found matching your criteria.'
-              : 'No invoices found. Add your first invoice to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px', tableLayout: 'fixed' }}>
@@ -1159,7 +1150,18 @@ const Invoice = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredInvoices.map((invoice) => (
+                {filteredInvoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || studentNameSearch || filterBranch || filterStatus
+                          ? 'No matching invoices. Try adjusting your search or filters.'
+                          : 'No invoices yet. Add your first invoice to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredInvoices.map((invoice) => (
                   <tr key={invoice.invoice_id}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
@@ -1280,12 +1282,12 @@ const Invoice = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredInvoices.length > 0 && (

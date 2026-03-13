@@ -760,19 +760,10 @@ const AdminPackage = () => {
       )}
 
       {/* Packages List */}
-      {filteredPackages.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm
-              ? 'No packages found matching your criteria.'
-              : 'No packages found. Add your first package to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          {/* Desktop Table View */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
+      <div className="bg-white rounded-lg shadow">
+        {/* Desktop Table View */}
+        <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '250px' }} />
                 <col style={{ width: '150px' }} />
@@ -832,7 +823,18 @@ const AdminPackage = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPackages.map((packageItem) => (
+                {filteredPackages.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm
+                          ? 'No matching packages. Try adjusting your search.'
+                          : 'No packages yet. Add your first package to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
                     <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
                       <div className="min-w-0">
@@ -906,12 +908,12 @@ const AdminPackage = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredPackages.length > 0 && (

@@ -352,8 +352,8 @@ const InstallmentInvoice = () => {
                   <td colSpan="9" className="px-6 py-12 text-center">
                     <p className="text-gray-500">
                       {nameSearchTerm || filterStatus
-                        ? 'No invoices found matching your criteria.'
-                        : 'No installment invoices found.'}
+                        ? 'No matching invoices. Try adjusting your search or filters.'
+                        : 'No installment invoices yet.'}
                     </p>
                   </td>
                 </tr>

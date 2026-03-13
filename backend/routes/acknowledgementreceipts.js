@@ -601,6 +601,8 @@ router.post(
               const nextInvoiceDueDate = profile.next_invoice_due_date
                 ? new Date(profile.next_invoice_due_date)
                 : new Date();
+              // next_invoice_month must always be the first day of the SAME month as next_generation_date
+              const nextInvoiceMonth = new Date(firstGenerationDate.getFullYear(), firstGenerationDate.getMonth(), 1);
 
               // Create the first installment invoice record
               const firstInvoiceRecordResult = await client.query(
@@ -619,7 +621,7 @@ router.post(
                   profile.amount,
                   profile.frequency || '1 month(s)',
                   formatYmdLocal(firstGenerationDate),
-                  formatYmdLocal(nextInvoiceDueDate),
+                  formatYmdLocal(nextInvoiceMonth),
                 ]
               );
 

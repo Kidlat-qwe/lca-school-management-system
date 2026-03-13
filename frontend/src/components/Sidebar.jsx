@@ -270,6 +270,26 @@ const Sidebar = ({ isOpen, onClose }) => {
       ],
     },
     {
+      name: 'Daily Summary Sale',
+      path: '/admin/daily-summary-sale',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+      roles: ['Admin'],
+    },
+    {
+      name: 'Daily Summary Sales',
+      path: '/superadmin/daily-summary-sales',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Finance'], // Finance = Superfinance (no branch)
+    },
+    {
       name: 'Holidays',
       path: '/superadmin/holidays', // Will be overridden in map function for Admin
       icon: (
@@ -368,6 +388,8 @@ const Sidebar = ({ isOpen, onClose }) => {
         itemPath = '/admin/report';
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
+      } else if (item.name === 'Daily Summary Sales' && basePath === '/superfinance') {
+        itemPath = '/superfinance/daily-summary-sales';
       }
       // Handle Dashboard children paths for Superadmin (financial-dashboard has explicit route)
       let children = item.children;
@@ -412,57 +434,43 @@ const Sidebar = ({ isOpen, onClose }) => {
           return child;
         });
       }
-      // Handle Manage Invoice children paths for Admin
-      if (item.name === 'Manage Invoice' && basePath === '/admin') {
+      // Handle Manage Invoice children paths for Superadmin
+      if (item.name === 'Manage Invoice' && basePath === '/superadmin') {
         children = item.children?.map(child => {
-          if (child.name === 'Invoice') {
-            return { ...child, path: '/admin/invoice' };
-          }
-          if (child.name === 'Installment Invoice') {
-            return { ...child, path: '/admin/installment-invoice' };
-          }
-          if (child.name === 'Payment Logs') {
-            return { ...child, path: '/admin/payment-logs' };
-          }
-          if (child.name === 'Acknowledgement Receipts') {
-            return { ...child, path: '/admin/acknowledgement-receipts' };
-          }
+          if (child.name === 'Invoice') return { ...child, path: '/superadmin/invoice' };
+          if (child.name === 'Installment Invoice') return { ...child, path: '/superadmin/installment-invoice' };
+          if (child.name === 'Payment Logs') return { ...child, path: '/superadmin/payment-logs' };
+          if (child.name === 'Acknowledgement Receipts') return { ...child, path: '/superadmin/acknowledgement-receipts' };
           return child;
         });
       }
-      // Handle Manage Invoice children paths for Finance
-      if (item.name === 'Manage Invoice' && basePath === '/finance') {
+      // Handle Manage Invoice children paths for Admin
+      if (item.name === 'Manage Invoice' && basePath === '/admin') {
         children = item.children?.map(child => {
-          if (child.name === 'Invoice') {
-            return { ...child, path: '/finance/invoice' };
-          }
-          if (child.name === 'Installment Invoice') {
-            return { ...child, path: '/finance/installment-invoice' };
-          }
-          if (child.name === 'Payment Logs') {
-            return { ...child, path: '/finance/payment-logs' };
-          }
-          if (child.name === 'Acknowledgement Receipts') {
-            return { ...child, path: '/finance/acknowledgement-receipts' };
-          }
+          if (child.name === 'Invoice') return { ...child, path: '/admin/invoice' };
+          if (child.name === 'Installment Invoice') return { ...child, path: '/admin/installment-invoice' };
+          if (child.name === 'Payment Logs') return { ...child, path: '/admin/payment-logs' };
+          if (child.name === 'Acknowledgement Receipts') return { ...child, path: '/admin/acknowledgement-receipts' };
           return child;
         });
+      }
+      // Handle Manage Invoice children paths for Finance (branch-level)
+      if (item.name === 'Manage Invoice' && basePath === '/finance') {
+        children = item.children?.map(child => {
+            if (child.name === 'Invoice') return { ...child, path: '/finance/invoice' };
+            if (child.name === 'Installment Invoice') return { ...child, path: '/finance/installment-invoice' };
+            if (child.name === 'Payment Logs') return { ...child, path: '/finance/payment-logs' };
+            if (child.name === 'Acknowledgement Receipts') return { ...child, path: '/finance/acknowledgement-receipts' };
+            return child;
+          });
       }
       // Handle Manage Invoice children paths for Superfinance
       if (item.name === 'Manage Invoice' && basePath === '/superfinance') {
         children = item.children?.map(child => {
-          if (child.name === 'Invoice') {
-            return { ...child, path: '/superfinance/invoice' };
-          }
-          if (child.name === 'Installment Invoice') {
-            return { ...child, path: '/superfinance/installment-invoice' };
-          }
-          if (child.name === 'Payment Logs') {
-            return { ...child, path: '/superfinance/payment-logs' };
-          }
-          if (child.name === 'Acknowledgement Receipts') {
-            return { ...child, path: '/superfinance/acknowledgement-receipts' };
-          }
+          if (child.name === 'Invoice') return { ...child, path: '/superfinance/invoice' };
+          if (child.name === 'Installment Invoice') return { ...child, path: '/superfinance/installment-invoice' };
+          if (child.name === 'Payment Logs') return { ...child, path: '/superfinance/payment-logs' };
+          if (child.name === 'Acknowledgement Receipts') return { ...child, path: '/superfinance/acknowledgement-receipts' };
           return child;
         });
       }

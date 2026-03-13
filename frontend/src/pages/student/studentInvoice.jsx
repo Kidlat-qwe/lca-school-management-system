@@ -375,17 +375,8 @@ const StudentInvoice = () => {
       </div>
 
       {/* Invoices List */}
-      {filteredInvoices.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterStatus
-              ? 'No invoices found matching your criteria.'
-              : 'No invoices found.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
+      <div className="bg-white rounded-lg shadow">
+        <div
             className="overflow-x-auto rounded-lg"
             style={{
               scrollbarWidth: 'thin',
@@ -423,7 +414,18 @@ const StudentInvoice = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredInvoices.map((invoice) => (
+                {filteredInvoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterStatus
+                          ? 'No matching invoices. Try adjusting your search or filters.'
+                          : 'No invoices found.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredInvoices.map((invoice) => (
                   <tr key={invoice.invoice_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       INV-{invoice.invoice_id}
@@ -456,12 +458,12 @@ const StudentInvoice = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {filteredInvoices.length > 0 && (
         <div className="text-sm text-gray-500 text-center">

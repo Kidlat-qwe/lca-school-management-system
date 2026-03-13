@@ -366,22 +366,13 @@ const AdminCurriculum = () => {
         </div>
       )}
 
-      {filteredCurricula.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterStatus
-              ? 'No curricula found matching your criteria.'
-              : 'No curricula found. Add your first curriculum to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
-            className="overflow-x-auto rounded-lg"
-            style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
-          >
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px' }}>
-              <thead className="bg-white">
+      <div className="bg-white rounded-lg shadow">
+        <div
+          className="overflow-x-auto rounded-lg"
+          style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+        >
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px' }}>
+            <thead className="bg-white">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <div className="flex flex-col space-y-2">
@@ -477,7 +468,18 @@ const AdminCurriculum = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredCurricula.map((curriculum) => (
+                {filteredCurricula.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterStatus
+                          ? 'No matching curricula. Try adjusting your search or filters.'
+                          : 'No curricula yet. Add your first curriculum to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredCurricula.map((curriculum) => (
                   <tr key={curriculum.curriculum_id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
@@ -520,12 +522,12 @@ const AdminCurriculum = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {filteredCurricula.length > 0 && (
         <div className="text-sm text-gray-500 text-center">

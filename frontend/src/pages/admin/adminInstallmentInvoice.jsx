@@ -376,7 +376,7 @@ const AdminInstallmentInvoice = () => {
                   <td colSpan="9" className="px-6 py-12 text-center">
                     <p className="text-gray-500">
                       {nameSearchTerm || filterStatus
-                        ? 'No invoices found matching your criteria.'
+                        ? 'No matching invoices. Try adjusting your search or filters.'
                         : 'No installment invoices found.'}
                     </p>
                   </td>

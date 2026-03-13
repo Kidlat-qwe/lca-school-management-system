@@ -604,20 +604,11 @@ const AdminRoom = () => {
       )}
 
       {/* Rooms List */}
-      {filteredRooms.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm
-              ? 'No rooms found matching your criteria.'
-              : 'No rooms found. Add your first room to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          {/* Desktop Table View */}
-          <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '600px' }}>
-              <thead className="bg-white">
+      <div className="bg-white rounded-lg shadow">
+        {/* Desktop Table View */}
+        <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '600px' }}>
+            <thead className="bg-white">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <div className="flex flex-col space-y-2">
@@ -661,7 +652,18 @@ const AdminRoom = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredRooms.map((room) => (
+                {filteredRooms.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm
+                          ? 'No matching rooms. Try adjusting your search.'
+                          : 'No rooms yet. Add your first room to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRooms.map((room) => (
                   <tr key={room.room_id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
@@ -689,12 +691,12 @@ const AdminRoom = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredRooms.length > 0 && (

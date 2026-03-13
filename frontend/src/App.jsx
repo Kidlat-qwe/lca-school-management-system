@@ -23,6 +23,7 @@ import Invoice from './pages/superadmin/Invoice';
 import InstallmentInvoice from './pages/superadmin/InstallmentInvoice';
 import PaymentLogs from './pages/superadmin/PaymentLogs';
 import AcknowledgementReceipts from './pages/superadmin/AcknowledgementReceipts';
+import DailySummarySales from './pages/superadmin/DailySummarySales';
 import Report from './pages/superadmin/Report';
 import CalendarSchedule from './pages/superadmin/CalendarSchedule';
 import Holidays from './pages/superadmin/Holidays';
@@ -47,6 +48,7 @@ import AdminInvoice from './pages/admin/adminInvoice';
 import AdminInstallmentInvoice from './pages/admin/adminInstallmentInvoice';
 import AdminPaymentLogs from './pages/admin/adminPaymentLogs';
 import AdminAcknowledgementReceipts from './pages/admin/adminAcknowledgementReceipts';
+import AdminDailySummarySale from './pages/admin/adminDailySummarySale';
 import AdminReport from './pages/admin/adminReport';
 import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
@@ -75,6 +77,7 @@ import SuperfinanceInvoice from './pages/superfinance/superfinanceInvoice';
 import SuperfinanceInstallmentInvoice from './pages/superfinance/superfinanceInstallmentInvoice';
 import SuperfinancePaymentLogs from './pages/superfinance/superfinancePaymentLogs';
 import SuperfinanceAcknowledgementReceipts from './pages/superfinance/superfinanceAcknowledgementReceipts';
+import SuperfinanceDailySummarySales from './pages/superfinance/superfinanceDailySummarySales';
 
 function App() {
   return (
@@ -114,6 +117,7 @@ function App() {
             <Route path="installment-invoice" element={<InstallmentInvoice />} />
             <Route path="payment-logs" element={<PaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AcknowledgementReceipts />} />
+            <Route path="daily-summary-sales" element={<DailySummarySales />} />
             <Route path="report" element={<Report />} />
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="holidays" element={<Holidays />} />
@@ -152,6 +156,7 @@ function App() {
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
+            <Route path="daily-summary-sale" element={<AdminDailySummarySale />} />
             <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
@@ -228,6 +233,7 @@ function App() {
             <Route path="installment-invoice" element={<SuperfinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<SuperfinanceAcknowledgementReceipts />} />
+            <Route path="daily-summary-sales" element={<SuperfinanceDailySummarySales />} />
           </Route>
           
           {/* Default redirect */}

@@ -578,16 +578,7 @@ const Room = () => {
       )}
 
       {/* Rooms List */}
-      {filteredRooms.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterBranch
-              ? 'No rooms found matching your criteria.'
-              : 'No rooms found. Add your first room to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px' }}>
@@ -687,7 +678,18 @@ const Room = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredRooms.map((room) => (
+                {filteredRooms.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterBranch
+                          ? 'No matching rooms. Try adjusting your search or filters.'
+                          : 'No rooms yet. Add your first room to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredRooms.map((room) => (
                   <tr key={room.room_id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
@@ -719,12 +721,12 @@ const Room = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredRooms.length > 0 && (

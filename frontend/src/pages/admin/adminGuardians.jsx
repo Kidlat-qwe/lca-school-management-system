@@ -97,8 +97,6 @@ const AdminGuardians = () => {
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
           </div>
-        ) : guardians.length === 0 ? (
-          <div className="p-10 text-center text-gray-500">No guardians found.</div>
         ) : (
           <>
           <div
@@ -136,7 +134,14 @@ const AdminGuardians = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {guardians.map((g) => (
+                {guardians.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">No guardians found.</p>
+                    </td>
+                  </tr>
+                ) : (
+                  guardians.map((g) => (
                   <tr key={g.guardian_id || `${g.student_id}-${g.guardian_name}`}>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">{g.guardian_name || '-'}</div>
@@ -172,11 +177,12 @@ const AdminGuardians = () => {
                       </button>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
-          {totalItems > 0 && (
+          {totalItems > 0 && guardians.length > 0 && (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
               <div className="text-sm text-gray-600">
                 Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} guardians

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 
 const AdminPersonnel = () => {
   const { signup, userInfo } = useAuth();
@@ -180,7 +181,7 @@ const AdminPersonnel = () => {
     setFormData({
       full_name: '',
       email: '',
-      password: '',
+      password: getDefaultPasswordForUserType('Teacher'),
       user_type: 'Teacher',
       phone_number: '',
       branch_id: adminBranchId ? adminBranchId.toString() : '',
@@ -282,19 +283,24 @@ const AdminPersonnel = () => {
         ...prev,
         [name]: value,
       };
-      if (name === 'user_type' && value !== 'Student') {
-        updated.level_tag = '';
-        updated.guardian_name = '';
-        updated.guardian_email = '';
-        updated.guardian_relationship = '';
-        updated.guardian_phone_number = '';
-        updated.guardian_gender = '';
-        updated.guardian_address = '';
-        updated.guardian_city = '';
-        updated.guardian_postal_code = '';
-        updated.guardian_country = '';
-        updated.guardian_state_province_region = '';
-        setExistingGuardian(null);
+      if (name === 'user_type') {
+        if (value !== 'Student') {
+          updated.level_tag = '';
+          updated.guardian_name = '';
+          updated.guardian_email = '';
+          updated.guardian_relationship = '';
+          updated.guardian_phone_number = '';
+          updated.guardian_gender = '';
+          updated.guardian_address = '';
+          updated.guardian_city = '';
+          updated.guardian_postal_code = '';
+          updated.guardian_country = '';
+          updated.guardian_state_province_region = '';
+          setExistingGuardian(null);
+        }
+        if (!editingPersonnel && getDefaultPasswordForUserType(value)) {
+          updated.password = getDefaultPasswordForUserType(value);
+        }
       }
       return updated;
     });
@@ -320,10 +326,11 @@ const AdminPersonnel = () => {
       errors.email = 'Please enter a valid email address';
     }
 
-    if (!editingPersonnel && !formData.password.trim()) {
-      errors.password = 'Password is required';
-    } else if (!editingPersonnel && formData.password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
+    if (!editingPersonnel) {
+      const passwordToUse = formData.password.trim() || getDefaultPasswordForUserType(formData.user_type);
+      if (passwordToUse.length > 0 && passwordToUse.length < 6) {
+        errors.password = 'Password must be at least 6 characters';
+      }
     }
 
     if (formData.user_type === 'Student' && !formData.level_tag.trim()) {
@@ -438,7 +445,8 @@ const AdminPersonnel = () => {
           level_tag: formData.user_type === 'Student' ? (formData.level_tag || null) : null,
         };
         
-        const result = await signup(formData.email, formData.password, userData, false);
+        const passwordToUse = (formData.password && formData.password.trim()) || getDefaultPasswordForUserType(formData.user_type);
+        const result = await signup(formData.email, passwordToUse, userData, false);
 
         if (formData.user_type === 'Student' && formData.guardian_name.trim() && result.user?.user_id) {
           try {
@@ -563,37 +571,28 @@ const AdminPersonnel = () => {
         </div>
       )}
 
-      {filteredPersonnel.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {userSearchTerm || filterRole
-              ? 'No personnel found matching your criteria.'
-              : 'No personnel found. Add your first personnel member to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
-            className="overflow-x-auto rounded-lg"
-            style={{
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#cbd5e0 #f7fafc',
-              WebkitOverflowScrolling: 'touch',
-            }}
+      <div className="bg-white rounded-lg shadow">
+        <div
+          className="overflow-x-auto rounded-lg"
+          style={{
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#cbd5e0 #f7fafc',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          <table
+            className="divide-y divide-gray-200"
+            style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
           >
-            <table
-              className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '800px', tableLayout: 'fixed' }}
-            >
-              <colgroup>
-                <col style={{ width: '200px' }} />
-                <col style={{ width: '200px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '100px' }} />
-                <col style={{ width: '130px' }} />
-                <col style={{ width: '50px' }} />
-              </colgroup>
-              <thead className="bg-white table-header-stable">
+            <colgroup>
+              <col style={{ width: '200px' }} />
+              <col style={{ width: '200px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '100px' }} />
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '50px' }} />
+            </colgroup>
+            <thead className="bg-white table-header-stable">
                 <tr>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
@@ -658,9 +657,20 @@ const AdminPersonnel = () => {
                     Actions
                   </th>
                 </tr>
-              </thead>
-              <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPersonnel.map((person) => (
+            </thead>
+            <tbody className="bg-[#ffffff] divide-y divide-gray-200">
+              {filteredPersonnel.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center">
+                    <p className="text-gray-500">
+                      {userSearchTerm || filterRole
+                        ? 'No matching personnel. Try adjusting your search or filters.'
+                        : 'No personnel yet. Add your first personnel member to get started.'}
+                    </p>
+                  </td>
+                </tr>
+              ) : (
+                filteredPersonnel.map((person) => (
                   <tr key={person.user_id}>
                     <td className="px-3 py-4">
                       <div className="flex items-center min-w-0">
@@ -753,17 +763,17 @@ const AdminPersonnel = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
-      {totalItems > 0 && (
+      {totalItems > 0 && filteredPersonnel.length > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
           <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1}?“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
+            Showing {(currentPage - 1) * itemsPerPage + 1}??{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-sm text-gray-600 flex items-center gap-1">
@@ -986,7 +996,7 @@ const AdminPersonnel = () => {
                           Password <span className="text-red-500">*</span>
                         </label>
                         <input
-                          type="password"
+                          type={formData.password === getDefaultPasswordForUserType(formData.user_type) ? 'text' : 'password'}
                           id="password"
                           name="password"
                           value={formData.password}
@@ -994,6 +1004,9 @@ const AdminPersonnel = () => {
                           className={`input-field ${formErrors.password ? 'border-red-500' : ''}`}
                           required={!editingPersonnel}
                         />
+                        {formData.password === getDefaultPasswordForUserType(formData.user_type) && (
+                          <p className="mt-1 text-xs text-gray-500">Default password ? visible for sharing with the user.</p>
+                        )}
                         {formErrors.password && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.password}</p>
                         )}

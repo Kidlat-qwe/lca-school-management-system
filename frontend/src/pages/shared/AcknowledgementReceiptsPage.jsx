@@ -31,6 +31,10 @@ const AcknowledgementReceiptsPage = () => {
     !isSuperadmin && userBranchId ? String(userBranchId) : ''
   );
 
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerUrl, setViewerUrl] = useState('');
+  const [viewerError, setViewerError] = useState('');
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState(null);
@@ -143,6 +147,85 @@ const AcknowledgementReceiptsPage = () => {
     });
     setCreateFormErrors({});
     setAttachmentUploading(false);
+  };
+
+  const openAttachmentViewer = (url) => {
+    if (!url) return;
+    setViewerUrl(url);
+    setViewerError('');
+    setViewerOpen(true);
+  };
+
+  const closeAttachmentViewer = () => {
+    setViewerOpen(false);
+    setViewerUrl('');
+    setViewerError('');
+  };
+
+  const renderAttachmentViewer = () => {
+    if (!viewerOpen || !viewerUrl || typeof document === 'undefined') return null;
+    const cleanedUrl = viewerUrl.split('?')[0] || '';
+    const isImage = /\.(png|jpe?g|webp|gif)$/i.test(cleanedUrl);
+
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        onClick={closeAttachmentViewer}
+      >
+        <div
+          className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+            <h2 className="text-sm font-semibold text-gray-900">Attachment preview</h2>
+            <button
+              type="button"
+              onClick={closeAttachmentViewer}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <span className="sr-only">Close</span>
+              <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                <path
+                  fillRule="evenodd"
+                  d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+          </div>
+          <div className="flex-1 bg-gray-50 flex items-center justify-center overflow-auto">
+            {viewerError ? (
+              <div className="p-4 text-center text-sm text-gray-600">
+                <p className="mb-2">
+                  We couldn&apos;t load the preview in this browser. You can open the file directly:
+                </p>
+                <a
+                  href={viewerUrl}
+                  className="text-blue-600 hover:underline break-all"
+                >
+                  {viewerUrl}
+                </a>
+              </div>
+            ) : isImage ? (
+              <img
+                src={viewerUrl}
+                alt="Attachment preview"
+                className="max-h-[80vh] w-auto object-contain"
+                onError={() => setViewerError('image')}
+              />
+            ) : (
+              <iframe
+                src={viewerUrl}
+                className="w-full h-[80vh] border-0 bg-white"
+                title="Attachment"
+                onError={() => setViewerError('iframe')}
+              />
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
   };
 
   const openCreateModal = () => {
@@ -431,8 +514,6 @@ const AcknowledgementReceiptsPage = () => {
             <p className="text-sm text-gray-600">Loading acknowledgement receipts?</p>
           ) : error ? (
             <p className="text-sm text-red-600">{error}</p>
-          ) : receipts.length === 0 ? (
-            <p className="text-sm text-gray-600">No acknowledgement receipts found.</p>
           ) : (
             <div
               className="overflow-x-auto rounded-lg"
@@ -461,7 +542,14 @@ const AcknowledgementReceiptsPage = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {receipts.map((r) => (
+                  {receipts.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="px-6 py-12 text-center">
+                        <p className="text-gray-500">No acknowledgement receipts found.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    receipts.map((r) => (
                     <tr key={r.ack_receipt_id}>
                       <td className="px-4 py-3">
                         <div className="text-gray-900 font-medium">
@@ -514,18 +602,21 @@ const AcknowledgementReceiptsPage = () => {
                       </td>
                       <td className="px-4 py-3">
                         {r.payment_attachment_url ? (
-                          <a
-                            href={r.payment_attachment_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            type="button"
+                            onClick={() => openAttachmentViewer(r.payment_attachment_url)}
                             className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                              />
                             </svg>
-                            View
-                          </a>
+                            <span>View</span>
+                          </button>
                         ) : (
                           <span className="text-gray-300">?</span>
                         )}
@@ -534,12 +625,15 @@ const AcknowledgementReceiptsPage = () => {
                         {r.issue_date ? formatDateManila(r.issue_date) : '-'}
                       </td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
               </table>
             </div>
           )}
         </div>
+
+        {renderAttachmentViewer()}
 
         {pagination.totalPages > 1 && (
           <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-gray-200">
@@ -935,14 +1029,13 @@ const AcknowledgementReceiptsPage = () => {
                         className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
                       />
                       <div className="mt-2 flex items-center gap-2 flex-wrap">
-                        <a
-                          href={createFormData.payment_attachment_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)}
                           className="text-sm text-blue-600 hover:underline"
                         >
                           View attached image
-                        </a>
+                        </button>
                         <button
                           type="button"
                           onClick={clearAttachment}

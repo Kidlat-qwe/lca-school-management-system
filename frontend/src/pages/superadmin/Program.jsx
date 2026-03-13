@@ -344,16 +344,7 @@ const Program = () => {
       )}
 
       {/* Program List */}
-      {filteredPrograms.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterCurriculum
-              ? 'No programs found matching your criteria.'
-              : 'No programs found. Add your first program to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Table View - Horizontal Scroll on All Screens */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '900px' }}>
@@ -458,7 +449,18 @@ const Program = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPrograms.map((program) => {
+                {filteredPrograms.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterCurriculum
+                          ? 'No matching programs. Try adjusting your search or filters.'
+                          : 'No programs yet. Add your first program to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPrograms.map((program) => {
                   // Format session duration for display
                   const formatSessionDuration = (duration) => {
                     if (!duration && duration !== 0) return '-';
@@ -508,12 +510,12 @@ const Program = () => {
                     </td>
                   </tr>
                 );
-                })}
+                })
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredPrograms.length > 0 && (

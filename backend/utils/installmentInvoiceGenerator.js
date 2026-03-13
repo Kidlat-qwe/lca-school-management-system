@@ -285,16 +285,13 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     );
     
     // Calculate next generation date and next invoice month
+    // next_invoice_month must always be the first day of the SAME month as next_generation_date
     const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
     const nextGenDate = calculateNextGenerationDate(
       installmentInvoice.next_generation_date,
       frequency
     );
-    
-    const nextInvoiceMonth = calculateNextInvoiceMonth(
-      installmentInvoice.next_invoice_month || installmentInvoice.next_generation_date,
-      frequency
-    );
+    const nextInvoiceMonth = new Date(nextGenDate.getFullYear(), nextGenDate.getMonth(), 1);
     
     // Check phase limit before generating
     const profileCheck = await client.query(

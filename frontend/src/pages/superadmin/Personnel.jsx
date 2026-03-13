@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 
 const Personnel = () => {
   const { signup } = useAuth();
@@ -191,7 +192,7 @@ const Personnel = () => {
     setFormData({
       full_name: '',
       email: '',
-      password: '',
+      password: getDefaultPasswordForUserType('Teacher'),
       user_type: 'Teacher',
       phone_number: '',
       branch_id: '',
@@ -318,19 +319,25 @@ const Personnel = () => {
         [name]: value,
       };
       // Clear level_tag and guardian fields if role changes from Student to something else
-      if (name === 'user_type' && value !== 'Student') {
-        updated.level_tag = '';
-        updated.guardian_name = '';
-        updated.guardian_email = '';
-        updated.guardian_relationship = '';
-        updated.guardian_phone_number = '';
-        updated.guardian_gender = '';
-        updated.guardian_address = '';
-        updated.guardian_city = '';
-        updated.guardian_postal_code = '';
-        updated.guardian_country = '';
-        updated.guardian_state_province_region = '';
-        setExistingGuardian(null);
+      if (name === 'user_type') {
+        if (value !== 'Student') {
+          updated.level_tag = '';
+          updated.guardian_name = '';
+          updated.guardian_email = '';
+          updated.guardian_relationship = '';
+          updated.guardian_phone_number = '';
+          updated.guardian_gender = '';
+          updated.guardian_address = '';
+          updated.guardian_city = '';
+          updated.guardian_postal_code = '';
+          updated.guardian_country = '';
+          updated.guardian_state_province_region = '';
+          setExistingGuardian(null);
+        }
+        // When creating (no editingPersonnel), set default password for the new role
+        if (!editingPersonnel && getDefaultPasswordForUserType(value)) {
+          updated.password = getDefaultPasswordForUserType(value);
+        }
       }
       return updated;
     });
@@ -357,11 +364,12 @@ const Personnel = () => {
       errors.email = 'Please enter a valid email address';
     }
 
-    // Password is required only when creating new user (not editing)
-    if (!editingPersonnel && !formData.password.trim()) {
-      errors.password = 'Password is required';
-    } else if (!editingPersonnel && formData.password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
+    // When creating, use default password if blank; otherwise require min length
+    if (!editingPersonnel) {
+      const passwordToUse = formData.password.trim() || getDefaultPasswordForUserType(formData.user_type);
+      if (passwordToUse.length > 0 && passwordToUse.length < 6) {
+        errors.password = 'Password must be at least 6 characters';
+      }
     }
 
     // Level tag is required only for Student role
@@ -418,8 +426,8 @@ const Personnel = () => {
           ? formData.level_tag.trim() 
           : null;
         
-        console.log('?“¤ Updating user payload:', payload);
-        console.log('?“¤ User ID:', editingPersonnel.user_id);
+        console.log('??? Updating user payload:', payload);
+        console.log('??? User ID:', editingPersonnel.user_id);
         
         try {
           const updateResponse = await apiRequest(`/users/${editingPersonnel.user_id}`, {
@@ -451,7 +459,7 @@ const Personnel = () => {
                 country: formData.guardian_country?.trim() || null,
                 state_province_region: formData.guardian_state_province_region?.trim() || null,
               };
-              console.log('?“¤ Guardian update payload:', updatePayload);
+              console.log('??? Guardian update payload:', updatePayload);
               
               const guardianResponse = await apiRequest(`/guardians/${existingGuardian.guardian_id}`, {
                 method: 'PUT',
@@ -475,7 +483,7 @@ const Personnel = () => {
                 country: formData.guardian_country?.trim() || null,
                 state_province_region: formData.guardian_state_province_region?.trim() || null,
               };
-              console.log('?“¤ Guardian create payload:', createPayload);
+              console.log('??? Guardian create payload:', createPayload);
               
               const guardianResponse = await apiRequest('/guardians', {
                 method: 'POST',
@@ -498,13 +506,13 @@ const Personnel = () => {
           }
         } else if (formData.user_type === 'Student' && !formData.guardian_name.trim()) {
           // If student but no guardian name, log a warning
-          console.warn('? ï? Student selected but no guardian name provided');
+          console.warn('???? Student selected but no guardian name provided');
         }
       } else {
         // Create new personnel - Use Firebase signup which handles both Firebase and PostgreSQL
         // Step 1: Firebase creates the user account and handles password encryption
         // Step 2: Backend syncs user data to PostgreSQL
-        console.log('?‘¤ Creating new personnel...', { 
+        console.log('??? Creating new personnel...', { 
           email: formData.email, 
           user_type: formData.user_type,
           branch_id: formData.branch_id 
@@ -520,14 +528,15 @@ const Personnel = () => {
         
         // Pass false as the last parameter to indicate this is NOT the current user signing up
         // This prevents the superadmin from being logged out
-        const result = await signup(formData.email, formData.password, userData, false);
+        const passwordToUse = (formData.password && formData.password.trim()) || getDefaultPasswordForUserType(formData.user_type);
+        const result = await signup(formData.email, passwordToUse, userData, false);
         console.log('??Personnel created successfully:', result.user);
 
         // Create guardian if user is a student and guardian data is provided
         // The superadmin's token is still active since we used Admin SDK
         if (formData.user_type === 'Student' && formData.guardian_name.trim() && result.user?.user_id) {
           try {
-            console.log('?‘¨?ð?©â€ð??Creating guardian for student:', result.user.user_id);
+            console.log('????????????Creating guardian for student:', result.user.user_id);
             await apiRequest('/guardians', {
               method: 'POST',
               body: JSON.stringify({
@@ -699,16 +708,7 @@ const Personnel = () => {
       )}
 
       {/* Personnel List */}
-      {filteredPersonnel.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {userSearchTerm || filterRole || filterBranch
-              ? 'No personnel found matching your criteria.'
-              : 'No personnel found. Add your first personnel member to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Table View - Responsive */}
           <div
             className="overflow-x-auto rounded-lg"
@@ -822,7 +822,18 @@ const Personnel = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPersonnel.map((person) => (
+                {filteredPersonnel.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {userSearchTerm || filterRole || filterBranch
+                          ? 'No matching personnel. Try adjusting your search or filters.'
+                          : 'No personnel yet. Add your first personnel member to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredPersonnel.map((person) => (
                   <tr key={person.user_id}>
                     <td className="px-3 py-4">
                       <div className="flex items-center min-w-0">
@@ -942,18 +953,18 @@ const formattedDate = formatDateManila(date);
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Pagination */}
       {totalItems > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
           <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1}?“{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
+            Showing {(currentPage - 1) * itemsPerPage + 1}??{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-sm text-gray-600 flex items-center gap-1">
@@ -1310,7 +1321,7 @@ const formattedDate = formatDateManila(date);
                             Password <span className="text-red-500">*</span>
                           </label>
                           <input
-                            type="password"
+                            type={formData.password === getDefaultPasswordForUserType(formData.user_type) ? 'text' : 'password'}
                             id="password"
                             name="password"
                             value={formData.password}
@@ -1318,6 +1329,9 @@ const formattedDate = formatDateManila(date);
                             className={`input-field ${formErrors.password ? 'border-red-500' : ''}`}
                             required={!editingPersonnel}
                           />
+                          {formData.password === getDefaultPasswordForUserType(formData.user_type) && (
+                            <p className="mt-1 text-xs text-gray-500">Default password ? visible for sharing with the user.</p>
+                          )}
                           {formErrors.password && (
                             <p className="mt-1 text-sm text-red-600">{formErrors.password}</p>
                           )}

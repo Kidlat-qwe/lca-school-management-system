@@ -345,17 +345,8 @@ const StudentPaymentLogs = () => {
       </div>
 
       {/* Payment Logs List */}
-      {filteredPayments.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {searchTerm || filterStatus || filterPaymentMethod
-              ? 'No payments found matching your criteria.'
-              : 'No payment records found.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
+      <div className="bg-white rounded-lg shadow">
+        <div
             className="overflow-x-auto rounded-lg"
             style={{
               scrollbarWidth: 'thin',
@@ -396,7 +387,18 @@ const StudentPaymentLogs = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredPayments.map((payment) => (
+                {filteredPayments.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {searchTerm || filterStatus || filterPaymentMethod
+                          ? 'No matching payments. Try adjusting your search or filters.'
+                          : 'No payment records found.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPayments.map((payment) => (
                   <tr key={payment.payment_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
@@ -426,12 +428,12 @@ const StudentPaymentLogs = () => {
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {filteredPayments.length > 0 && (
         <div className="text-sm text-gray-500 text-center">

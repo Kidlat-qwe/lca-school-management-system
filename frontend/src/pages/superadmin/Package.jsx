@@ -708,16 +708,7 @@ const Package = () => {
       )}
 
       {/* Packages List */}
-      {filteredPackages.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterBranch
-              ? 'No packages found matching your criteria.'
-              : 'No packages found. Add your first package to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}>
@@ -800,7 +791,18 @@ const Package = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredPackages.map((packageItem) => (
+                {filteredPackages.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterBranch
+                          ? 'No matching packages. Try adjusting your search or filters.'
+                          : 'No packages yet. Add your first package to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
                     <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
                       <div className="min-w-0">
@@ -878,12 +880,12 @@ const Package = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredPackages.length > 0 && (

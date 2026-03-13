@@ -445,18 +445,9 @@ const SuperfinancePaymentLogs = () => {
       )}
 
       {/* Payment Logs List */}
-      {filteredPayments.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {searchTerm || filterBranch || filterStatus || filterPaymentMethod
-              ? 'No payments found matching your criteria.'
-              : 'No payment records found.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div className="rounded-lg overflow-hidden">
-            <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
+      <div className="bg-white rounded-lg shadow">
+        <div className="rounded-lg overflow-hidden">
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '12%' }} />
                 <col style={{ width: '14%' }} />
@@ -589,7 +580,18 @@ const SuperfinancePaymentLogs = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredPayments.map((payment) => (
+                {filteredPayments.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {searchTerm || filterBranch || filterStatus || filterPaymentMethod
+                          ? 'No matching payments. Try adjusting your search or filters.'
+                          : 'No payment records found.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPayments.map((payment) => (
                   <tr key={payment.payment_id} className="hover:bg-gray-50/80">
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
@@ -685,11 +687,12 @@ const SuperfinancePaymentLogs = () => {
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
-          {pagination.totalPages > 1 && (
+          {pagination.totalPages > 1 && filteredPayments.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
               <p className="text-sm text-gray-600">
                 Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} payments
@@ -718,7 +721,6 @@ const SuperfinancePaymentLogs = () => {
             </div>
           )}
         </div>
-      )}
 
       {/* Payment Method filter dropdown - portaled to avoid table overflow clipping */}
       {openPaymentMethodDropdown && paymentMethodDropdownRect && createPortal(

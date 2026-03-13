@@ -24,6 +24,7 @@ router.get(
     queryValidator('invoice_id').optional().isInt().withMessage('Invoice ID must be an integer'),
     queryValidator('student_id').optional().isInt().withMessage('Student ID must be an integer'),
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('issue_date').optional().isISO8601().withMessage('issue_date must be YYYY-MM-DD'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -31,7 +32,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { invoice_id, student_id, branch_id, status, page = 1, limit = 20 } = req.query;
+      const { invoice_id, student_id, branch_id, issue_date, status, page = 1, limit = 20 } = req.query;
       const pageNum = parseInt(page) || 1;
       const limitNum = parseInt(limit) || 20;
       const offset = (pageNum - 1) * limitNum;
@@ -79,6 +80,12 @@ router.get(
         params.push(student_id);
       }
 
+      if (issue_date) {
+        paramCount++;
+        sql += ` AND p.issue_date = $${paramCount}::date`;
+        params.push(issue_date);
+      }
+
       if (status) {
         paramCount++;
         sql += ` AND p.status = $${paramCount}`;
@@ -115,6 +122,12 @@ router.get(
         countParamCount++;
         countSql += ` AND p.student_id = $${countParamCount}`;
         countParams.push(student_id);
+      }
+
+      if (issue_date) {
+        countParamCount++;
+        countSql += ` AND p.issue_date = $${countParamCount}::date`;
+        countParams.push(issue_date);
       }
 
       if (status) {
@@ -530,6 +543,8 @@ router.post(
               const nextInvoiceDueDate = profile.next_invoice_due_date
                 ? new Date(profile.next_invoice_due_date)
                 : new Date();
+              // next_invoice_month must always be the first day of the SAME month as next_generation_date
+              const nextInvoiceMonth = new Date(firstGenerationDate.getFullYear(), firstGenerationDate.getMonth(), 1);
               
               // Create the first installment invoice record (needed before generating invoice)
               const firstInvoiceRecordResult = await client.query(
@@ -548,7 +563,7 @@ router.post(
                   profile.amount, // Assuming no tax for now
                   profile.frequency || '1 month(s)',
                   formatYmdLocal(firstGenerationDate),
-                  formatYmdLocal(nextInvoiceDueDate),
+                  formatYmdLocal(nextInvoiceMonth),
                 ]
               );
               
@@ -1197,6 +1212,8 @@ router.put(
                   const nextInvoiceDueDate = profile.next_invoice_due_date
                     ? new Date(profile.next_invoice_due_date)
                     : new Date();
+                  // next_invoice_month must always be the first day of the SAME month as next_generation_date
+                  const nextInvoiceMonth = new Date(firstGenerationDate.getFullYear(), firstGenerationDate.getMonth(), 1);
                   
                   // Create the first installment invoice record (needed before generating invoice)
                   const firstInvoiceRecordResult = await client.query(
@@ -1215,7 +1232,7 @@ router.put(
                       profile.amount, // Assuming no tax for now
                       profile.frequency || '1 month(s)',
                       formatYmdLocal(firstGenerationDate),
-                      formatYmdLocal(nextInvoiceDueDate),
+                      formatYmdLocal(nextInvoiceMonth),
                     ]
                   );
                   

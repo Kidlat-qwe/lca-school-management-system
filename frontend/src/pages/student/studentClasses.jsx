@@ -853,17 +853,8 @@ const StudentClasses = () => {
         </div>
       </div>
 
-      {filteredClasses.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterProgram
-              ? 'No classes found matching your criteria.'
-              : 'No classes assigned to you yet.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <div
+      <div className="bg-white rounded-lg shadow">
+        <div
             className="overflow-x-auto rounded-lg"
             style={{
               scrollbarWidth: 'thin',
@@ -901,7 +892,18 @@ const StudentClasses = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredClasses.map((classItem) => (
+                {filteredClasses.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterProgram
+                          ? 'No matching classes. Try adjusting your search or filters.'
+                          : 'No classes assigned to you yet.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredClasses.map((classItem) => (
                   <tr key={classItem.class_id}>
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900">
@@ -983,12 +985,12 @@ const StudentClasses = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {filteredClasses.length > 0 && (
         <div className="text-sm text-gray-500 text-center">

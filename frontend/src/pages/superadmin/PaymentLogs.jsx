@@ -450,16 +450,7 @@ const PaymentLogs = () => {
       )}
 
       {/* Payment Logs List */}
-      {filteredPayments.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {searchTerm || filterBranch || filterStatus || filterPaymentMethod
-              ? 'No payments found matching your criteria.'
-              : 'No payment records found.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Table fits viewport - no horizontal scroll; compact responsive layout */}
           <div className="rounded-lg overflow-hidden">
             <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
@@ -595,7 +586,18 @@ const PaymentLogs = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredPayments.map((payment) => (
+                {filteredPayments.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {searchTerm || filterBranch || filterStatus || filterPaymentMethod
+                          ? 'No matching payments. Try adjusting your search or filters.'
+                          : 'No payment records yet.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredPayments.map((payment) => (
                   <tr key={payment.payment_id} className="hover:bg-gray-50/80">
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
@@ -691,7 +693,8 @@ const PaymentLogs = () => {
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>
@@ -724,7 +727,6 @@ const PaymentLogs = () => {
             </div>
           )}
         </div>
-      )}
 
       {/* Payment Method filter dropdown - portaled to avoid table overflow clipping */}
       {openPaymentMethodDropdown && paymentMethodDropdownRect && createPortal(

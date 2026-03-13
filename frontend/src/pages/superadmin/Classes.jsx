@@ -7714,7 +7714,7 @@ const initializePackageMerchSelections = useCallback(
                 </svg>
               </button>
               {openProgramDropdown && (
-                <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
+                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
                   <div className="py-1">
                     <button
                       onClick={(e) => {
@@ -7755,16 +7755,7 @@ const initializePackageMerchSelections = useCallback(
       </div>
 
       {/* Classes List */}
-      {filteredClasses.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">
-            {nameSearchTerm || filterBranch || filterProgram
-              ? 'No classes found matching your criteria.'
-              : 'No classes found. Add your first class to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow">
           {/* Table View - Horizontal Scroll on All Screens */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <div className="max-h-[600px] overflow-y-auto relative">
@@ -7798,7 +7789,18 @@ const initializePackageMerchSelections = useCallback(
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredClasses.map((classItem) => {
+                {filteredClasses.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-12 text-center">
+                      <p className="text-gray-500">
+                        {nameSearchTerm || filterBranch || filterProgram
+                          ? 'No matching classes. Try adjusting your search or filters.'
+                          : 'No classes yet. Add your first class to get started.'}
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                filteredClasses.map((classItem) => {
                   const formatDate = (dateValue) => {
                     if (!dateValue) return '-';
                     try {
@@ -7955,13 +7957,13 @@ const initializePackageMerchSelections = useCallback(
                       </td>
                     </tr>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
             </div>
           </div>
         </div>
-      )}
 
       {/* Results Count */}
       {filteredClasses.length > 0 && (
