@@ -1,6 +1,6 @@
 /**
- * One-off script: Remove penalty from all invoices for a given list of student emails.
- * - Finds students by email (userstbl, user_type = 'Student')
+ * One-off script: Remove penalty from all invoices for given students (by email or full name).
+ * - Finds students by email (STUDENT_EMAILS) or full_name (STUDENT_NAMES) in userstbl (user_type = 'Student')
  * - Finds all invoices linked to those students (invoicestudentstbl + installment profile invoices)
  * - For each invoice: zeros penalty_amount and amount on penalty line items, recomputes invoice amount, clears late_penalty_applied_for_due_date
  *
@@ -13,8 +13,11 @@ import '../config/loadEnv.js';
 import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
-  // Target single student as requested
-  'cuevasdaniella9@gmail.com',
+  // Target by email (leave empty to use STUDENT_NAMES)
+];
+
+const STUDENT_NAMES = [
+  'Uriah Seth Beliber',
 ];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -23,16 +26,28 @@ async function main() {
   const client = await getClient();
 
   try {
-    // 1) Resolve emails to student user_ids
-    const studentResult = await client.query(
-      `SELECT user_id, email, full_name FROM userstbl WHERE user_type = 'Student' AND email = ANY($1::text[])`,
-      [STUDENT_EMAILS]
-    );
-    const students = studentResult.rows;
+    // 1) Resolve emails or names to student user_ids
+    let students = [];
+    if (STUDENT_EMAILS.length > 0) {
+      const r = await client.query(
+        `SELECT user_id, email, full_name FROM userstbl WHERE user_type = 'Student' AND email = ANY($1::text[])`,
+        [STUDENT_EMAILS]
+      );
+      students = r.rows;
+    }
+    if (STUDENT_NAMES.length > 0) {
+      const r = await client.query(
+        `SELECT user_id, email, full_name FROM userstbl WHERE user_type = 'Student' AND full_name = ANY($1::text[])`,
+        [STUDENT_NAMES]
+      );
+      const byId = new Map(students.map((s) => [s.user_id, s]));
+      r.rows.forEach((s) => byId.set(s.user_id, s));
+      students = Array.from(byId.values());
+    }
     const studentIds = students.map((s) => s.user_id);
 
     if (studentIds.length === 0) {
-      console.log('No students found for the given emails.');
+      console.log('No students found for the given emails/names.');
       return;
     }
     console.log(`Found ${studentIds.length} student(s):`, students.map((s) => `${s.email} (${s.full_name})`).join(', '));

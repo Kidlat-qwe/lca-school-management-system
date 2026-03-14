@@ -4739,12 +4739,14 @@ router.post(
             const frequency = `${installment_settings.frequency_months} month(s)`;
             const scheduledDate = installment_settings.invoice_due_date || installment_settings.invoice_generation_date;
             
+            // Calculate next invoice month (first billing month + frequency)
+            const nextInvoiceMonth = new Date(nextInvoiceDueDate);
+            
             // Calculate next generation date: should be the same as the first generation date
             // This follows the settings from Classes.jsx where invoice generation date is configured
             // Example: If first generation is Dec 1, 2025, next generation should also be Dec 1, 2025
             const nextGenerationDate = new Date(generationDate);
-            // next_invoice_month must always be the first day of the SAME month as next_generation_date
-            const nextInvoiceMonth = new Date(nextGenerationDate.getFullYear(), nextGenerationDate.getMonth(), 1);
+            // Keep the same date (first generation date) - don't add frequency
             
             await client.query(
               `INSERT INTO installmentinvoicestbl 
@@ -4760,7 +4762,7 @@ router.post(
                 installmentProfileAmount, // Use calculated amount for installment invoice display
                 installmentProfileAmount, // Assuming no tax for now, or can be calculated separately
                 frequency,
-                nextGenerationDate.toISOString().split('T')[0],
+                nextGenerationDate.toISOString().split('T')[0], // First day of next billing month
                 nextInvoiceMonth.toISOString().split('T')[0],
               ]
             );

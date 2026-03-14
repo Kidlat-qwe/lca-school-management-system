@@ -73,6 +73,16 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Teacher', 'Student'], // Single link for Teacher, Student
     },
     {
+      name: 'Daily Summary Sales',
+      path: '/superadmin/daily-summary-sales',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Finance'],
+    },
+    {
       name: 'Calendar',
       path: '/superadmin/calendar-schedule', // Will be overridden in map function for Admin, Teacher, and Student
       icon: (
@@ -270,26 +280,6 @@ const Sidebar = ({ isOpen, onClose }) => {
       ],
     },
     {
-      name: 'Daily Summary Sale',
-      path: '/admin/daily-summary-sale',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-      ),
-      roles: ['Admin'],
-    },
-    {
-      name: 'Daily Summary Sales',
-      path: '/superadmin/daily-summary-sales',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-      ),
-      roles: ['Superadmin', 'Finance'], // Finance = Superfinance (no branch)
-    },
-    {
       name: 'Holidays',
       path: '/superadmin/holidays', // Will be overridden in map function for Admin
       icon: (
@@ -328,7 +318,13 @@ const Sidebar = ({ isOpen, onClose }) => {
     .map(item => {
       // Handle dynamic paths based on user role
       let itemPath = item.path;
-      if (item.name === 'Calendar') {
+      if (item.name === 'Daily Summary Sales') {
+        if (basePath === '/superfinance') {
+          itemPath = '/superfinance/daily-summary-sales';
+        } else {
+          itemPath = '/superadmin/daily-summary-sales';
+        }
+      } else if (item.name === 'Calendar') {
         if (basePath === '/superadmin') {
           itemPath = '/superadmin/calendar-schedule';
         } else if (basePath === '/admin') {
@@ -388,18 +384,18 @@ const Sidebar = ({ isOpen, onClose }) => {
         itemPath = '/admin/report';
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
-      } else if (item.name === 'Daily Summary Sales' && basePath === '/superfinance') {
-        itemPath = '/superfinance/daily-summary-sales';
       }
-      // Handle Dashboard children paths for Superadmin (financial-dashboard has explicit route)
+      // Handle Dashboard children paths for Superadmin, Admin, Finance/Superfinance
       let children = item.children;
       if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance')) {
-        children = item.children?.map(child => {
-          if (child.name === 'Financial Dashboard') {
-            return { ...child, path: `${basePath}/financial-dashboard` };
-          }
-          return child;
-        });
+        children = item.children
+          ?.filter(child => !child.roles || child.roles.includes(userType))
+          ?.map(child => {
+            if (child.name === 'Financial Dashboard') {
+              return { ...child, path: `${basePath}/financial-dashboard` };
+            }
+            return child;
+          });
       }
       // Handle Manage Users children paths for Admin
       if (item.name === 'Manage Users' && basePath === '/admin') {

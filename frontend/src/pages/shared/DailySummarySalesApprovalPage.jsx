@@ -15,8 +15,22 @@ const DailySummarySalesApprovalPage = () => {
   const [approvingId, setApprovingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, remarks: '' });
   const [detailModal, setDetailModal] = useState({ open: false, summary: null });
+  const [detailPayments, setDetailPayments] = useState([]);
+  const [detailPaymentsLoading, setDetailPaymentsLoading] = useState(false);
+  const [verifyModal, setVerifyModal] = useState({ open: false, summary: null });
+  const [verifyPayments, setVerifyPayments] = useState([]);
+  const [verifyPaymentsLoading, setVerifyPaymentsLoading] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
+
+  const formatCurrency = (amount) =>
+    `₱${(Number(amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const fetchPaymentsForSummary = async (dailySummaryId) => {
+    if (!dailySummaryId) return [];
+    const res = await apiRequest(`/daily-summary-sales/${dailySummaryId}/payments`);
+    return Array.isArray(res?.data) ? res.data : [];
+  };
 
   const fetchSummaries = async (page = 1) => {
     try {
@@ -46,7 +60,7 @@ const DailySummarySalesApprovalPage = () => {
 
   const fetchBranches = async () => {
     try {
-      const res = await apiRequest('/branches?limit=200');
+      const res = await apiRequest('/branches?limit=100');
       setBranches(res.data || []);
     } catch (err) {
       console.error('Fetch branches error:', err);
@@ -61,7 +75,47 @@ const DailySummarySalesApprovalPage = () => {
     fetchBranches();
   }, []);
 
-  const handleApprove = async (id) => {
+  useEffect(() => {
+    if (!detailModal.open || !detailModal.summary?.daily_summary_id) {
+      setDetailPayments([]);
+      return;
+    }
+    let cancelled = false;
+    setDetailPaymentsLoading(true);
+    fetchPaymentsForSummary(detailModal.summary.daily_summary_id)
+      .then((payments) => {
+        if (!cancelled) setDetailPayments(payments);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailPayments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailPaymentsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [detailModal.open, detailModal.summary?.daily_summary_id]);
+
+  useEffect(() => {
+    if (!verifyModal.open || !verifyModal.summary?.daily_summary_id) {
+      setVerifyPayments([]);
+      return;
+    }
+    let cancelled = false;
+    setVerifyPaymentsLoading(true);
+    fetchPaymentsForSummary(verifyModal.summary.daily_summary_id)
+      .then((payments) => {
+        if (!cancelled) setVerifyPayments(payments);
+      })
+      .catch(() => {
+        if (!cancelled) setVerifyPayments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setVerifyPaymentsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [verifyModal.open, verifyModal.summary?.daily_summary_id]);
+
+  const handleVerify = async (id) => {
     setApprovingId(id);
     try {
       await apiRequest(`/daily-summary-sales/${id}/approve`, {
@@ -70,13 +124,13 @@ const DailySummarySalesApprovalPage = () => {
       });
       await fetchSummaries(pagination.page);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to approve');
+      alert(err.response?.data?.message || err.message || 'Failed to verify');
     } finally {
       setApprovingId(null);
     }
   };
 
-  const handleReject = async () => {
+  const handleFlag = async () => {
     const { id, remarks } = rejectModal;
     if (!id) return;
     setApprovingId(id);
@@ -88,7 +142,7 @@ const DailySummarySalesApprovalPage = () => {
       setRejectModal({ open: false, id: null, remarks: '' });
       await fetchSummaries(pagination.page);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to reject');
+      alert(err.response?.data?.message || err.message || 'Failed to flag');
     } finally {
       setApprovingId(null);
     }
@@ -98,11 +152,12 @@ const DailySummarySalesApprovalPage = () => {
     const classes = {
       Submitted: 'bg-yellow-100 text-yellow-800',
       Approved: 'bg-green-100 text-green-800',
-      Rejected: 'bg-red-100 text-red-800',
+      Rejected: 'bg-amber-100 text-amber-800',
     };
+    const label = status === 'Approved' ? 'Verified' : status === 'Rejected' ? 'Flagged' : status;
     return (
       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {label}
       </span>
     );
   };
@@ -112,7 +167,7 @@ const DailySummarySalesApprovalPage = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Approve or reject daily sales summaries submitted by branch Admins for financial closing tracking.
+          Verify daily sales summaries submitted by branch Admins for financial closing tracking.
         </p>
       </div>
 
@@ -145,8 +200,8 @@ const DailySummarySalesApprovalPage = () => {
           >
             <option value="">All</option>
             <option value="Submitted">Submitted</option>
-            <option value="Approved">Approved</option>
-            <option value="Rejected">Rejected</option>
+            <option value="Approved">Verified</option>
+            <option value="Rejected">Flagged</option>
           </select>
         </div>
         <div>
@@ -203,25 +258,7 @@ const DailySummarySalesApprovalPage = () => {
                   <td className="px-4 py-3 text-sm text-gray-600">{s.submitted_by_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-600">{s.approved_by_name || '-'}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap align-middle">
-                    <div className="inline-flex items-center justify-end gap-2">
-                      {s.status === 'Submitted' && (
-                        <>
-                          <button
-                            onClick={() => handleApprove(s.daily_summary_id)}
-                            disabled={!!approvingId}
-                            className="text-sm font-medium text-green-600 hover:text-green-700 disabled:opacity-50"
-                          >
-                            {approvingId === s.daily_summary_id ? 'Approving...' : 'Approve'}
-                          </button>
-                          <button
-                            onClick={() => setRejectModal({ open: true, id: s.daily_summary_id, remarks: '' })}
-                            disabled={!!approvingId}
-                            className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
+                    <div className="inline-flex items-center justify-end">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -236,7 +273,7 @@ const DailySummarySalesApprovalPage = () => {
                           );
                         }}
                         className="inline-flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                        aria-label="More actions"
+                        aria-label="Actions"
                       >
                         <svg className="w-4 h-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
                           <path d="M10 3a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 11.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 20a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
@@ -284,7 +321,7 @@ const DailySummarySalesApprovalPage = () => {
               onClick={() => setOpenMenuId(null)}
             />
             <div
-              className="fixed z-[9999] w-40 bg-white rounded-md shadow-lg border border-gray-200 text-left"
+              className="fixed z-[9999] w-44 bg-white rounded-md shadow-lg border border-gray-200 text-left py-1"
               style={{ top: menuPosition.top, right: menuPosition.right }}
             >
               <button
@@ -296,10 +333,40 @@ const DailySummarySalesApprovalPage = () => {
                   }
                   setOpenMenuId(null);
                 }}
-                className="block w-full px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 text-left"
+                className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
               >
                 View details
               </button>
+              {(() => {
+                const summary = summaries.find((s) => s.daily_summary_id === openMenuId);
+                if (!summary || summary.status !== 'Submitted') return null;
+                return (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVerifyModal({ open: true, summary });
+                        setOpenMenuId(null);
+                      }}
+                      disabled={!!approvingId}
+                      className="block w-full px-3 py-2 text-sm text-green-600 hover:bg-green-50 text-left disabled:opacity-50"
+                    >
+                      Verify
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRejectModal({ open: true, id: summary.daily_summary_id, remarks: '' });
+                        setOpenMenuId(null);
+                      }}
+                      disabled={!!approvingId}
+                      className="block w-full px-3 py-2 text-sm text-amber-600 hover:bg-amber-50 text-left disabled:opacity-50"
+                    >
+                      Flag for review
+                    </button>
+                  </>
+                );
+              })()}
             </div>
           </>,
           document.body
@@ -308,8 +375,8 @@ const DailySummarySalesApprovalPage = () => {
       {rejectModal.open && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4" onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}>
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-gray-900">Reject Daily Summary</h3>
-            <p className="mt-2 text-sm text-gray-600">Optional: Add a reason for rejection.</p>
+            <h3 className="text-lg font-semibold text-gray-900">Flag for review</h3>
+            <p className="mt-2 text-sm text-gray-600">Optional: Add a reason (e.g. discrepancy to clarify with branch admin).</p>
             <textarea
               value={rejectModal.remarks}
               onChange={(e) => setRejectModal((prev) => ({ ...prev, remarks: e.target.value }))}
@@ -324,10 +391,103 @@ const DailySummarySalesApprovalPage = () => {
                 Cancel
               </button>
               <button
-                onClick={handleReject}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+                onClick={handleFlag}
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700"
               >
-                Reject
+                Flag for review
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {verifyModal.open && verifyModal.summary && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+          onClick={() => !approvingId && setVerifyModal({ open: false, summary: null })}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 shrink-0">Verify daily summary</h3>
+            <p className="mt-1 text-sm text-gray-600 shrink-0">
+              Confirm the payment records below, then click Verify to mark this submission as verified.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-4 text-sm shrink-0">
+              <span className="font-medium text-gray-800">{verifyModal.summary.branch_name || '-'}</span>
+              <span className="text-gray-600">{verifyModal.summary.summary_date ? formatDateManila(verifyModal.summary.summary_date) : '-'}</span>
+              <span className="font-semibold text-green-600">
+                Total: {formatCurrency(verifyModal.summary.total_amount)} ({verifyModal.summary.payment_count ?? 0} payment(s))
+              </span>
+            </div>
+            <div className="mt-4 shrink-0">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Payment records (from payment logs)</p>
+              {verifyPaymentsLoading ? (
+                <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
+              ) : (
+                <div
+                  className="overflow-x-auto rounded-lg border border-gray-200 max-h-56"
+                  style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                >
+                  <table className="text-sm" style={{ width: '100%', minWidth: '520px' }}>
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 bg-white">
+                      {(verifyPayments.length === 0) ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-4 text-center text-gray-500">No payment records for this date.</td>
+                        </tr>
+                      ) : (
+                        verifyPayments.map((p) => (
+                          <tr key={p.payment_id} className="hover:bg-gray-50/80">
+                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                              {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[140px]">
+                              <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
+                              {formatCurrency(p.payable_amount)}
+                            </td>
+                            <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[100px]">
+                              <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="mt-6 flex justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => !approvingId && setVerifyModal({ open: false, summary: null })}
+                disabled={!!approvingId}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await handleVerify(verifyModal.summary.daily_summary_id);
+                  setVerifyModal({ open: false, summary: null });
+                }}
+                disabled={!!approvingId}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {approvingId === verifyModal.summary.daily_summary_id ? 'Verifying...' : 'Verify'}
               </button>
             </div>
           </div>
@@ -340,14 +500,14 @@ const DailySummarySalesApprovalPage = () => {
           onClick={() => setDetailModal({ open: false, summary: null })}
         >
           <div
-            className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6"
+            className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start justify-between gap-4 shrink-0">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Daily Summary Details</h3>
                 <p className="mt-1 text-xs text-gray-500">
-                  Overview of this branch&apos;s submitted sales summary.
+                  Overview of this branch&apos;s submitted sales summary and payment records from payment logs.
                 </p>
               </div>
               <button
@@ -366,7 +526,7 @@ const DailySummarySalesApprovalPage = () => {
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
               <div>
                 <p className="text-xs font-medium text-gray-500">Branch</p>
                 <p className="mt-0.5 text-gray-900">{detailModal.summary.branch_name || '-'}</p>
@@ -380,11 +540,7 @@ const DailySummarySalesApprovalPage = () => {
               <div>
                 <p className="text-xs font-medium text-gray-500">Total Amount</p>
                 <p className="mt-0.5 text-gray-900 font-semibold">
-                  ₱
-                  {(Number(detailModal.summary.total_amount) || 0).toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
+                  {formatCurrency(detailModal.summary.total_amount)}
                 </p>
               </div>
               <div>
@@ -412,13 +568,13 @@ const DailySummarySalesApprovalPage = () => {
                 </p>
               </div>
               <div>
-                <p className="text-xs font-medium text-gray-500">Approved By</p>
+                <p className="text-xs font-medium text-gray-500">Verified By</p>
                 <p className="mt-0.5 text-gray-900">
                   {detailModal.summary.approved_by_name || '-'}
                 </p>
               </div>
               <div>
-                <p className="text-xs font-medium text-gray-500">Approved At</p>
+                <p className="text-xs font-medium text-gray-500">Verified At</p>
                 <p className="mt-0.5 text-gray-900">
                   {detailModal.summary.approved_at
                     ? formatDateManila(detailModal.summary.approved_at)
@@ -427,8 +583,59 @@ const DailySummarySalesApprovalPage = () => {
               </div>
             </div>
 
-            <div className="mt-4">
-              <p className="text-xs font-medium text-gray-500">Remarks</p>
+            <div className="mt-4 shrink-0">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Payment records (from payment logs)</p>
+              {detailPaymentsLoading ? (
+                <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
+              ) : (
+                <div
+                  className="overflow-x-auto rounded-lg border border-gray-200 max-h-48"
+                  style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                >
+                  <table className="text-sm" style={{ width: '100%', minWidth: '520px' }}>
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 bg-white">
+                      {(detailPayments.length === 0) ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-4 text-center text-gray-500">No payment records for this date.</td>
+                        </tr>
+                      ) : (
+                        detailPayments.map((p) => (
+                          <tr key={p.payment_id} className="hover:bg-gray-50/80">
+                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                              {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[140px]">
+                              <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
+                              {formatCurrency(p.payable_amount)}
+                            </td>
+                            <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[100px]">
+                              <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 shrink-0">
+              <p className="text-xs font-medium text-gray-500">
+                {detailModal.summary.status === 'Rejected' ? 'Flag reason' : 'Remarks'}
+              </p>
               <p className="mt-1 text-sm text-gray-800 whitespace-pre-line">
                 {detailModal.summary.remarks && detailModal.summary.remarks.trim()
                   ? detailModal.summary.remarks
@@ -436,7 +643,7 @@ const DailySummarySalesApprovalPage = () => {
               </p>
             </div>
 
-            <div className="mt-5 flex justify-end">
+            <div className="mt-5 flex justify-end shrink-0">
               <button
                 type="button"
                 onClick={() => setDetailModal({ open: false, summary: null })}

@@ -1183,7 +1183,9 @@ router.delete(
         });
       }
 
-      // Delete related records first (due to foreign keys)
+      // Delete or unlink all records that reference this invoice (so delete succeeds even if student is unenrolled or profile inactive)
+      await client.query('DELETE FROM paymenttbl WHERE invoice_id = $1', [id]);
+      await client.query('DELETE FROM promousagetbl WHERE invoice_id = $1', [id]);
       await client.query('DELETE FROM invoicestudentstbl WHERE invoice_id = $1', [id]);
       await client.query('DELETE FROM invoiceitemstbl WHERE invoice_id = $1', [id]);
       await client.query('DELETE FROM invoicestbl WHERE invoice_id = $1', [id]);

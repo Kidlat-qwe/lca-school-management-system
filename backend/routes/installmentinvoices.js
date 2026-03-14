@@ -3,6 +3,8 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { calculateNextGenerationDate, calculateNextInvoiceMonth } from '../utils/installmentInvoiceGenerator.js';
+import { formatYmdLocal } from '../utils/dateUtils.js';
 
 const router = express.Router();
 
@@ -55,6 +57,9 @@ router.get(
         paramCount++;
         sql += ` AND is_active = $${paramCount}`;
         params.push(is_active === 'true');
+      } else {
+        // Default: only active profiles (e.g. unenrolled students are inactive and excluded from list)
+        sql += ' AND is_active = true';
       }
 
       sql += ` ORDER BY installmentinvoiceprofiles_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
@@ -381,6 +386,194 @@ router.delete(
 );
 
 /**
+ * GET /api/sms/installment-invoices/profiles-needed-phase-1
+ * Returns profiles where downpayment is paid but Phase 1 was not generated
+ */
+router.get(
+  '/profiles-needed-phase-1',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { branch_id } = req.query;
+      let sql = `
+        SELECT ip.*, u.full_name as student_name, p.program_name
+        FROM installmentinvoiceprofilestbl ip
+        LEFT JOIN userstbl u ON ip.student_id = u.user_id
+        LEFT JOIN classestbl c ON ip.class_id = c.class_id
+        LEFT JOIN programstbl p ON c.program_id = p.program_id
+        WHERE ip.is_active = true
+          AND COALESCE(ip.generated_count, 0) = 0
+          AND EXISTS (
+            SELECT 1 FROM invoicestbl i
+            WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+              AND i.status = 'Paid'
+          )
+      `;
+      const params = [];
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        sql += ' AND ip.branch_id = $1';
+        params.push(req.user.branchId);
+      } else if (branch_id) {
+        sql += ' AND ip.branch_id = $1';
+        params.push(branch_id);
+      }
+      sql += ' ORDER BY ip.installmentinvoiceprofiles_id DESC';
+      const result = await query(sql, params);
+      res.json({ success: true, data: result.rows });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/installment-invoices/profiles/:id/generate-phase-1
+ * Retry Phase 1 generation when downpayment is paid but Phase 1 was not auto-generated
+ * Access: Superadmin, Admin, Finance
+ */
+router.post(
+  '/profiles/:id/generate-phase-1',
+  [
+    param('id').isInt().withMessage('Profile ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const { id } = req.params;
+
+      const profileResult = await client.query(
+        `SELECT ip.*, u.full_name as student_name
+         FROM installmentinvoiceprofilestbl ip
+         LEFT JOIN userstbl u ON ip.student_id = u.user_id
+         WHERE ip.installmentinvoiceprofiles_id = $1`,
+        [id]
+      );
+      if (profileResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Profile not found' });
+      }
+      const profile = profileResult.rows[0];
+
+      if ((profile.generated_count || 0) > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Phase 1 already generated. Use the regular Generate button for next phases.',
+        });
+      }
+
+      // Find downpayment invoice (explicit or first linked invoice)
+      const downpaymentInvoiceId = profile.downpayment_invoice_id;
+      let downpaymentPaid = false;
+      if (downpaymentInvoiceId) {
+        const invCheck = await client.query(
+          'SELECT status FROM invoicestbl WHERE invoice_id = $1',
+          [downpaymentInvoiceId]
+        );
+        downpaymentPaid = invCheck.rows.length > 0 && invCheck.rows[0].status === 'Paid';
+      }
+      if (!downpaymentPaid) {
+        const linkedPaid = await client.query(
+          `SELECT invoice_id FROM invoicestbl
+           WHERE installmentinvoiceprofiles_id = $1 AND status = 'Paid' LIMIT 1`,
+          [id]
+        );
+        if (linkedPaid.rows.length > 0) {
+          downpaymentPaid = true;
+          if (!profile.downpayment_invoice_id) {
+            await client.query(
+              `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1, downpayment_paid = true WHERE installmentinvoiceprofiles_id = $2`,
+              [linkedPaid.rows[0].invoice_id, id]
+            );
+          }
+        }
+      }
+      if (!downpaymentPaid) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Downpayment must be paid before generating Phase 1.',
+        });
+      }
+
+      // Ensure downpayment_paid is set
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl SET downpayment_paid = true WHERE installmentinvoiceprofiles_id = $1`,
+        [id]
+      );
+
+      // Get or create first installment invoice record
+      let firstRecordResult = await client.query(
+        'SELECT * FROM installmentinvoicestbl WHERE installmentinvoiceprofiles_id = $1 ORDER BY installmentinvoicedtl_id ASC LIMIT 1',
+        [id]
+      );
+      let firstRecord = firstRecordResult.rows[0];
+
+      if (!firstRecord) {
+        const nextDue = profile.next_invoice_due_date
+          ? new Date(profile.next_invoice_due_date)
+          : new Date();
+        const firstGen = profile.first_generation_date
+          ? new Date(profile.first_generation_date)
+          : new Date();
+        const insertResult = await client.query(
+          `INSERT INTO installmentinvoicestbl
+           (installmentinvoiceprofiles_id, scheduled_date, status, student_name,
+            total_amount_including_tax, total_amount_excluding_tax, frequency,
+            next_generation_date, next_invoice_month)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING *`,
+          [
+            id,
+            profile.bill_invoice_due_date || formatYmdLocal(nextDue),
+            'Pending',
+            profile.student_name || 'Student',
+            profile.amount,
+            profile.amount,
+            profile.frequency || '1 month(s)',
+            formatYmdLocal(firstGen),
+            formatYmdLocal(nextDue),
+          ]
+        );
+        firstRecord = insertResult.rows[0];
+      }
+
+      await client.query('COMMIT');
+
+      const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
+      const genProfile = {
+        student_id: profile.student_id,
+        branch_id: profile.branch_id,
+        package_id: profile.package_id,
+        amount: profile.amount,
+        frequency: profile.frequency || '1 month(s)',
+        description: profile.description || 'Monthly Installment Payment',
+        generated_count: 0,
+        class_id: profile.class_id,
+      };
+      const generatedInvoice = await generateInvoiceFromInstallment(firstRecord, genProfile);
+
+      res.status(201).json({
+        success: true,
+        message: 'Phase 1 invoice generated successfully',
+        data: { invoice_id: generatedInvoice.invoice_id },
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      next(err);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * GET /api/sms/installment-invoices/invoices
  * Get all generated installment invoices
  * Access: All authenticated users
@@ -403,6 +596,7 @@ router.get(
         SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count,
                ip.downpayment_invoice_id,
+               c.start_date::text as class_start_date,
                (SELECT COUNT(*) 
                 FROM invoicestbl i 
                 WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id 
@@ -421,6 +615,7 @@ router.get(
         LEFT JOIN programstbl p ON c.program_id = p.program_id
         LEFT JOIN userstbl u ON ip.student_id = u.user_id
         WHERE 1=1
+          AND ip.is_active = true
       `;
       const params = [];
       let paramCount = 0;
@@ -479,6 +674,7 @@ router.get(
       const result = await query(
         `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
                 ip.frequency as profile_frequency, ip.class_id, ip.total_phases, ip.generated_count,
+                c.start_date::text as class_start_date,
                 p.program_name, u.full_name as student_name
          FROM installmentinvoicestbl ii
          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
@@ -663,6 +859,25 @@ router.post(
 
       const student = studentResult.rows[0];
 
+      // Due date: Phase 1 = class start; Phase 2+ = USE FORM'S due_date (frontend computes correct value with skip-April logic)
+      const currentCount = installmentInvoice.generated_count || 0;
+      let classStartYmd = null;
+      if (profile.class_id) {
+        const classResult = await client.query(
+          'SELECT start_date FROM classestbl WHERE class_id = $1',
+          [profile.class_id]
+        );
+        if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
+          const sd = classResult.rows[0].start_date;
+          classStartYmd = typeof sd === 'string' ? sd.slice(0, 10) : sd.toISOString().split('T')[0];
+        }
+      }
+      let effectiveDueDate = due_date;
+      if (currentCount === 0 && classStartYmd) {
+        effectiveDueDate = classStartYmd; // Phase 1 = class start (ignore form)
+      }
+      // Phase 2+: use form's due_date - frontend sends correct value (05/05 when Phase 2, etc.)
+
       // Create invoice (link to installment invoice profile for phase tracking)
       const invoiceResult = await client.query(
         `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id)
@@ -675,7 +890,7 @@ router.post(
           'Unpaid',
           `Manually generated from installment invoice: ${profile.description || 'Installment payment'}`,
           issue_date,
-          due_date,
+          effectiveDueDate,
           req.user.userId || null,
           installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile
         ]
@@ -714,7 +929,6 @@ router.post(
       // Logic: We can generate invoices until all phases are paid
       // Downpayment is NOT counted as a phase - only paid installment invoices count
       const totalPhases = installmentInvoice.total_phases;
-      const currentCount = installmentInvoice.generated_count || 0;
       const maxInvoices = totalPhases !== null ? totalPhases : null; // Max invoices = total_phases (downpayment doesn't count)
       
       // Calculate how many phases are actually paid (downpayment is NOT counted as a phase)
@@ -776,15 +990,18 @@ router.post(
           ]
         );
       } else {
-        // Not last invoice - update with next dates for next cycle
+        // Not last invoice - USE FORM'S next_* values so they become default for next generate (adjusted by 1 month each time)
+        const nextGenYmd = next_generation_date ? String(next_generation_date).trim().slice(0, 10) : null;
+        const nextMonthYmd = next_invoice_month ? String(next_invoice_month).trim().slice(0, 10) : null;
+        const fallbackDate = new Date().toISOString().split('T')[0];
         await client.query(
           `UPDATE installmentinvoicestbl 
            SET status = 'Generated', next_generation_date = $1, next_invoice_month = $2, scheduled_date = $3
            WHERE installmentinvoicedtl_id = $4`,
           [
-            next_generation_date,
-            next_invoice_month,
-            generation_date || new Date().toISOString().split('T')[0],
+            nextGenYmd || fallbackDate,
+            nextMonthYmd || fallbackDate,
+            generation_date || fallbackDate,
             id,
           ]
         );

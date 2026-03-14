@@ -10,6 +10,8 @@ const AdminInstallmentInvoice = () => {
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [invoices, setInvoices] = useState([]);
+  const [profilesNeedingPhase1, setProfilesNeedingPhase1] = useState([]);
+  const [generatingPhase1For, setGeneratingPhase1For] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
@@ -99,14 +101,31 @@ const AdminInstallmentInvoice = () => {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      // Filter by admin's branch
-      const response = await apiRequest(`/installment-invoices/invoices?branch_id=${adminBranchId}&limit=100`);
-      setInvoices(response.data || []);
+      const [invRes, needRes] = await Promise.all([
+        apiRequest(`/installment-invoices/invoices?branch_id=${adminBranchId}&limit=100`),
+        apiRequest(`/installment-invoices/profiles-needed-phase-1?branch_id=${adminBranchId}`),
+      ]);
+      setInvoices(invRes.data || []);
+      setProfilesNeedingPhase1(needRes.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch installment invoices');
       console.error('Error fetching invoices:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGeneratePhase1 = async (profile) => {
+    try {
+      setGeneratingPhase1For(profile.installmentinvoiceprofiles_id);
+      await apiRequest(`/installment-invoices/profiles/${profile.installmentinvoiceprofiles_id}/generate-phase-1`, {
+        method: 'POST',
+      });
+      await fetchInvoices();
+    } catch (err) {
+      alert(err.message || 'Failed to generate Phase 1');
+    } finally {
+      setGeneratingPhase1For(null);
     }
   };
 
@@ -146,29 +165,55 @@ const AdminInstallmentInvoice = () => {
     
     setSelectedInvoiceForGeneration(invoice);
     
-    // Calculate dates based on frequency (for manual generation after phase 1 paid)
     const months = getFrequencyMonths(invoice.frequency);
 
-    // Current Invoice Detail = invoice we're generating NOW (next billing month)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const issueDate = new Date(today);
-    const invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-    const dueDate = new Date(invoiceMonth);
-    dueDate.setMonth(dueDate.getMonth() + 1);
-    dueDate.setDate(5);
-    const generationDate = new Date(invoiceMonth);
-    generationDate.setDate(25);
+    // Base "current" dates: use row's next_generation_date / next_invoice_month when present (so 2nd+ manual generate shows correct dates)
+    let issueDate, invoiceMonth, generationDate;
+    const hasStoredDates = invoice.next_generation_date && invoice.next_invoice_month;
+    if (hasStoredDates) {
+      const genYmd = String(invoice.next_generation_date).slice(0, 10);
+      const [gy, gm, gd] = genYmd.split('-').map(Number);
+      generationDate = new Date(gy, gm - 1, gd);
+      issueDate = new Date(generationDate);
+      const monthYmd = String(invoice.next_invoice_month).slice(0, 10);
+      const [my, mm] = monthYmd.split('-').map(Number);
+      invoiceMonth = new Date(my, mm - 1, 1);
+    } else {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      issueDate = new Date(today);
+      invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      generationDate = new Date(invoiceMonth);
+      generationDate.setDate(25);
+    }
+    // Phase 1: due = class start. Phase 2+: invoice month = class start + generated_count months (Phase 2 = May, Phase 3 = June, etc.)
+    let dueDate;
+    const generatedCount = invoice.generated_count || 0;
+    const isFirstPhase = generatedCount === 0;
+    const classStartYmd = invoice.class_start_date ? String(invoice.class_start_date).slice(0, 10) : null;
+    if (isFirstPhase && classStartYmd) {
+      const [y, m, d] = classStartYmd.split('-').map(Number);
+      dueDate = new Date(y, m - 1, d);
+    } else if (classStartYmd) {
+      // Phase 2+: derive from class start - Phase 2 = May (class start April + 1), Phase 3 = June, etc.
+      const [cy, cm] = classStartYmd.split('-').map(Number);
+      invoiceMonth = new Date(cy, cm - 1 + generatedCount, 1); // class start month + generated_count
+      dueDate = new Date(invoiceMonth);
+      dueDate.setDate(5); // 5th of that month (e.g. May → 05/05)
+    } else {
+      // No class start: use row's month, due = 5th
+      dueDate = new Date(invoiceMonth);
+      dueDate.setDate(5);
+    }
 
-    // Next Invoice Detail = month after current invoice month
+    // Next Invoice Detail = current invoice month + 1 month (default pattern until finished)
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
     nextInvoiceMonth.setDate(1);
     const nextIssueDate = new Date(nextInvoiceMonth);
     nextIssueDate.setDate(25);
     const nextDueDate = new Date(nextInvoiceMonth);
-    nextDueDate.setMonth(nextDueDate.getMonth() + 1);
-    nextDueDate.setDate(5);
+    nextDueDate.setDate(5); // 5th of next invoice month
 
     setGenerateFormData({
       issue_date: formatYmd(issueDate),
@@ -287,6 +332,38 @@ const AdminInstallmentInvoice = () => {
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
           {error}
+        </div>
+      )}
+
+      {/* Profiles needing Phase 1 (downpayment paid but Phase 1 not auto-generated) */}
+      {profilesNeedingPhase1.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-amber-800 mb-2">
+            Phase 1 not auto-generated ({profilesNeedingPhase1.length} profile{profilesNeedingPhase1.length !== 1 ? 's' : ''})
+          </h3>
+          <p className="text-sm text-amber-700 mb-3">
+            Downpayment is paid but Phase 1 invoice was not created. Click &quot;Generate Phase 1&quot; to create it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {profilesNeedingPhase1.map((p) => (
+              <div
+                key={p.installmentinvoiceprofiles_id}
+                className="inline-flex items-center gap-2 bg-white border border-amber-200 rounded-lg px-3 py-2"
+              >
+                <span className="text-sm text-gray-800">
+                  {p.student_name || 'Student'} ({p.program_name || '-'})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleGeneratePhase1(p)}
+                  disabled={generatingPhase1For === p.installmentinvoiceprofiles_id}
+                  className="px-3 py-1 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {generatingPhase1For === p.installmentinvoiceprofiles_id ? 'Generating...' : 'Generate Phase 1'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

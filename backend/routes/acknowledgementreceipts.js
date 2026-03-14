@@ -577,8 +577,17 @@ router.post(
           if (profileResult.rows.length > 0) {
             const profile = profileResult.rows[0];
 
-            // Only act on the downpayment invoice
-            if (profile.downpayment_invoice_id === invoice_id && !profile.downpayment_paid) {
+            // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
+            const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(invoice_id);
+            const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+
+            if ((isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid) {
+              if (!profile.downpayment_invoice_id) {
+                await client.query(
+                  `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
+                  [invoice_id, invoice.installmentinvoiceprofiles_id]
+                );
+              }
               // Mark downpayment as paid
               await client.query(
                 `UPDATE installmentinvoiceprofilestbl
@@ -601,8 +610,6 @@ router.post(
               const nextInvoiceDueDate = profile.next_invoice_due_date
                 ? new Date(profile.next_invoice_due_date)
                 : new Date();
-              // next_invoice_month must always be the first day of the SAME month as next_generation_date
-              const nextInvoiceMonth = new Date(firstGenerationDate.getFullYear(), firstGenerationDate.getMonth(), 1);
 
               // Create the first installment invoice record
               const firstInvoiceRecordResult = await client.query(
@@ -621,7 +628,7 @@ router.post(
                   profile.amount,
                   profile.frequency || '1 month(s)',
                   formatYmdLocal(firstGenerationDate),
-                  formatYmdLocal(nextInvoiceMonth),
+                  formatYmdLocal(nextInvoiceDueDate),
                 ]
               );
 

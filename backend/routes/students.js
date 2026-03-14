@@ -420,11 +420,62 @@ router.delete(
         });
       }
 
+      const { student_id, class_id } = existingEnrollment.rows[0];
+
       await query('DELETE FROM classstudentstbl WHERE classstudent_id = $1', [enrollmentId]);
+
+      // So the student is fully removed from the class list: deactivate any installment
+      // profile for this student+class so they do not reappear as "Pending Enrollment (Downpayment Paid)"
+      await query(
+        `UPDATE installmentinvoiceprofilestbl SET is_active = false
+         WHERE student_id = $1 AND class_id = $2 AND is_active = true`,
+        [student_id, class_id]
+      );
 
       res.json({
         success: true,
         message: 'Student unenrolled successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/students/class/:classId/pending/:studentId
+ * Remove a pending (installment, not yet enrolled) student from the class list by deactivating their installment profile.
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/class/:classId/pending/:studentId',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      const result = await query(
+        `UPDATE installmentinvoiceprofilestbl SET is_active = false
+         WHERE student_id = $1 AND class_id = $2 AND is_active = true
+         RETURNING installmentinvoiceprofiles_id`,
+        [studentId, classId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No active pending enrollment found for this student in this class',
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Pending student removed from class successfully',
       });
     } catch (error) {
       next(error);

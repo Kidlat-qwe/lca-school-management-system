@@ -48,7 +48,6 @@ import AdminInvoice from './pages/admin/adminInvoice';
 import AdminInstallmentInvoice from './pages/admin/adminInstallmentInvoice';
 import AdminPaymentLogs from './pages/admin/adminPaymentLogs';
 import AdminAcknowledgementReceipts from './pages/admin/adminAcknowledgementReceipts';
-import AdminDailySummarySale from './pages/admin/adminDailySummarySale';
 import AdminReport from './pages/admin/adminReport';
 import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
@@ -156,7 +155,6 @@ function App() {
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
-            <Route path="daily-summary-sale" element={<AdminDailySummarySale />} />
             <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>

@@ -119,21 +119,47 @@ const FinanceInstallmentInvoice = () => {
     
     setSelectedInvoiceForGeneration(invoice);
     
-    // Calculate dates based on frequency (for manual generation after phase 1 paid)
     const months = getFrequencyMonths(invoice.frequency);
 
-    // Current Invoice Detail = invoice we're generating NOW (next billing month)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const issueDate = new Date(today);
-    const invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-    const dueDate = new Date(invoiceMonth);
-    dueDate.setMonth(dueDate.getMonth() + 1);
-    dueDate.setDate(5);
-    const generationDate = new Date(invoiceMonth);
-    generationDate.setDate(25);
+    // Base "current" dates: use row's next_generation_date / next_invoice_month when present (so 2nd+ manual generate shows correct dates)
+    let issueDate, invoiceMonth, generationDate;
+    const hasStoredDates = invoice.next_generation_date && invoice.next_invoice_month;
+    if (hasStoredDates) {
+      const genYmd = String(invoice.next_generation_date).slice(0, 10);
+      const [gy, gm, gd] = genYmd.split('-').map(Number);
+      generationDate = new Date(gy, gm - 1, gd);
+      issueDate = new Date(generationDate);
+      const monthYmd = String(invoice.next_invoice_month).slice(0, 10);
+      const [my, mm] = monthYmd.split('-').map(Number);
+      invoiceMonth = new Date(my, mm - 1, 1);
+    } else {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      issueDate = new Date(today);
+      invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      generationDate = new Date(invoiceMonth);
+      generationDate.setDate(25);
+    }
+    // Phase 1: due = class start. Phase 2+: invoice month = class start + generated_count, due = 5th of next month.
+    const generatedCount = invoice.generated_count || 0;
+    const classStartYmd = invoice.class_start_date ? String(invoice.class_start_date).slice(0, 10) : null;
+    let dueDate;
+    if (generatedCount === 0 && classStartYmd) {
+      const [y, m, d] = classStartYmd.split('-').map(Number);
+      dueDate = new Date(y, m - 1, d);
+    } else if (classStartYmd) {
+      const [cy, cm] = classStartYmd.split('-').map(Number);
+      invoiceMonth = new Date(cy, cm - 1 + generatedCount - 1, 1); // Phase 2 = April, Phase 3 = May (due = 5th of next)
+      dueDate = new Date(invoiceMonth);
+      dueDate.setMonth(dueDate.getMonth() + 1);
+      dueDate.setDate(5);
+    } else {
+      dueDate = new Date(invoiceMonth);
+      dueDate.setMonth(dueDate.getMonth() + 1);
+      dueDate.setDate(5);
+    }
 
-    // Next Invoice Detail = month after current invoice month
+    // Next Invoice Detail = current invoice month + frequency
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
     nextInvoiceMonth.setDate(1);

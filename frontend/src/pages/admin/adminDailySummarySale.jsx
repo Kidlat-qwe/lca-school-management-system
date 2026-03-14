@@ -128,7 +128,7 @@ const AdminDailySummarySale = () => {
         method: 'POST',
         body: JSON.stringify({ summary_date: today }),
       });
-      setSuccess('Daily summary submitted successfully. Awaiting approval from Superadmin/Superfinance.');
+      setSuccess('Daily summary submitted successfully. Superadmin and Superfinance will verify your submission.');
       await fetchCheckToday();
       await fetchPreview();
       if (activeTab === TAB_DETAILS) {
@@ -145,11 +145,12 @@ const AdminDailySummarySale = () => {
     const classes = {
       Submitted: 'bg-yellow-100 text-yellow-800',
       Approved: 'bg-green-100 text-green-800',
-      Rejected: 'bg-red-100 text-red-800',
+      Rejected: 'bg-amber-100 text-amber-800',
     };
+    const label = status === 'Approved' ? 'Verified' : status === 'Rejected' ? 'Flagged' : status;
     return (
       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {label}
       </span>
     );
   };
@@ -289,7 +290,7 @@ const AdminDailySummarySale = () => {
                 </li>
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
-                  <span>Superadmin or Superfinance will approve your submission for daily closing tracking.</span>
+                  <span>Superadmin or Superfinance will verify your submission for daily closing tracking.</span>
                 </li>
               </ul>
               <p className="mt-4 text-xs text-gray-500">
@@ -369,7 +370,7 @@ const AdminDailySummarySale = () => {
                     <th className="px-4 py-2 text-center text-xs font-semibold text-gray-700">Payments</th>
                     <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700">Status</th>
                     <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700">Submitted</th>
-                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700">Approved By</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700">Verified By</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">

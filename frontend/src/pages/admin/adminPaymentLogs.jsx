@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 
 const AdminPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -33,7 +33,19 @@ const AdminPaymentLogs = () => {
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
-  // Removed branches state - admin only sees their branch
+  const [endOfShiftLoading, setEndOfShiftLoading] = useState(false);
+  const [todaySubmitted, setTodaySubmitted] = useState(false);
+  const [endOfShiftModalOpen, setEndOfShiftModalOpen] = useState(false);
+  const [endOfShiftPreview, setEndOfShiftPreview] = useState(null);
+  const [endOfShiftSuccess, setEndOfShiftSuccess] = useState('');
+  const [openActionsDropdown, setOpenActionsDropdown] = useState(false);
+
+  // Today in Manila (YYYY-MM-DD) for end-of-shift
+  const todayManila = () => {
+    const now = new Date();
+    const manila = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
+    return manila.toISOString().split('T')[0];
+  };
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -62,6 +74,52 @@ const AdminPaymentLogs = () => {
     }
   }, [adminBranchId]);
 
+  const fetchEndOfShiftStatus = async () => {
+    try {
+      const [checkRes, previewRes] = await Promise.all([
+        apiRequest('/daily-summary-sales/check-today'),
+        apiRequest(`/daily-summary-sales/preview?date=${todayManila()}`),
+      ]);
+      setTodaySubmitted(checkRes?.success && checkRes?.data?.submitted === true);
+      setEndOfShiftPreview(previewRes?.data || null);
+    } catch (err) {
+      console.error('End of shift status error:', err);
+      setTodaySubmitted(false);
+      setEndOfShiftPreview(null);
+    }
+  };
+
+  useEffect(() => {
+    if (adminBranchId) {
+      fetchEndOfShiftStatus();
+    }
+  }, [adminBranchId]);
+
+  const handleEndOfShiftClick = () => {
+    setEndOfShiftSuccess('');
+    setEndOfShiftModalOpen(true);
+  };
+
+  const handleEndOfShiftSubmit = async () => {
+    setEndOfShiftLoading(true);
+    setEndOfShiftSuccess('');
+    try {
+      await apiRequest('/daily-summary-sales', {
+        method: 'POST',
+        body: JSON.stringify({ summary_date: todayManila() }),
+      });
+      setEndOfShiftSuccess('Daily summary submitted successfully. Superadmin and Superfinance will verify your submission.');
+      setTodaySubmitted(true);
+      setEndOfShiftModalOpen(false);
+      await fetchEndOfShiftStatus();
+    } catch (err) {
+      setEndOfShiftSuccess('');
+      setError(err?.message || 'Failed to submit daily summary.');
+    } finally {
+      setEndOfShiftLoading(false);
+    }
+  };
+
   const isInitialMount = useRef(true);
   useEffect(() => {
     if (!adminBranchId) return;
@@ -87,15 +145,18 @@ const AdminPaymentLogs = () => {
       if (openApprovalMenuId && !event.target.closest('.payment-status-cell') && !event.target.closest('.payment-status-approval-portal')) {
         setOpenApprovalMenuId(null);
       }
+      if (openActionsDropdown && !event.target.closest('.actions-dropdown-container')) {
+        setOpenActionsDropdown(false);
+      }
     };
 
-    if (openStatusDropdown || openPaymentMethodDropdown || openApprovalMenuId) {
+    if (openStatusDropdown || openPaymentMethodDropdown || openApprovalMenuId || openActionsDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }
-  }, [openStatusDropdown, openPaymentMethodDropdown, openApprovalMenuId]);
+  }, [openStatusDropdown, openPaymentMethodDropdown, openApprovalMenuId, openActionsDropdown]);
 
   const userType = userInfo?.user_type || userInfo?.userType;
   const canApprovePayment = () => false;
@@ -356,26 +417,173 @@ const AdminPaymentLogs = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
           <p className="text-sm text-gray-500 mt-1">View and manage all payment records</p>
         </div>
-        <button
-          onClick={handleExportToExcel}
-          disabled={exportLoading}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
-        >
-          {exportLoading ? (
-            <>
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-              Exporting...
-            </>
-          ) : (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              Export to Excel
-            </>
+        <div className="relative actions-dropdown-container">
+          <button
+            type="button"
+            onClick={() => setOpenActionsDropdown((prev) => !prev)}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors"
+            aria-expanded={openActionsDropdown}
+            aria-haspopup="true"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            </svg>
+            Actions
+            <svg className={`w-4 h-4 transition-transform ${openActionsDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {openActionsDropdown && (
+            <div
+              className="absolute right-0 top-full mt-1 z-50 min-w-[200px] py-1 bg-white rounded-lg shadow-lg border border-gray-200"
+              role="menu"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenActionsDropdown(false);
+                  handleEndOfShiftClick();
+                }}
+                disabled={todaySubmitted || endOfShiftLoading}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={todaySubmitted ? 'Today\'s summary already submitted' : 'Submit all today\'s sales for closure'}
+              >
+                {endOfShiftLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-amber-600 border-t-transparent" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    End of Shift
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenActionsDropdown(false);
+                  handleExportToExcel();
+                }}
+                disabled={exportLoading}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 disabled:opacity-50"
+              >
+                {exportLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-600 border-t-transparent" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export to Excel
+                  </>
+                )}
+              </button>
+            </div>
           )}
-        </button>
+        </div>
       </div>
+
+      {/* End of Shift Success */}
+      {endOfShiftSuccess && (
+        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg">
+          {endOfShiftSuccess}
+        </div>
+      )}
+
+      {/* End of Shift Confirmation Modal */}
+      {endOfShiftModalOpen && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-gray-900 shrink-0">End of Shift</h3>
+            <p className="mt-2 text-sm text-gray-600 shrink-0">
+              Submit all today&apos;s sales for proper closure? This will send the daily summary to Superadmin, Finance, and Superfinance for verification.
+            </p>
+            <p className="mt-1 text-sm font-medium text-gray-700 shrink-0">
+              Date & time: {formatDateTimeManila(new Date())} (Manila)
+            </p>
+            {endOfShiftPreview && (
+              <>
+                <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
+                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({endOfShiftPreview.payment_count ?? 0} payment(s))
+                </p>
+                {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
+                  <div className="mt-4 shrink-0">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Records to be submitted</p>
+                    <div
+                      className="overflow-x-auto rounded-lg border border-gray-200"
+                      style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                    >
+                      <table className="text-sm" style={{ width: '100%', minWidth: '520px' }}>
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 bg-white">
+                          {endOfShiftPreview.payments.map((p) => (
+                            <tr key={p.payment_id} className="hover:bg-gray-50/80">
+                              <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                                {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                              </td>
+                              <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[140px]">
+                                <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                              </td>
+                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
+                                {formatCurrency(p.payable_amount)}
+                              </td>
+                              <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[100px]">
+                                <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length === 0 && endOfShiftPreview.payment_count === 0 && (
+                  <p className="mt-3 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    No payments recorded for today. You can still submit to close the day with zero sales.
+                  </p>
+                )}
+              </>
+            )}
+            <div className="mt-6 flex justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}
+                disabled={endOfShiftLoading}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleEndOfShiftSubmit}
+                disabled={endOfShiftLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              >
+                {endOfShiftLoading ? 'Submitting...' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* Error Message */}
       {error && (

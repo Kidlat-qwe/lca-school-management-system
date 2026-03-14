@@ -1324,10 +1324,17 @@ router.put(
           [installmentProfile.installmentinvoiceprofiles_id, newInvoice.invoice_id]
         );
 
+        // Set downpayment_invoice_id so Phase 1 auto-generates when this invoice is paid
+        await client.query(
+          `UPDATE installmentinvoiceprofilestbl 
+           SET downpayment_invoice_id = $1 
+           WHERE installmentinvoiceprofiles_id = $2`,
+          [newInvoice.invoice_id, installmentProfile.installmentinvoiceprofiles_id]
+        );
+
         // Create first installment invoice record
         const nextGenerationDate = new Date(generationDate);
-        // next_invoice_month must always be the first day of the SAME month as next_generation_date
-        const nextInvoiceMonth = new Date(nextGenerationDate.getFullYear(), nextGenerationDate.getMonth(), 1);
+        const nextInvoiceMonth = new Date(nextInvoiceDueDate);
         
         await client.query(
           `INSERT INTO installmentinvoicestbl 

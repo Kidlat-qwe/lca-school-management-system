@@ -1331,66 +1331,74 @@ const initializePackageMerchSelections = useCallback(
 
   const handleUnenrollStudent = async (student) => {
     if (!selectedClassForEnrollment) return;
-    
+
+    const classId = selectedClassForEnrollment.class_id;
     const studentName = student.full_name || `Student ID: ${student.user_id}`;
+    const isPending = student.student_type === 'pending';
+
     const reason = window.prompt(
-      `Are you sure you want to unenroll ${studentName} from this class?\n\n` +
+      `Are you sure you want to ${isPending ? 'remove' : 'unenroll'} ${studentName} from this class?\n\n` +
       `Please provide a reason (e.g., "Client informed student will not continue"):`
     );
-    
+
     if (!reason || reason.trim() === '') {
-      alert('Unenrollment cancelled. Reason is required.');
+      alert(isPending ? 'Removal cancelled. Reason is required.' : 'Unenrollment cancelled. Reason is required.');
       return;
     }
-    
-    if (!window.confirm(`Confirm unenrollment of ${studentName}?\n\nReason: ${reason.trim()}`)) {
+
+    if (!window.confirm(`Confirm ${isPending ? 'removal' : 'unenrollment'} of ${studentName}?\n\nReason: ${reason.trim()}`)) {
       return;
     }
 
     try {
       setLoadingEnrolledStudents(true);
-      
-      // Fetch all enrollment records for this student in this class
-      const enrollmentResponse = await apiRequest(`/students/class/${selectedClassForEnrollment.class_id}`);
+
+      const enrollmentResponse = await apiRequest(`/students/class/${classId}`);
       const allStudents = enrollmentResponse.data || [];
-      
-      // Find all enrollment IDs for this student (can have multiple phases)
+
       const enrollmentIds = allStudents
         .filter(s => s.user_id === student.user_id && s.classstudent_id)
         .map(s => s.classstudent_id);
-      
-      if (enrollmentIds.length === 0) {
-        alert('No active enrollment found for this student.');
+
+      if (enrollmentIds.length > 0) {
+        // Enrolled: delete class enrollments; backend also deactivates installment profile so student is fully removed
+        const unenrollPromises = enrollmentIds.map(enrollmentId =>
+          apiRequest(`/students/unenroll/${enrollmentId}`, {
+            method: 'DELETE',
+          }).then(response => ({ success: true, enrollmentId, response })).catch(err => {
+            console.error(`Error unenrolling enrollment ${enrollmentId}:`, err);
+            return { success: false, enrollmentId, error: err.message || err.response?.data?.message || 'Unknown error' };
+          })
+        );
+        const results = await Promise.all(unenrollPromises);
+        const successCount = results.filter(r => r.success === true).length;
+        const failCount = results.filter(r => r.success === false).length;
+        if (successCount > 0) {
+          alert(`Student ${studentName} has been unenrolled and removed from the class.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
+          await fetchEnrolledStudents(classId);
+        } else {
+          alert('Failed to unenroll student. Please try again.');
+        }
         return;
       }
-      
-      // Unenroll all enrollments for this student
-      const unenrollPromises = enrollmentIds.map(enrollmentId =>
-        apiRequest(`/students/unenroll/${enrollmentId}`, {
-          method: 'DELETE',
-        }).then(response => {
-          // API returns { success: true, message: ... }
-          return { success: true, enrollmentId, response };
-        }).catch(err => {
-          console.error(`Error unenrolling enrollment ${enrollmentId}:`, err);
-          return { success: false, enrollmentId, error: err.message || err.response?.data?.message || 'Unknown error' };
-        })
-      );
-      
-      const results = await Promise.all(unenrollPromises);
-      const successCount = results.filter(r => r.success === true).length;
-      const failCount = results.filter(r => r.success === false).length;
-      
-      if (successCount > 0) {
-        alert(`Student ${studentName} has been unenrolled successfully.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
-        // Refresh enrolled students list
-        await fetchEnrolledStudents(selectedClassForEnrollment.class_id);
-      } else {
-        alert(`Failed to unenroll student. Please try again.`);
+
+      if (isPending) {
+        // Pending (installment, downpayment paid, not yet in classstudentstbl): remove via deactivating installment profile
+        const res = await apiRequest(`/students/class/${classId}/pending/${student.user_id}`, { method: 'DELETE' });
+        if (res?.success) {
+          alert(`${studentName} has been removed from the class.`);
+          await fetchEnrolledStudents(classId);
+        } else {
+          alert(res?.message || 'Failed to remove student from class. Please try again.');
+        }
+        return;
       }
+
+      alert('No active enrollment or pending record found for this student.');
     } catch (err) {
-      console.error('Error unenrolling student:', err);
-      alert(err.message || 'Failed to unenroll student. Please try again.');
+      console.error('Error unenrolling/removing student:', err);
+      const msg = err.response?.data?.message || err.message || 'Failed to unenroll student. Please try again.';
+      alert(msg);
     } finally {
       setLoadingEnrolledStudents(false);
     }
@@ -9079,16 +9087,16 @@ setFormData({
                                     >
                                       Upgrade
                                     </button>
-                                  ) : !isReserved && !isPending ? (
+                                  ) : !isReserved ? (
                                     <button
                                       onClick={() => handleUnenrollStudent(student)}
                                       className="text-red-600 hover:text-red-900 flex items-center space-x-1"
-                                      title="Unenroll student from class"
+                                      title={isPending ? 'Remove pending student from class' : 'Unenroll student from class'}
                                     >
                                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                       </svg>
-                                      <span>Unenroll</span>
+                                      <span>{isPending ? 'Remove' : 'Unenroll'}</span>
                                     </button>
                                   ) : (
                                     <span className="text-sm text-gray-400">-</span>

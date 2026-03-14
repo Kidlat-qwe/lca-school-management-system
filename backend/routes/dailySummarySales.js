@@ -1,7 +1,7 @@
 /**
  * Daily Summary Sales
  * - Admin: Submit daily summary for TODAY only (amount auto-calculated from paymenttbl)
- * - Superadmin / Superfinance: List and approve/reject summaries from all branches
+ * - Superadmin / Superfinance: List and verify (or flag for review) summaries submitted by branch Admins
  */
 import express from 'express';
 import { param, query as queryValidator, body } from 'express-validator';
@@ -139,7 +139,8 @@ router.get(
       const { branch_id, date } = req.query;
 
       let targetBranchId = branch_id ? parseInt(branch_id, 10) : userBranchId;
-      const targetDate = date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const targetDateRaw = date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const targetDate = String(targetDateRaw).slice(0, 10);
 
       if (!targetBranchId) {
         return res.status(400).json({
@@ -158,7 +159,7 @@ router.get(
       const sumRes = await query(
         `SELECT COALESCE(SUM(payable_amount), 0) AS total, COUNT(*) AS payment_count
          FROM paymenttbl
-         WHERE branch_id = $1 AND issue_date = $2`,
+         WHERE branch_id = $1 AND issue_date = $2::date`,
         [targetBranchId, targetDate]
       );
       const row = sumRes.rows[0];
@@ -178,7 +179,7 @@ router.get(
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-         WHERE p.branch_id = $1 AND p.issue_date = $2
+         WHERE p.branch_id = $1 AND p.issue_date = $2::date
          ORDER BY p.payment_id DESC`,
         [targetBranchId, targetDate]
       );
@@ -267,7 +268,7 @@ router.post(
 
 /**
  * PUT /api/sms/daily-summary-sales/:id/approve
- * Approve or reject a daily summary. Superadmin and Superfinance only.
+ * Verify (approve: true) or flag for review (approve: false) a daily summary. Superadmin and Superfinance only.
  */
 router.put(
   '/:id/approve',
@@ -285,11 +286,11 @@ router.put(
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      // Only Superadmin and Superfinance (Finance with no branch) can approve
+      // Only Superadmin and Superfinance (Finance with no branch) can verify
       if (userType === 'Finance' && (userBranchId !== null && userBranchId !== undefined)) {
         return res.status(403).json({
           success: false,
-          message: 'Only Superadmin and Superfinance can approve daily summaries',
+          message: 'Only Superadmin and Superfinance can verify daily summaries',
         });
       }
 
@@ -307,7 +308,7 @@ router.put(
       if (rec.status !== 'Submitted') {
         return res.status(400).json({
           success: false,
-          message: `Cannot change approval. Current status: ${rec.status}`,
+          message: `Cannot change verification. Current status: ${rec.status}`,
         });
       }
 
@@ -335,7 +336,7 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Daily summary approved' : 'Daily summary rejected',
+        message: isApproved ? 'Daily summary verified' : 'Daily summary flagged for review',
         data: updated.rows[0],
       });
     } catch (error) {
@@ -371,6 +372,73 @@ router.get(
           submitted: !!record,
           record,
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/daily-summary-sales/:id/payments
+ * Get payment records for a daily summary (by summary id). Uses the summary's stored branch_id and summary_date.
+ * Access: Superadmin, Superfinance (and Admin for their own branch).
+ */
+router.get(
+  '/:id/payments',
+  [param('id').isInt().withMessage('id must be an integer')],
+  handleValidationErrors,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      const summaryRes = await query(
+        `SELECT daily_summary_id, branch_id, summary_date FROM daily_summary_salestbl WHERE daily_summary_id = $1`,
+        [id]
+      );
+      if (summaryRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+      const summary = summaryRes.rows[0];
+      const branchId = summary.branch_id;
+      const summaryDate = summary.summary_date;
+
+      if (userType === 'Admin' && userBranchId !== branchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only view payments for your branch',
+        });
+      }
+      if (userType === 'Finance' && userBranchId != null && userBranchId !== branchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only view payments for your branch',
+        });
+      }
+
+      const paymentsRes = await query(
+        `SELECT p.payment_id,
+                p.invoice_id,
+                p.student_id,
+                p.payment_method,
+                p.payable_amount,
+                p.reference_number,
+                TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
+                u.full_name AS student_name,
+                i.invoice_description
+         FROM paymenttbl p
+         LEFT JOIN userstbl u ON p.student_id = u.user_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         WHERE p.branch_id = $1 AND p.issue_date = $2
+         ORDER BY p.payment_id DESC`,
+        [branchId, summaryDate]
+      );
+
+      res.json({
+        success: true,
+        data: paymentsRes.rows || [],
       });
     } catch (error) {
       next(error);
