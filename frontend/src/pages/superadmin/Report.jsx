@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const STATUS_OPTIONS = [
@@ -12,6 +13,7 @@ const STATUS_OPTIONS = [
 
 const Report = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -60,6 +62,14 @@ const Report = () => {
   useEffect(() => {
     fetchStudents(1);
   }, [filterStatus, filterBranch]);
+
+  useEffect(() => {
+    if (isSuperadmin) {
+      setFilterBranch(globalBranchId || '');
+      setOpenBranchDropdown(false);
+      setBranchDropdownRect(null);
+    }
+  }, [globalBranchId, isSuperadmin]);
 
   useEffect(() => {
     if (isSuperadmin) {
@@ -150,25 +160,7 @@ const Report = () => {
                   </th>
                   {isSuperadmin && (
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '160px', minWidth: '160px' }}>
-                      <div className="report-branch-dropdown">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setBranchDropdownRect(rect);
-                            setOpenBranchDropdown(!openBranchDropdown);
-                            setOpenStatusDropdown(false);
-                          }}
-                          className="flex items-center gap-1 hover:text-gray-700 w-full text-left"
-                        >
-                          Branch
-                          {filterBranch && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary-600 flex-shrink-0" aria-hidden />}
-                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          </svg>
-                        </button>
-                      </div>
+                      <span>Branch</span>
                     </th>
                   )}
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>

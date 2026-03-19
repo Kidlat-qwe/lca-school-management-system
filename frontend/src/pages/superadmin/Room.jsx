@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const ITEMS_PER_PAGE = 10;
 
 const Room = () => {
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -43,6 +45,11 @@ const Room = () => {
     fetchBranches();
     fetchClasses();
   }, []);
+
+  useEffect(() => {
+    setFilterBranch(globalBranchId || '');
+    setOpenBranchDropdown(false);
+  }, [globalBranchId]);
 
   useEffect(() => {
     if (editingRoom && isModalOpen && modalStep === 'form') {
@@ -635,57 +642,7 @@ const Room = () => {
                     </div>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    <div className="relative branch-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenBranchDropdown(!openBranchDropdown);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Branch</span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {openBranchDropdown && (
-                        <div className="absolute left-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFilterBranch('');
-                                setOpenBranchDropdown(false);
-                              }}
-                              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                              }`}
-                            >
-                              All Branches
-                            </button>
-                            {getUniqueBranches.map((branchId) => {
-                              const branchName = getBranchName(branchId);
-                              return (
-                                <button
-                                  key={branchId}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterBranch(branchId.toString());
-                                    setOpenBranchDropdown(false);
-                                  }}
-                                  className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                                    filterBranch === branchId.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                                  }`}
-                                >
-                                  {branchName || `Branch ${branchId}`}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <span>Branch</span>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Schedules

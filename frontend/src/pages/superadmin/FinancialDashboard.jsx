@@ -14,6 +14,7 @@ import {
   YAxis,
 } from 'recharts';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
@@ -47,10 +48,10 @@ const ChartCard = ({ title, subtitle, children, className = '' }) => (
 );
 
 const FinancialDashboard = () => {
+  const { selectedBranchId } = useGlobalBranchFilter();
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedBranchId, setSelectedBranchId] = useState('');
 
   const fetchDashboardData = async () => {
     try {
@@ -114,23 +115,6 @@ const FinancialDashboard = () => {
             <p className="text-sm text-gray-500">Real-time overview of your physical school operations</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
-            <div className="flex-1 min-w-[200px]">
-              <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Filter by Branch
-              </label>
-              <select
-                value={selectedBranchId}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
-                className="w-full rounded-xl border-0 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 transition-all focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
-              >
-                <option value="">All Branches</option>
-                {metrics?.branches?.map((branch) => (
-                  <option key={branch.branch_id} value={branch.branch_id}>
-                    {branch.branch_name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <button
               type="button"
               onClick={fetchDashboardData}

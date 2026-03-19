@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const COLORS = ['#22C55E', '#94A3B8', '#F7C844', '#4F46E5'];
 
@@ -46,6 +47,7 @@ const ChartCard = ({ title, subtitle, children, className = '' }) => (
 
 const EnrollmentDashboard = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.userType || userInfo?.user_type;
   const branchId = userInfo?.branchId ?? userInfo?.branch_id;
   const showBranchFilter = userType === 'Superadmin' || (userType === 'Finance' && (branchId === null || branchId === undefined));
@@ -53,7 +55,6 @@ const EnrollmentDashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedBranchId, setSelectedBranchId] = useState('');
 
   const fetchData = async () => {
     try {
@@ -124,25 +125,6 @@ const EnrollmentDashboard = () => {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {showBranchFilter && (
-            <div className="min-w-[200px]">
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Branch
-              </label>
-              <select
-                value={selectedBranchId}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
-              >
-                <option value="">All Branches</option>
-                {branches.map((b) => (
-                  <option key={b.branch_id} value={String(b.branch_id)}>
-                    {b.branch_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           <button
             type="button"
             onClick={fetchData}

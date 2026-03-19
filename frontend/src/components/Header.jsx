@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../contexts/GlobalBranchFilterContext';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import ProfilePictureModal from './ProfilePictureModalS3';
@@ -9,6 +10,13 @@ import { auth } from '../config/firebase';
 
 const Header = ({ onMenuClick }) => {
   const { userInfo, logout } = useAuth();
+  const {
+    branches,
+    loadingBranches,
+    selectedBranchId,
+    setSelectedBranchId,
+    shouldShowBranchFilter,
+  } = useGlobalBranchFilter();
   const navigate = useNavigate();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfilePictureModalOpen, setIsProfilePictureModalOpen] = useState(false);
@@ -159,13 +167,13 @@ const Header = ({ onMenuClick }) => {
         <div className="h-[env(safe-area-inset-top,0px)]" aria-hidden="true" />
         <header className="bg-[#F7C844] border-b border-primary-600 min-h-16 flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-2 shadow-sm">
         {/* Logo and Company Name / Branch Name */}
-        <div className="flex items-center space-x-2 sm:space-x-3 flex-1 min-w-0">
+        <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
           <img
             src="/LCA Icon.png"
             alt="Little Champions Academy Logo"
             className="h-8 w-8 sm:h-10 sm:w-10 md:h-12 md:w-12 object-contain bg-transparent flex-shrink-0"
           />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             {branchName ? (() => {
               const formatted = formatBranchName(branchName);
               return (
@@ -186,6 +194,39 @@ const Header = ({ onMenuClick }) => {
               </h1>
             )}
           </div>
+          {shouldShowBranchFilter && (
+            <div className="hidden lg:flex items-center pl-3 flex-shrink-0">
+              <div className="w-[240px] max-w-[280px]">
+                <label htmlFor="global_branch_filter" className="sr-only">
+                  Global Branch Filter
+                </label>
+                <div className="relative">
+                  <select
+                    id="global_branch_filter"
+                    value={selectedBranchId}
+                    onChange={(e) => setSelectedBranchId(e.target.value)}
+                    className="w-full appearance-none rounded-lg border border-[#c78d14] bg-[#f8d373] px-4 py-2 pr-10 text-sm font-medium text-gray-900 text-left shadow-sm transition-colors focus:border-[#a86f00] focus:outline-none focus:ring-2 focus:ring-[#f4b428]"
+                    disabled={loadingBranches}
+                  >
+                    <option value="">Global Branch Filter</option>
+                    {branches.map((branch) => (
+                      <option key={branch.branch_id} value={branch.branch_id}>
+                        {branch.branch_name}
+                      </option>
+                    ))}
+                  </select>
+                  <svg
+                    className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-700"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Notifications and User Profile */}

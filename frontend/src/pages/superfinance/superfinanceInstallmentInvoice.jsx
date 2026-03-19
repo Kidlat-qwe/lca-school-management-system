@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const ITEMS_PER_PAGE = 10;
 
 const SuperfinanceInstallmentInvoice = () => {
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -57,6 +59,11 @@ const SuperfinanceInstallmentInvoice = () => {
     fetchInvoices();
     fetchBranches();
   }, []);
+
+  useEffect(() => {
+    setFilterBranch(globalBranchId || '');
+    setOpenBranchDropdown(false);
+  }, [globalBranchId]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -344,53 +351,6 @@ const SuperfinanceInstallmentInvoice = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-            )}
-          </div>
-          <div className="relative branch-filter-dropdown">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenBranchDropdown(!openBranchDropdown);
-              }}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center space-x-2"
-            >
-              <span>Branch: {filterBranch ? (() => { const b = branches.find(b => b.branch_id === parseInt(filterBranch)); return b ? (b.branch_nickname || b.branch_name) : 'All Branches'; })() : 'All Branches'}</span>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openBranchDropdown && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
-                <div className="py-1">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFilterBranch('');
-                      setOpenBranchDropdown(false);
-                    }}
-                    className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${
-                      !filterBranch ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                    }`}
-                  >
-                    All Branches
-                  </button>
-                  {branches.map((branch) => (
-                    <button
-                      key={branch.branch_id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setFilterBranch(branch.branch_id.toString());
-                        setOpenBranchDropdown(false);
-                      }}
-                      className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${
-                        filterBranch === branch.branch_id.toString() ? 'bg-gray-100 font-medium' : 'text-gray-700'
-                      }`}
-                    >
-                      {branch.branch_nickname || branch.branch_name}
-                    </button>
-                  ))}
-                </div>
-              </div>
             )}
           </div>
           {filterStatus && (

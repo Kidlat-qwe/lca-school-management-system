@@ -1,26 +1,22 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const OperationalDashboard = () => {
+  const { selectedBranchId: filterBranch } = useGlobalBranchFilter();
   const [cohortData, setCohortData] = useState([]);
   const [studentsPerClass, setStudentsPerClass] = useState([]);
   const [studentsPerTeacher, setStudentsPerTeacher] = useState([]);
   const [studentsPerRoom, setStudentsPerRoom] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [branches, setBranches] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [programs, setPrograms] = useState([]);
-  const [filterBranch, setFilterBranch] = useState('');
   const [filterTeacher, setFilterTeacher] = useState('');
   const [filterRoom, setFilterRoom] = useState('');
   const [filterProgram, setFilterProgram] = useState('');
   const [cohortYear, setCohortYear] = useState(new Date().getFullYear());
-
-  useEffect(() => {
-    fetchBranches();
-  }, []);
 
   useEffect(() => {
     if (filterBranch) {
@@ -38,15 +34,6 @@ const OperationalDashboard = () => {
   useEffect(() => {
     fetchCohortData();
   }, [filterBranch, filterTeacher, filterRoom, filterProgram]);
-
-  const fetchBranches = async () => {
-    try {
-      const res = await apiRequest('/branches?limit=100');
-      setBranches(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      console.error('Error fetching branches:', err);
-    }
-  };
 
   const fetchBranchFilters = async (branchId) => {
     try {
@@ -124,20 +111,7 @@ const OperationalDashboard = () => {
       {/* Filters - Branch first; Teacher, Room, Program appear when branch is selected */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h3 className="text-sm font-semibold text-gray-900 mb-4">Filters</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
-            <select
-              value={filterBranch}
-              onChange={(e) => setFilterBranch(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            >
-              <option value="">All Branches</option>
-              {branches.map(b => (
-                <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>
-              ))}
-            </select>
-          </div>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${filterBranch ? 'lg:grid-cols-3' : ''}`}>
           {filterBranch && (
             <>
               <div>
@@ -180,6 +154,11 @@ const OperationalDashboard = () => {
                 </select>
               </div>
             </>
+          )}
+          {!filterBranch && (
+            <div className="sm:col-span-2 rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+              Select a branch from the header to unlock teacher, room, and program filters.
+            </div>
           )}
         </div>
       </div>

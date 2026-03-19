@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const SuperfinanceFinancialDashboard = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId, branches, selectedBranchName } = useGlobalBranchFilter();
   const [metrics, setMetrics] = useState({
     totalRevenue: 0,
     pendingInvoices: 0,
@@ -16,29 +18,10 @@ const SuperfinanceFinancialDashboard = () => {
   const [error, setError] = useState('');
   const [recentInvoices, setRecentInvoices] = useState([]);
   const [recentPayments, setRecentPayments] = useState([]);
-  const [selectedBranchId, setSelectedBranchId] = useState('');
-  const [branches, setBranches] = useState([]);
-
-  useEffect(() => {
-    fetchBranches();
-  }, []);
 
   useEffect(() => {
     fetchDashboardData();
   }, [selectedBranchId]);
-
-  const fetchBranches = async () => {
-    try {
-      const response = await apiRequest('/branches');
-      setBranches(response.data || []);
-      setMetrics(prev => ({
-        ...prev,
-        totalBranches: response.data?.length || 0,
-      }));
-    } catch (err) {
-      console.error('Error fetching branches:', err);
-    }
-  };
 
   const fetchDashboardData = async () => {
     try {
@@ -56,21 +39,41 @@ const SuperfinanceFinancialDashboard = () => {
         }
       }
 
-      // Build query params
-      const params = new URLSearchParams();
-      params.append('limit', '100');
+      // Build common query params
+      const baseParams = new URLSearchParams();
       if (selectedBranchId) {
-        params.append('branch_id', selectedBranchId);
+        baseParams.append('branch_id', selectedBranchId);
       }
 
-      // Fetch invoices and payments in parallel
-      const [invoicesResponse, paymentsResponse] = await Promise.all([
-        apiRequest(`/invoices?${params.toString()}`),
-        apiRequest(`/payments?${params.toString()}`),
+      // Payments endpoint is paginated (max 100), so fetch all pages for accurate totals
+      const fetchAllPayments = async () => {
+        const limit = 100;
+        let page = 1;
+        let allPayments = [];
+        let totalPages = 1;
+
+        do {
+          const pageParams = new URLSearchParams(baseParams.toString());
+          pageParams.append('limit', String(limit));
+          pageParams.append('page', String(page));
+
+          const response = await apiRequest(`/payments?${pageParams.toString()}`);
+          const pageData = response.data || [];
+          allPayments = allPayments.concat(pageData);
+          totalPages = response.pagination?.totalPages || 1;
+          page += 1;
+        } while (page <= totalPages);
+
+        return allPayments;
+      };
+
+      // Invoices endpoint returns full filtered data set
+      const [invoicesResponse, payments] = await Promise.all([
+        apiRequest(`/invoices?${baseParams.toString()}`),
+        fetchAllPayments(),
       ]);
 
       const invoices = invoicesResponse.data || [];
-      const payments = paymentsResponse.data || [];
 
       // Calculate metrics
       const completedPayments = payments.filter(p => p.status === 'Completed');
@@ -117,7 +120,7 @@ const SuperfinanceFinancialDashboard = () => {
         pendingInvoices,
         completedPayments: completedPayments.length,
         unpaidInvoices,
-        totalBranches: branches.length,
+        totalBranches: branchesData.length,
         revenueByBranch,
       });
 
@@ -178,10 +181,6 @@ const SuperfinanceFinancialDashboard = () => {
     };
   };
 
-  const selectedBranchName = selectedBranchId
-    ? branches.find(b => b.branch_id === parseInt(selectedBranchId))?.branch_name || 'All Branches'
-    : 'All Branches';
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -199,18 +198,6 @@ const SuperfinanceFinancialDashboard = () => {
           <p className="mt-2 text-sm text-gray-600">Welcome to the Superfinance Dashboard - Manage all branches</p>
         </div>
         <div className="flex items-center gap-4">
-          <select
-            value={selectedBranchId}
-            onChange={(e) => setSelectedBranchId(e.target.value)}
-            className="px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-          >
-            <option value="">All Branches</option>
-            {branches.map((branch) => (
-              <option key={branch.branch_id} value={branch.branch_id}>
-                {branch.branch_name}
-              </option>
-            ))}
-          </select>
           <button
             onClick={fetchDashboardData}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center space-x-2"

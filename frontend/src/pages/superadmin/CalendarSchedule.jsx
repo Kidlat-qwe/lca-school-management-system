@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -91,6 +92,7 @@ const startTimeToHour = (startTime) => {
 };
 
 const CalendarSchedule = () => {
+  const { selectedBranchId: branchFilter } = useGlobalBranchFilter();
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
   const todayYmd = toYmd(today);
@@ -100,7 +102,6 @@ const CalendarSchedule = () => {
   const [selectedDate, setSelectedDate] = useState(todayYmd);
   const [viewDropdownOpen, setViewDropdownOpen] = useState(false);
   const [teacherFilter, setTeacherFilter] = useState('');
-  const [branchFilter, setBranchFilter] = useState('');
   const [roomFilter, setRoomFilter] = useState('');
   const [events, setEvents] = useState([]);
   const [holidays, setHolidays] = useState([]);
@@ -351,22 +352,13 @@ const CalendarSchedule = () => {
         </div>
       </div>
 
-      <div className={`grid gap-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ${branchFilter ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-2'}`}>
+      <div className={`grid gap-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ${branchFilter ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2'}`}>
         {viewMode === 'month' && (
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Month</label>
             <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#F7C844] focus:ring-[#F7C844]" />
           </div>
         )}
-        <div className="space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Branch</label>
-          <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#F7C844] focus:ring-[#F7C844]">
-            <option value="">All Branches</option>
-            {filterOptions.branches.sort((a, b) => (a.branch_name || '').localeCompare(b.branch_name || '')).map((b) => (
-              <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>
-            ))}
-          </select>
-        </div>
         {branchFilter && (
           <>
             <div className="space-y-2">
@@ -388,6 +380,11 @@ const CalendarSchedule = () => {
               </select>
             </div>
           </>
+        )}
+        {!branchFilter && (
+          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 sm:col-span-2">
+            Select a branch from the header to enable room and teacher filters.
+          </div>
         )}
       </div>
 

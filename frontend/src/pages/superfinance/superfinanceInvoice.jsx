@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const ITEMS_PER_PAGE = 10;
 
 const SuperfinanceInvoice = () => {
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -73,6 +75,12 @@ const SuperfinanceInvoice = () => {
     fetchBranches();
     fetchStudents();
   }, []);
+
+  useEffect(() => {
+    setFilterBranch(globalBranchId || '');
+    setOpenBranchDropdown(false);
+    setBranchDropdownRect(null);
+  }, [globalBranchId]);
 
   // Fetch package details by package name
   const fetchPackageDetails = async (packageName) => {
@@ -1112,25 +1120,7 @@ const SuperfinanceInvoice = () => {
                     </div>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '160px', minWidth: '160px' }}>
-                    <div className="relative branch-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setBranchDropdownRect(rect);
-                          setOpenBranchDropdown(!openBranchDropdown);
-                          setOpenStatusDropdown(false);
-                          setStatusDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Branch</span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
+                    <span>Branch</span>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     <div className="relative status-filter-dropdown">
