@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const RECIPIENT_GROUPS = [
   { value: 'All', label: 'All' },
@@ -67,7 +68,7 @@ const TeacherAnnouncements = () => {
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(15);
+  const [itemsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
@@ -1005,70 +1006,15 @@ const TeacherAnnouncements = () => {
         </div>
 
         {/* Pagination */}
-        <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-700">Showing</span>
-            <select
-              value={itemsPerPage}
-              onChange={(e) => {
-                setItemsPerPage(parseInt(e.target.value));
-                setCurrentPage(1);
-              }}
-              className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value={15}>15</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-            <span className="text-sm text-gray-700">to</span>
-            <span className="text-sm text-gray-700">
-              {totalItems > 0 ? Math.min((currentPage - 1) * itemsPerPage + 1, totalItems) : 0} - {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} entries
-            </span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-              disabled={currentPage === 1}
-              className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-            >
-              &lt;
-            </button>
-            <span className="px-3 py-1 bg-primary-600 text-white rounded-lg text-sm">
-              {currentPage}
-            </span>
-            <button
-              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-              disabled={currentPage >= totalPages}
-              className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-            >
-              &gt;
-            </button>
-            <span className="text-sm text-gray-700">Go to page</span>
-            <input
-              type="number"
-              min="1"
-              max={totalPages}
-              value={currentPage}
-              onChange={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) {
-                  setCurrentPage(page);
-                }
-              }}
-              className="w-16 px-2 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            />
-            <button
-              onClick={() => {
-                if (currentPage >= 1 && currentPage <= totalPages) {
-                  fetchAnnouncements();
-                }
-              }}
-              className="px-3 py-1 bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700"
-            >
-              Go
-            </button>
-          </div>
+        <div className="mt-4">
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages || 1}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            itemLabel="entries"
+            onPageChange={(page) => setCurrentPage(Math.min(Math.max(page, 1), totalPages || 1))}
+          />
         </div>
       </div>
 

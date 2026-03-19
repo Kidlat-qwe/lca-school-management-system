@@ -32,6 +32,7 @@ const Merchandise = () => {
     gender: '',
     type: '',
     image_url: '',
+    remarks: '',
   });
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
   const [formErrors, setFormErrors] = useState({});
@@ -173,6 +174,7 @@ const Merchandise = () => {
         gender: '',
         type: '',
         image_url: '',
+        remarks: '',
       });
       setEditingMerchandiseType(null);
     } else if (selectedBranchId) {
@@ -190,6 +192,7 @@ const Merchandise = () => {
         gender: '',
         type: '',
         image_url: '',
+        remarks: '',
       });
       setEditingMerchandiseType(null);
     } else {
@@ -208,6 +211,7 @@ const Merchandise = () => {
       gender: '',
       type: '',
       image_url: '',
+      remarks: '',
     });
     setEditingMerchandiseType(null);
     }
@@ -309,6 +313,7 @@ const Merchandise = () => {
       gender: item.gender || '',
       type: item.type || '',
       image_url: item.image_url || '',
+      remarks: item.remarks || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -341,6 +346,7 @@ const Merchandise = () => {
       gender: '',
       type: '',
       image_url: merchType.image_url || sampleItem?.image_url || '',
+      remarks: sampleItem?.remarks || merchType.remarks || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -444,6 +450,7 @@ const Merchandise = () => {
         gender: formData.gender && formData.gender.trim() !== '' ? formData.gender.trim() : null,
         type: formData.type && formData.type.trim() !== '' ? formData.type.trim() : null,
         image_url: formData.image_url || null,
+        remarks: formData.remarks?.trim() || null,
       };
       
       if (editingMerchandise) {
@@ -582,6 +589,7 @@ const Merchandise = () => {
       price: item.price || 0,
       gender: item.gender || '',
       type: item.type || '',
+      remarks: item.remarks || '',
     }));
   };
 
@@ -898,6 +906,21 @@ const Merchandise = () => {
                         {formErrors.price && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.price}</p>
                         )}
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label htmlFor="remarks" className="label-field">
+                          Remarks
+                        </label>
+                        <textarea
+                          id="remarks"
+                          name="remarks"
+                          value={formData.remarks}
+                          onChange={handleInputChange}
+                          className="input-field"
+                          rows={2}
+                          placeholder="Optional notes or remarks for this merchandise"
+                        />
                       </div>
 
                       {/* Gender and Type fields - show for Uniform (School/PE) category or when name contains "uniform" */}
@@ -1379,8 +1402,8 @@ const Merchandise = () => {
               style={{
                 width: '100%',
                 minWidth: showSizeColumn
-                  ? (showGenderTypeColumns ? '1000px' : '800px')
-                  : (showGenderTypeColumns ? '800px' : '650px'),
+                  ? (showGenderTypeColumns ? '1100px' : '900px')
+                  : (showGenderTypeColumns ? '900px' : '750px'),
               }}
             >
               <thead className="bg-white">
@@ -1395,6 +1418,9 @@ const Merchandise = () => {
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Price
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Remarks
                   </th>
                   {showGenderTypeColumns && (
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1426,6 +1452,11 @@ const Merchandise = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
                           {stock.price ? `₱${parseFloat(stock.price).toFixed(2)}` : '-'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-gray-900 max-w-[200px] truncate" title={stock.remarks || '-'}>
+                          {stock.remarks || '-'}
                         </div>
                       </td>
                       {showGenderTypeColumns && (
@@ -1462,12 +1493,12 @@ const Merchandise = () => {
                 ) : (
                   <tr>
                     <td
-                      colSpan={
-                        (showSizeColumn ? 1 : 0) +
-                        2 + // qty, price
-                        (showGenderTypeColumns ? 2 : 0) +
-                        1 // actions
-                      }
+                        colSpan={
+                          (showSizeColumn ? 1 : 0) +
+                          3 + // qty, price, remarks
+                          (showGenderTypeColumns ? 2 : 0) +
+                          1 // actions
+                        }
                       className="px-6 py-4 text-center text-sm text-gray-500"
                     >
                       No stock information available for this merchandise type.

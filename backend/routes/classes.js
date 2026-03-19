@@ -3503,7 +3503,8 @@ router.post(
         // For Installment packages: package_price is the monthly installment amount, not a total
         // So we don't add it to invoice items (downpayment invoice will be created separately)
         // For other package types: package_price represents the total cost
-        if (packageData.package_type !== 'Installment') {
+        const isInstallmentPkg = packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment');
+        if (!isInstallmentPkg) {
           let packageAmount = 0;
           if (packageData.package_price && !isNaN(parseFloat(packageData.package_price))) {
             packageAmount = parseFloat(packageData.package_price);
@@ -3895,8 +3896,8 @@ router.post(
         // So we check package_type instead of totalAmount for Installment packages
         const isInstallmentEnabled = installment_settings && 
           (package_id || hasInstallmentPricing) && 
-          (package_id && packageData && packageData.package_type === 'Installment' 
-            ? true  // For Installment packages, always require installment settings
+          (package_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
+            ? true  // For Installment packages (incl. Phase+Installment), always require installment settings
             : totalAmount > 0) &&  // For other packages, require totalAmount > 0
           installment_settings.invoice_issue_date &&
           installment_settings.billing_month &&
@@ -3958,7 +3959,7 @@ router.post(
       
       // For Installment packages, downpayment is REQUIRED
       // package_price is the monthly installment amount, not a total
-      if (package_id && packageData && packageData.package_type === 'Installment') {
+      if (package_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))) {
         if (!packageData.downpayment_amount) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -4239,7 +4240,7 @@ router.post(
       }
 
       // Apply promo to downpayment only when package is Installment (promo applies to downpayment only)
-      if (promo_id && skipMainInvoice && downpaymentInvoice && packageData && packageData.package_type === 'Installment' && downpaymentAmount > 0) {
+      if (promo_id && skipMainInvoice && downpaymentInvoice && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment')) && downpaymentAmount > 0) {
         try {
           const promoResult = await client.query(
             `SELECT p.*, pkg.package_price, pkg.downpayment_amount
@@ -4570,11 +4571,20 @@ router.post(
       // 3. Fallback: Use invoice total amount
       // NOTE: For Installment packages, package_price represents the monthly/per-period installment amount
       
-      // Get total phases from curriculum
-      const totalPhases = classData.number_of_phase || null;
+      // Get total phases and phase_start for installment profile
+      // For Phase+Installment packages: total_phases = count in package range, phase_start = first phase
+      // For regular Installment: use curriculum total, no phase_start (defaults to 1)
+      let totalPhases = classData.number_of_phase || null;
+      let profilePhaseStart = null;
+      if (package_id && packageData && packageData.package_type === 'Phase' && packageData.payment_option === 'Installment') {
+        const pkgStart = packageData.phase_start || 1;
+        const pkgEnd = packageData.phase_end || pkgStart;
+        profilePhaseStart = pkgStart;
+        totalPhases = Math.max(1, pkgEnd - pkgStart + 1);
+      }
       
       let installmentProfileAmount;
-      if (package_id && packageData && packageData.package_type === 'Installment' && packageData.package_price) {
+      if (package_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment')) && packageData.package_price) {
         // For Installment packages, package_price IS the installment amount (monthly/per-period)
         installmentProfileAmount = parseFloat(packageData.package_price);
       } else {
@@ -4633,7 +4643,7 @@ router.post(
           const hasDownpayment = downpaymentInvoice !== null && downpaymentAmount > 0;
           const downpaymentPaid = false; // Initially false, will be set to true when downpayment is paid
 
-          // Ensure downpayment columns exist
+          // Ensure downpayment and phase_start columns exist
           try {
             await client.query(`
               DO $$ 
@@ -4650,10 +4660,16 @@ router.post(
                 ) THEN
                   ALTER TABLE installmentinvoiceprofilestbl ADD COLUMN downpayment_invoice_id INTEGER;
                 END IF;
+                IF NOT EXISTS (
+                  SELECT 1 FROM information_schema.columns 
+                  WHERE table_name = 'installmentinvoiceprofilestbl' AND column_name = 'phase_start'
+                ) THEN
+                  ALTER TABLE installmentinvoiceprofilestbl ADD COLUMN phase_start INTEGER DEFAULT NULL;
+                END IF;
               END $$;
             `);
           } catch (err) {
-            console.log('Downpayment column check:', err.message);
+            console.log('Downpayment/phase_start column check:', err.message);
           }
 
           // Get promo scope info if promo was applied (for installment packages)
@@ -4661,7 +4677,7 @@ router.post(
           let promoApplyScopeForProfile = null;
           let promoMonthsToApplyForProfile = null;
           
-          if (promo_id && packageData && packageData.package_type === 'Installment') {
+          if (promo_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))) {
             const promoScopeCheck = await client.query(
               `SELECT installment_apply_scope, installment_months_to_apply 
                FROM promostbl WHERE promo_id = $1`,
@@ -4680,8 +4696,8 @@ router.post(
              (student_id, branch_id, package_id, amount, frequency, description, 
               day_of_month, is_active, bill_invoice_due_date, next_invoice_due_date, 
               first_billing_month, first_generation_date, created_by, class_id, total_phases, generated_count,
-              downpayment_paid, downpayment_invoice_id, promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+              downpayment_paid, downpayment_invoice_id, promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied, phase_start)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
              RETURNING *`,
             [
               student_id,
@@ -4698,7 +4714,7 @@ router.post(
               installment_settings.invoice_generation_date,
               req.user.fullName || req.user.email || null,
               class_id, // Store class_id for phase tracking
-              totalPhases, // Store total phases from curriculum
+              totalPhases, // For Phase package: count in range. Else: curriculum total
               0, // Start with 0 generated invoices
               downpaymentPaid, // Initially false, will be set to true when downpayment is paid
               downpaymentInvoice ? downpaymentInvoice.invoice_id : null, // Link to downpayment invoice
@@ -4706,6 +4722,7 @@ router.post(
               promoApplyScopeForProfile, // Store promo scope
               promoMonthsToApplyForProfile, // Store months to apply
               0, // Start with 0 months applied
+              profilePhaseStart, // For Phase package: first phase (e.g. 3). Else: null (= 1)
             ]
           );
           installmentProfile = profileResult.rows[0];

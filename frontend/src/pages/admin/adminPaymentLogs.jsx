@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const AdminPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -32,7 +33,7 @@ const AdminPaymentLogs = () => {
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
-  const [pagination, setPagination] = useState({ page: 1, limit: 100, total: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [endOfShiftLoading, setEndOfShiftLoading] = useState(false);
   const [todaySubmitted, setTodaySubmitted] = useState(false);
   const [endOfShiftModalOpen, setEndOfShiftModalOpen] = useState(false);
@@ -797,33 +798,15 @@ const AdminPaymentLogs = () => {
               </tbody>
             </table>
           </div>
-          {pagination.totalPages > 1 && filteredPayments.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-              <p className="text-sm text-gray-600">
-                Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} payments
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => fetchPayments(pagination.page - 1)}
-                  disabled={pagination.page <= 1}
-                  className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <span className="text-sm text-gray-600">
-                  Page {pagination.page} of {pagination.totalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => fetchPayments(pagination.page + 1)}
-                  disabled={pagination.page >= pagination.totalPages}
-                  className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
+          {pagination.total > 0 && filteredPayments.length > 0 && (
+            <FixedTablePagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.total}
+              itemsPerPage={10}
+              itemLabel="payments"
+              onPageChange={fetchPayments}
+            />
           )}
         </div>
 

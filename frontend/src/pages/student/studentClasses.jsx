@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 
 const StudentClasses = () => {
+  const ITEMS_PER_PAGE = 10;
   const { userInfo } = useAuth();
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +24,7 @@ const StudentClasses = () => {
   const [expandedPhases, setExpandedPhases] = useState(new Set([1])); // Phase 1 open by default
   const [programs, setPrograms] = useState([]);
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Get student's user_id from userInfo
   const studentId = userInfo?.user_id || userInfo?.userId;
@@ -446,6 +449,21 @@ const StudentClasses = () => {
     const matchesProgram = !filterProgram || classItem.program_id === parseInt(filterProgram);
     return matchesNameSearch && matchesProgram;
   });
+  const totalPages = Math.max(Math.ceil(filteredClasses.length / ITEMS_PER_PAGE), 1);
+  const paginatedClasses = filteredClasses.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterProgram]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   if (loading) {
     return (
@@ -903,7 +921,7 @@ const StudentClasses = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredClasses.map((classItem) => (
+                  paginatedClasses.map((classItem) => (
                   <tr key={classItem.class_id}>
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900">
@@ -990,13 +1008,15 @@ const StudentClasses = () => {
               </tbody>
             </table>
           </div>
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredClasses.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="classes"
+            onPageChange={setCurrentPage}
+          />
         </div>
-
-      {filteredClasses.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredClasses.length} of {classes.length} classes
-        </div>
-      )}
 
       {openMenuId && createPortal(
         <>

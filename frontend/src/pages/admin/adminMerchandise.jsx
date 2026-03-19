@@ -33,6 +33,7 @@ const AdminMerchandise = () => {
     gender: '',
     type: '',
     image_url: '',
+    remarks: '',
   });
   const [requestFormData, setRequestFormData] = useState({
     merchandise_name: '',
@@ -196,6 +197,7 @@ const AdminMerchandise = () => {
         gender: '',
         type: '',
         image_url: '',
+        remarks: '',
       });
       setEditingMerchandiseType(null);
     } else if (adminBranchId) {
@@ -211,6 +213,7 @@ const AdminMerchandise = () => {
         gender: '',
         type: '',
         image_url: '',
+        remarks: '',
       });
       setEditingMerchandiseType(null);
     }
@@ -285,6 +288,7 @@ const AdminMerchandise = () => {
       gender: item.gender || '',
       type: item.type || '',
       image_url: item.image_url || '',
+      remarks: item.remarks || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -316,6 +320,7 @@ const AdminMerchandise = () => {
       gender: '',
       type: '',
       image_url: merchType.image_url || sampleItem?.image_url || '',
+      remarks: sampleItem?.remarks || merchType.remarks || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -352,6 +357,7 @@ const AdminMerchandise = () => {
       price: item.price || 0,
       gender: item.gender || '',
       type: item.type || '',
+      remarks: item.remarks || '',
     }));
   };
 
@@ -493,6 +499,7 @@ const AdminMerchandise = () => {
         gender: formData.gender && formData.gender.trim() !== '' ? formData.gender.trim() : null,
         type: formData.type && formData.type.trim() !== '' ? formData.type.trim() : null,
         image_url: formData.image_url || null,
+        remarks: formData.remarks?.trim() || null,
       };
       
       if (editingMerchandise) {
@@ -830,6 +837,21 @@ const AdminMerchandise = () => {
                         {formErrors.price && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.price}</p>
                         )}
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label htmlFor="remarks" className="label-field">
+                          Remarks
+                        </label>
+                        <textarea
+                          id="remarks"
+                          name="remarks"
+                          value={formData.remarks}
+                          onChange={handleInputChange}
+                          className="input-field"
+                          rows={2}
+                          placeholder="Optional notes or remarks for this merchandise"
+                        />
                       </div>
 
                       {/* Gender and Type fields - only show for uniforms */}
@@ -1223,7 +1245,7 @@ const AdminMerchandise = () => {
         {/* Stocks Table */}
         <div className="bg-white rounded-lg shadow">
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: showSizeColumn ? '800px' : '600px' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: showSizeColumn ? '900px' : '750px' }}>
               <thead className="bg-white">
                 <tr>
                   {showSizeColumn && (
@@ -1236,6 +1258,9 @@ const AdminMerchandise = () => {
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Price
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Remarks
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Gender
@@ -1262,6 +1287,11 @@ const AdminMerchandise = () => {
                           {stock.price ? `₱${parseFloat(stock.price).toFixed(2)}` : '-'}
                         </div>
                       </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-gray-900 max-w-[200px] truncate" title={stock.remarks || '-'}>
+                          {stock.remarks || '-'}
+                        </div>
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
                       </td>
@@ -1272,7 +1302,7 @@ const AdminMerchandise = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={showSizeColumn ? 5 : 4} className="px-6 py-4 text-center text-sm text-gray-500">
+                    <td colSpan={showSizeColumn ? 6 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
                       No stock information available for this merchandise type.
                     </td>
                   </tr>

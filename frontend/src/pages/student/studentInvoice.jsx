@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const StudentInvoice = () => {
   const { userInfo } = useAuth();
@@ -16,6 +19,7 @@ const StudentInvoice = () => {
   const [selectedInvoiceForDetails, setSelectedInvoiceForDetails] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [packageDetails, setPackageDetails] = useState({});
+  const [currentPage, setCurrentPage] = useState(1);
 
   const studentId = userInfo?.userId || userInfo?.user_id;
 
@@ -266,6 +270,19 @@ const StudentInvoice = () => {
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
+  const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
+  const paginatedInvoices = filteredInvoices.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterStatus]);
+
+  useEffect(() => {
+    setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
+  }, [totalPages]);
 
   const calculateItemTotal = (item) => {
     const amount = parseFloat(item.amount) || 0;
@@ -425,7 +442,7 @@ const StudentInvoice = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredInvoices.map((invoice) => (
+                  paginatedInvoices.map((invoice) => (
                   <tr key={invoice.invoice_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       INV-{invoice.invoice_id}
@@ -463,13 +480,15 @@ const StudentInvoice = () => {
               </tbody>
             </table>
           </div>
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredInvoices.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="invoices"
+            onPageChange={setCurrentPage}
+          />
         </div>
-
-      {filteredInvoices.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredInvoices.length} of {invoices.length} invoices
-        </div>
-      )}
 
       {/* Action Menu Overlay */}
       {openMenuId && createPortal(

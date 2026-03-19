@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const TeacherProgram = () => {
   const [programs, setPrograms] = useState([]);
@@ -7,6 +10,7 @@ const TeacherProgram = () => {
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [filterCurriculum, setFilterCurriculum] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openCurriculumDropdown, setOpenCurriculumDropdown] = useState(false);
   const [curricula, setCurricula] = useState([]);
 
@@ -67,6 +71,20 @@ const TeacherProgram = () => {
     const matchesCurriculum = !filterCurriculum || program.curriculum_id?.toString() === filterCurriculum;
     return matchesNameSearch && matchesCurriculum;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredPrograms.length / ITEMS_PER_PAGE));
+  const paginatedPrograms = filteredPrograms.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterCurriculum]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
   if (loading) {
     return (
@@ -206,7 +224,7 @@ const TeacherProgram = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPrograms.map((program) => {
+                  paginatedPrograms.map((program) => {
                   const formatSessionDuration = (duration) => {
                     if (!duration && duration !== 0) return '-';
                     const numDuration = parseFloat(duration);
@@ -250,9 +268,14 @@ const TeacherProgram = () => {
         </div>
 
       {filteredPrograms.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPrograms.length} of {programs.length} programs
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPrograms.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="programs"
+          onPageChange={setCurrentPage}
+        />
       )}
     </div>
   );

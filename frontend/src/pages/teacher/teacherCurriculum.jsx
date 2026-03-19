@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const TeacherCurriculum = () => {
   const [curricula, setCurricula] = useState([]);
@@ -8,6 +11,7 @@ const TeacherCurriculum = () => {
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedCurriculumForDetails, setSelectedCurriculumForDetails] = useState(null);
@@ -80,6 +84,20 @@ const TeacherCurriculum = () => {
     const matchesStatus = !filterStatus || curriculum.status === filterStatus;
     return matchesNameSearch && matchesStatus;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredCurricula.length / ITEMS_PER_PAGE));
+  const paginatedCurricula = filteredCurricula.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterStatus]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
   const getStatusBadgeColor = (status) => {
     const colors = {
@@ -225,7 +243,7 @@ const TeacherCurriculum = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredCurricula.map((curriculum) => (
+                  paginatedCurricula.map((curriculum) => (
                   <tr key={curriculum.curriculum_id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
@@ -272,9 +290,14 @@ const TeacherCurriculum = () => {
         </div>
 
       {filteredCurricula.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredCurricula.length} of {curricula.length} curricula
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredCurricula.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="curricula"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {isDetailsModalOpen && selectedCurriculumForDetails && createPortal(

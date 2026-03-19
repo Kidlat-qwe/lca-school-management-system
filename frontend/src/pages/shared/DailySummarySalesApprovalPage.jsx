@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const DailySummarySalesApprovalPage = () => {
   const [summaries, setSummaries] = useState([]);
@@ -11,7 +12,7 @@ const DailySummarySalesApprovalPage = () => {
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterDate, setFilterDate] = useState('');
-  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [approvingId, setApprovingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, remarks: '' });
   const [detailModal, setDetailModal] = useState({ open: false, summary: null });
@@ -35,7 +36,7 @@ const DailySummarySalesApprovalPage = () => {
   const fetchSummaries = async (page = 1) => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({ page: String(page), limit: '50' });
+      const params = new URLSearchParams({ page: String(page), limit: '10' });
       if (filterBranch) params.set('branch_id', filterBranch);
       if (filterStatus) params.set('status', filterStatus);
       if (filterDate) params.set('summary_date', filterDate);
@@ -288,28 +289,15 @@ const DailySummarySalesApprovalPage = () => {
         </table>
       </div>
 
-      {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-          <p className="text-sm text-gray-600">
-            Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => fetchSummaries(pagination.page - 1)}
-              disabled={pagination.page <= 1}
-              className="px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white disabled:opacity-50"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => fetchSummaries(pagination.page + 1)}
-              disabled={pagination.page >= pagination.totalPages}
-              className="px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+      {pagination.total > 0 && (
+        <FixedTablePagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.total}
+          itemsPerPage={10}
+          itemLabel="summaries"
+          onPageChange={fetchSummaries}
+        />
       )}
 
       {openMenuId &&

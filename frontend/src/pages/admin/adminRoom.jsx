@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const AdminRoom = () => {
   const { userInfo } = useAuth();
@@ -13,6 +16,7 @@ const AdminRoom = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -558,6 +562,20 @@ const AdminRoom = () => {
     return matchesSearch;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredRooms.length / ITEMS_PER_PAGE));
+  const paginatedRooms = filteredRooms.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   // If no branch ID, show loading or error
   if (!adminBranchId) {
     return (
@@ -663,7 +681,7 @@ const AdminRoom = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredRooms.map((room) => (
+                  paginatedRooms.map((room) => (
                   <tr key={room.room_id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
@@ -698,11 +716,16 @@ const AdminRoom = () => {
           </div>
         </div>
 
-      {/* Results Count */}
+      {/* Pagination */}
       {filteredRooms.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredRooms.length} of {rooms.length} rooms
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredRooms.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="rooms"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {/* Action Menu Overlay */}

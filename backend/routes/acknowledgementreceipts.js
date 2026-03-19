@@ -157,16 +157,21 @@ router.get(
 /**
  * POST /api/sms/acknowledgement-receipts
  * Create a new acknowledgement receipt (front-desk fast payment)
- * Access: Superadmin, Admin, Finance, Superfinance
+ * Supports Package (enrollment) and Merchandise (buy merchandise) types
+ * Access: Superadmin, Admin (branch admin) - Merchandise; Superadmin, Admin, Finance, Superfinance - Package
  */
 router.post(
   '/',
   [
+    body('ar_type')
+      .optional({ nullable: true })
+      .isIn(['Package', 'Merchandise'])
+      .withMessage('ar_type must be Package or Merchandise'),
     body('prospect_student_name').notEmpty().isString().withMessage('Student name is required'),
-    body('prospect_student_contact').notEmpty().isString().withMessage('Guardian name is required'),
+    body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
     body('prospect_student_notes').optional().isString().withMessage('Notes must be a string'),
-    body('package_id').isInt().withMessage('Package ID is required and must be an integer'),
-    body('payment_amount').isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
+    body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
+    body('payment_amount').optional({ nullable: true }).isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('reference_number').optional({ nullable: true }).isString().withMessage('Reference number must be a string'),
     body('payment_attachment_url').optional({ nullable: true }).isString().withMessage('Attachment URL must be a string'),
@@ -175,10 +180,28 @@ router.post(
       .optional({ nullable: true })
       .isIn(['downpayment_only', 'downpayment_plus_phase1'])
       .withMessage('installment_option must be downpayment_only or downpayment_plus_phase1'),
+    body('merchandise_items').optional().isArray().withMessage('merchandise_items must be an array'),
+    body('merchandise_items.*.merchandise_id').optional().isInt().withMessage('merchandise_id must be an integer'),
+    body('merchandise_items.*.quantity').optional().isInt({ min: 1 }).withMessage('quantity must be a positive integer'),
+    body('student_id').optional({ nullable: true }).isInt().withMessage('student_id must be an integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+    requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
   async (req, res, next) => {
+    const arType = req.body.ar_type || 'Package';
+    const isMerchandise = arType === 'Merchandise';
+
+    // Merchandise AR: Superadmin and Admin only (branch admin)
+    if (isMerchandise) {
+      const allowed = ['Superadmin', 'Admin'];
+      if (!allowed.includes(req.user?.userType)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only Superadmin and Branch Admin can create merchandise acknowledgement receipts',
+        });
+      }
+    }
+
     const client = await getClient();
     try {
       await client.query('BEGIN');
@@ -195,36 +218,136 @@ router.post(
         level_tag,
         installment_option,
         branch_id: bodyBranchId,
+        merchandise_items = [],
+        student_id: linkedStudentId,
       } = req.body;
 
-      // Ensure package exists and get snapshot info
-      const pkgResult = await client.query(
-        `SELECT package_id, package_name, package_price, branch_id 
-         FROM packagestbl 
-         WHERE package_id = $1`,
-        [package_id]
-      );
+      let branchId = bodyBranchId || req.user.branchId || null;
+      let packageNameSnapshot = null;
+      let packageAmountSnapshot = null;
+      let pkgId = null;
+      let totalPaymentAmount = 0;
+      let merchandiseItemsSnapshot = null;
 
-      if (pkgResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({
-          success: false,
-          message: 'Package not found',
-        });
-      }
+      if (isMerchandise) {
+        // ── MERCHANDISE AR ─────────────────────────────────────────────────
+        if (!merchandise_items || merchandise_items.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'At least one merchandise item is required for merchandise AR',
+          });
+        }
 
-      const pkg = pkgResult.rows[0];
+        if (!bodyBranchId && !req.user.branchId) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Branch is required for merchandise AR',
+          });
+        }
 
-      // Determine branch: prefer explicit branch_id from body (for Superadmin),
-      // then user's branch, then package branch if available
-      const branchId = bodyBranchId || req.user.branchId || pkg.branch_id || null;
+        const merchSnapshots = [];
+        let totalAmount = 0;
 
-      if (!branchId) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Branch is required to create an acknowledgement receipt',
-        });
+        for (const item of merchandise_items) {
+          const merchId = item.merchandise_id;
+          const qty = Math.max(1, parseInt(item.quantity, 10) || 1);
+
+          const merchResult = await client.query(
+            `SELECT merchandise_id, merchandise_name, size, quantity, price, branch_id
+             FROM merchandisestbl WHERE merchandise_id = $1`,
+            [merchId]
+          );
+
+          if (merchResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+              success: false,
+              message: `Merchandise ID ${merchId} not found`,
+            });
+          }
+
+          const merch = merchResult.rows[0];
+          const price = parseFloat(merch.price) || 0;
+          const itemTotal = price * qty;
+          totalAmount += itemTotal;
+
+          if (merch.branch_id && branchId && merch.branch_id !== branchId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Merchandise "${merch.merchandise_name}" belongs to a different branch`,
+            });
+          }
+
+          const availableQty = merch.quantity != null ? parseInt(merch.quantity, 10) : null;
+          if (availableQty !== null && availableQty < qty) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Insufficient stock for ${merch.merchandise_name}${merch.size ? ` (${merch.size})` : ''}. Available: ${availableQty}, Requested: ${qty}`,
+            });
+          }
+
+          merchSnapshots.push({
+            merchandise_id: merch.merchandise_id,
+            merchandise_name: merch.merchandise_name,
+            size: merch.size,
+            quantity: qty,
+            price,
+            branch_id: merch.branch_id || branchId,
+          });
+        }
+
+        merchandiseItemsSnapshot = merchSnapshots;
+        totalPaymentAmount = totalAmount;
+      } else {
+        // ── PACKAGE AR ─────────────────────────────────────────────────────
+        if (!prospect_student_contact || !prospect_student_contact.trim()) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Guardian name is required for package AR',
+          });
+        }
+
+        if (!package_id) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Package ID is required for package AR',
+          });
+        }
+
+        const pkgResult = await client.query(
+          `SELECT package_id, package_name, package_price, branch_id 
+           FROM packagestbl WHERE package_id = $1`,
+          [package_id]
+        );
+
+        if (pkgResult.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({
+            success: false,
+            message: 'Package not found',
+          });
+        }
+
+        const pkg = pkgResult.rows[0];
+        pkgId = pkg.package_id;
+        packageNameSnapshot = pkg.package_name;
+        packageAmountSnapshot = pkg.package_price;
+        branchId = branchId || pkg.branch_id || null;
+        totalPaymentAmount = parseFloat(payment_amount) || 0;
+
+        if (!branchId) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Branch is required to create an acknowledgement receipt',
+          });
+        }
       }
 
       // Verify branch exists
@@ -238,13 +361,13 @@ router.post(
       }
 
       const createdBy = req.user.userId || null;
-
       const ackNumber = generateAckReceiptNumber();
 
       const insertResult = await client.query(
         `INSERT INTO acknowledgement_receiptstbl (
            ack_receipt_number,
            status,
+           ar_type,
            prospect_student_name,
            prospect_student_contact,
            prospect_student_notes,
@@ -253,6 +376,7 @@ router.post(
            package_id,
            package_name_snapshot,
            package_amount_snapshot,
+           merchandise_items_snapshot,
            payment_amount,
            issue_date,
            reference_number,
@@ -264,36 +388,109 @@ router.post(
            created_by
          )
          VALUES (
-           $1, 'Paid', $2, $3, $4, NULL, $5, $6, $7, $8,
-           $9, $10, $11, $12, $13, $14, NULL, NULL, $15
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+           $13, $14, $15, $16, $17, $18, NULL, NULL, $19
          )
          RETURNING *`,
         [
           ackNumber,
+          isMerchandise ? 'Pending' : 'Paid',
+          isMerchandise ? 'Merchandise' : 'Package',
           prospect_student_name,
-          prospect_student_contact || null,
-          prospect_student_notes || null,
+          prospect_student_contact?.trim() || null,
+          prospect_student_notes?.trim() || null,
+          linkedStudentId || null,
           branchId,
-          pkg.package_id,
-          pkg.package_name,
-          pkg.package_price,
-          payment_amount,
+          pkgId,
+          packageNameSnapshot,
+          packageAmountSnapshot,
+          merchandiseItemsSnapshot ? JSON.stringify(merchandiseItemsSnapshot) : null,
+          totalPaymentAmount,
           issue_date,
-          reference_number || null,
+          reference_number?.trim() || null,
           payment_attachment_url || null,
-          level_tag || null,
-          installment_option || null,
+          level_tag?.trim() || null,
+          isMerchandise ? null : (installment_option || null),
           createdBy,
         ]
       );
 
       const ackReceipt = insertResult.rows[0];
 
+      // ── For Merchandise AR: auto-generate invoice ─────────────────────────
+      if (isMerchandise && merchandiseItemsSnapshot) {
+        let studentIdForInvoice = linkedStudentId;
+
+        if (!studentIdForInvoice) {
+          // Use or auto-create Walk-in Customer for unregistered students (no migration needed)
+          const walkInResult = await client.query(
+            `SELECT user_id FROM userstbl WHERE email = 'walkin@merchandise.psms.internal' LIMIT 1`
+          );
+          if (walkInResult.rows.length > 0) {
+            studentIdForInvoice = walkInResult.rows[0].user_id;
+          } else {
+            // Auto-create Walk-in Customer (idempotent: ON CONFLICT reuses existing)
+            const insertResult = await client.query(
+              `INSERT INTO userstbl (email, full_name, user_type) 
+               VALUES ('walkin@merchandise.psms.internal', 'Walk-in Customer', 'Student') 
+               ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+               RETURNING user_id`
+            );
+            studentIdForInvoice = insertResult.rows[0].user_id;
+          }
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        const invoiceDesc = `Merchandise - AR ${ackNumber}`;
+
+        const invoiceResult = await client.query(
+          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, ack_receipt_id)
+           VALUES ($1, $2, $3, 'Unpaid', $4, $5, $6, $7, $8)
+           RETURNING *`,
+          [
+            invoiceDesc,
+            branchId,
+            totalPaymentAmount,
+            `Merchandise purchase via AR ${ackNumber} - ${prospect_student_name}`,
+            today,
+            today,
+            createdBy,
+            ackReceipt.ack_receipt_id,
+          ]
+        );
+
+        const newInvoice = invoiceResult.rows[0];
+
+        for (const item of merchandiseItemsSnapshot) {
+          const desc = `Merchandise: ${item.merchandise_name}${item.size ? ` (${item.size})` : ''}`;
+          const itemAmount = (item.price || 0) * (item.quantity || 1);
+          await client.query(
+            `INSERT INTO invoiceitemstbl (invoice_id, description, amount) VALUES ($1, $2, $3)`,
+            [newInvoice.invoice_id, desc, itemAmount]
+          );
+        }
+
+        await client.query(
+          'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
+          [newInvoice.invoice_id, studentIdForInvoice]
+        );
+
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET invoice_id = $1 WHERE ack_receipt_id = $2`,
+          [newInvoice.invoice_id, ackReceipt.ack_receipt_id]
+        );
+
+        ackReceipt.invoice_id = newInvoice.invoice_id;
+      }
+
       await client.query('COMMIT');
 
       res.status(201).json({
         success: true,
         data: ackReceipt,
+        ...(isMerchandise && ackReceipt.invoice_id
+          ? { message: 'Merchandise AR created. Invoice generated. Pay on the Payment/Invoice page to complete and deduct stock.' }
+          : {}),
       });
     } catch (err) {
       await client.query('ROLLBACK');
@@ -568,7 +765,7 @@ router.post(
             `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
                     ip.downpayment_paid, ip.downpayment_invoice_id, ip.amount, ip.frequency,
                     ip.first_generation_date, ip.next_invoice_due_date, ip.bill_invoice_due_date,
-                    ip.branch_id, ip.package_id, ip.description
+                    ip.branch_id, ip.package_id, ip.description, ip.phase_start
              FROM installmentinvoiceprofilestbl ip
              WHERE ip.installmentinvoiceprofiles_id = $1`,
             [invoice.installmentinvoiceprofiles_id]
@@ -636,6 +833,7 @@ router.post(
               console.log(`✅ AR downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
 
               // Store for async generation after COMMIT
+              const enrollPhase = profile.phase_start != null ? parseInt(profile.phase_start) : 1;
               _pendingInvoiceGeneration = {
                 firstInvoiceRecord,
                 profile: {
@@ -647,9 +845,10 @@ router.post(
                   description: profile.description || 'Monthly Installment Payment',
                   generated_count: profile.generated_count || 0,
                   class_id: profile.class_id,
+                  phase_start: profile.phase_start,
                 },
                 profileId: invoice.installmentinvoiceprofiles_id,
-                // When "downpayment_plus_phase1" option: auto-pay Phase 1 after generating it
+                // When "downpayment_plus_phase1" option: auto-pay first phase after generating it
                 autoPayPhase1: ack.installment_option === 'downpayment_plus_phase1',
                 autoPayPhase1Data: ack.installment_option === 'downpayment_plus_phase1' ? {
                   student_id,
@@ -662,6 +861,7 @@ router.post(
                   profile_id: invoice.installmentinvoiceprofiles_id,
                   reference_number: ack.reference_number || null,
                   payment_attachment_url: ack.payment_attachment_url || null,
+                  enroll_phase: enrollPhase, // Phase to enroll (phase_start for Phase packages, else 1)
                 } : null,
               };
               // NOTE: If downpayment_only, student is NOT enrolled yet.
@@ -819,19 +1019,20 @@ router.post(
                 );
                 console.log(`✅ AR Phase 1 auto-paid: invoice ${phase1InvoiceId}`);
 
-                // Enroll student in Phase 1 (phase_number = 1)
+                // Enroll student in first phase (phase_start for Phase packages, else 1)
                 if (class_id) {
+                  const enrollPhase = autoPayPhase1Data.enroll_phase != null ? parseInt(autoPayPhase1Data.enroll_phase) : 1;
                   const existingEnroll = await dbQuery(
-                    `SELECT classstudent_id FROM classstudentstbl WHERE student_id = $1 AND class_id = $2 AND phase_number = 1`,
-                    [sid, class_id]
+                    `SELECT classstudent_id FROM classstudentstbl WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
+                    [sid, class_id, enrollPhase]
                   );
                   if (existingEnroll.rows.length === 0) {
                     await dbQuery(
                       `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                       VALUES ($1, $2, $3, 1)`,
-                      [sid, class_id, 'System (Auto-enrolled via AR Downpayment + Phase 1)']
+                       VALUES ($1, $2, $3, $4)`,
+                      [sid, class_id, 'System (Auto-enrolled via AR Downpayment + Phase 1)', enrollPhase]
                     );
-                    console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase 1`);
+                    console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase ${enrollPhase}`);
                   }
                 }
 

@@ -47,12 +47,14 @@ router.get(
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
-                        approver.full_name as approved_by_name
+                        approver.full_name as approved_by_name,
+                        ar.prospect_student_name as ar_prospect_student_name
                  FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
                  LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
+                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                  WHERE 1=1`;
       const params = [];
       let paramCount = 0;
@@ -96,6 +98,26 @@ router.get(
       params.push(limitNum, offset);
 
       const result = await query(sql, params);
+
+      // Post-process to replace Walk-in Customer with AR prospect name when applicable
+      const payments = [];
+      for (const row of result.rows) {
+        let studentName = row.student_name;
+        let studentEmail = row.student_email;
+
+        const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        const prospectName = row.ar_prospect_student_name || null;
+        if (isWalkIn && prospectName) {
+          studentName = prospectName;
+          studentEmail = null; // Merchandise AR: show student name only, no email
+        }
+
+        payments.push({
+          ...row,
+          student_name: studentName,
+          student_email: studentEmail,
+        });
+      }
 
       // Get total count for pagination
       let countSql = `SELECT COUNT(*) as total FROM paymenttbl p WHERE 1=1`;
@@ -141,7 +163,7 @@ router.get(
 
       res.json({
         success: true,
-        data: result.rows,
+        data: payments,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -290,9 +312,9 @@ router.post(
         attachment_url,
       } = req.body;
 
-      // Verify invoice exists (include installmentinvoiceprofiles_id for phase tracking)
+      // Verify invoice exists (include ack_receipt_id for merchandise AR stock deduction)
       const invoiceCheck = await client.query(
-        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1', 
+        'SELECT *, installmentinvoiceprofiles_id, ack_receipt_id FROM invoicestbl WHERE invoice_id = $1',
         [invoice_id]
       );
       if (invoiceCheck.rows.length === 0) {
@@ -474,6 +496,36 @@ router.post(
         ]);
       }
 
+      // ── Merchandise AR: deduct stock when invoice is fully paid ───────────
+      if (newInvoiceStatus === 'Paid' && invoice.ack_receipt_id) {
+        try {
+          const ackResult = await client.query(
+            `SELECT ar_type, merchandise_items_snapshot FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
+            [invoice.ack_receipt_id]
+          );
+          if (ackResult.rows.length > 0 && ackResult.rows[0].ar_type === 'Merchandise') {
+            const items = ackResult.rows[0].merchandise_items_snapshot;
+            if (items && Array.isArray(items)) {
+              for (const item of items) {
+                const merchId = item.merchandise_id;
+                const qty = parseInt(item.quantity, 10) || 1;
+                await client.query(
+                  `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
+                  [qty, merchId]
+                );
+                console.log(`✅ Merchandise AR payment: deducted ${qty} from merchandise_id ${merchId}`);
+              }
+              await client.query(
+                `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
+                [newPayment.payment_id, invoice.ack_receipt_id]
+              );
+            }
+          }
+        } catch (merchErr) {
+          console.error('Error deducting merchandise stock for AR payment:', merchErr);
+        }
+      }
+
       // Check if this invoice is linked to a reservation
       // If yes, and invoice is now fully paid, update reservation status to "Fee Paid"
       // Note: Student is NOT auto-enrolled here. Enrollment only happens when reservation is upgraded.
@@ -510,7 +562,7 @@ router.post(
                 `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count, 
                     ip.downpayment_paid, ip.downpayment_invoice_id, ip.amount, ip.frequency,
                     ip.first_generation_date, ip.next_invoice_due_date, ip.bill_invoice_due_date,
-                    ip.branch_id, ip.package_id, ip.description
+                    ip.branch_id, ip.package_id, ip.description, ip.phase_start
              FROM installmentinvoiceprofilestbl ip
              WHERE ip.installmentinvoiceprofiles_id = $1`,
                 [invoice.installmentinvoiceprofiles_id]
@@ -626,7 +678,8 @@ router.post(
                 [student_id, profile.class_id]
               );
 
-              // Get total phases from curriculum
+              // Get phase range: for Phase packages use profile.phase_start + total_phases; else curriculum
+              const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start) : null;
               const classResult = await client.query(
                 `SELECT cu.number_of_phase
                  FROM classestbl c
@@ -636,13 +689,16 @@ router.post(
                 [profile.class_id]
               );
 
-              const totalPhases = classResult.rows[0]?.number_of_phase || profile.total_phases;
+              const totalPhases = phaseStart != null
+                ? (phaseStart + (profile.total_phases || 0) - 1) // phase_end for Phase packages
+                : (classResult.rows[0]?.number_of_phase || profile.total_phases);
+              const enrollPhase = phaseStart != null ? phaseStart : 1; // First enrollment phase
               
               // Check if student has any enrollment in this class
               const hasEnrollment = enrollmentResult.rows.length > 0;
               
               if (!hasEnrollment) {
-                // First invoice payment: Enroll student in Phase 1
+                // First invoice payment: Enroll student in first phase (phase_start for Phase packages, else 1)
                 await client.query(
                   `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
                    VALUES ($1, $2, $3, $4)`,
@@ -650,17 +706,17 @@ router.post(
                     student_id,
                     profile.class_id,
                     'System (Auto-enrolled via first installment payment)',
-                    1
+                    enrollPhase
                   ]
                 );
                 
-                console.log(`✅ First installment payment: Auto-enrolled student ${student_id} in Phase 1 after paying first invoice`);
+                console.log(`✅ First installment payment: Auto-enrolled student ${student_id} in Phase ${enrollPhase} after paying first invoice`);
               } else {
                 // Subsequent invoice payment: Progress to next phase
-                const highestPhase = enrollmentResult.rows[0].phase_number || 1;
+                const highestPhase = enrollmentResult.rows[0].phase_number || enrollPhase;
                 
                 // Calculate next phase (highest phase + 1)
-                // But don't exceed total phases
+                // Cap at totalPhases (phase_end for Phase packages, curriculum total otherwise)
                 const nextPhase = totalPhases ? Math.min(highestPhase + 1, totalPhases) : highestPhase + 1;
                 
                 // Check if student already has an enrollment for this next phase

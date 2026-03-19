@@ -14,10 +14,12 @@ import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
   // Target by email (leave empty to use STUDENT_NAMES)
+  'judyannferrer928@gmail.com',
+  'prescellianogorre@gmail.com',
 ];
 
 const STUDENT_NAMES = [
-  'Uriah Seth Beliber',
+  // No name-based targeting for this run
 ];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 
 const TeacherStudentList = () => {
+  const ITEMS_PER_PAGE = 10;
   const { userInfo } = useAuth();
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -14,6 +16,7 @@ const TeacherStudentList = () => {
   const [levelTagDropdownRect, setLevelTagDropdownRect] = useState(null);
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
   const [imageErrors, setImageErrors] = useState(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Get teacher's branch_id from userInfo
   const teacherBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -124,6 +127,21 @@ const TeacherStudentList = () => {
     const matchesLevelTag = !filterLevelTag || student.level_tag === filterLevelTag;
     return matchesUserSearch && matchesLevelTag;
   });
+  const totalPages = Math.max(Math.ceil(filteredStudents.length / ITEMS_PER_PAGE), 1);
+  const paginatedStudents = filteredStudents.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [userSearchTerm, filterLevelTag]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   if (loading) {
     return (
@@ -243,7 +261,7 @@ const TeacherStudentList = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredStudents.map((student) => (
+                  paginatedStudents.map((student) => (
                   <tr key={student.user_id}>
                     <td className="px-3 py-4">
                       <div className="flex items-center min-w-0">
@@ -303,13 +321,15 @@ const TeacherStudentList = () => {
               </tbody>
             </table>
           </div>
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredStudents.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="students"
+            onPageChange={setCurrentPage}
+          />
         </div>
-
-      {filteredStudents.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredStudents.length} of {students.length} students
-        </div>
-      )}
 
       {/* Level Tag filter dropdown - portaled to avoid table overflow clipping */}
       {openLevelTagDropdown && levelTagDropdownRect && createPortal(

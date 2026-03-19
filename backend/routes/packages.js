@@ -38,7 +38,8 @@ router.get(
         package_type,
         phase_start,
         phase_end,
-        downpayment_amount
+        downpayment_amount,
+        payment_option
       FROM packagestbl WHERE 1=1`;
       const params = [];
       let paramCount = 0;
@@ -137,7 +138,8 @@ router.get(
           package_type,
           phase_start,
           phase_end,
-          downpayment_amount
+          downpayment_amount,
+          payment_option
         FROM packagestbl WHERE package_id = $1`,
         [id]
       );
@@ -208,6 +210,7 @@ router.post(
     body('package_price').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Package price must be a positive number'),
     body('level_tag').optional().isString().withMessage('Level tag must be a string'),
     body('package_type').optional().isIn(['Fullpayment', 'Installment', 'Reserved', 'Phase']).withMessage('Package type must be Fullpayment, Installment, Reserved, or Phase'),
+    body('payment_option').optional().isIn(['Fullpayment', 'Installment']).withMessage('Payment option must be Fullpayment or Installment (only used when package_type is Phase)'),
     body('phase_start').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Phase start must be a positive integer'),
     body('phase_end').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Phase end must be a positive integer'),
     body('downpayment_amount').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Downpayment amount must be a positive number'),
@@ -220,7 +223,7 @@ router.post(
     try {
       await client.query('BEGIN');
 
-      const { package_name, branch_id, status, package_price, level_tag, package_type, phase_start, phase_end, downpayment_amount, details = [] } = req.body;
+      const { package_name, branch_id, status, package_price, level_tag, package_type, payment_option, phase_start, phase_end, downpayment_amount, details = [] } = req.body;
 
       // Verify branch exists if provided
       if (branch_id) {
@@ -254,10 +257,15 @@ router.post(
         }
       }
 
-      // Validate downpayment for Installment packages
+      // Phase + Installment: same validation as Installment packages
+      const isPhaseInstallment = package_type === 'Phase' && payment_option === 'Installment';
+      if (package_type === 'Phase' && payment_option && payment_option !== 'Installment') {
+        downpayment_amount = null;
+      }
+
+      // Validate downpayment for Installment packages (and Phase+Installment)
       // Note: package_price for Installment packages is the monthly installment amount, not total
-      // Downpayment is REQUIRED for Installment packages
-      if (package_type === 'Installment') {
+      if (package_type === 'Installment' || isPhaseInstallment) {
         if (!downpayment_amount || downpayment_amount === '' || downpayment_amount === null || downpayment_amount === undefined) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -273,7 +281,6 @@ router.post(
             message: 'Downpayment amount must be a positive number',
           });
         }
-        // Also require package_price (monthly installment amount)
         if (!package_price || package_price === '' || package_price === null || package_price === undefined) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -281,8 +288,8 @@ router.post(
             message: 'Monthly installment amount (package price) is required for Installment packages',
           });
         }
-      } else if (package_type !== 'Installment' && downpayment_amount !== undefined && downpayment_amount !== null) {
-        // Clear downpayment for non-Installment packages
+      } else if (!isPhaseInstallment && downpayment_amount !== undefined && downpayment_amount !== null) {
+        // Clear downpayment for non-Installment / non-Phase-Installment packages
         downpayment_amount = null;
       }
 
@@ -316,9 +323,26 @@ router.post(
         console.log('Column check:', err.message);
       }
 
+      // Ensure payment_option column exists
+      try {
+        await client.query(`
+          DO $$ 
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'packagestbl' AND column_name = 'payment_option'
+            ) THEN
+              ALTER TABLE packagestbl ADD COLUMN payment_option character varying(50) DEFAULT NULL;
+            END IF;
+          END $$;
+        `);
+      } catch (err) {
+        console.log('payment_option column check:', err.message);
+      }
+
       const packageResult = await client.query(
-        `INSERT INTO packagestbl (package_name, branch_id, status, package_price, level_tag, package_type, phase_start, phase_end, downpayment_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO packagestbl (package_name, branch_id, status, package_price, level_tag, package_type, phase_start, phase_end, downpayment_amount, payment_option)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
         [
           package_name, 
@@ -331,9 +355,10 @@ router.post(
           package_type === 'Phase'
             ? (phase_end ? parseInt(phase_end) : (phase_start ? parseInt(phase_start) : null))
             : null,
-          package_type === 'Installment' && downpayment_amount !== undefined && downpayment_amount !== null
+          (package_type === 'Installment' || isPhaseInstallment) && downpayment_amount !== undefined && downpayment_amount !== null
             ? parseFloat(downpayment_amount)
-            : null
+            : null,
+          package_type === 'Phase' ? (payment_option || 'Fullpayment') : null
         ]
       );
 
@@ -458,6 +483,7 @@ router.put(
     body('package_price').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Package price must be a positive number'),
     body('level_tag').optional().isString().withMessage('Level tag must be a string'),
     body('package_type').optional().isIn(['Fullpayment', 'Installment', 'Reserved', 'Phase']).withMessage('Package type must be Fullpayment, Installment, Reserved, or Phase'),
+    body('payment_option').optional().isIn(['Fullpayment', 'Installment']).withMessage('Payment option must be Fullpayment or Installment (only used when package_type is Phase)'),
     body('phase_start').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Phase start must be a positive integer'),
     body('phase_end').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Phase end must be a positive integer'),
     body('downpayment_amount').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Downpayment amount must be a positive number'),
@@ -467,7 +493,7 @@ router.put(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const { package_name, branch_id, status, package_price, level_tag, package_type, phase_start, phase_end, downpayment_amount } = req.body;
+      const { package_name, branch_id, status, package_price, level_tag, package_type, payment_option, phase_start, phase_end, downpayment_amount } = req.body;
 
       // Check if package exists
       const existingPackage = await query('SELECT * FROM packagestbl WHERE package_id = $1', [id]);
@@ -510,10 +536,13 @@ router.put(
         }
       }
 
-      // Validate downpayment for Installment packages
-      // Note: package_price for Installment packages is the monthly installment amount, not total
-      // Downpayment is REQUIRED for Installment packages
-      if (package_type === 'Installment') {
+      // Phase + Installment: same validation as Installment
+      const isPhaseInstallment = package_type === 'Phase' && payment_option === 'Installment';
+      if (package_type === 'Phase' && payment_option && payment_option !== 'Installment') {
+        downpayment_amount = null;
+      }
+
+      if (package_type === 'Installment' || isPhaseInstallment) {
         if (!downpayment_amount || downpayment_amount === '' || downpayment_amount === null || downpayment_amount === undefined) {
           return res.status(400).json({
             success: false,
@@ -527,15 +556,13 @@ router.put(
             message: 'Downpayment amount must be a positive number',
           });
         }
-        // Also require package_price (monthly installment amount)
         if (!package_price || package_price === '' || package_price === null || package_price === undefined) {
           return res.status(400).json({
             success: false,
             message: 'Monthly installment amount (package price) is required for Installment packages',
           });
         }
-      } else if (package_type !== 'Installment' && downpayment_amount !== undefined && downpayment_amount !== null) {
-        // Clear downpayment for non-Installment packages
+      } else if (!isPhaseInstallment && downpayment_amount !== undefined && downpayment_amount !== null) {
         downpayment_amount = null;
       }
 
@@ -554,8 +581,9 @@ router.put(
         phase_start: phase_start !== undefined ? (phase_start ? parseInt(phase_start) : null) : undefined,
         phase_end: phase_end !== undefined ? (phase_end ? parseInt(phase_end) : null) : undefined,
         downpayment_amount: downpayment_amount !== undefined 
-          ? (package_type === 'Installment' && downpayment_amount !== null ? parseFloat(downpayment_amount) : null)
-          : undefined
+          ? ((package_type === 'Installment' || isPhaseInstallment) && downpayment_amount !== null ? parseFloat(downpayment_amount) : null)
+          : undefined,
+        payment_option: package_type !== undefined ? (package_type !== 'Phase' ? null : (payment_option !== undefined ? payment_option : undefined)) : undefined
       };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {

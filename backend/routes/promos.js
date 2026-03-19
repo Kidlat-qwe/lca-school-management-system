@@ -945,10 +945,10 @@ router.post(
         let hasInstallmentPackage = false;
         if (hasPackageRestriction) {
           const packageTypesResult = await client.query(
-            `SELECT DISTINCT package_type FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
+            `SELECT DISTINCT package_type, payment_option FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
             finalPackageIds
           );
-          hasInstallmentPackage = packageTypesResult.rows.some(p => p.package_type === 'Installment');
+          hasInstallmentPackage = packageTypesResult.rows.some(p => p.package_type === 'Installment' || (p.package_type === 'Phase' && p.payment_option === 'Installment'));
         } else if (global_package_type === 'installment') {
           hasInstallmentPackage = true;
         }
@@ -1421,23 +1421,23 @@ router.put(
         let packageTypesToCheck = [];
         if (finalPackageIds !== null) {
           const packageTypesResult = await query(
-            `SELECT DISTINCT package_type FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
+            `SELECT DISTINCT package_type, payment_option FROM packagestbl WHERE package_id IN (${finalPackageIds.map((_, i) => `$${i + 1}`).join(', ')})`,
             finalPackageIds
           );
-          packageTypesToCheck = packageTypesResult.rows.map(p => p.package_type);
+          packageTypesToCheck = packageTypesResult.rows;
         } else {
           // Use existing promo's packages
           const existingPackagesResult = await query(
-            `SELECT DISTINCT pkg.package_type 
+            `SELECT DISTINCT pkg.package_type, pkg.payment_option 
              FROM promopackagestbl pp
              JOIN packagestbl pkg ON pp.package_id = pkg.package_id
              WHERE pp.promo_id = $1`,
             [id]
           );
-          packageTypesToCheck = existingPackagesResult.rows.map(p => p.package_type);
+          packageTypesToCheck = existingPackagesResult.rows;
         }
         
-        const hasInstallmentPackage = packageTypesToCheck.some(p => p === 'Installment');
+        const hasInstallmentPackage = packageTypesToCheck.some(p => p.package_type === 'Installment' || (p.package_type === 'Phase' && p.payment_option === 'Installment'));
         
         if (hasInstallmentPackage) {
           // Validate scope value
@@ -1980,18 +1980,20 @@ router.post(
         } else if (promo.global_package_type) {
           // Global promo: verify that package type matches global_package_type
           const pkgResult = await query(
-            'SELECT package_type FROM packagestbl WHERE package_id = $1',
+            'SELECT package_type, payment_option FROM packagestbl WHERE package_id = $1',
             [package_id]
           );
           const pkgType = pkgResult.rows[0]?.package_type || null;
+          const pkgPaymentOption = pkgResult.rows[0]?.payment_option || null;
+          const isInstallmentPkg = pkgType === 'Installment' || (pkgType === 'Phase' && pkgPaymentOption === 'Installment');
 
-          if (promo.global_package_type === 'fullpayment' && pkgType !== 'Fullpayment') {
+          if (promo.global_package_type === 'fullpayment' && (pkgType !== 'Fullpayment' && !(pkgType === 'Phase' && pkgPaymentOption === 'Fullpayment'))) {
             return res.status(400).json({
               success: false,
               message: 'Promo code does not apply to this package type',
             });
           }
-          if (promo.global_package_type === 'installment' && pkgType !== 'Installment') {
+          if (promo.global_package_type === 'installment' && !isInstallmentPkg) {
             return res.status(400).json({
               success: false,
               message: 'Promo code does not apply to this package type',

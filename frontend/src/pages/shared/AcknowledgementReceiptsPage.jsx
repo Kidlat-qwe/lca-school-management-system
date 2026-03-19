@@ -10,6 +10,7 @@ const AcknowledgementReceiptsPage = () => {
   const { userInfo } = useAuth();
   const userType = userInfo?.user_type || userInfo?.userType;
   const isSuperadmin = userType === 'Superadmin';
+  const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
   const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,6 +26,8 @@ const AcknowledgementReceiptsPage = () => {
 
   const [packages, setPackages] = useState([]);
   const [packagesLoading, setPackagesLoading] = useState(false);
+  const [merchandise, setMerchandise] = useState([]);
+  const [merchandiseLoading, setMerchandiseLoading] = useState(false);
   const [branches, setBranches] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState(
@@ -37,7 +40,10 @@ const AcknowledgementReceiptsPage = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
+  const [branchModalStep, setBranchModalStep] = useState(1);
+  const [arType, setArType] = useState('Package');
   const [selectedPackage, setSelectedPackage] = useState(null);
+  const [merchandiseSelections, setMerchandiseSelections] = useState([]);
   const [createFormData, setCreateFormData] = useState({
     prospect_student_name: '',
     prospect_student_contact: '',
@@ -114,6 +120,20 @@ const AcknowledgementReceiptsPage = () => {
     }
   };
 
+  const fetchMerchandise = async (branchId) => {
+    try {
+      setMerchandiseLoading(true);
+      const url = branchId ? `/merchandise?branch_id=${branchId}&limit=100` : '/merchandise?limit=100';
+      const response = await apiRequest(url);
+      setMerchandise(response.data || []);
+    } catch (err) {
+      console.error('Error fetching merchandise for AR:', err);
+      setMerchandise([]);
+    } finally {
+      setMerchandiseLoading(false);
+    }
+  };
+
   const fetchBranches = async () => {
     try {
       setBranchesLoading(true);
@@ -132,7 +152,9 @@ const AcknowledgementReceiptsPage = () => {
   };
 
   const resetCreateForm = () => {
+    setArType('Package');
     setSelectedPackage(null);
+    setMerchandiseSelections([]);
     setCreateFormData({
       prospect_student_name: '',
       prospect_student_contact: '',
@@ -228,13 +250,86 @@ const AcknowledgementReceiptsPage = () => {
     );
   };
 
-  const openCreateModal = () => {
+  const openCreateModal = (preserveArType) => {
     resetCreateForm();
+    if (preserveArType) {
+      setArType(preserveArType);
+    }
     setShowCreateModal(true);
+  };
+
+  const handleArTypeChange = (newType) => {
+    setArType(newType);
+    setSelectedPackage(null);
+    setMerchandiseSelections([]);
+    setCreateFormData((prev) => ({
+      ...prev,
+      package_id: '',
+      payment_amount: '',
+      prospect_student_contact: newType === 'Package' ? prev.prospect_student_contact : '',
+    }));
+    const branchId = isSuperadmin ? parseInt(selectedBranchId, 10) : userBranchId;
+    if (newType === 'Merchandise' && branchId) {
+      fetchMerchandise(branchId);
+    } else if (newType === 'Package' && branchId) {
+      fetchPackages(branchId);
+    }
+  };
+
+  const uniqueMerchandiseNames = () => {
+    const names = [...new Set(merchandise.filter((m) => m.quantity == null || m.quantity > 0).map((m) => m.merchandise_name))];
+    return names.sort((a, b) => a.localeCompare(b));
+  };
+
+  const merchandiseTotalAmount = () => {
+    return merchandiseSelections.reduce((sum, sel) => {
+      if (!sel.selectedMerchandiseId) return sum;
+      const m = merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId);
+      const price = m ? (parseFloat(m.price) || 0) : 0;
+      return sum + price * (sel.quantity || 1);
+    }, 0);
+  };
+
+  const isUniformMerchandise = (name) => (name || '').toLowerCase().includes('uniform');
+
+  const addMerchandiseByName = (merchandiseName) => {
+    const sizeOptions = merchandise.filter(
+      (m) => m.merchandise_name === merchandiseName && (m.quantity == null || m.quantity > 0)
+    );
+    if (sizeOptions.length === 0) return;
+    const autoSelect = sizeOptions.length === 1 ? sizeOptions[0].merchandise_id : null;
+    setMerchandiseSelections((prev) => [
+      ...prev,
+      {
+        id: `sel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        merchandise_name: merchandiseName,
+        sizeOptions,
+        selectedMerchandiseId: autoSelect,
+        quantity: 1,
+      },
+    ]);
+  };
+
+  const removeMerchandiseSelection = (selectionId) => {
+    setMerchandiseSelections((prev) => prev.filter((s) => s.id !== selectionId));
+  };
+
+  const updateMerchandiseSelectionSize = (selectionId, merchandiseId) => {
+    setMerchandiseSelections((prev) =>
+      prev.map((s) => (s.id === selectionId ? { ...s, selectedMerchandiseId: merchandiseId ? parseInt(merchandiseId, 10) : null } : s))
+    );
+  };
+
+  const updateMerchandiseSelectionQuantity = (selectionId, qty) => {
+    const num = Math.max(1, parseInt(qty, 10) || 1);
+    setMerchandiseSelections((prev) =>
+      prev.map((s) => (s.id === selectionId ? { ...s, quantity: num } : s))
+    );
   };
 
   const handleCreateClick = () => {
     if (isSuperadmin) {
+      setBranchModalStep(1);
       setShowBranchModal(true);
     } else {
       openCreateModal();
@@ -265,7 +360,7 @@ const AcknowledgementReceiptsPage = () => {
 
     let amount = 0;
     if (pkg) {
-      const isInstallment = (pkg.package_type || '').toLowerCase() === 'installment';
+      const isInstallment = (pkg.package_type || '').toLowerCase() === 'installment' || (pkg.package_type === 'Phase' && (pkg.payment_option || '').toLowerCase() === 'installment');
       const downpayment = pkg.downpayment_amount != null
         ? (typeof pkg.downpayment_amount === 'number' ? pkg.downpayment_amount : parseFloat(pkg.downpayment_amount) || 0)
         : 0;
@@ -351,27 +446,40 @@ const AcknowledgementReceiptsPage = () => {
   const validateCreateForm = () => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
-    const guardianName = (createFormData.prospect_student_contact || '').trim();
-    const amount = parseFloat(createFormData.payment_amount || '0');
+    const isMerch = arType === 'Merchandise';
 
     if (!name) {
       errors.prospect_student_name = 'Student name is required';
     }
-    if (!guardianName) {
-      errors.prospect_student_contact = 'Guardian name is required';
-    }
     if (isSuperadmin && !selectedBranchId) {
       errors.branch_id = 'Branch is required';
     }
-    if (!createFormData.package_id) {
-      errors.package_id = 'Package is required';
-    }
-    const levelTag = (createFormData.level_tag || '').trim();
-    if (!levelTag) {
-      errors.level_tag = 'Level tag is required';
-    }
-    if (!amount || amount <= 0) {
-      errors.payment_amount = 'Payment amount must be greater than 0';
+
+    if (isMerch) {
+      const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
+      if (merchandiseSelections.length === 0 || configuredCount === 0) {
+        errors.merchandise = 'Select at least one merchandise item and configure size';
+      }
+      const levelTag = (createFormData.level_tag || '').trim();
+      if (!levelTag) {
+        errors.level_tag = 'Level tag is required';
+      }
+    } else {
+      const guardianName = (createFormData.prospect_student_contact || '').trim();
+      if (!guardianName) {
+        errors.prospect_student_contact = 'Guardian name is required';
+      }
+      if (!createFormData.package_id) {
+        errors.package_id = 'Package is required';
+      }
+      const levelTag = (createFormData.level_tag || '').trim();
+      if (!levelTag) {
+        errors.level_tag = 'Level tag is required';
+      }
+      const amount = parseFloat(createFormData.payment_amount || '0');
+      if (!amount || amount <= 0) {
+        errors.payment_amount = 'Payment amount must be greater than 0';
+      }
     }
 
     setCreateFormErrors(errors);
@@ -384,44 +492,65 @@ const AcknowledgementReceiptsPage = () => {
 
     setCreating(true);
     try {
-      const isInstallmentPkg = selectedPackage &&
-        (selectedPackage.package_type || '').toLowerCase() === 'installment';
+      const isMerch = arType === 'Merchandise';
+      const branchId = isSuperadmin && selectedBranchId
+        ? parseInt(selectedBranchId, 10)
+        : !isSuperadmin && userBranchId
+        ? userBranchId
+        : null;
 
-      const payload = {
-        ...createFormData,
-        prospect_student_name: (createFormData.prospect_student_name || '').trim(),
-        prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
-        prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
-        package_id: parseInt(createFormData.package_id, 10),
-        payment_amount: parseFloat(createFormData.payment_amount),
-        issue_date: todayManilaYMD(),
-        installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
-        ...(isSuperadmin && selectedBranchId
-          ? { branch_id: parseInt(selectedBranchId, 10) }
-          : !isSuperadmin && userBranchId
-          ? { branch_id: userBranchId }
-          : {}),
-      };
+      let payload;
+      if (isMerch) {
+        payload = {
+          ar_type: 'Merchandise',
+          prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
+          level_tag: (createFormData.level_tag || '').trim() || undefined,
+          merchandise_items: merchandiseSelections
+            .filter((s) => s.selectedMerchandiseId)
+            .map((s) => ({
+              merchandise_id: s.selectedMerchandiseId,
+              quantity: s.quantity || 1,
+            })),
+          reference_number: (createFormData.reference_number || '').trim() || undefined,
+          payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          issue_date: todayManilaYMD(),
+          branch_id: branchId,
+        };
+        if (!payload.reference_number) delete payload.reference_number;
+        if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
+        if (!payload.level_tag) delete payload.level_tag;
+      } else {
+        const isInstallmentPkg = selectedPackage &&
+          (selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment');
+        payload = {
+          ar_type: 'Package',
+          prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+          prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
+          package_id: parseInt(createFormData.package_id, 10),
+          payment_amount: parseFloat(createFormData.payment_amount),
+          issue_date: todayManilaYMD(),
+          installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
+          level_tag: (createFormData.level_tag || '').trim() || undefined,
+          reference_number: (createFormData.reference_number || '').trim() || undefined,
+          payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          branch_id: branchId,
+        };
+        if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
+        if (!payload.level_tag) delete payload.level_tag;
+        if (!payload.reference_number) delete payload.reference_number;
+        if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
+      }
 
-      if (!payload.prospect_student_notes) {
-        delete payload.prospect_student_notes;
-      }
-      if (payload.level_tag !== undefined && payload.level_tag !== null && String(payload.level_tag).trim() === '') {
-        delete payload.level_tag;
-      }
-      if (!payload.reference_number) {
-        delete payload.reference_number;
-      }
-      if (!payload.payment_attachment_url) {
-        delete payload.payment_attachment_url;
-      }
-
-      await apiRequest('/acknowledgement-receipts', {
+      const result = await apiRequest('/acknowledgement-receipts', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
 
-      alert('Acknowledgement Receipt created successfully.');
+      alert(isMerch && result.message
+        ? result.message
+        : 'Acknowledgement Receipt created successfully.');
       setShowCreateModal(false);
       await fetchReceipts(1);
     } catch (err) {
@@ -529,9 +658,10 @@ const AcknowledgementReceiptsPage = () => {
               >
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Type</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Student Name</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Guardian Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Package / Items</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Level Tag</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Branch</th>
@@ -544,7 +674,7 @@ const AcknowledgementReceiptsPage = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center">
+                      <td colSpan={11} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
@@ -552,24 +682,54 @@ const AcknowledgementReceiptsPage = () => {
                     receipts.map((r) => (
                     <tr key={r.ack_receipt_id}>
                       <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                            r.ar_type === 'Merchandise' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                          }`}
+                        >
+                          {r.ar_type || 'Package'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="text-gray-900 font-medium">
                           {r.prospect_student_name || '-'}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-900">
-                        {r.prospect_student_contact || <span className="text-gray-300">?</span>}
+                        {r.prospect_student_contact || <span className="text-gray-300">–</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="text-gray-900">
-                          {r.package_name_snapshot || r.package_name || 'N/A'}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          ₱
-                          {Number(r.package_amount_snapshot || 0).toLocaleString('en-US', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </div>
+                        {r.ar_type === 'Merchandise' ? (
+                          <div className="text-gray-900 text-xs">
+                            {(() => {
+                              const items = typeof r.merchandise_items_snapshot === 'string'
+                                ? (() => { try { return JSON.parse(r.merchandise_items_snapshot); } catch { return []; } })()
+                                : r.merchandise_items_snapshot;
+                              return items && Array.isArray(items)
+                              ? items.map((i, idx) => (
+                                  <span key={idx}>
+                                    {i.merchandise_name}
+                                    {i.size ? ` (${i.size})` : ''} × {i.quantity || 1}
+                                    {idx < items.length - 1 ? ', ' : ''}
+                                  </span>
+                                ))
+                              : 'Merchandise';
+                            })()}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-gray-900">
+                              {r.package_name_snapshot || r.package_name || 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              ₱
+                              {Number(r.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </div>
+                          </>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-700">
                         {r.level_tag || <span className="text-gray-300">?</span>}
@@ -671,17 +831,19 @@ const AcknowledgementReceiptsPage = () => {
         createPortal(
           <div
             className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-            onClick={() => setShowBranchModal(false)}
+            onClick={() => { setShowBranchModal(false); setBranchModalStep(1); }}
           >
             <div
               className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-6 pt-6 pb-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Select Branch</h2>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {branchModalStep === 1 ? 'Select Branch' : 'Select Issue Type'}
+                </h2>
                 <button
                   type="button"
-                  onClick={() => setShowBranchModal(false)}
+                  onClick={() => { setShowBranchModal(false); setBranchModalStep(1); }}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -690,42 +852,73 @@ const AcknowledgementReceiptsPage = () => {
                 </button>
               </div>
               <div className="px-6 pt-4 pb-6 space-y-4">
-                <div>
-                  <label className="label-field text-xs">
-                    Select Branch <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={selectedBranchId}
-                    onChange={(e) => setSelectedBranchId(e.target.value)}
-                    className="input-field text-sm"
-                    disabled={branchesLoading}
-                  >
-                    <option value="">Choose a branch...</option>
-                    {branches.map((b) => (
-                      <option key={b.branch_id} value={b.branch_id}>
-                        {b.branch_nickname || b.branch_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {branchModalStep === 1 ? (
+                  <div>
+                    <label className="label-field text-xs">
+                      Select Branch <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={selectedBranchId}
+                      onChange={(e) => setSelectedBranchId(e.target.value)}
+                      className="input-field text-sm"
+                      disabled={branchesLoading}
+                    >
+                      <option value="">Choose a branch...</option>
+                      {branches.map((b) => (
+                        <option key={b.branch_id} value={b.branch_id}>
+                          {b.branch_nickname || b.branch_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={arType}
+                      onChange={(e) => setArType(e.target.value)}
+                      className="input-field text-sm"
+                    >
+                      <option value="Package">Package</option>
+                      <option value="Merchandise">Merchandise</option>
+                    </select>
+                  </div>
+                )}
                 <div className="flex justify-end gap-3 pt-2 border-t border-gray-200">
                   <button
                     type="button"
-                    onClick={() => setShowBranchModal(false)}
+                    onClick={() => {
+                      if (branchModalStep === 2) {
+                        setBranchModalStep(1);
+                      } else {
+                        setShowBranchModal(false);
+                      }
+                    }}
                     className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
                   >
-                    Cancel
+                    {branchModalStep === 2 ? 'Back' : 'Cancel'}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      if (!selectedBranchId) {
-                        alert('Please select a branch.');
-                        return;
+                      if (branchModalStep === 1) {
+                        if (!selectedBranchId) {
+                          alert('Please select a branch.');
+                          return;
+                        }
+                        setBranchModalStep(2);
+                      } else {
+                        const branchId = parseInt(selectedBranchId, 10);
+                        fetchPackages(branchId);
+                        if (arType === 'Merchandise') {
+                          fetchMerchandise(branchId);
+                        }
+                        setShowBranchModal(false);
+                        setBranchModalStep(1);
+                        openCreateModal(arType);
                       }
-                      fetchPackages(parseInt(selectedBranchId, 10));
-                      setShowBranchModal(false);
-                      openCreateModal();
                     }}
                     className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-md hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -745,7 +938,7 @@ const AcknowledgementReceiptsPage = () => {
             onClick={closeCreateModal}
           >
             <div
-              className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+              className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] overflow-y-auto ${arType === 'Merchandise' ? 'max-w-4xl' : 'max-w-2xl'}`}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-6 pt-6 pb-4 border-b border-gray-200 flex items-center justify-between">
@@ -784,6 +977,7 @@ const AcknowledgementReceiptsPage = () => {
                           return next;
                         });
                         setSelectedPackage(null);
+                        setMerchandiseSelections([]);
                         setCreateFormData((prev) => ({
                           ...prev,
                           package_id: '',
@@ -791,9 +985,12 @@ const AcknowledgementReceiptsPage = () => {
                           installment_option: 'downpayment_only',
                         }));
                         if (value) {
-                          fetchPackages(parseInt(value, 10));
+                          const bid = parseInt(value, 10);
+                          fetchPackages(bid);
+                          if (arType === 'Merchandise') fetchMerchandise(bid);
                         } else {
                           setPackages([]);
+                          setMerchandise([]);
                         }
                       }}
                       className={`input-field text-sm ${createFormErrors.branch_id ? 'border-red-500' : ''}`}
@@ -811,6 +1008,248 @@ const AcknowledgementReceiptsPage = () => {
                     )}
                   </div>
                 )}
+                {(isSuperadmin || isAdminOrSuperadmin) && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={arType}
+                      onChange={(e) => handleArTypeChange(e.target.value)}
+                      className="input-field text-sm"
+                    >
+                      <option value="Package">Package</option>
+                      {isAdminOrSuperadmin && <option value="Merchandise">Merchandise</option>}
+                    </select>
+                  </div>
+                )}
+                {arType === 'Merchandise' ? (
+                  <>
+                    <div>
+                      <label className="label-field text-xs">
+                        Student Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="prospect_student_name"
+                        value={createFormData.prospect_student_name}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
+                      />
+                      {createFormErrors.prospect_student_name && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Select Merchandise <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        className={`input-field text-sm ${createFormErrors.merchandise ? 'border-red-500' : ''}`}
+                        disabled={merchandiseLoading}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val) {
+                            addMerchandiseByName(val);
+                            e.target.value = '';
+                          }
+                        }}
+                      >
+                        <option value="">Add merchandise...</option>
+                        {uniqueMerchandiseNames().map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      {createFormErrors.merchandise && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.merchandise}</p>
+                      )}
+                      {merchandiseSelections.length > 0 && (
+                        <ul className="mt-2 space-y-3">
+                          {merchandiseSelections.map((sel) => {
+                            const selectedItem = sel.selectedMerchandiseId
+                              ? merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId)
+                              : sel.sizeOptions.length === 1
+                              ? sel.sizeOptions[0]
+                              : null;
+                            const price = selectedItem ? parseFloat(selectedItem.price) || 0 : 0;
+                            const lineTotal = price * (sel.quantity || 1);
+                            const imageUrl = selectedItem?.image_url || sel.sizeOptions.find((o) => o.image_url)?.image_url || sel.sizeOptions[0]?.image_url;
+                            return (
+                              <li
+                                key={sel.id}
+                                className="flex flex-row items-center gap-4 p-3 bg-gray-50 rounded-lg border border-gray-200"
+                              >
+                                <div className="flex items-center gap-3 flex-shrink-0">
+                                  {imageUrl && (
+                                    <img
+                                      src={imageUrl}
+                                      alt={sel.merchandise_name}
+                                      className="w-12 h-12 object-cover rounded border border-gray-200 bg-white"
+                                    />
+                                  )}
+                                  <div>
+                                    <p className="font-medium text-gray-900 text-sm">{sel.merchandise_name}</p>
+                                    <p className="text-xs text-gray-500">
+                                      {selectedItem
+                                        ? [
+                                            `₱${price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+                                            selectedItem.size && selectedItem.size,
+                                            selectedItem.gender && selectedItem.gender,
+                                            selectedItem.type && selectedItem.type,
+                                            !isUniformMerchandise(sel.merchandise_name) && selectedItem.remarks?.trim() && selectedItem.remarks.trim(),
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' • ')
+                                        : isUniformMerchandise(sel.merchandise_name)
+                                          ? 'Select size'
+                                          : 'Select type'}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3 flex-1 flex-wrap min-w-0">
+                                  {sel.sizeOptions.length > 1 ? (
+                                    <div className="min-w-[180px]">
+                                      <label className="sr-only">{isUniformMerchandise(sel.merchandise_name) ? 'Size' : 'Type'}</label>
+                                      <select
+                                        value={sel.selectedMerchandiseId || ''}
+                                        onChange={(e) => updateMerchandiseSelectionSize(sel.id, e.target.value)}
+                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"
+                                      >
+                                        <option value="">
+                                          {isUniformMerchandise(sel.merchandise_name) ? 'Select size' : 'Select type'}
+                                        </option>
+                                        {sel.sizeOptions.map((opt) => (
+                                          <option key={opt.merchandise_id} value={opt.merchandise_id}>
+                                            {[
+                                              opt.size || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type'),
+                                              opt.gender && opt.gender,
+                                              opt.type && opt.type,
+                                              !isUniformMerchandise(sel.merchandise_name) && opt.remarks?.trim(),
+                                              `₱${Number(opt.price || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+                                            ]
+                                              .filter(Boolean)
+                                              .join(' - ')}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  ) : (
+                                    sel.sizeOptions.length === 1 && (
+                                      <span className="text-xs text-gray-500">
+                                        {[
+                                          sel.sizeOptions[0].size && `Size: ${sel.sizeOptions[0].size}`,
+                                          sel.sizeOptions[0].gender && `Gender: ${sel.sizeOptions[0].gender}`,
+                                          sel.sizeOptions[0].type && `Type: ${sel.sizeOptions[0].type}`,
+                                          !isUniformMerchandise(sel.merchandise_name) && sel.sizeOptions[0].remarks?.trim() && `Remarks: ${sel.sizeOptions[0].remarks.trim()}`,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' • ') || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type')}
+                                      </span>
+                                    )
+                                  )}
+                                  <div>
+                                    <label className="sr-only">Quantity</label>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={sel.quantity || 1}
+                                      onChange={(e) => updateMerchandiseSelectionQuantity(sel.id, e.target.value)}
+                                      className="w-16 px-2 py-1.5 text-sm border border-gray-300 rounded"
+                                    />
+                                  </div>
+                                  <span className="text-sm font-medium text-gray-700">
+                                    ₱{lineTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMerchandiseSelection(sel.id)}
+                                    className="p-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded"
+                                    title="Remove"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Level Tag <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        name="level_tag"
+                        value={createFormData.level_tag}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
+                      >
+                        <option value="">Select Level Tag</option>
+                        {LEVEL_TAG_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                      {createFormErrors.level_tag && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Amount</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Reference Number</label>
+                      <input
+                        type="text"
+                        name="reference_number"
+                        value={createFormData.reference_number}
+                        onChange={handleCreateInputChange}
+                        placeholder="e.g. GCash transaction ID, bank ref"
+                        className="input-field text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Attachment (image)</label>
+                      <p className="text-xs text-gray-500 mb-1">Optional: upload receipt or proof (JPEG, PNG, WebP, GIF – max 5 MB)</p>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={handleAttachmentChange}
+                        disabled={attachmentUploading || creating}
+                        className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                      />
+                      {attachmentUploading && <p className="text-xs text-amber-600 mt-1">Uploading…</p>}
+                      {createFormData.payment_attachment_url && !attachmentUploading && (
+                        <div className="mt-2">
+                          <img
+                            src={createFormData.payment_attachment_url}
+                            alt="Preview"
+                            className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
+                          />
+                          <div className="mt-2 flex gap-2">
+                            <button type="button" onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)} className="text-sm text-blue-600 hover:underline">
+                              View
+                            </button>
+                            <button type="button" onClick={clearAttachment} className="text-xs text-red-600 hover:text-red-700">
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="label-field text-xs">
@@ -927,8 +1366,10 @@ const AcknowledgementReceiptsPage = () => {
                         createFormErrors.payment_amount ? 'border-red-500' : ''
                       }`}
                       readOnly={
-                        !!(selectedPackage &&
-                          (selectedPackage.package_type || '').toLowerCase() === 'installment')
+                        !!(selectedPackage && (
+                          (selectedPackage.package_type || '').toLowerCase() === 'installment' ||
+                          (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')
+                        ))
                       }
                     />
                     {createFormErrors.payment_amount && (
@@ -938,7 +1379,7 @@ const AcknowledgementReceiptsPage = () => {
                 </div>
 
                 {selectedPackage &&
-                  (selectedPackage.package_type || '').toLowerCase() === 'installment' && (() => {
+                  ((selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')) && (() => {
                     const downpayment = parseFloat(selectedPackage.downpayment_amount || 0);
                     const monthly = parseFloat(selectedPackage.package_price || 0);
                     return (
@@ -1009,7 +1450,7 @@ const AcknowledgementReceiptsPage = () => {
                 <div>
                   <label className="label-field text-xs">Attachment (image)</label>
                   <p className="text-xs text-gray-500 mb-1">
-                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF ? max 5 MB)
+                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF – max 5 MB)
                   </p>
                   <input
                     type="file"
@@ -1047,6 +1488,9 @@ const AcknowledgementReceiptsPage = () => {
                     </div>
                   )}
                 </div>
+
+                  </>
+                )}
 
                 <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                   <button

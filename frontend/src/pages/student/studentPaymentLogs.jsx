@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -11,6 +12,7 @@ const StudentPaymentLogs = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
@@ -121,6 +123,21 @@ const StudentPaymentLogs = () => {
     
     return matchesSearch && matchesStatus && matchesPaymentMethod;
   });
+
+  const itemsPerPage = 10;
+  const totalPages = Math.max(Math.ceil(filteredPayments.length / itemsPerPage), 1);
+  const paginatedPayments = filteredPayments.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterStatus, filterPaymentMethod]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   const handleExportToExcel = async () => {
     try {
@@ -398,7 +415,7 @@ const StudentPaymentLogs = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPayments.map((payment) => (
+                  paginatedPayments.map((payment) => (
                   <tr key={payment.payment_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
@@ -436,9 +453,14 @@ const StudentPaymentLogs = () => {
         </div>
 
       {filteredPayments.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPayments.length} of {payments.length} payments
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPayments.length}
+          itemsPerPage={itemsPerPage}
+          itemLabel="payments"
+          onPageChange={(page) => setCurrentPage(Math.min(Math.max(page, 1), totalPages))}
+        />
       )}
     </div>
   );

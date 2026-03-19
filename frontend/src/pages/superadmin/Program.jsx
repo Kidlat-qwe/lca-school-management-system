@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const Program = () => {
   const [programs, setPrograms] = useState([]);
@@ -8,6 +11,7 @@ const Program = () => {
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [filterCurriculum, setFilterCurriculum] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openCurriculumDropdown, setOpenCurriculumDropdown] = useState(false);
@@ -312,6 +316,20 @@ const Program = () => {
     return matchesNameSearch && matchesCurriculum;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredPrograms.length / ITEMS_PER_PAGE));
+  const paginatedPrograms = filteredPrograms.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterCurriculum]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -460,7 +478,7 @@ const Program = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPrograms.map((program) => {
+                  paginatedPrograms.map((program) => {
                   // Format session duration for display
                   const formatSessionDuration = (duration) => {
                     if (!duration && duration !== 0) return '-';
@@ -517,11 +535,16 @@ const Program = () => {
           </div>
         </div>
 
-      {/* Results Count */}
+      {/* Pagination */}
       {filteredPrograms.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPrograms.length} of {programs.length} programs
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPrograms.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="programs"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {/* Action Menu Overlay */}

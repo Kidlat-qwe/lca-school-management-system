@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const StudentAnnouncements = () => {
   const { userInfo } = useAuth();
@@ -16,7 +17,7 @@ const StudentAnnouncements = () => {
   const [filterCreatedOn, setFilterCreatedOn] = useState('');
   const [openRecipientGroupDropdown, setOpenRecipientGroupDropdown] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(15);
+  const [itemsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
@@ -435,45 +436,14 @@ const StudentAnnouncements = () => {
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">Items per page:</span>
-              <select
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(Number(e.target.value));
-                  setCurrentPage(1);
-                }}
-                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844]"
-              >
-                <option value={10}>10</option>
-                <option value={15}>15</option>
-                <option value={20}>20</option>
-                <option value={30}>30</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">
-                Page {currentPage} of {totalPages} ({totalItems} total)
-              </span>
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages || 1}
+          totalItems={totalItems}
+          itemsPerPage={itemsPerPage}
+          itemLabel="entries"
+          onPageChange={(page) => setCurrentPage(Math.min(Math.max(page, 1), totalPages || 1))}
+        />
       </div>
 
       {/* View Details Modal (portaled so overlay covers header) */}

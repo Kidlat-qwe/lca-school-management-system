@@ -2,10 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 
 const AdminClasses = () => {
+  const ITEMS_PER_PAGE = 10;
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -32,6 +34,7 @@ const AdminClasses = () => {
   const [holidayCacheKey, setHolidayCacheKey] = useState('');
   const [holidayDateSet, setHolidayDateSet] = useState(new Set());
   const [loadingHolidays, setLoadingHolidays] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const [formData, setFormData] = useState({
     branch_id: '',
     room_id: '',
@@ -434,7 +437,8 @@ const initializePackageMerchSelections = useCallback(
       params.set('limit', '50');
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
-      setAckReceipts(response.data || []);
+      const all = response.data || [];
+      setAckReceipts(all.filter((ar) => ar.ar_type === 'Package'));
     } catch (err) {
       console.error('Error fetching acknowledgement receipts for enrollment:', err);
       setAckReceiptsError('Failed to load acknowledgement receipts. Please try again.');
@@ -522,7 +526,7 @@ const initializePackageMerchSelections = useCallback(
       if (response.success && response.data) {
         const promo = response.data;
         // For Installment packages, apply promo to downpayment; otherwise use package_price
-        const baseAmount = selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+        const baseAmount = (selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
           ? parseFloat(selectedPackage.downpayment_amount)
           : parseFloat(selectedPackage?.package_price || 0);
         let discountAmount = 0;
@@ -2366,7 +2370,7 @@ const initializePackageMerchSelections = useCallback(
 
         const enrollmentType = isPhasePerPhase
           ? 'Per-Phase'
-          : (upgradeSelectedPackage.package_type === 'Installment' ? 'Installment' : 'Fullpayment');
+          : ((upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? 'Installment' : 'Fullpayment');
 
         payload = {
           enrollment_type: enrollmentType,
@@ -2375,7 +2379,7 @@ const initializePackageMerchSelections = useCallback(
           ...(upgradeSelectedPromo ? { promo_id: upgradeSelectedPromo.promo_id } : {}),
           // Installment settings apply only to standard Installment packages (not Phase per-phase)
           ...(!isPhasePerPhase &&
-          upgradeSelectedPackage.package_type === 'Installment' &&
+          (upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) &&
           upgradeShowInstallmentSettings &&
           upgradeInstallmentSettings.invoice_issue_date
             ? {
@@ -2672,7 +2676,7 @@ const initializePackageMerchSelections = useCallback(
     
     // Auto-show installment settings if package type is "Installment" and NOT fullpayment
     // Hide installment settings for Reserved packages (settings will be configured during upgrade)
-    if (packageItem.package_type === 'Installment' && !hasFullpaymentPricing) {
+    if ((packageItem.package_type === 'Installment' || (packageItem.package_type === 'Phase' && packageItem.payment_option === 'Installment')) && !hasFullpaymentPricing) {
       setShowInstallmentSettings(true);
       const branchId = selectedClassForEnrollment?.branch_id ?? selectedClassForEnrollment?.branchId ?? null;
       fetchInstallmentScheduleSettings(branchId).then(setInstallmentSettings);
@@ -5224,6 +5228,21 @@ setFormData({
     
     return matchesSearch && matchesProgram;
   });
+  const totalPages = Math.max(Math.ceil(filteredClasses.length / ITEMS_PER_PAGE), 1);
+  const paginatedClasses = filteredClasses.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterProgram]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   if (loading) {
     return (
@@ -7402,7 +7421,7 @@ setFormData({
                     </td>
                   </tr>
                 ) : (
-                  filteredClasses.map((classItem) => {
+                  paginatedClasses.map((classItem) => {
                   const formatDate = (dateValue) => {
                     if (!dateValue) return '-';
                     try {
@@ -7565,14 +7584,15 @@ setFormData({
             </table>
             </div>
           </div>
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredClasses.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="classes"
+            onPageChange={setCurrentPage}
+          />
         </div>
-
-      {/* Results Count */}
-      {filteredClasses.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredClasses.length} of {classes.length} classes
-        </div>
-      )}
 
       {/* Action Menu Overlay Modal */}
       {openMenuId && createPortal(
@@ -9298,16 +9318,14 @@ setFormData({
                                       {ar.package_name_snapshot || ar.package_name || 'N/A'}
                                     </div>
                                     <div className="text-xs text-gray-500">
-                                      ?
-                                      {Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                      ₱{Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2,
                                       })}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-gray-900">
-                                    ?
-                                    {Number(ar.payment_amount || 0).toLocaleString('en-US', {
+                                    ₱{Number(ar.payment_amount || 0).toLocaleString('en-US', {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
                                     })}
@@ -9380,7 +9398,7 @@ setFormData({
                         ? packages.filter(pkg => pkg.package_type === 'Phase')
                         : packages.filter(pkg =>
                             pkg.package_type === 'Fullpayment' ||
-                            pkg.package_type === 'Installment' ||
+                            (pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ||
                             pkg.package_type === 'Promo'
                           );
                     
@@ -9449,7 +9467,7 @@ setFormData({
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
-                                  {pkg.package_type === 'Installment' && (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                                       Installment
                                     </span>
@@ -9457,7 +9475,7 @@ setFormData({
                                 </div>
                               {pkg.package_price && (
                                 <div className="flex flex-col space-y-1 mb-2">
-                                  {pkg.package_type === 'Installment' ? (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ? (
                                     <>
                                       {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
                                         <div className="flex items-baseline space-x-2">
@@ -9707,7 +9725,7 @@ setFormData({
                               <p className="text-base font-semibold text-gray-900 mt-0.5">
                                   {selectedPackage.package_name}
                                 </p>
-                            {selectedPackage.package_type === 'Installment' ? (
+                            {(selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) ? (
                               <div className="flex flex-col gap-1 mt-1">
                                 {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
@@ -9903,7 +9921,7 @@ setFormData({
                                         <div className="mt-2 pt-2 border-t border-gray-200">
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-xs text-gray-500 line-through">
-                                              ?{(selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                              ₱{((selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                                 ? parseFloat(selectedPackage.downpayment_amount)
                                                 : parseFloat(selectedPackage?.package_price || 0)
                                               ).toFixed(2)}
@@ -9912,7 +9930,7 @@ setFormData({
                                               ?{validatedPromoFromCode.final_price.toFixed(2)}
                                             </span>
                                             <span className="text-xs text-gray-600">
-                                              {selectedPackage?.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
+                                              {(selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) ? 'Final Down payment' : 'Final Price'}
                                             </span>
                                           </div>
                                         </div>
@@ -9925,7 +9943,7 @@ setFormData({
                               {/* Show auto-apply promos */}
                               {availablePromos.map((promo) => {
                                 // For Installment packages, apply promo to downpayment; otherwise use package_price
-                                const baseAmount = selectedPackage.package_type === 'Installment' && selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                const baseAmount = (selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) && selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                   ? parseFloat(selectedPackage.downpayment_amount)
                                   : parseFloat(selectedPackage.package_price || 0);
                                 let discountAmount = 0;
@@ -11131,7 +11149,7 @@ setFormData({
                           <p className="text-sm text-gray-700">
                             <strong>Package:</strong> {selectedPackage.package_name}
                           </p>
-                          {selectedPackage.package_type === 'Installment' ? (
+                          {(selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) ? (
                             <>
                               {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
                                 <p className="text-sm text-gray-700">
@@ -11405,7 +11423,7 @@ setFormData({
                                     <li key={pricing.pricinglist_id} className="flex justify-between items-center text-sm">
                                       <span className="text-gray-700">{pricing.name}</span>
                                       <span className="text-gray-900 font-semibold">
-                                        ?{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        ₱{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                       </span>
                                 </li>
                                   );
@@ -11597,18 +11615,17 @@ setFormData({
                 enrollStep !== 'ack-receipt-selection' &&
                 !(enrollStep === 'review' && generatedInvoices.length > 0) && (
                 <div className="flex items-center gap-3">
-                  {/* Total Amount Display - For per-phase enrollment in student-selection and review steps */}
-                  {(enrollStep === 'student-selection' || enrollStep === 'review') && (
-                    <>
-                      {selectedEnrollmentOption === 'per-phase' && (
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
-                          <span className="text-xs font-medium text-blue-900">Total Amount:</span>
-                          <span className="text-sm font-bold text-blue-700">
-                            ${calculatePerPhaseTotal().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      )}
-                    </>
+                  {/* Total Amount Display - Hidden for per-phase enrollment (pay per phase, no single total) */}
+                  {(enrollStep === 'student-selection' || enrollStep === 'review') &&
+                    selectedEnrollmentOption !== 'per-phase' &&
+                    (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation' || selectedEnrollmentOption === 'ack-receipt') &&
+                    selectedPackage && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
+                      <span className="text-xs font-medium text-blue-900">Total Amount:</span>
+                      <span className="text-sm font-bold text-blue-700">
+                        ₱{(Number(selectedPackage.package_price) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   )}
                 <button
                   type="button"
@@ -13441,7 +13458,7 @@ setFormData({
                                 await fetchUpgradeAvailablePromos(pkg.package_id);
                               }
                               
-                              if (pkg.package_type === 'Installment' && !hasFullpaymentPricing) {
+                              if ((pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && !hasFullpaymentPricing) {
                                 setUpgradeShowInstallmentSettings(true);
                                 const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
                                 const systemSettings = await fetchInstallmentScheduleSettings(branchId);
@@ -13470,7 +13487,7 @@ setFormData({
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
-                                  {pkg.package_type === 'Installment' && (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                                       Installment
                                     </span>
@@ -13478,7 +13495,7 @@ setFormData({
                                 </div>
                                 {pkg.package_price && (
                                   <div className="flex flex-col space-y-1 mb-2">
-                                    {pkg.package_type === 'Installment' ? (
+                                    {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ? (
                                       <>
                                         {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
                                           <div className="flex items-baseline space-x-2">
@@ -13560,7 +13577,7 @@ setFormData({
                             <p className="text-base font-semibold text-gray-900 mt-0.5">
                               {upgradeSelectedPackage.package_name}
                             </p>
-                            {upgradeSelectedPackage.package_type === 'Installment' ? (
+                            {(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? (
                               <div className="flex flex-col gap-1 mt-1">
                                 {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
@@ -14138,7 +14155,7 @@ setFormData({
                       <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                         <h4 className="font-semibold text-gray-900 mb-2">Selected Package</h4>
                         <p className="text-sm text-gray-700">{upgradeSelectedPackage.package_name}</p>
-                        {upgradeSelectedPackage.package_type === 'Installment' ? (
+                        {(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? (
                           <div className="mt-2 space-y-2">
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                               <p className="text-sm text-gray-700">
@@ -14162,13 +14179,13 @@ setFormData({
                               }
                               return promoDiscount > 0 ? (
                                 <p className="text-sm text-blue-700">
-                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               ) : null;
                             })()}
                             {reservationFeePaid > 0 && (
                               <p className="text-sm text-green-700">
-                                Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                             )}
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
@@ -14207,13 +14224,13 @@ setFormData({
                                 }
                                 return promoDiscount > 0 ? (
                                   <p className="text-sm text-blue-700">
-                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 ) : null;
                               })()}
                               {reservationFeePaid > 0 && (
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               )}
                               <div className="pt-2 border-t border-gray-300">
@@ -14275,11 +14292,11 @@ setFormData({
                             {reservationFeePaid > 0 && (
                               <>
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                                 <div className="pt-2 border-t border-gray-300">
                                   <p className="text-sm font-semibold text-gray-900">
-                                    Final Amount: <span className="text-lg">?{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Final Amount: <span className="text-lg">₱{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 </div>
                               </>

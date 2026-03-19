@@ -175,7 +175,9 @@ router.get(
                 p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
                 u.full_name AS student_name,
-                i.invoice_description
+                u.email AS student_email,
+                i.invoice_description,
+                i.ack_receipt_id
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -184,6 +186,31 @@ router.get(
         [targetBranchId, targetDate]
       );
 
+      // Replace Walk-in Customer with AR prospect name for merchandise AR payments
+      const payments = [];
+      for (const row of paymentsRes.rows || []) {
+        let studentName = row.student_name;
+        let studentEmail = row.student_email;
+
+        const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        if (isWalkIn && row.ack_receipt_id) {
+          const arResult = await query(
+            'SELECT prospect_student_name FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+            [row.ack_receipt_id]
+          );
+          const prospectName = arResult.rows[0]?.prospect_student_name || null;
+          if (prospectName) {
+            studentName = prospectName;
+          }
+        }
+
+        payments.push({
+          ...row,
+          student_name: studentName,
+          student_email: studentEmail,
+        });
+      }
+
       res.json({
         success: true,
         data: {
@@ -191,7 +218,7 @@ router.get(
           summary_date: targetDate,
           total_amount: Math.round(total * 100) / 100,
           payment_count: paymentCount,
-          payments: paymentsRes.rows || [],
+          payments,
         },
       });
     } catch (error) {

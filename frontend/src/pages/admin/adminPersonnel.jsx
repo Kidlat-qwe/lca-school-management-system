@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const AdminPersonnel = () => {
   const { signup, userInfo } = useAuth();
@@ -13,7 +14,7 @@ const AdminPersonnel = () => {
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [itemsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -771,49 +772,14 @@ const AdminPersonnel = () => {
       </div>
 
       {totalItems > 0 && filteredPersonnel.length > 0 && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-          <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1}??{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} personnel
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-sm text-gray-600 flex items-center gap-1">
-              Per page
-              <select
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(Number(e.target.value));
-                  setCurrentPage(1);
-                }}
-                className="rounded border border-gray-300 px-2 py-1 text-sm"
-              >
-                {[10, 20, 50].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </label>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-              >
-                Previous
-              </button>
-              <span className="px-2 text-sm text-gray-600">
-                Page {currentPage} of {totalPages || 1}
-              </span>
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages || 1, p + 1))}
-                disabled={currentPage >= (totalPages || 1)}
-                className="px-3 py-1 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages || 1}
+          totalItems={totalItems}
+          itemsPerPage={itemsPerPage}
+          itemLabel="personnel"
+          onPageChange={(page) => setCurrentPage(Math.min(Math.max(page, 1), totalPages || 1))}
+        />
       )}
 
       {openMenuId && createPortal(

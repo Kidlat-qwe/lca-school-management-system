@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const FinanceInstallmentInvoice = () => {
   const [invoices, setInvoices] = useState([]);
@@ -26,6 +29,7 @@ const FinanceInstallmentInvoice = () => {
   });
   const [generateFormErrors, setGenerateFormErrors] = useState({});
   const [generating, setGenerating] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const getFrequencyMonths = (frequency) => {
     const match = String(frequency || '1 month(s)').match(/(\d+)/);
@@ -83,8 +87,6 @@ const FinanceInstallmentInvoice = () => {
     }
   };
 
-  const getUniqueStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
-
   const filteredInvoices = invoices.filter((invoice) => {
     const matchesSearch = !nameSearchTerm || 
       invoice.student_name?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
@@ -94,6 +96,19 @@ const FinanceInstallmentInvoice = () => {
     
     return matchesSearch && matchesStatus;
   });
+  const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
+  const paginatedInvoices = filteredInvoices.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterStatus]);
+
+  useEffect(() => {
+    setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
+  }, [totalPages]);
 
   const handleViewEdit = (invoice) => {
     console.log('View/Edit invoice:', invoice);
@@ -381,7 +396,7 @@ const FinanceInstallmentInvoice = () => {
                   </td>
                 </tr>
               ) : (
-                filteredInvoices.map((invoice) => (
+                paginatedInvoices.map((invoice) => (
                   <tr key={invoice.installmentinvoicedtl_id}>
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
@@ -512,6 +527,14 @@ const FinanceInstallmentInvoice = () => {
                   </tbody>
                 </table>
               </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredInvoices.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="invoices"
+          onPageChange={setCurrentPage}
+        />
         </div>
 
       {/* Action Menu Overlay */}
@@ -588,13 +611,6 @@ const FinanceInstallmentInvoice = () => {
           </div>
         </>,
         document.body
-      )}
-
-      {/* Results Count */}
-      {filteredInvoices.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredInvoices.length} of {invoices.length} invoices
-        </div>
       )}
 
       {/* Generate Invoice Modal */}

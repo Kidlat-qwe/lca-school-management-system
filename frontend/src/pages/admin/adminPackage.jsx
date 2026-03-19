@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const AdminPackage = () => {
   const { userInfo } = useAuth();
@@ -12,6 +15,7 @@ const AdminPackage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   // Removed filterBranch - admin only sees their branch
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
@@ -28,6 +32,7 @@ const AdminPackage = () => {
     package_price: '',
     level_tag: '',
     package_type: 'Fullpayment',
+    payment_option: 'Fullpayment', // For Phase packages: Fullpayment | Installment
     phase_start: '',
     phase_end: '',
     downpayment_amount: '',
@@ -221,6 +226,7 @@ const AdminPackage = () => {
       package_price: '',
       level_tag: '',
       package_type: 'Fullpayment',
+      payment_option: 'Fullpayment',
       phase_start: '',
       phase_end: '',
       downpayment_amount: '',
@@ -268,6 +274,7 @@ const AdminPackage = () => {
       package_price: packageItem.package_price?.toString() || '',
       level_tag: packageItem.level_tag || '',
       package_type: packageItem.package_type || 'Fullpayment',
+      payment_option: packageItem.package_type === 'Phase' ? (packageItem.payment_option || 'Fullpayment') : 'Fullpayment',
       phase_start: packageItem.phase_start?.toString() || '',
       phase_end: packageItem.phase_end?.toString() || '',
       downpayment_amount: packageItem.downpayment_amount?.toString() || '',
@@ -289,20 +296,7 @@ const AdminPackage = () => {
       package_price: '',
       level_tag: '',
       package_type: 'Fullpayment',
-      phase_start: '',
-      phase_end: '',
-      downpayment_amount: '',
-      selectedPricingLists: [],
-      selectedMerchandise: [],
-    });
-    setFormErrors({});
-    setFormData({
-      package_name: '',
-      branch_id: adminBranchId ? adminBranchId.toString() : '',
-      status: 'Active',
-      package_price: '',
-      level_tag: '',
-      package_type: 'Fullpayment',
+      payment_option: 'Fullpayment',
       phase_start: '',
       phase_end: '',
       downpayment_amount: '',
@@ -313,10 +307,19 @@ const AdminPackage = () => {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'package_type') {
+        if (value === 'Phase') {
+          next.payment_option = prev.payment_option || 'Fullpayment';
+          if (prev.payment_option !== 'Installment') next.downpayment_amount = '';
+        } else {
+          next.payment_option = 'Fullpayment';
+          next.downpayment_amount = '';
+        }
+      }
+      return next;
+    });
     if (formErrors[name]) {
       setFormErrors((prev) => {
         const newErrors = { ...prev };
@@ -442,8 +445,9 @@ const AdminPackage = () => {
       }
     }
 
-    // Validate downpayment and package price for Installment packages
-    if (formData.package_type === 'Installment') {
+    // Validate downpayment and package price for Installment packages (and Phase+Installment)
+    const isPhaseInstallment = formData.package_type === 'Phase' && formData.payment_option === 'Installment';
+    if (formData.package_type === 'Installment' || isPhaseInstallment) {
       if (!formData.downpayment_amount || formData.downpayment_amount === '') {
         errors.downpayment_amount = 'Downpayment is required for Installment packages';
       } else {
@@ -480,6 +484,7 @@ const AdminPackage = () => {
       if (editingPackage) {
         // When editing, only update package info (not details - they're managed separately)
         // Ensure branch_id remains admin's branch (cannot be changed)
+        const isPhaseInstallmentPayload = formData.package_type === 'Phase' && formData.payment_option === 'Installment';
         const payload = {
           package_name: formData.package_name.trim(),
           branch_id: adminBranchId || (formData.branch_id && formData.branch_id !== '' ? parseInt(formData.branch_id) : null),
@@ -487,11 +492,12 @@ const AdminPackage = () => {
           package_price: formData.package_price && formData.package_price !== '' ? parseFloat(formData.package_price) : null,
           level_tag: formData.level_tag?.trim() || null,
           package_type: formData.package_type || 'Fullpayment',
+          payment_option: formData.package_type === 'Phase' ? formData.payment_option : undefined,
           phase_start: formData.package_type === 'Phase' && formData.phase_start ? parseInt(formData.phase_start) : null,
           phase_end: formData.package_type === 'Phase'
             ? (formData.phase_end ? parseInt(formData.phase_end) : (formData.phase_start ? parseInt(formData.phase_start) : null))
             : null,
-          downpayment_amount: formData.package_type === 'Installment' && formData.downpayment_amount && formData.downpayment_amount !== ''
+          downpayment_amount: (formData.package_type === 'Installment' || isPhaseInstallmentPayload) && formData.downpayment_amount && formData.downpayment_amount !== ''
             ? parseFloat(formData.downpayment_amount)
             : null,
         };
@@ -519,6 +525,7 @@ const AdminPackage = () => {
           });
         });
 
+        const isPhaseInstallmentCreate = formData.package_type === 'Phase' && formData.payment_option === 'Installment';
         const payload = {
           package_name: formData.package_name.trim(),
           branch_id: adminBranchId || (formData.branch_id && formData.branch_id !== '' ? parseInt(formData.branch_id) : null),
@@ -526,11 +533,12 @@ const AdminPackage = () => {
           package_price: formData.package_price && formData.package_price !== '' ? parseFloat(formData.package_price) : null,
           level_tag: formData.level_tag?.trim() || null,
           package_type: formData.package_type || 'Fullpayment',
+          payment_option: formData.package_type === 'Phase' ? formData.payment_option : undefined,
           phase_start: formData.package_type === 'Phase' && formData.phase_start ? parseInt(formData.phase_start) : null,
           phase_end: formData.package_type === 'Phase'
             ? (formData.phase_end ? parseInt(formData.phase_end) : (formData.phase_start ? parseInt(formData.phase_start) : null))
             : null,
-          downpayment_amount: formData.package_type === 'Installment' && formData.downpayment_amount && formData.downpayment_amount !== ''
+          downpayment_amount: (formData.package_type === 'Installment' || isPhaseInstallmentCreate) && formData.downpayment_amount && formData.downpayment_amount !== ''
             ? parseFloat(formData.downpayment_amount)
             : null,
           details: details,
@@ -723,6 +731,20 @@ const AdminPackage = () => {
     return matchesSearch;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredPackages.length / ITEMS_PER_PAGE));
+  const paginatedPackages = filteredPackages.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   // Filter pricing lists by selected level tag (use formData.level_tag)
   const filteredPricingListsByLevel = formData.level_tag
     ? pricingLists.filter(p => p.level_tag === formData.level_tag)
@@ -834,7 +856,7 @@ const AdminPackage = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPackages.map((packageItem) => (
+                  paginatedPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
                     <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
                       <div className="min-w-0">
@@ -855,14 +877,16 @@ const AdminPackage = () => {
                       <div className="flex flex-col items-start space-y-1">
                         <span
                           className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                            (packageItem.package_type || '').trim() === 'Installment'
+                            (packageItem.package_type || '').trim() === 'Installment' || ((packageItem.package_type || '').trim() === 'Phase' && (packageItem.payment_option || '').trim() === 'Installment')
                               ? 'bg-blue-100 text-blue-800'
                               : (packageItem.package_type || '').trim() === 'Reserved'
                               ? 'bg-yellow-100 text-yellow-800'
                               : 'bg-gray-100 text-gray-800'
                           }`}
                         >
-                          {(packageItem.package_type || 'Fullpayment').trim()}
+                          {(packageItem.package_type || 'Fullpayment').trim() === 'Phase'
+                            ? `Phase (${(packageItem.payment_option || 'Fullpayment').trim()})`
+                            : (packageItem.package_type || 'Fullpayment').trim()}
                         </span>
                       </div>
                     </td>
@@ -884,7 +908,7 @@ const AdminPackage = () => {
                           ? `₱${parseFloat(packageItem.package_price).toFixed(2)}`
                           : '-'}
                       </div>
-                      {(packageItem.package_type || '').trim() === 'Installment' && packageItem.downpayment_amount && (
+                      {((packageItem.package_type || '').trim() === 'Installment' || ((packageItem.package_type || '').trim() === 'Phase' && (packageItem.payment_option || '').trim() === 'Installment')) && packageItem.downpayment_amount && (
                         <div className="text-xs text-gray-500 mt-1">
                           Downpayment: ₱{parseFloat(packageItem.downpayment_amount).toFixed(2)}
                         </div>
@@ -915,11 +939,16 @@ const AdminPackage = () => {
           </div>
         </div>
 
-      {/* Results Count */}
+      {/* Pagination */}
       {filteredPackages.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPackages.length} of {packages.length} packages
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPackages.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="packages"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {/* Action Menu Overlay */}
@@ -1133,7 +1162,7 @@ const AdminPackage = () => {
                   {/* Package Price / Monthly Installment Amount */}
                   <div>
                     <label htmlFor="package_price" className="label-field">
-                      {formData.package_type === 'Installment' ? (
+                      {(formData.package_type === 'Installment' || (formData.package_type === 'Phase' && formData.payment_option === 'Installment')) ? (
                         <>Monthly Installment Amount <span className="text-red-500">*</span></>
                       ) : (
                         <>Package Price</>
@@ -1149,20 +1178,20 @@ const AdminPackage = () => {
                       step="0.01"
                       min="0"
                       placeholder="0.00"
-                      required={formData.package_type === 'Installment'}
+                      required={formData.package_type === 'Installment' || (formData.package_type === 'Phase' && formData.payment_option === 'Installment')}
                     />
                     {formErrors.package_price && (
                       <p className="mt-1 text-sm text-red-600">{formErrors.package_price}</p>
                     )}
-                    {formData.package_type === 'Installment' && (
+                    {(formData.package_type === 'Installment' || (formData.package_type === 'Phase' && formData.payment_option === 'Installment')) && (
                       <p className="mt-1 text-xs text-gray-500">
                         The monthly installment amount that will be charged after downpayment is paid.
                       </p>
                     )}
                   </div>
 
-                  {/* Downpayment Settings for Installment Packages */}
-                  {formData.package_type === 'Installment' && (
+                  {/* Downpayment Settings for Installment Packages (and Phase+Installment) */}
+                  {(formData.package_type === 'Installment' || (formData.package_type === 'Phase' && formData.payment_option === 'Installment')) && (
                     <div className="space-y-4 border-t border-gray-200 pt-4">
                       <h3 className="text-lg font-semibold text-gray-900">Downpayment Settings</h3>
                       <div>
@@ -1195,6 +1224,40 @@ const AdminPackage = () => {
                   {formData.package_type === 'Phase' && (
                     <div className="space-y-4 border-t border-gray-200 pt-4">
                       <h3 className="text-lg font-semibold text-gray-900">Phase Settings</h3>
+                      {/* Payment option radio buttons for Phase packages */}
+                      <div>
+                        <label className="label-field block mb-2">Payment Option</label>
+                        <div className="flex flex-wrap gap-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="payment_option"
+                              value="Fullpayment"
+                              checked={formData.payment_option === 'Fullpayment'}
+                              onChange={(e) => {
+                                setFormData((prev) => ({ ...prev, payment_option: e.target.value, downpayment_amount: '' }));
+                                if (formErrors.downpayment_amount) setFormErrors((prev) => { const n = { ...prev }; delete n.downpayment_amount; return n; });
+                              }}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            />
+                            <span className="text-sm font-medium text-gray-700">Full Payment</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="payment_option"
+                              value="Installment"
+                              checked={formData.payment_option === 'Installment'}
+                              onChange={(e) => setFormData((prev) => ({ ...prev, payment_option: e.target.value }))}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            />
+                            <span className="text-sm font-medium text-gray-700">Installment</span>
+                          </label>
+                        </div>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Full Payment: pay in full. Installment: downpayment + monthly installments.
+                        </p>
+                      </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label htmlFor="phase_start" className="label-field">

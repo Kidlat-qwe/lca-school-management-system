@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 
 const Classes = () => {
+  const ITEMS_PER_PAGE = 10;
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -29,6 +31,7 @@ const Classes = () => {
   const [holidayCacheKey, setHolidayCacheKey] = useState('');
   const [holidayDateSet, setHolidayDateSet] = useState(new Set());
   const [loadingHolidays, setLoadingHolidays] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const [formData, setFormData] = useState({
     branch_id: '',
     room_id: '',
@@ -470,7 +473,7 @@ const initializePackageMerchSelections = useCallback(
       if (response.success && response.data) {
         const promo = response.data;
         // For Installment packages, apply promo to downpayment; otherwise use package_price
-        const baseAmount = selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+        const baseAmount = (selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
           ? parseFloat(selectedPackage.downpayment_amount)
           : parseFloat(selectedPackage?.package_price || 0);
         let discountAmount = 0;
@@ -2471,7 +2474,7 @@ const initializePackageMerchSelections = useCallback(
 
         const enrollmentType = isPhasePerPhase
           ? 'Per-Phase'
-          : (upgradeSelectedPackage.package_type === 'Installment' ? 'Installment' : 'Fullpayment');
+          : ((upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? 'Installment' : 'Fullpayment');
 
         payload = {
           enrollment_type: enrollmentType,
@@ -2480,7 +2483,7 @@ const initializePackageMerchSelections = useCallback(
           ...(upgradeSelectedPromo ? { promo_id: upgradeSelectedPromo.promo_id } : {}),
           // Installment settings apply only to standard Installment packages (not Phase per-phase)
           ...(!isPhasePerPhase &&
-          upgradeSelectedPackage.package_type === 'Installment' &&
+          (upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) &&
           upgradeShowInstallmentSettings &&
           upgradeInstallmentSettings.invoice_issue_date
             ? {
@@ -2613,7 +2616,8 @@ const initializePackageMerchSelections = useCallback(
       if (search && search.trim()) params.set('search', search.trim());
       params.set('limit', '50');
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
-      setAckReceipts(response.data || []);
+      const all = response.data || [];
+      setAckReceipts(all.filter((ar) => ar.ar_type === 'Package'));
     } catch (err) {
       console.error('Error fetching acknowledgement receipts for enrollment:', err);
       setAckReceiptsError('Failed to load acknowledgement receipts. Please try again.');
@@ -2734,7 +2738,7 @@ const initializePackageMerchSelections = useCallback(
     
     // Auto-show installment settings if package type is "Installment" and NOT fullpayment
     // Hide installment settings for Reserved packages (settings will be configured during upgrade)
-    if (packageItem.package_type === 'Installment' && !hasFullpaymentPricing) {
+    if ((packageItem.package_type === 'Installment' || (packageItem.package_type === 'Phase' && packageItem.payment_option === 'Installment')) && !hasFullpaymentPricing) {
       setShowInstallmentSettings(true);
       const branchId = selectedClassForEnrollment?.branch_id ?? selectedClassForEnrollment?.branchId ?? null;
       fetchInstallmentScheduleSettings(branchId).then(setInstallmentSettings);
@@ -5350,6 +5354,21 @@ const initializePackageMerchSelections = useCallback(
     
     return matchesSearch && matchesBranch && matchesProgram;
   });
+  const totalPages = Math.max(Math.ceil(filteredClasses.length / ITEMS_PER_PAGE), 1);
+  const paginatedClasses = filteredClasses.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterBranch, filterProgram]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   if (loading) {
     return (
@@ -7806,7 +7825,7 @@ const initializePackageMerchSelections = useCallback(
                     </td>
                   </tr>
                 ) : (
-                filteredClasses.map((classItem) => {
+                paginatedClasses.map((classItem) => {
                   const formatDate = (dateValue) => {
                     if (!dateValue) return '-';
                     try {
@@ -7969,14 +7988,15 @@ const initializePackageMerchSelections = useCallback(
             </table>
             </div>
           </div>
+          <FixedTablePagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredClasses.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="classes"
+            onPageChange={setCurrentPage}
+          />
         </div>
-
-      {/* Results Count */}
-      {filteredClasses.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredClasses.length} of {classes.length} classes
-        </div>
-      )}
 
       {/* Action Menu Overlay Modal */}
       {openMenuId && createPortal(
@@ -9833,7 +9853,7 @@ const initializePackageMerchSelections = useCallback(
                         ? packages.filter(pkg => pkg.package_type === 'Phase')
                         : packages.filter(pkg =>
                             pkg.package_type === 'Fullpayment' ||
-                            pkg.package_type === 'Installment' ||
+                            (pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ||
                             pkg.package_type === 'Promo'
                           );
                     
@@ -9902,7 +9922,7 @@ const initializePackageMerchSelections = useCallback(
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
-                                  {pkg.package_type === 'Installment' && (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                                       Installment
                                     </span>
@@ -9910,7 +9930,7 @@ const initializePackageMerchSelections = useCallback(
                                 </div>
                               {pkg.package_price && (
                                 <div className="flex flex-col space-y-1 mb-2">
-                                  {pkg.package_type === 'Installment' ? (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ? (
                                     <>
                                       {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
                                         <div className="flex items-baseline space-x-2">
@@ -10160,7 +10180,7 @@ const initializePackageMerchSelections = useCallback(
                               <p className="text-base font-semibold text-gray-900 mt-0.5">
                                   {selectedPackage.package_name}
                                 </p>
-                            {selectedPackage.package_type === 'Installment' ? (
+                            {(selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) ? (
                               <div className="flex flex-col gap-1 mt-1">
                                 {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
@@ -10356,7 +10376,7 @@ const initializePackageMerchSelections = useCallback(
                                         <div className="mt-2 pt-2 border-t border-gray-200">
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-xs text-gray-500 line-through">
-                                              ₱{(selectedPackage?.package_type === 'Installment' && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                              ₱{((selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                                 ? parseFloat(selectedPackage.downpayment_amount)
                                                 : parseFloat(selectedPackage?.package_price || 0)
                                               ).toFixed(2)}
@@ -10365,7 +10385,7 @@ const initializePackageMerchSelections = useCallback(
                                               ₱{validatedPromoFromCode.final_price.toFixed(2)}
                                             </span>
                                             <span className="text-xs text-gray-600">
-                                              {selectedPackage?.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
+                                              {(selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) ? 'Final Down payment' : 'Final Price'}
                                             </span>
                                           </div>
                                         </div>
@@ -10378,7 +10398,7 @@ const initializePackageMerchSelections = useCallback(
                               {/* Show auto-apply promos */}
                               {availablePromos.map((promo) => {
                                 // For Installment packages, apply promo to downpayment; otherwise use package_price
-                                const baseAmount = selectedPackage.package_type === 'Installment' && selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                const baseAmount = (selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) && selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                   ? parseFloat(selectedPackage.downpayment_amount)
                                   : parseFloat(selectedPackage.package_price || 0);
                                 let discountAmount = 0;
@@ -10440,7 +10460,7 @@ const initializePackageMerchSelections = useCallback(
                                                 ₱{finalPrice.toFixed(2)}
                                               </span>
                                               <span className="text-xs text-gray-600">
-                                                {selectedPackage.package_type === 'Installment' ? 'Final Down payment' : 'Final Price'}
+                                                {(selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) ? 'Final Down payment' : 'Final Price'}
                                               </span>
                                             </div>
                                           </div>
@@ -11588,7 +11608,7 @@ const initializePackageMerchSelections = useCallback(
                           <p className="text-sm text-gray-700">
                             <strong>Package:</strong> {selectedPackage.package_name}
                           </p>
-                          {selectedPackage.package_type === 'Installment' ? (
+                          {(selectedPackage.package_type === 'Installment' || (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment')) ? (
                             <>
                               {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
                                 <p className="text-sm text-gray-700">
@@ -12059,18 +12079,17 @@ const initializePackageMerchSelections = useCallback(
               )}
               {enrollStep !== 'view' && enrollStep !== 'enrollment-option' && enrollStep !== 'package-selection' && enrollStep !== 'ack-receipt-selection' && !(enrollStep === 'review' && generatedInvoices.length > 0) && (
                 <div className="flex items-center gap-3">
-                  {/* Total Amount Display - For per-phase enrollment in student-selection and review steps */}
-                  {(enrollStep === 'student-selection' || enrollStep === 'review') && (
-                    <>
-                      {selectedEnrollmentOption === 'per-phase' && (
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
-                          <span className="text-xs font-medium text-blue-900">Total Amount:</span>
-                          <span className="text-sm font-bold text-blue-700">
-                            ${calculatePerPhaseTotal().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      )}
-                    </>
+                  {/* Total Amount Display - Hidden for per-phase enrollment (pay per phase, no single total) */}
+                  {(enrollStep === 'student-selection' || enrollStep === 'review') &&
+                    selectedEnrollmentOption !== 'per-phase' &&
+                    (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation' || selectedEnrollmentOption === 'ack-receipt') &&
+                    selectedPackage && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
+                      <span className="text-xs font-medium text-blue-900">Total Amount:</span>
+                      <span className="text-sm font-bold text-blue-700">
+                        ₱{(Number(selectedPackage.package_price) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   )}
                 <button
                   type="button"
@@ -13974,7 +13993,7 @@ const initializePackageMerchSelections = useCallback(
                                 await fetchUpgradeAvailablePromos(pkg.package_id);
                               }
                               
-                              if (pkg.package_type === 'Installment' && !hasFullpaymentPricing) {
+                              if ((pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && !hasFullpaymentPricing) {
                                 setUpgradeShowInstallmentSettings(true);
                                 const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
                                 const systemSettings = await fetchInstallmentScheduleSettings(branchId);
@@ -14003,7 +14022,7 @@ const initializePackageMerchSelections = useCallback(
                                   <h5 className="font-bold text-gray-900 text-base transition-colors truncate group-hover:text-[#F7C844]">
                                     {pkg.package_name}
                                   </h5>
-                                  {pkg.package_type === 'Installment' && (
+                                  {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                                       Installment
                                     </span>
@@ -14011,7 +14030,7 @@ const initializePackageMerchSelections = useCallback(
                                 </div>
                                 {pkg.package_price && (
                                   <div className="flex flex-col space-y-1 mb-2">
-                                    {pkg.package_type === 'Installment' ? (
+                                    {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ? (
                                       <>
                                         {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
                                           <div className="flex items-baseline space-x-2">
@@ -14093,7 +14112,7 @@ const initializePackageMerchSelections = useCallback(
                             <p className="text-base font-semibold text-gray-900 mt-0.5">
                               {upgradeSelectedPackage.package_name}
                             </p>
-                            {upgradeSelectedPackage.package_type === 'Installment' ? (
+                            {(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? (
                               <div className="flex flex-col gap-1 mt-1">
                                 {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
@@ -14439,7 +14458,7 @@ const initializePackageMerchSelections = useCallback(
                       return pricing && isNewEnrolleeFullpayment(pricing);
                     });
                     
-                    if (hasFullpaymentPricing || upgradeSelectedPackage.package_type !== 'Installment') {
+                    if (hasFullpaymentPricing || !(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment'))) {
                       return null;
                     }
                     
@@ -14671,7 +14690,7 @@ const initializePackageMerchSelections = useCallback(
                       <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                         <h4 className="font-semibold text-gray-900 mb-2">Selected Package</h4>
                         <p className="text-sm text-gray-700">{upgradeSelectedPackage.package_name}</p>
-                        {upgradeSelectedPackage.package_type === 'Installment' ? (
+                        {(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) ? (
                           <div className="mt-2 space-y-2">
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                               <p className="text-sm text-gray-700">

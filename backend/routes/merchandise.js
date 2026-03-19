@@ -137,6 +137,7 @@ router.post(
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
     body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Top', 'Bottom', null, '']).withMessage('Type must be one of: Top, Bottom'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
+    body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -165,19 +166,25 @@ router.post(
             ) THEN
               ALTER TABLE merchandisestbl ADD COLUMN type VARCHAR(30);
             END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'merchandisestbl' AND column_name = 'remarks'
+            ) THEN
+              ALTER TABLE merchandisestbl ADD COLUMN remarks TEXT;
+            END IF;
           END $$;
         `);
       } catch (err) {
         console.log('Column check:', err.message);
       }
 
-      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url } = req.body;
+      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks } = req.body;
 
       const result = await query(
-        `INSERT INTO merchandisestbl (merchandise_name, size, quantity, price, branch_id, gender, type, image_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO merchandisestbl (merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-        [merchandise_name, size || null, quantity || null, price || null, branch_id ? parseInt(branch_id) : null, gender || null, type || null, image_url || null]
+        [merchandise_name, size || null, quantity || null, price || null, branch_id ? parseInt(branch_id) : null, gender || null, type || null, image_url || null, remarks || null]
       );
 
       res.status(201).json({
@@ -223,6 +230,7 @@ router.put(
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
     body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Top', 'Bottom', null, '']).withMessage('Type must be one of: Top, Bottom'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
+    body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -251,6 +259,12 @@ router.put(
             ) THEN
               ALTER TABLE merchandisestbl ADD COLUMN type VARCHAR(30);
             END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'merchandisestbl' AND column_name = 'remarks'
+            ) THEN
+              ALTER TABLE merchandisestbl ADD COLUMN remarks TEXT;
+            END IF;
           END $$;
         `);
       } catch (err) {
@@ -258,7 +272,7 @@ router.put(
       }
 
       const { id } = req.params;
-      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url } = req.body;
+      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks } = req.body;
 
       const existingMerchandise = await query('SELECT * FROM merchandisestbl WHERE merchandise_id = $1', [id]);
       if (existingMerchandise.rows.length === 0) {
@@ -280,7 +294,8 @@ router.put(
         branch_id: branch_id !== undefined ? (branch_id ? parseInt(branch_id) : null) : undefined,
         gender: gender !== undefined ? (gender || null) : undefined,
         type: type !== undefined ? (type || null) : undefined,
-        image_url: image_url !== undefined ? (image_url || null) : undefined
+        image_url: image_url !== undefined ? (image_url || null) : undefined,
+        remarks: remarks !== undefined ? (remarks || null) : undefined
       };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {

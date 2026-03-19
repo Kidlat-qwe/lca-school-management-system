@@ -112,43 +112,43 @@ router.get(
         // Continue with invoice fetching even if expiration check fails
       }
 
-      const { branch_id, status, page = 1, limit = 20 } = req.query;
-      const pageNum = parseInt(page) || 1;
-      const limitNum = parseInt(limit) || 20;
-      const offset = (pageNum - 1) * limitNum;
+      const { branch_id, status } = req.query;
 
-      let sql = `SELECT invoice_id, invoice_description, branch_id, amount, status, remarks, 
-                        TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date, 
-                        TO_CHAR(due_date, 'YYYY-MM-DD') as due_date, 
-                        created_by,
+      let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
+                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
+                        TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
+                        i.created_by,
+                        ar.prospect_student_name as ar_prospect_student_name,
                         CASE 
-                          WHEN status NOT IN ('Paid', 'Cancelled') AND due_date IS NOT NULL AND due_date < CURRENT_DATE 
+                          WHEN i.status NOT IN ('Paid', 'Cancelled') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE 
                           THEN 'Unpaid'
-                          ELSE status
+                          ELSE i.status
                         END as computed_status
-                 FROM invoicestbl WHERE 1=1`;
+                 FROM invoicestbl i
+                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.invoice_id = i.invoice_id
+                 WHERE 1=1`;
       const params = [];
       let paramCount = 0;
 
       // Filter by branch (non-superadmin users are limited to their branch)
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
-        sql += ` AND branch_id = $${paramCount}`;
+        sql += ` AND i.branch_id = $${paramCount}`;
         params.push(req.user.branchId);
       } else if (branch_id) {
         paramCount++;
-        sql += ` AND branch_id = $${paramCount}`;
+        sql += ` AND i.branch_id = $${paramCount}`;
         params.push(branch_id);
       }
 
       if (status) {
         paramCount++;
-        sql += ` AND status = $${paramCount}`;
+        sql += ` AND i.status = $${paramCount}`;
         params.push(status);
       }
 
-      sql += ` ORDER BY invoice_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-      params.push(limitNum, offset);
+      // Return all matching invoices, ordered from newest to oldest
+      sql += ' ORDER BY invoice_id DESC';
 
       const result = await query(sql, params);
 
@@ -165,6 +165,25 @@ router.get(
               'SELECT inv_student.*, u.full_name, u.email FROM invoicestudentstbl inv_student LEFT JOIN userstbl u ON inv_student.student_id = u.user_id WHERE inv_student.invoice_id = $1',
               [invoice.invoice_id]
             );
+
+            // For AR-linked invoices (e.g. merchandise), use prospect_student_name from AR instead of Walk-in Customer
+            let arProspectName = null;
+            if (invoice.ack_receipt_id) {
+              const arResult = await query(
+                'SELECT prospect_student_name FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+                [invoice.ack_receipt_id]
+              );
+              arProspectName = arResult.rows[0]?.prospect_student_name || null;
+            }
+            const studentsWithDisplayName = (studentsResult.rows || []).map((s) => {
+              const isWalkIn = (s.email || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+              return {
+                ...s,
+                full_name: isWalkIn && (arProspectName || invoice.ar_prospect_student_name)
+                  ? (arProspectName || invoice.ar_prospect_student_name)
+                  : (s.full_name || '-'),
+              };
+            });
 
             // Check if this invoice is linked to a reservation
             const reservationResult = await query(
@@ -202,7 +221,7 @@ router.get(
               amount: effectiveAmount,
               status: invoice.computed_status || invoice.status, // Use computed status if available
               items,
-              students: studentsResult.rows || [],
+              students: studentsWithDisplayName,
               reservation: reservation ? {
                 reserved_id: reservation.reserved_id,
                 status: reservation.reservation_status,
@@ -229,10 +248,6 @@ router.get(
       res.json({
         success: true,
         data: invoicesWithDetails,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-        },
       });
     } catch (error) {
       next(error);
@@ -274,6 +289,24 @@ router.get(
         [id]
       );
 
+      // For AR-linked invoices, use prospect_student_name from AR instead of Walk-in Customer
+      let arProspectName = null;
+      const invoiceRow = result.rows[0];
+      if (invoiceRow.ack_receipt_id) {
+        const arResult = await query(
+          'SELECT prospect_student_name FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+          [invoiceRow.ack_receipt_id]
+        );
+        arProspectName = arResult.rows[0]?.prospect_student_name || null;
+      }
+      const studentsWithDisplayName = (studentsResult.rows || []).map((s) => {
+        const isWalkIn = (s.email || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        return {
+          ...s,
+          full_name: isWalkIn && arProspectName ? arProspectName : (s.full_name || '-'),
+        };
+      });
+
       // Check if this invoice is linked to a reservation
       const reservationResult = await query(
         `SELECT r.reserved_id, r.status as reservation_status, r.due_date as reservation_due_date,
@@ -300,7 +333,6 @@ router.get(
       }
 
       const items = itemsResult.rows || [];
-      const invoiceRow = result.rows[0];
       const effectiveAmount = items.length > 0
         ? Math.max(0, items.reduce((sum, i) => sum + (Number(i.amount) || 0) - (Number(i.discount_amount) || 0) + (Number(i.penalty_amount) || 0), 0))
         : invoiceRow.amount;
@@ -311,7 +343,7 @@ router.get(
           ...invoiceRow,
           amount: effectiveAmount,
           items,
-          students: studentsResult.rows,
+          students: studentsWithDisplayName,
           reservation: reservation ? {
             reserved_id: reservation.reserved_id,
             status: reservation.reservation_status,

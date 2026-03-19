@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const StudentPackages = () => {
   const { userInfo } = useAuth();
@@ -11,6 +14,7 @@ const StudentPackages = () => {
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [filterPackageType, setFilterPackageType] = useState('');
   const [filterLevelTag, setFilterLevelTag] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedPackageForDetails, setSelectedPackageForDetails] = useState(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
@@ -106,6 +110,20 @@ const StudentPackages = () => {
     
     return matchesNameSearch && matchesPackageType && matchesLevelTag;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredPackages.length / ITEMS_PER_PAGE));
+  const paginatedPackages = filteredPackages.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterPackageType, filterLevelTag]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
   if (loading) {
     return (
@@ -236,7 +254,7 @@ const StudentPackages = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPackages.map((packageItem) => (
+                  paginatedPackages.map((packageItem) => (
                   <tr key={packageItem.package_id}>
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">
@@ -251,7 +269,7 @@ const StudentPackages = () => {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                          (packageItem.package_type || '').trim() === 'Installment'
+                          (packageItem.package_type || '').trim() === 'Installment' || ((packageItem.package_type || '').trim() === 'Phase' && (packageItem.payment_option || '').trim() === 'Installment')
                             ? 'bg-blue-100 text-blue-800'
                             : (packageItem.package_type || '').trim() === 'Reserved'
                             ? 'bg-yellow-100 text-yellow-800'
@@ -306,9 +324,14 @@ const StudentPackages = () => {
         </div>
 
       {filteredPackages.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPackages.length} of {packages.length} packages
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPackages.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="packages"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {/* Package Details Modal */}
@@ -357,7 +380,7 @@ const StudentPackages = () => {
                     <p className="mt-1">
                       <span
                         className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                          (selectedPackageForDetails.package_type || '').trim() === 'Installment'
+                          (selectedPackageForDetails.package_type || '').trim() === 'Installment' || ((selectedPackageForDetails.package_type || '').trim() === 'Phase' && (selectedPackageForDetails.payment_option || '').trim() === 'Installment')
                             ? 'bg-blue-100 text-blue-800'
                             : (selectedPackageForDetails.package_type || '').trim() === 'Reserved'
                             ? 'bg-yellow-100 text-yellow-800'

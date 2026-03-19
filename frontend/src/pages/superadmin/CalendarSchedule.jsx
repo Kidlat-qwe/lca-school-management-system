@@ -5,7 +5,12 @@ import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const HOURS = Array.from({ length: 23 }, (_, i) => i + 1);
+const CALENDAR_START_HOUR = 6;
+const CALENDAR_END_HOUR = 23;
+const HOURS = Array.from(
+  { length: CALENDAR_END_HOUR - CALENDAR_START_HOUR + 1 },
+  (_, i) => i + CALENDAR_START_HOUR
+);
 
 const formatHour = (h) => {
   if (h === 12) return '12 PM';
@@ -245,7 +250,7 @@ const CalendarSchedule = () => {
     const dayEvents = events.filter((e) => e.date === selectedDate);
     dayEvents.forEach((ev) => {
       const hour = Math.floor(startTimeToHour(ev.start_time));
-      if (hour >= 1 && hour <= 23) {
+      if (hour >= CALENDAR_START_HOUR && hour <= CALENDAR_END_HOUR) {
         if (!byHour[hour]) byHour[hour] = [];
         byHour[hour].push(ev);
       }
@@ -506,8 +511,8 @@ const CalendarSchedule = () => {
                       </div>
                     );
                   })}
-                  {selectedDate === todayYmd && currentTime != null && currentTime >= 1 && currentTime < 24 && (
-                    <div className="absolute left-0 right-0 flex items-center pointer-events-none z-10" style={{ top: `${((currentTime - 1) / 23) * 100}%` }}>
+                  {selectedDate === todayYmd && currentTime != null && currentTime >= CALENDAR_START_HOUR && currentTime < (CALENDAR_END_HOUR + 1) && (
+                    <div className="absolute left-0 right-0 flex items-center pointer-events-none z-10" style={{ top: `${((currentTime - CALENDAR_START_HOUR) / (CALENDAR_END_HOUR + 1 - CALENDAR_START_HOUR)) * 100}%` }}>
                       <span className="h-0.5 w-3 bg-red-500 rounded-r flex-shrink-0" />
                       <span className="flex-1 h-0.5 bg-red-500" />
                     </div>

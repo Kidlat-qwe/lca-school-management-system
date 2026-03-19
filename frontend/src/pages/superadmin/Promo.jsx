@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
+
+const ITEMS_PER_PAGE = 10;
 
 const PROMO_TYPES = [
   { value: 'percentage_discount', label: 'Percentage Discount' },
@@ -33,6 +36,7 @@ const Promo = () => {
   const [filterBranch, setFilterBranch] = useState('');
   const [filterPackage, setFilterPackage] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
@@ -518,7 +522,7 @@ const Promo = () => {
     // Validate installment scope fields if any selected package is Installment
     const hasInstallmentPackage = formData.package_ids.some((id) => {
       const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
-      return p && p.package_type === 'Installment';
+      return p && (p.package_type === 'Installment' || (p.package_type === 'Phase' && p.payment_option === 'Installment'));
     }) || (formData.branch_id === '' && formData.global_package_type === 'installment');
     
     if (hasInstallmentPackage) {
@@ -577,7 +581,7 @@ const Promo = () => {
         merchandise: formData.selectedMerchandise,
         installment_apply_scope: (formData.package_ids.some((id) => {
           const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
-          return p && p.package_type === 'Installment';
+          return p && (p.package_type === 'Installment' || (p.package_type === 'Phase' && p.payment_option === 'Installment'));
         }) || (formData.branch_id === '' && formData.global_package_type === 'installment'))
           ? formData.installment_apply_scope
           : null,
@@ -730,6 +734,20 @@ const Promo = () => {
 
     return matchesSearch && matchesBranch && matchesPackage && matchesStatus;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredPromos.length / ITEMS_PER_PAGE));
+  const paginatedPromos = filteredPromos.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm, filterBranch, filterPackage, filterStatus]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
   if (loading) {
     return (
@@ -905,7 +923,7 @@ const Promo = () => {
                     </td>
                   </tr>
                 ) : (
-                filteredPromos.map((promo) => {
+                paginatedPromos.map((promo) => {
                   const isActive = isPromoActive(promo);
                   const isExpired = isPromoExpired(promo);
                   
@@ -1041,11 +1059,16 @@ const Promo = () => {
           </div>
         </div>
 
-      {/* Results Count */}
+      {/* Pagination */}
       {filteredPromos.length > 0 && (
-        <div className="text-sm text-gray-500 text-center">
-          Showing {filteredPromos.length} of {promos.length} promos
-        </div>
+        <FixedTablePagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPromos.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          itemLabel="promos"
+          onPageChange={setCurrentPage}
+        />
       )}
 
       {/* Action Menu Overlay */}
@@ -1412,14 +1435,14 @@ const Promo = () => {
                                               ({pkg.level_tag})
                                             </span>
                                           )}
-                                          {pkg.package_type === 'Installment' && (
+                                          {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && (
                                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                                               Installment
                                             </span>
                                           )}
                                         </div>
                                         <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-gray-600">
-                                          {pkg.package_type === 'Installment' ? (
+                                          {(pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ? (
                                             <>
                                               {pkg.downpayment_amount != null && parseFloat(pkg.downpayment_amount) > 0 && (
                                                 <span>Down payment: ₱{parseFloat(pkg.downpayment_amount).toFixed(2)}</span>
@@ -1452,7 +1475,7 @@ const Promo = () => {
                           {formData.package_ids.length > 0 &&
                             formData.package_ids.some((id) => {
                               const p = filteredPackages.find((pkg) => pkg.package_id.toString() === id);
-                              return p && p.package_type === 'Installment';
+                              return p && (p.package_type === 'Installment' || (p.package_type === 'Phase' && p.payment_option === 'Installment'));
                             }) && (
                               <div className="mt-4 space-y-3">
                                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -1685,7 +1708,7 @@ const Promo = () => {
                                   let base = null;
                                   let label = '';
                                   
-                                  if (firstPackage.package_type === 'Installment') {
+                                  if (firstPackage.package_type === 'Installment' || (firstPackage.package_type === 'Phase' && firstPackage.payment_option === 'Installment')) {
                                     if (formData.installment_apply_scope === 'downpayment' || formData.installment_apply_scope === 'both') {
                                       base = firstPackage.downpayment_amount != null ? parseFloat(firstPackage.downpayment_amount) : null;
                                       label = 'on down payment';
