@@ -19,6 +19,7 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'invoice',
   'installment-invoice',
   'payment-logs',
+  'daily-summary-sales',
   'report',
   'calendar-schedule',
 ]);

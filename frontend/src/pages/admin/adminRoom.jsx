@@ -39,6 +39,10 @@ const AdminRoom = () => {
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [isClassSchedulesModalOpen, setIsClassSchedulesModalOpen] = useState(false);
+  const [selectedRoomForSchedules, setSelectedRoomForSchedules] = useState(null);
+  const [classSchedulesLoading, setClassSchedulesLoading] = useState(false);
+  const [roomClassSchedules, setRoomClassSchedules] = useState([]);
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -340,8 +344,127 @@ const AdminRoom = () => {
 
   const formatTime = (timeString) => {
     if (!timeString) return '';
-    // Convert HH:MM:SS to HH:MM for display
-    return timeString.substring(0, 5);
+    const [hourStr, minuteStr] = timeString.substring(0, 5).split(':');
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+      return timeString.substring(0, 5);
+    }
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${String(minute).padStart(2, '0')} ${period}`;
+  };
+
+  const fetchRoomClassSchedules = async (roomId) => {
+    setClassSchedulesLoading(true);
+    try {
+      const classesForRoom = classes.filter((classItem) => classItem.room_id === roomId);
+
+      if (classesForRoom.length === 0) {
+        setRoomClassSchedules([]);
+        return;
+      }
+
+      const sessionsByClass = await Promise.all(
+        classesForRoom.map(async (classItem) => {
+          try {
+            const response = await apiRequest(`/classes/${classItem.class_id}/sessions`);
+            return {
+              classItem,
+              sessions: response?.data || [],
+            };
+          } catch (err) {
+            console.error(`Error fetching sessions for class ${classItem.class_id}:`, err);
+            return {
+              classItem,
+              sessions: [],
+            };
+          }
+        })
+      );
+
+      const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const dayShort = {
+        Monday: 'M',
+        Tuesday: 'T',
+        Wednesday: 'W',
+        Thursday: 'Th',
+        Friday: 'F',
+        Saturday: 'Sa',
+        Sunday: 'Su',
+      };
+
+      const getDayFromDate = (dateStr) => {
+        if (!dateStr) return null;
+        const day = new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long' });
+        return dayOrder.includes(day) ? day : null;
+      };
+
+      const summarized = sessionsByClass
+        .map(({ classItem, sessions }) => {
+          const validDates = sessions
+            .map((session) => session.scheduled_date)
+            .filter(Boolean)
+            .sort();
+
+          const daySet = new Set();
+          sessions.forEach((session) => {
+            const sessionDay = session.day_of_week || getDayFromDate(session.scheduled_date);
+            if (sessionDay && dayOrder.includes(sessionDay)) {
+              daySet.add(sessionDay);
+            }
+          });
+
+          const daysPattern = dayOrder
+            .filter((day) => daySet.has(day))
+            .map((day) => dayShort[day])
+            .join(', ');
+
+          const timeSet = new Set();
+          sessions.forEach((session) => {
+            const startTime = formatTime(session.scheduled_start_time || session.start_time || '');
+            const endTime = formatTime(session.scheduled_end_time || session.end_time || '');
+            if (startTime && endTime) {
+              timeSet.add(`${startTime} - ${endTime}`);
+            }
+          });
+
+          const timePattern = Array.from(timeSet).sort().join(', ');
+
+          return {
+            class_id: classItem.class_id,
+            class_name: classItem.class_name || getClassName(classItem.class_id),
+            day_pattern: daysPattern || '-',
+            time_pattern: timePattern || '-',
+            start_date: validDates[0] || '-',
+            end_date: validDates[validDates.length - 1] || '-',
+          };
+        })
+        .sort((a, b) => a.class_name.localeCompare(b.class_name));
+
+      setRoomClassSchedules(summarized);
+    } catch (err) {
+      console.error('Error fetching room class schedules:', err);
+      alert(err.message || 'Failed to load class schedules');
+      setRoomClassSchedules([]);
+    } finally {
+      setClassSchedulesLoading(false);
+    }
+  };
+
+  const openClassSchedulesModal = async (room) => {
+    setOpenMenuId(null);
+    setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
+    setSelectedRoomForSchedules(room);
+    setIsClassSchedulesModalOpen(true);
+    await fetchRoomClassSchedules(room.room_id);
+  };
+
+  const closeClassSchedulesModal = () => {
+    setIsClassSchedulesModalOpen(false);
+    setSelectedRoomForSchedules(null);
+    setRoomClassSchedules([]);
+    setClassSchedulesLoading(false);
   };
 
   const handleInputChange = (e) => {
@@ -758,6 +881,19 @@ const AdminRoom = () => {
                   e.stopPropagation();
                   const selectedRoom = filteredRooms.find(r => r.room_id === openMenuId);
                   if (selectedRoom) {
+                    openClassSchedulesModal(selectedRoom);
+                  }
+                }}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                View Class Schedules
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const selectedRoom = filteredRooms.find(r => r.room_id === openMenuId);
+                  if (selectedRoom) {
                     setOpenMenuId(null);
                     setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
                     openEditModal(selectedRoom);
@@ -782,6 +918,87 @@ const AdminRoom = () => {
             </div>
           </div>
         </>,
+        document.body
+      )}
+
+      {/* View Class Schedules Modal */}
+      {isClassSchedulesModalOpen && createPortal(
+        <div
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
+          onClick={closeClassSchedulesModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Class Schedules</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Room: {selectedRoomForSchedules?.room_name || '-'}
+                </p>
+              </div>
+              <button
+                onClick={closeClassSchedulesModal}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              {classSchedulesLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-gray-200" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
+                  <table style={{ width: '100%', minWidth: '900px' }} className="divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Class</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Day</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Start Date</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {roomClassSchedules.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500">
+                            No class schedules found for this room.
+                          </td>
+                        </tr>
+                      ) : (
+                        roomClassSchedules.map((item, index) => (
+                          <tr key={`${item.class_id}-${index}`}>
+                            <td className="px-4 py-3 text-sm text-gray-900">{item.class_name}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700">{item.day_pattern || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700">{item.time_pattern || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700">{item.start_date || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700">{item.end_date || '-'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end p-6 border-t border-gray-200">
+              <button
+                onClick={closeClassSchedulesModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>,
         document.body
       )}
 

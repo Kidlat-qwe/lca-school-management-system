@@ -38,6 +38,7 @@ import holidaysRoutes from './routes/holidays.js';
 import settingsRoutes from './routes/settings.js';
 import reportsRoutes from './routes/reports.js';
 import dailySummarySalesRoutes from './routes/dailySummarySales.js';
+import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
 
 // Import middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -166,6 +167,7 @@ app.use(`${API_VERSION}/holidays`, holidaysRoutes);
 app.use(`${API_VERSION}/settings`, settingsRoutes);
 app.use(`${API_VERSION}/reports`, reportsRoutes);
 app.use(`${API_VERSION}/daily-summary-sales`, dailySummarySalesRoutes);
+app.use(`${API_VERSION}/cash-deposit-summaries`, cashDepositSummariesRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

@@ -10,6 +10,20 @@ const router = express.Router();
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
+const canManagePackage = ({ userType, userBranchId, packageBranchId }) => {
+  if (userType === 'Superadmin') {
+    return true;
+  }
+
+  if (!userBranchId) {
+    return false;
+  }
+
+  // Branch-scoped users can only manage packages owned by their branch.
+  // Global packages (branch_id NULL) are visible to them but are managed by Superadmin only.
+  return packageBranchId != null && Number(packageBranchId) === Number(userBranchId);
+};
+
 /**
  * GET /api/sms/packages
  * Get all packages with their details
@@ -44,14 +58,14 @@ router.get(
       const params = [];
       let paramCount = 0;
 
-      // Filter by branch (non-superadmin users are limited to their branch)
+      // Branch-scoped users can see their branch packages plus global packages.
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
-        sql += ` AND branch_id = $${paramCount}`;
+        sql += ` AND (branch_id = $${paramCount} OR branch_id IS NULL)`;
         params.push(req.user.branchId);
       } else if (branch_id) {
         paramCount++;
-        sql += ` AND branch_id = $${paramCount}`;
+        sql += ` AND (branch_id = $${paramCount} OR branch_id IS NULL)`;
         params.push(branch_id);
       }
 
@@ -205,7 +219,7 @@ router.post(
   '/',
   [
     body('package_name').notEmpty().withMessage('Package name is required'),
-    body('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    body('branch_id').optional({ nullable: true, checkFalsy: true }).isInt().withMessage('Branch ID must be an integer'),
     body('status').optional().isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
     body('package_price').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Package price must be a positive number'),
     body('level_tag').optional().isString().withMessage('Level tag must be a string'),
@@ -223,11 +237,38 @@ router.post(
     try {
       await client.query('BEGIN');
 
-      const { package_name, branch_id, status, package_price, level_tag, package_type, payment_option, phase_start, phase_end, downpayment_amount, details = [] } = req.body;
+      const {
+        package_name,
+        branch_id,
+        status,
+        package_price,
+        level_tag,
+        package_type,
+        payment_option,
+        phase_start,
+        phase_end,
+        downpayment_amount: rawDownpaymentAmount,
+        details = [],
+      } = req.body;
+
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      let finalBranchId = branch_id ? parseInt(branch_id, 10) : null;
+      if (userType !== 'Superadmin') {
+        if (!userBranchId) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            success: false,
+            message: 'Only branch users with an assigned branch can create packages.',
+          });
+        }
+        finalBranchId = userBranchId;
+      }
 
       // Verify branch exists if provided
-      if (branch_id) {
-        const branchCheck = await client.query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [branch_id]);
+      if (finalBranchId) {
+        const branchCheck = await client.query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [finalBranchId]);
         if (branchCheck.rows.length === 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -259,21 +300,26 @@ router.post(
 
       // Phase + Installment: same validation as Installment packages
       const isPhaseInstallment = package_type === 'Phase' && payment_option === 'Installment';
-      if (package_type === 'Phase' && payment_option && payment_option !== 'Installment') {
-        downpayment_amount = null;
+      let normalizedDownpaymentAmount = rawDownpaymentAmount ?? null;
+      if (package_type === 'Phase' && !isPhaseInstallment) {
+        normalizedDownpaymentAmount = null;
       }
 
       // Validate downpayment for Installment packages (and Phase+Installment)
       // Note: package_price for Installment packages is the monthly installment amount, not total
-      if (package_type === 'Installment' || isPhaseInstallment) {
-        if (!downpayment_amount || downpayment_amount === '' || downpayment_amount === null || downpayment_amount === undefined) {
+      if (package_type === 'Installment') {
+        if (
+          normalizedDownpaymentAmount === '' ||
+          normalizedDownpaymentAmount === null ||
+          normalizedDownpaymentAmount === undefined
+        ) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
             message: 'Downpayment amount is required for Installment packages',
           });
         }
-        const downpayment = parseFloat(downpayment_amount);
+        const downpayment = parseFloat(normalizedDownpaymentAmount);
         if (isNaN(downpayment) || downpayment <= 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -288,9 +334,31 @@ router.post(
             message: 'Monthly installment amount (package price) is required for Installment packages',
           });
         }
-      } else if (!isPhaseInstallment && downpayment_amount !== undefined && downpayment_amount !== null) {
-        // Clear downpayment for non-Installment / non-Phase-Installment packages
-        downpayment_amount = null;
+      } else if (isPhaseInstallment) {
+        if (
+          normalizedDownpaymentAmount !== '' &&
+          normalizedDownpaymentAmount !== null &&
+          normalizedDownpaymentAmount !== undefined
+        ) {
+          const downpayment = parseFloat(normalizedDownpaymentAmount);
+          if (isNaN(downpayment) || downpayment < 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Downpayment amount must be a positive number',
+            });
+          }
+        }
+        if (!package_price || package_price === '' || package_price === null || package_price === undefined) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Monthly installment amount (package price) is required for Phase installment packages',
+          });
+        }
+      } else if (!isPhaseInstallment) {
+        // Clear downpayment for non-Installment packages.
+        normalizedDownpaymentAmount = null;
       }
 
       // Create package
@@ -346,7 +414,7 @@ router.post(
          RETURNING *`,
         [
           package_name, 
-          branch_id || null, 
+          finalBranchId, 
           status || 'Active', 
           package_price || null, 
           level_tag || null, 
@@ -355,8 +423,8 @@ router.post(
           package_type === 'Phase'
             ? (phase_end ? parseInt(phase_end) : (phase_start ? parseInt(phase_start) : null))
             : null,
-          (package_type === 'Installment' || isPhaseInstallment) && downpayment_amount !== undefined && downpayment_amount !== null
-            ? parseFloat(downpayment_amount)
+          (package_type === 'Installment' || isPhaseInstallment) && normalizedDownpaymentAmount !== undefined && normalizedDownpaymentAmount !== null && normalizedDownpaymentAmount !== ''
+            ? parseFloat(normalizedDownpaymentAmount)
             : null,
           package_type === 'Phase' ? (payment_option || 'Fullpayment') : null
         ]
@@ -479,6 +547,7 @@ router.put(
   [
     param('id').isInt().withMessage('Package ID must be an integer'),
     body('package_name').optional().notEmpty().withMessage('Package name cannot be empty'),
+    body('branch_id').optional({ nullable: true, checkFalsy: true }).isInt().withMessage('Branch ID must be an integer'),
     body('status').optional().isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
     body('package_price').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Package price must be a positive number'),
     body('level_tag').optional().isString().withMessage('Level tag must be a string'),
@@ -493,7 +562,18 @@ router.put(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const { package_name, branch_id, status, package_price, level_tag, package_type, payment_option, phase_start, phase_end, downpayment_amount } = req.body;
+      const {
+        package_name,
+        branch_id,
+        status,
+        package_price,
+        level_tag,
+        package_type,
+        payment_option,
+        phase_start,
+        phase_end,
+        downpayment_amount: rawDownpaymentAmount,
+      } = req.body;
 
       // Check if package exists
       const existingPackage = await query('SELECT * FROM packagestbl WHERE package_id = $1', [id]);
@@ -504,8 +584,30 @@ router.put(
         });
       }
 
+      const existingPackageRow = existingPackage.rows[0];
+      if (!canManagePackage({
+        userType: req.user.userType,
+        userBranchId: req.user.branchId,
+        packageBranchId: existingPackageRow.branch_id,
+      })) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to update this package.',
+        });
+      }
+
+      if (branch_id !== undefined && branch_id !== null && branch_id !== '') {
+        const branchCheck = await query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [branch_id]);
+        if (branchCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Branch not found',
+          });
+        }
+      }
+
       // Check if package has active installment profiles (prevent downpayment changes)
-      if (downpayment_amount !== undefined) {
+      if (rawDownpaymentAmount !== undefined) {
         const activeProfiles = await query(
           'SELECT COUNT(*) as count FROM installmentinvoiceprofilestbl WHERE package_id = $1 AND is_active = true',
           [id]
@@ -538,18 +640,23 @@ router.put(
 
       // Phase + Installment: same validation as Installment
       const isPhaseInstallment = package_type === 'Phase' && payment_option === 'Installment';
-      if (package_type === 'Phase' && payment_option && payment_option !== 'Installment') {
-        downpayment_amount = null;
+      let normalizedDownpaymentAmount = rawDownpaymentAmount;
+      if (package_type === 'Phase' && !isPhaseInstallment) {
+        normalizedDownpaymentAmount = null;
       }
 
-      if (package_type === 'Installment' || isPhaseInstallment) {
-        if (!downpayment_amount || downpayment_amount === '' || downpayment_amount === null || downpayment_amount === undefined) {
+      if (package_type === 'Installment') {
+        if (
+          normalizedDownpaymentAmount === '' ||
+          normalizedDownpaymentAmount === null ||
+          normalizedDownpaymentAmount === undefined
+        ) {
           return res.status(400).json({
             success: false,
             message: 'Downpayment amount is required for Installment packages',
           });
         }
-        const downpayment = parseFloat(downpayment_amount);
+        const downpayment = parseFloat(normalizedDownpaymentAmount);
         if (isNaN(downpayment) || downpayment <= 0) {
           return res.status(400).json({
             success: false,
@@ -562,8 +669,28 @@ router.put(
             message: 'Monthly installment amount (package price) is required for Installment packages',
           });
         }
-      } else if (!isPhaseInstallment && downpayment_amount !== undefined && downpayment_amount !== null) {
-        downpayment_amount = null;
+      } else if (isPhaseInstallment) {
+        if (
+          normalizedDownpaymentAmount !== '' &&
+          normalizedDownpaymentAmount !== null &&
+          normalizedDownpaymentAmount !== undefined
+        ) {
+          const downpayment = parseFloat(normalizedDownpaymentAmount);
+          if (isNaN(downpayment) || downpayment < 0) {
+            return res.status(400).json({
+              success: false,
+              message: 'Downpayment amount must be a positive number',
+            });
+          }
+        }
+        if (!package_price || package_price === '' || package_price === null || package_price === undefined) {
+          return res.status(400).json({
+            success: false,
+            message: 'Monthly installment amount (package price) is required for Phase installment packages',
+          });
+        }
+      } else if (!isPhaseInstallment) {
+        normalizedDownpaymentAmount = null;
       }
 
       // Build update query
@@ -573,15 +700,19 @@ router.put(
 
       const fields = { 
         package_name, 
-        branch_id, 
+        branch_id: req.user.userType === 'Superadmin'
+          ? (branch_id === undefined ? undefined : (branch_id ? parseInt(branch_id, 10) : null))
+          : req.user.branchId,
         status, 
         package_price, 
         level_tag, 
         package_type,
         phase_start: phase_start !== undefined ? (phase_start ? parseInt(phase_start) : null) : undefined,
         phase_end: phase_end !== undefined ? (phase_end ? parseInt(phase_end) : null) : undefined,
-        downpayment_amount: downpayment_amount !== undefined 
-          ? ((package_type === 'Installment' || isPhaseInstallment) && downpayment_amount !== null ? parseFloat(downpayment_amount) : null)
+        downpayment_amount: rawDownpaymentAmount !== undefined 
+          ? (((package_type === 'Installment' || isPhaseInstallment) && normalizedDownpaymentAmount !== null && normalizedDownpaymentAmount !== '')
+            ? parseFloat(normalizedDownpaymentAmount)
+            : null)
           : undefined,
         payment_option: package_type !== undefined ? (package_type !== 'Phase' ? null : (payment_option !== undefined ? payment_option : undefined)) : undefined
       };
@@ -673,6 +804,19 @@ router.delete(
         });
       }
 
+      const existingPackageRow = existingPackage.rows[0];
+      if (!canManagePackage({
+        userType: req.user.userType,
+        userBranchId: req.user.branchId,
+        packageBranchId: existingPackageRow.branch_id,
+      })) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to delete this package.',
+        });
+      }
+
       // Delete package details first (due to foreign key)
       await client.query('DELETE FROM packagedetailstbl WHERE package_id = $1', [id]);
 
@@ -721,11 +865,22 @@ router.post(
       const { pricinglist_id, merchandise_id } = req.body;
 
       // Check if package exists
-      const packageCheck = await query('SELECT package_id FROM packagestbl WHERE package_id = $1', [id]);
+      const packageCheck = await query('SELECT package_id, branch_id FROM packagestbl WHERE package_id = $1', [id]);
       if (packageCheck.rows.length === 0) {
         return res.status(404).json({
           success: false,
           message: 'Package not found',
+        });
+      }
+
+      if (!canManagePackage({
+        userType: req.user.userType,
+        userBranchId: req.user.branchId,
+        packageBranchId: packageCheck.rows[0].branch_id,
+      })) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to modify this package.',
         });
       }
 
@@ -819,6 +974,25 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id, detailId } = req.params;
+
+      const packageCheck = await query('SELECT package_id, branch_id FROM packagestbl WHERE package_id = $1', [id]);
+      if (packageCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Package not found',
+        });
+      }
+
+      if (!canManagePackage({
+        userType: req.user.userType,
+        userBranchId: req.user.branchId,
+        packageBranchId: packageCheck.rows[0].branch_id,
+      })) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to modify this package.',
+        });
+      }
 
       // Verify detail belongs to package
       const detailCheck = await query('SELECT * FROM packagedetailstbl WHERE packagedtl_id = $1 AND package_id = $2', [detailId, id]);

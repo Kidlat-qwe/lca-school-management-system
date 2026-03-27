@@ -1,5 +1,9 @@
 import { query, getClient } from '../config/database.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import {
+  buildPhaseInstallmentSchedule,
+  isPhaseInstallmentProfile,
+} from './phaseInstallmentUtils.js';
 
 /**
  * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
@@ -145,43 +149,54 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       }
     }
     
-    // Calculate issue date (use next generation date as issue date)
-    // Use local-noon parsing to avoid timezone shifting (PH time can become previous day in UTC).
-    const issueDate =
-      typeof installmentInvoice.next_generation_date === 'string'
-        ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
-        : new Date(installmentInvoice.next_generation_date);
+    const phaseSchedule = isPhaseInstallmentProfile(profile)
+      ? await buildPhaseInstallmentSchedule({
+          db: client,
+          profile,
+          generatedCountOverride: profile.generated_count || 0,
+          issueDateOverride: installmentInvoice.next_generation_date,
+        })
+      : null;
+
+    // Calculate issue date (use next generation date as issue date).
+    const issueDate = phaseSchedule?.current_issue_date
+      ? parseYmdToLocalNoon(phaseSchedule.current_issue_date)
+      : (
+          typeof installmentInvoice.next_generation_date === 'string'
+            ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
+            : new Date(installmentInvoice.next_generation_date)
+        );
     
-    // Calculate due date based on whether this is the first installment or subsequent ones
+    // Calculate due date based on whether this is the first installment or subsequent ones.
     let dueDate;
     
-    // Check if this is the first installment invoice (generated_count = 0 before this generation)
-    const isFirstInvoice = (profile.generated_count || 0) === 0;
-    
-    if (isFirstInvoice && profile.class_id) {
-      // First installment: due date = class start date
-      // Get class start date
-      const classResult = await client.query(
-        'SELECT start_date FROM classestbl WHERE class_id = $1',
-        [profile.class_id]
-      );
+    if (phaseSchedule?.current_due_date) {
+      dueDate = parseYmdToLocalNoon(phaseSchedule.current_due_date);
+    } else {
+      // Check if this is the first installment invoice (generated_count = 0 before this generation)
+      const isFirstInvoice = (profile.generated_count || 0) === 0;
       
-      if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
-        dueDate = typeof classResult.rows[0].start_date === 'string'
-          ? parseYmdToLocalNoon(classResult.rows[0].start_date)
-          : new Date(classResult.rows[0].start_date);
+      if (isFirstInvoice && profile.class_id) {
+        // First installment: due date = class start date
+        const classResult = await client.query(
+          'SELECT start_date FROM classestbl WHERE class_id = $1',
+          [profile.class_id]
+        );
+        
+        if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
+          dueDate = typeof classResult.rows[0].start_date === 'string'
+            ? parseYmdToLocalNoon(classResult.rows[0].start_date)
+            : new Date(classResult.rows[0].start_date);
+        } else {
+          dueDate = new Date(issueDate);
+          dueDate.setMonth(dueDate.getMonth() + 1);
+          dueDate.setDate(5);
+        }
       } else {
-        // Fallback if class start date not available
         dueDate = new Date(issueDate);
         dueDate.setMonth(dueDate.getMonth() + 1);
         dueDate.setDate(5);
       }
-    } else {
-      // Subsequent invoices: due on 5th of the next month
-      // Issue date is typically the 25th of current month, due on 5th of next month
-      dueDate = new Date(issueDate);
-      dueDate.setMonth(dueDate.getMonth() + 1); // Move to next month
-      dueDate.setDate(5); // Set to 5th day of next month
     }
     
     // Calculate final invoice amount after promo discount
@@ -198,7 +213,9 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         profile.branch_id || null,
         finalInvoiceAmount, // Use discounted amount
         'Unpaid',
-        `Auto-generated from installment invoice: ${profile.description || 'Installment payment'}`,
+        `Auto-generated from installment invoice: ${profile.description || 'Installment payment'}${
+          phaseSchedule?.current_phase_number ? `;TARGET_PHASE:${phaseSchedule.current_phase_number}` : ''
+        }`,
         formatYmdLocal(issueDate),
         formatYmdLocal(dueDate),
         null, // System-generated
@@ -298,7 +315,7 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     
     // Check phase limit before generating
     const profileCheck = await client.query(
-      'SELECT total_phases, generated_count, downpayment_invoice_id FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1',
+      'SELECT total_phases, generated_count, downpayment_invoice_id, phase_start FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1',
       [installmentInvoice.installmentinvoiceprofiles_id]
     );
     
@@ -347,7 +364,25 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     );
     
     // Check if this was the last invoice (reached phase limit)
-    const isLastInvoice = maxInvoices !== null && newCount >= maxInvoices;
+    const nextPhaseSchedule = isPhaseInstallmentProfile({
+      ...profile,
+      ...profileData,
+      phase_start: profile.phase_start ?? profileData.phase_start,
+    })
+      ? await buildPhaseInstallmentSchedule({
+          db: client,
+          profile: {
+            ...profile,
+            ...profileData,
+            phase_start: profile.phase_start ?? profileData.phase_start,
+          },
+          generatedCountOverride: newCount,
+        })
+      : null;
+
+    const isLastInvoice = nextPhaseSchedule
+      ? nextPhaseSchedule.is_last_phase
+      : (maxInvoices !== null && newCount >= maxInvoices);
     
     if (isLastInvoice) {
       // Last invoice - mark profile as inactive and update installment invoice status
@@ -366,7 +401,7 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         ]
       );
     } else {
-      // Not last invoice - update with next dates for next cycle
+      // Not last invoice - persist the generated cycle as the row baseline.
       await client.query(
         `UPDATE installmentinvoicestbl 
          SET status = NULL, next_generation_date = $1, next_invoice_month = $2, scheduled_date = $3
@@ -400,6 +435,16 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       generated_count: updatedProfile.rows[0]?.generated_count || newCount,
       total_phases: updatedProfile.rows[0]?.total_phases || totalPhases,
       phase_limit_reached: isLastInvoice,
+      current_phase_number: phaseSchedule?.current_phase_number || null,
+      current_due_date: phaseSchedule?.current_due_date || formatYmdLocal(dueDate),
+      next_phase_number: nextPhaseSchedule?.current_phase_number || null,
+      next_due_date: nextPhaseSchedule?.current_due_date || null,
+      next_generation_date: isLastInvoice
+        ? null
+        : formatYmdLocal(nextGenDate),
+      next_invoice_month: isLastInvoice
+        ? null
+        : formatYmdLocal(nextInvoiceMonth),
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -440,7 +485,7 @@ export const processDueInstallmentInvoices = async () => {
     const result = await query(
       `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
               ip.frequency as profile_frequency, ip.description, ip.is_active,
-              ip.class_id, ip.total_phases, ip.generated_count,
+              ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
               ip.downpayment_paid, ip.downpayment_invoice_id
        FROM installmentinvoicestbl ii
        JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
@@ -468,6 +513,8 @@ export const processDueInstallmentInvoices = async () => {
           description: installmentInvoice.description,
           generated_count: installmentInvoice.generated_count || 0,
           class_id: installmentInvoice.class_id,
+          total_phases: installmentInvoice.total_phases,
+          phase_start: installmentInvoice.phase_start,
         });
         
         processed.push(invoiceData);

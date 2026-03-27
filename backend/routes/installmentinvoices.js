@@ -5,12 +5,60 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { calculateNextGenerationDate, calculateNextInvoiceMonth } from '../utils/installmentInvoiceGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
+import {
+  buildPhaseInstallmentSchedule,
+  isPhaseInstallmentProfile,
+} from '../utils/phaseInstallmentUtils.js';
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
+
+const enrichInstallmentInvoiceRow = async (row) => {
+  const profile = {
+    class_id: row.class_id,
+    total_phases: row.total_phases,
+    generated_count: row.generated_count,
+    phase_start: row.phase_start,
+  };
+
+  if (!isPhaseInstallmentProfile(profile)) {
+    return row;
+  }
+
+  try {
+    const schedule = await buildPhaseInstallmentSchedule({
+      db: { query },
+      profile,
+      generatedCountOverride: row.generated_count || 0,
+      issueDateOverride: row.next_generation_date || null,
+    });
+
+    return {
+      ...row,
+      current_phase_number: schedule.current_phase_number,
+      current_phase_start_date: schedule.current_phase_start_date,
+      current_issue_date: schedule.current_issue_date,
+      current_due_date: schedule.current_due_date,
+      current_invoice_month: schedule.current_invoice_month,
+      current_generation_date: schedule.current_generation_date,
+      computed_next_phase_number: schedule.next_phase_number,
+      computed_next_phase_start_date: schedule.next_phase_start_date,
+      computed_next_issue_date: schedule.next_issue_date,
+      computed_next_due_date: schedule.next_due_date,
+      computed_next_invoice_month: schedule.next_invoice_month,
+      computed_next_generation_date: schedule.next_generation_date,
+      is_last_phase: schedule.is_last_phase,
+    };
+  } catch (error) {
+    return {
+      ...row,
+      phase_schedule_error: error.message,
+    };
+  }
+};
 
 /**
  * GET /api/sms/installment-invoices/profiles
@@ -556,6 +604,8 @@ router.post(
         description: profile.description || 'Monthly Installment Payment',
         generated_count: 0,
         class_id: profile.class_id,
+        total_phases: profile.total_phases,
+        phase_start: profile.phase_start,
       };
       const generatedInvoice = await generateInvoiceFromInstallment(firstRecord, genProfile);
 
@@ -594,7 +644,7 @@ router.get(
 
       let sql = `
         SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
-               ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count,
+               ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
                ip.downpayment_invoice_id,
                c.start_date::text as class_start_date,
                (SELECT COUNT(*) 
@@ -643,10 +693,11 @@ router.get(
       params.push(limit, offset);
 
       const result = await query(sql, params);
+      const enrichedRows = await Promise.all(result.rows.map(enrichInstallmentInvoiceRow));
 
       res.json({
         success: true,
-        data: result.rows,
+        data: enrichedRows,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -673,7 +724,7 @@ router.get(
       const { id } = req.params;
       const result = await query(
         `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
-                ip.frequency as profile_frequency, ip.class_id, ip.total_phases, ip.generated_count,
+                ip.frequency as profile_frequency, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
                 c.start_date::text as class_start_date,
                 p.program_name, u.full_name as student_name
          FROM installmentinvoicestbl ii
@@ -692,9 +743,11 @@ router.get(
         });
       }
 
+      const enrichedRow = await enrichInstallmentInvoiceRow(result.rows[0]);
+
       res.json({
         success: true,
-        data: result.rows[0],
+        data: enrichedRow,
       });
     } catch (error) {
       next(error);
@@ -812,7 +865,7 @@ router.post(
       // Get installment invoice with profile (including phase tracking)
       const installmentResult = await client.query(
         `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
-                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count,
+                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
                 ip.downpayment_invoice_id,
                 p.program_name, u.full_name as student_name
          FROM installmentinvoicestbl ii
@@ -841,6 +894,9 @@ router.post(
         frequency: installmentInvoice.profile_frequency || installmentInvoice.frequency,
         description: installmentInvoice.description,
         class_id: installmentInvoice.class_id, // Include class_id for enrollment check
+        total_phases: installmentInvoice.total_phases,
+        generated_count: installmentInvoice.generated_count || 0,
+        phase_start: installmentInvoice.phase_start,
       };
 
       // Get student information
@@ -859,24 +915,17 @@ router.post(
 
       const student = studentResult.rows[0];
 
-      // Due date: Phase 1 = class start; Phase 2+ = USE FORM'S due_date (frontend computes correct value with skip-April logic)
-      const currentCount = installmentInvoice.generated_count || 0;
-      let classStartYmd = null;
-      if (profile.class_id) {
-        const classResult = await client.query(
-          'SELECT start_date FROM classestbl WHERE class_id = $1',
-          [profile.class_id]
-        );
-        if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
-          const sd = classResult.rows[0].start_date;
-          classStartYmd = typeof sd === 'string' ? sd.slice(0, 10) : sd.toISOString().split('T')[0];
-        }
-      }
-      let effectiveDueDate = due_date;
-      if (currentCount === 0 && classStartYmd) {
-        effectiveDueDate = classStartYmd; // Phase 1 = class start (ignore form)
-      }
-      // Phase 2+: use form's due_date - frontend sends correct value (05/05 when Phase 2, etc.)
+      const phaseSchedule = isPhaseInstallmentProfile(profile)
+        ? await buildPhaseInstallmentSchedule({
+            db: client,
+            profile,
+            generatedCountOverride: profile.generated_count || 0,
+            issueDateOverride: installmentInvoice.next_generation_date || issue_date,
+          })
+        : null;
+
+      const effectiveIssueDate = issue_date;
+      const effectiveDueDate = due_date;
 
       // Create invoice (link to installment invoice profile for phase tracking)
       const invoiceResult = await client.query(
@@ -888,8 +937,10 @@ router.post(
           profile.branch_id || null,
           installmentInvoice.total_amount_including_tax || profile.amount,
           'Unpaid',
-          `Manually generated from installment invoice: ${profile.description || 'Installment payment'}`,
-          issue_date,
+          `Manually generated from installment invoice: ${profile.description || 'Installment payment'}${
+            phaseSchedule?.current_phase_number ? `;TARGET_PHASE:${phaseSchedule.current_phase_number}` : ''
+          }`,
+          effectiveIssueDate,
           effectiveDueDate,
           req.user.userId || null,
           installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile
@@ -945,6 +996,7 @@ router.post(
       );
       
       const paidPhases = paidInvoicesDetailResult.rows.length;
+      const currentCount = installmentInvoice.generated_count || 0;
       
       // Debug logging
       console.log('Paid invoices count:', paidPhases);
@@ -971,7 +1023,20 @@ router.post(
       );
       
       // Check if this was the last invoice (reached phase limit)
-      const isLastInvoice = maxInvoices !== null && newCount >= maxInvoices;
+      const nextPhaseSchedule = isPhaseInstallmentProfile(profile)
+        ? await buildPhaseInstallmentSchedule({
+            db: client,
+            profile: {
+              ...profile,
+              generated_count: newCount,
+            },
+            generatedCountOverride: newCount,
+          })
+        : null;
+
+      const isLastInvoice = nextPhaseSchedule
+        ? nextPhaseSchedule.is_last_phase
+        : (maxInvoices !== null && newCount >= maxInvoices);
       
       if (isLastInvoice) {
         // Last invoice - mark profile as inactive and update installment invoice status
@@ -990,7 +1055,7 @@ router.post(
           ]
         );
       } else {
-        // Not last invoice - USE FORM'S next_* values so they become default for next generate (adjusted by 1 month each time)
+        // Advance the row to the next cycle after this manual generation.
         const nextGenYmd = next_generation_date ? String(next_generation_date).trim().slice(0, 10) : null;
         const nextMonthYmd = next_invoice_month ? String(next_invoice_month).trim().slice(0, 10) : null;
         const fallbackDate = new Date().toISOString().split('T')[0];
@@ -1029,6 +1094,10 @@ router.post(
           total_phases: updatedProfile.rows[0]?.total_phases || totalPhases,
           phase_limit_reached: isLastInvoice,
           phases_completed: newCount + 1, // Include Phase 1 that was paid via initial package
+          current_phase_number: phaseSchedule?.current_phase_number || null,
+          current_due_date: phaseSchedule?.current_due_date || effectiveDueDate,
+          next_phase_number: nextPhaseSchedule?.current_phase_number || null,
+          next_due_date: nextPhaseSchedule?.current_due_date || (next_due_date ? String(next_due_date).trim().slice(0, 10) : null),
         },
       });
     } catch (error) {

@@ -40,12 +40,144 @@ const AdminPaymentLogs = () => {
   const [endOfShiftPreview, setEndOfShiftPreview] = useState(null);
   const [endOfShiftSuccess, setEndOfShiftSuccess] = useState('');
   const [openActionsDropdown, setOpenActionsDropdown] = useState(false);
+  const [depositModalOpen, setDepositModalOpen] = useState(false);
+  const [depositStartDate, setDepositStartDate] = useState('');
+  const [depositEndDate, setDepositEndDate] = useState('');
+  const [depositLoading, setDepositLoading] = useState(false);
+  const [depositError, setDepositError] = useState('');
+  const [depositData, setDepositData] = useState(null);
+  const [depositSubmitLoading, setDepositSubmitLoading] = useState(false);
+  const [depositExistingRanges, setDepositExistingRanges] = useState([]);
+  const [depositRangesLoading, setDepositRangesLoading] = useState(false);
+  const depositAlertRef = useRef('');
 
   // Today in Manila (YYYY-MM-DD) for end-of-shift
   const todayManila = () => {
     const now = new Date();
     const manila = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
     return manila.toISOString().split('T')[0];
+  };
+
+  const openDepositCashModal = () => {
+    setDepositError('');
+    setDepositData(null);
+    setDepositExistingRanges([]);
+    setDepositStartDate('');
+    setDepositEndDate('');
+    depositAlertRef.current = '';
+    setDepositModalOpen(true);
+  };
+
+  const showDepositAlert = (message) => {
+    setDepositError(message);
+    if (depositAlertRef.current === message) return;
+    depositAlertRef.current = message;
+    alert(message);
+  };
+
+  const fetchExistingDepositRanges = async () => {
+    setDepositRangesLoading(true);
+    try {
+      const res = await apiRequest('/cash-deposit-summaries?limit=200');
+      setDepositExistingRanges(Array.isArray(res?.data) ? res.data : []);
+    } catch (err) {
+      console.error('Error fetching cash deposit ranges:', err);
+      setDepositExistingRanges([]);
+    } finally {
+      setDepositRangesLoading(false);
+    }
+  };
+
+  const getOverlappingDepositRange = (startDate, endDate) =>
+    depositExistingRanges.find(
+      (range) => range.start_date <= endDate && range.end_date >= startDate
+    ) || null;
+
+  const getRangeLabel = (range) =>
+    range ? `${formatDateManila(range.start_date)} - ${formatDateManila(range.end_date)}` : '';
+
+  const isDepositDateBlocked = (dateValue) =>
+    !!depositExistingRanges.find(
+      (range) => range.start_date <= dateValue && range.end_date >= dateValue
+    );
+
+  useEffect(() => {
+    if (!depositModalOpen) return;
+    fetchExistingDepositRanges();
+  }, [depositModalOpen]);
+
+  const fetchDepositCashSummary = async (startDate, endDate) => {
+    setDepositLoading(true);
+    setDepositError('');
+    depositAlertRef.current = '';
+    setDepositData(null);
+    try {
+      const params = new URLSearchParams({
+        start_date: startDate,
+        end_date: endDate,
+      });
+      const res = await apiRequest(`/payments/cash-deposit-summary?${params.toString()}`);
+      setDepositData(res.data || null);
+    } catch (err) {
+      showDepositAlert(err?.message || 'Unable to load the cash deposit summary right now. Please try again.');
+    } finally {
+      setDepositLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!depositModalOpen) return;
+
+    if (!depositStartDate || !depositEndDate) {
+      setDepositError('');
+      depositAlertRef.current = '';
+      setDepositData(null);
+      return;
+    }
+
+    if (depositStartDate > depositEndDate) {
+      showDepositAlert('The start date must be earlier than or the same as the end date.');
+      setDepositData(null);
+      return;
+    }
+
+    const overlappingRange = getOverlappingDepositRange(depositStartDate, depositEndDate);
+    if (overlappingRange) {
+      showDepositAlert(
+        `These dates were already included in a previous cash deposit summary (${getRangeLabel(overlappingRange)}). Please choose dates outside that deposited period.`
+      );
+      setDepositData(null);
+      return;
+    }
+
+    fetchDepositCashSummary(depositStartDate, depositEndDate);
+  }, [depositModalOpen, depositStartDate, depositEndDate, depositExistingRanges]);
+
+  const submitDepositCashSummary = async () => {
+    if (!depositData) {
+      showDepositAlert('Please select a valid uncovered date range first.');
+      return;
+    }
+
+    setDepositSubmitLoading(true);
+    setDepositError('');
+    depositAlertRef.current = '';
+
+    try {
+      await apiRequest('/cash-deposit-summaries', {
+        method: 'POST',
+        body: JSON.stringify({
+          start_date: depositStartDate,
+          end_date: depositEndDate,
+        }),
+      });
+
+      alert('Cash deposit summary submitted successfully. Superadmin and Superfinance will verify your deposited cash.');
+    } catch (err) {
+      showDepositAlert(err?.message || 'Unable to submit this cash deposit summary. Please try again.');
+    } finally {
+      setDepositSubmitLoading(false);
+    }
   };
 
   // Fetch branch name if not in userInfo
@@ -488,10 +620,232 @@ const AdminPaymentLogs = () => {
                   </>
                 )}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenActionsDropdown(false);
+                  openDepositCashModal();
+                }}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-sky-50 hover:text-sky-800"
+              >
+                <svg className="w-5 h-5 text-sky-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a1 1 0 11-2 0 1 1 0 012 0z" />
+                </svg>
+                Deposit Cash
+              </button>
             </div>
           )}
         </div>
       </div>
+
+      {/* Deposit Cash — date range summary (server-side from payment logs) */}
+      {depositModalOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-4"
+          onClick={() => !depositLoading && !depositSubmitLoading && setDepositModalOpen(false)}
+        >
+          <div
+            className="deposit-cash-modal-root bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Deposit Cash</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Sum of <strong>Cash</strong> payments by <strong>issue date</strong> for{' '}
+                  <span className="whitespace-nowrap">{selectedBranchName}</span>. Matches your payment logs (same source as this page).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !depositLoading && !depositSubmitLoading && setDepositModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-md self-start"
+                aria-label="Close"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="px-5 py-4 border-b border-gray-100 shrink-0 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">From (issue date)</label>
+                  <input
+                    type="date"
+                    value={depositStartDate}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue && isDepositDateBlocked(nextValue)) {
+                        const blockedRange = depositExistingRanges.find(
+                          (range) => range.start_date <= nextValue && range.end_date >= nextValue
+                        );
+                        showDepositAlert(
+                          `This date already belongs to a deposited period (${getRangeLabel(blockedRange)}). Please choose another date.`
+                        );
+                        return;
+                      }
+                      setDepositError('');
+                      depositAlertRef.current = '';
+                      setDepositStartDate(nextValue);
+                      setDepositData(null);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                  />
+                </div>
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">To (issue date)</label>
+                  <input
+                    type="date"
+                    value={depositEndDate}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue && isDepositDateBlocked(nextValue)) {
+                        const blockedRange = depositExistingRanges.find(
+                          (range) => range.start_date <= nextValue && range.end_date >= nextValue
+                        );
+                        showDepositAlert(
+                          `This date already belongs to a deposited period (${getRangeLabel(blockedRange)}). Please choose another date.`
+                        );
+                        return;
+                      }
+                      setDepositError('');
+                      depositAlertRef.current = '';
+                      setDepositEndDate(nextValue);
+                      setDepositData(null);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                <strong>Deposit amount</strong> uses Cash payments with status <strong>Completed</strong> only (ready to bank). The summary refreshes automatically after both dates are selected.
+              </p>
+              {depositExistingRanges.length > 0 && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Deposited periods cannot be reused:
+                  {' '}
+                  {depositExistingRanges
+                    .map((range) => getRangeLabel(range))
+                    .join(', ')}
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+              {depositData && (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                    <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
+                      <p className="text-xs font-medium text-sky-800 uppercase tracking-wide">Cash to deposit</p>
+                      <p className="text-xl font-bold text-sky-900 mt-1">
+                        {formatCurrency(depositData.total_cash_deposit_amount)}
+                      </p>
+                      <p className="text-xs text-sky-700 mt-1">{depositData.completed_cash_count ?? 0} completed payment(s)</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                      <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">All Cash (in range)</p>
+                      <p className="text-xl font-bold text-gray-900 mt-1">
+                        {formatCurrency(depositData.total_cash_all_amount)}
+                      </p>
+                      <p className="text-xs text-gray-600 mt-1">{depositData.payment_count ?? 0} row(s)</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                      <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Period</p>
+                      <p className="text-sm font-semibold text-gray-900 mt-2">
+                        {depositData.start_date} → {depositData.end_date}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-sm font-medium text-gray-800 mb-2">Payment lines (Cash only)</p>
+                  <div
+                    className="overflow-x-auto rounded-lg border border-gray-200"
+                    style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                  >
+                    <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '860px' }}>
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Issue date</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Invoice</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Student</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Payment Method</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Amount</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Reference</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {(depositData.payments || []).length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                              No Cash payments in this date range.
+                            </td>
+                          </tr>
+                        ) : (
+                          depositData.payments.map((p) => (
+                            <tr key={p.payment_id} className="hover:bg-gray-50/80">
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">{formatDate(p.issue_date)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
+                                {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                              </td>
+                              <td className="px-3 py-2 text-gray-800 min-w-0 max-w-[200px]">
+                                <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                                {p.payment_method || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
+                                {formatCurrency(p.payable_amount)}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">{getStatusBadge(p.status)}</td>
+                              <td className="px-3 py-2 text-gray-600 min-w-0 max-w-[140px]">
+                                <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+              {!depositData && !depositLoading && !depositError && (
+                <p className="text-sm text-gray-500 text-center py-8">Choose both dates to load totals from the server automatically.</p>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <p className="text-xs text-gray-500">
+                After you confirm this period, submit it so Superadmin can review the actual office cash deposit.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={submitDepositCashSummary}
+                  disabled={depositLoading || depositSubmitLoading || !depositData}
+                  className="px-4 py-2 text-sm font-medium text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {depositSubmitLoading ? 'Submitting...' : 'Submit for Confirmation'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !depositLoading && !depositSubmitLoading && setDepositModalOpen(false)}
+                  disabled={depositLoading || depositSubmitLoading}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* End of Shift Success */}
       {endOfShiftSuccess && (

@@ -6,12 +6,127 @@ import { query, getClient } from '../config/database.js';
 import { sendInvoiceEmail } from '../utils/emailService.js';
 import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
+import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
+
+const syncInstallmentEnrollmentForPaidInvoice = async ({
+  client,
+  profileId,
+  profile,
+  studentId,
+  sourceLabel,
+}) => {
+  if (!profileId || !profile?.class_id || Number(profile.student_id) !== Number(studentId)) {
+    return;
+  }
+
+  const paidInstallmentCountResult = await client.query(
+    `SELECT COUNT(*) AS paid_count
+     FROM invoicestbl i
+     WHERE i.installmentinvoiceprofiles_id = $1
+       AND i.status = 'Paid'
+       AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)`,
+    [profileId, profile.downpayment_invoice_id || null]
+  );
+
+  const paidInstallmentCount = parseInt(paidInstallmentCountResult.rows[0]?.paid_count || 0, 10);
+  if (paidInstallmentCount <= 0) {
+    return;
+  }
+
+  const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start, 10) : 1;
+  const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
+  const maxPhase = totalPhases ? (phaseStart + totalPhases - 1) : null;
+  let targetPhase = phaseStart + paidInstallmentCount - 1;
+  if (maxPhase !== null) {
+    targetPhase = Math.min(targetPhase, maxPhase);
+  }
+
+  const existingPhaseEnrollment = await client.query(
+    `SELECT classstudent_id
+     FROM classstudentstbl
+     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
+    [studentId, profile.class_id, targetPhase]
+  );
+
+  if (existingPhaseEnrollment.rows.length > 0) {
+    return;
+  }
+
+  await client.query(
+    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      studentId,
+      profile.class_id,
+      sourceLabel,
+      targetPhase,
+    ]
+  );
+
+  console.log(`✅ Auto-enrolled student ${studentId} in Phase ${targetPhase} after installment payment`);
+};
+
+const createFirstInstallmentRecordAfterDownpayment = async ({
+  client,
+  profileId,
+  profile,
+  studentName,
+  paymentIssueDate,
+}) => {
+  const paymentDateYmd = paymentIssueDate || formatYmdLocal(new Date());
+  const phaseSchedule = profile.phase_start != null
+    ? await buildPhaseInstallmentSchedule({
+        db: client,
+        profile: {
+          class_id: profile.class_id,
+          phase_start: profile.phase_start,
+          total_phases: profile.total_phases,
+          generated_count: profile.generated_count || 0,
+        },
+        generatedCountOverride: profile.generated_count || 0,
+        issueDateOverride: paymentDateYmd,
+      })
+    : null;
+
+  const firstGenerationYmd = phaseSchedule?.current_generation_date
+    || (profile.first_generation_date ? formatYmdLocal(new Date(profile.first_generation_date)) : paymentDateYmd);
+  const currentInvoiceMonthYmd = phaseSchedule?.current_invoice_month
+    || (profile.next_invoice_due_date ? formatYmdLocal(new Date(profile.next_invoice_due_date)) : paymentDateYmd);
+  const scheduledDateYmd = phaseSchedule?.current_due_date
+    || profile.bill_invoice_due_date
+    || (profile.next_invoice_due_date ? formatYmdLocal(new Date(profile.next_invoice_due_date)) : paymentDateYmd);
+
+  const firstInvoiceRecordResult = await client.query(
+    `INSERT INTO installmentinvoicestbl 
+     (installmentinvoiceprofiles_id, scheduled_date, status, student_name, 
+      total_amount_including_tax, total_amount_excluding_tax, frequency, 
+      next_generation_date, next_invoice_month)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [
+      profileId,
+      scheduledDateYmd,
+      'Pending',
+      studentName,
+      profile.amount,
+      profile.amount,
+      profile.frequency || '1 month(s)',
+      firstGenerationYmd,
+      currentInvoiceMonthYmd,
+    ]
+  );
+
+  return {
+    firstInvoiceRecord: firstInvoiceRecordResult.rows[0],
+    phaseSchedule,
+  };
+};
 
 /**
  * GET /api/sms/payments
@@ -169,6 +284,110 @@ router.get(
           limit: limitNum,
           total,
           totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/cash-deposit-summary
+ * All Cash-method payments in an issue_date range (inclusive), for bank deposit reconciliation.
+ * Non-superadmin users are limited to their branch. Totals use Completed payments only for "deposit" amount.
+ */
+router.get(
+  '/cash-deposit-summary',
+  [
+    queryValidator('start_date').isISO8601().withMessage('start_date must be YYYY-MM-DD'),
+    queryValidator('end_date').isISO8601().withMessage('end_date must be YYYY-MM-DD'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { start_date: startDate, end_date: endDate } = req.query;
+      const start = String(startDate).trim().slice(0, 10);
+      const end = String(endDate).trim().slice(0, 10);
+      if (start > end) {
+        return res.status(400).json({
+          success: false,
+          message: 'start_date must be on or before end_date',
+        });
+      }
+
+      let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
+                        p.payment_method, p.payment_type, p.payable_amount,
+                        TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
+                        p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
+                        TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
+                        p.approval_status, p.approved_by,
+                        TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
+                        u.full_name as student_name, u.email as student_email,
+                        i.invoice_description, i.amount as invoice_amount,
+                        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                        approver.full_name as approved_by_name,
+                        ar.prospect_student_name as ar_prospect_student_name
+                 FROM paymenttbl p
+                 LEFT JOIN userstbl u ON p.student_id = u.user_id
+                 LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                 LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
+                 LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
+                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
+                 WHERE p.payment_method = 'Cash'
+                   AND p.issue_date >= $1::date AND p.issue_date <= $2::date`;
+      const params = [start, end];
+      let paramCount = 2;
+
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        paramCount++;
+        sql += ` AND p.branch_id = $${paramCount}`;
+        params.push(req.user.branchId);
+      }
+
+      sql += ` ORDER BY p.issue_date ASC, p.payment_id ASC`;
+
+      const result = await query(sql, params);
+
+      const payments = [];
+      let totalCompleted = 0;
+      let totalAll = 0;
+      let completedCount = 0;
+
+      for (const row of result.rows) {
+        let studentName = row.student_name;
+        let studentEmail = row.student_email;
+        const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        const prospectName = row.ar_prospect_student_name || null;
+        if (isWalkIn && prospectName) {
+          studentName = prospectName;
+          studentEmail = null;
+        }
+
+        const amount = parseFloat(row.payable_amount) || 0;
+        totalAll += amount;
+        if (row.status === 'Completed') {
+          totalCompleted += amount;
+          completedCount += 1;
+        }
+
+        payments.push({
+          ...row,
+          student_name: studentName,
+          student_email: studentEmail,
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          start_date: start,
+          end_date: end,
+          payment_count: payments.length,
+          completed_cash_count: completedCount,
+          total_cash_all_amount: Math.round(totalAll * 100) / 100,
+          total_cash_deposit_amount: Math.round(totalCompleted * 100) / 100,
+          payments,
         },
       });
     } catch (error) {
@@ -599,36 +818,13 @@ router.post(
               );
               const studentName = studentResult.rows[0]?.full_name || 'Student';
               
-              // Calculate dates for first installment invoice
-              const firstGenerationDate = profile.first_generation_date 
-                ? new Date(profile.first_generation_date)
-                : new Date();
-              const nextInvoiceDueDate = profile.next_invoice_due_date
-                ? new Date(profile.next_invoice_due_date)
-                : new Date();
-              
-              // Create the first installment invoice record (needed before generating invoice)
-              const firstInvoiceRecordResult = await client.query(
-                `INSERT INTO installmentinvoicestbl 
-                 (installmentinvoiceprofiles_id, scheduled_date, status, student_name, 
-                  total_amount_including_tax, total_amount_excluding_tax, frequency, 
-                  next_generation_date, next_invoice_month)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                 RETURNING *`,
-                [
-                  invoice.installmentinvoiceprofiles_id,
-                  profile.bill_invoice_due_date || formatYmdLocal(nextInvoiceDueDate),
-                  'Pending', // Will be updated to 'Generated' after invoice is created
-                  studentName,
-                  profile.amount, // Installment amount (monthly amount)
-                  profile.amount, // Assuming no tax for now
-                  profile.frequency || '1 month(s)',
-                  formatYmdLocal(firstGenerationDate),
-                  formatYmdLocal(nextInvoiceDueDate),
-                ]
-              );
-              
-              const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
+              const { firstInvoiceRecord } = await createFirstInstallmentRecordAfterDownpayment({
+                client,
+                profileId: invoice.installmentinvoiceprofiles_id,
+                profile,
+                studentName,
+                paymentIssueDate: issue_date,
+              });
               
               console.log(`✅ Downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
               
@@ -645,6 +841,8 @@ router.post(
                   description: profile.description || 'Monthly Installment Payment',
                   generated_count: profile.generated_count || 0,
                   class_id: profile.class_id,
+                  total_phases: profile.total_phases,
+                  phase_start: profile.phase_start,
                 },
                 profileId: invoice.installmentinvoiceprofiles_id
               };
@@ -668,89 +866,13 @@ router.post(
               
               // Only proceed if we have class_id and student_id matches
               if (profile.class_id && profile.student_id === student_id) {
-              // Get all enrollments for this student in this class to find the highest phase
-              const enrollmentResult = await client.query(
-                `SELECT classstudent_id, phase_number 
-                 FROM classstudentstbl 
-                 WHERE student_id = $1 AND class_id = $2
-                 ORDER BY phase_number DESC
-                 LIMIT 1`,
-                [student_id, profile.class_id]
-              );
-
-              // Get phase range: for Phase packages use profile.phase_start + total_phases; else curriculum
-              const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start) : null;
-              const classResult = await client.query(
-                `SELECT cu.number_of_phase
-                 FROM classestbl c
-                 LEFT JOIN programstbl p ON c.program_id = p.program_id
-                 LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
-                 WHERE c.class_id = $1`,
-                [profile.class_id]
-              );
-
-              const totalPhases = phaseStart != null
-                ? (phaseStart + (profile.total_phases || 0) - 1) // phase_end for Phase packages
-                : (classResult.rows[0]?.number_of_phase || profile.total_phases);
-              const enrollPhase = phaseStart != null ? phaseStart : 1; // First enrollment phase
-              
-              // Check if student has any enrollment in this class
-              const hasEnrollment = enrollmentResult.rows.length > 0;
-              
-              if (!hasEnrollment) {
-                // First invoice payment: Enroll student in first phase (phase_start for Phase packages, else 1)
-                await client.query(
-                  `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                   VALUES ($1, $2, $3, $4)`,
-                  [
-                    student_id,
-                    profile.class_id,
-                    'System (Auto-enrolled via first installment payment)',
-                    enrollPhase
-                  ]
-                );
-                
-                console.log(`✅ First installment payment: Auto-enrolled student ${student_id} in Phase ${enrollPhase} after paying first invoice`);
-              } else {
-                // Subsequent invoice payment: Progress to next phase
-                const highestPhase = enrollmentResult.rows[0].phase_number || enrollPhase;
-                
-                // Calculate next phase (highest phase + 1)
-                // Cap at totalPhases (phase_end for Phase packages, curriculum total otherwise)
-                const nextPhase = totalPhases ? Math.min(highestPhase + 1, totalPhases) : highestPhase + 1;
-                
-                // Check if student already has an enrollment for this next phase
-                const existingPhaseEnrollment = await client.query(
-                  `SELECT classstudent_id 
-                   FROM classstudentstbl 
-                   WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
-                  [student_id, profile.class_id, nextPhase]
-                );
-                
-                // Only create new enrollment if:
-                // 1. Next phase is greater than highest phase
-                // 2. Next phase doesn't exceed total phases
-                // 3. Student doesn't already have an enrollment for this phase
-                if (nextPhase > highestPhase && 
-                    (!totalPhases || nextPhase <= totalPhases) &&
-                    existingPhaseEnrollment.rows.length === 0) {
-                  
-                  // Create a new enrollment record for the next phase
-                  // This allows student to be enrolled in multiple phases simultaneously
-                  await client.query(
-                    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                     VALUES ($1, $2, $3, $4)`,
-                    [
-                      student_id,
-                      profile.class_id,
-                      'System (Auto-enrolled via installment payment)',
-                      nextPhase
-                    ]
-                  );
-                  
-                  console.log(`✅ Auto-enrolled student ${student_id} in Phase ${nextPhase} (keeping Phase ${highestPhase} enrollment) after installment payment`);
-                }
-              }
+                await syncInstallmentEnrollmentForPaidInvoice({
+                  client,
+                  profileId: invoice.installmentinvoiceprofiles_id,
+                  profile,
+                  studentId: student_id,
+                  sourceLabel: 'System (Auto-enrolled via installment payment)',
+                });
               }
             }
           }
@@ -1279,36 +1401,14 @@ router.put(
                   );
                   const studentName = studentResult.rows[0]?.full_name || 'Student';
                   
-                  // Calculate dates for first installment invoice
-                  const firstGenerationDate = profile.first_generation_date 
-                    ? new Date(profile.first_generation_date)
-                    : new Date();
-                  const nextInvoiceDueDate = profile.next_invoice_due_date
-                    ? new Date(profile.next_invoice_due_date)
-                    : new Date();
-                  
-                  // Create the first installment invoice record (needed before generating invoice)
-                  const firstInvoiceRecordResult = await client.query(
-                    `INSERT INTO installmentinvoicestbl 
-                     (installmentinvoiceprofiles_id, scheduled_date, status, student_name, 
-                      total_amount_including_tax, total_amount_excluding_tax, frequency, 
-                      next_generation_date, next_invoice_month)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                     RETURNING *`,
-                    [
-                      invoice.installmentinvoiceprofiles_id,
-                      profile.bill_invoice_due_date || formatYmdLocal(nextInvoiceDueDate),
-                      'Pending', // Will be updated to 'Generated' after invoice is created
-                      studentName,
-                      profile.amount, // Installment amount (monthly amount)
-                      profile.amount, // Assuming no tax for now
-                      profile.frequency || '1 month(s)',
-                      formatYmdLocal(firstGenerationDate),
-                      formatYmdLocal(nextInvoiceDueDate),
-                    ]
-                  );
-                  
-                  const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
+                  const firstPaymentIssueDate = issue_date || payment.issue_date || formatYmdLocal(new Date());
+                  const { firstInvoiceRecord } = await createFirstInstallmentRecordAfterDownpayment({
+                    client,
+                    profileId: invoice.installmentinvoiceprofiles_id,
+                    profile,
+                    studentName,
+                    paymentIssueDate: firstPaymentIssueDate,
+                  });
                   
                   console.log(`✅ Downpayment paid (via update): Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
                   
@@ -1325,6 +1425,8 @@ router.put(
                       amount: profile.amount,
                       frequency: profile.frequency || '1 month(s)',
                       description: profile.description || 'Monthly Installment Payment',
+                      total_phases: profile.total_phases,
+                      phase_start: profile.phase_start,
                     },
                     profileId: invoice.installmentinvoiceprofiles_id
                   };
@@ -1348,69 +1450,14 @@ router.put(
                   
                   // Only proceed if we have class_id and student_id matches
                   if (profile.class_id && profile.student_id === payment.student_id) {
-                  // Get all enrollments for this student in this class to find the highest phase
-                  const enrollmentResult = await client.query(
-                    `SELECT classstudent_id, phase_number 
-                     FROM classstudentstbl 
-                     WHERE student_id = $1 AND class_id = $2
-                     ORDER BY phase_number DESC
-                     LIMIT 1`,
-                    [payment.student_id, profile.class_id]
-                  );
-
-                  // Get total phases from curriculum
-                  const classResult = await client.query(
-                    `SELECT cu.number_of_phase
-                     FROM classestbl c
-                     LEFT JOIN programstbl p ON c.program_id = p.program_id
-                     LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
-                     WHERE c.class_id = $1`,
-                    [profile.class_id]
-                  );
-
-                  const totalPhases = classResult.rows[0]?.number_of_phase || profile.total_phases;
-                  
-                  // Determine the highest current phase (or default to 1 if no enrollment found)
-                  const highestPhase = enrollmentResult.rows.length > 0 
-                    ? (enrollmentResult.rows[0].phase_number || 1)
-                    : 1;
-                  
-                  // Calculate next phase (highest phase + 1)
-                  // But don't exceed total phases
-                  const nextPhase = totalPhases ? Math.min(highestPhase + 1, totalPhases) : highestPhase + 1;
-                  
-                  // Check if student already has an enrollment for this next phase
-                  const existingPhaseEnrollment = await client.query(
-                    `SELECT classstudent_id 
-                     FROM classstudentstbl 
-                     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
-                    [payment.student_id, profile.class_id, nextPhase]
-                  );
-                  
-                  // Only create new enrollment if:
-                  // 1. Next phase is greater than highest phase
-                  // 2. Next phase doesn't exceed total phases
-                  // 3. Student doesn't already have an enrollment for this phase
-                  if (nextPhase > highestPhase && 
-                      (!totalPhases || nextPhase <= totalPhases) &&
-                      existingPhaseEnrollment.rows.length === 0) {
-                    
-                    // Create a new enrollment record for the next phase
-                    // This allows student to be enrolled in multiple phases simultaneously
-                    await client.query(
-                      `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                       VALUES ($1, $2, $3, $4)`,
-                      [
-                        payment.student_id,
-                        profile.class_id,
-                        'System (Auto-enrolled via installment payment)',
-                        nextPhase
-                      ]
-                    );
-                    
-                    console.log(`✅ Auto-enrolled student ${payment.student_id} in Phase ${nextPhase} (keeping Phase ${highestPhase} enrollment) after installment payment update`);
+                    await syncInstallmentEnrollmentForPaidInvoice({
+                      client,
+                      profileId: invoice.installmentinvoiceprofiles_id,
+                      profile,
+                      studentId: payment.student_id,
+                      sourceLabel: 'System (Auto-enrolled via installment payment)',
+                    });
                   }
-                }
                 }
               }
             } catch (phaseError) {

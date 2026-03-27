@@ -229,6 +229,40 @@ router.get(
 
 const TODAY_MANILA = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
+const createDailySummarySubmissionNotification = async ({
+  branchId,
+  summaryDate,
+  totalAmount,
+  paymentCount,
+  createdBy,
+}) => {
+  const [branchResult, userResult] = await Promise.all([
+    query(
+      `SELECT COALESCE(branch_nickname, branch_name) AS branch_name
+       FROM branchestbl
+       WHERE branch_id = $1`,
+      [branchId]
+    ),
+    query(
+      `SELECT full_name, email
+       FROM userstbl
+       WHERE user_id = $1`,
+      [createdBy]
+    ),
+  ]);
+
+  const branchName = branchResult.rows[0]?.branch_name || `Branch ${branchId}`;
+  const submittedBy = userResult.rows[0]?.full_name || userResult.rows[0]?.email || 'Branch Admin';
+
+  const body = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${Number(totalAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
+
+  await query(
+    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
+     VALUES ($1, $2, $3, 'Active', 'High', $4, $5)`,
+    ['End of Shift Submitted', body, ['Admin', 'Finance'], branchId, createdBy]
+  );
+};
+
 /**
  * POST /api/sms/daily-summary-sales
  * Submit daily summary for TODAY only. Admin only.
@@ -281,6 +315,14 @@ router.post(
          RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
         [userBranchId, requestedDate, totalAmount, paymentCount, userId]
       );
+
+      await createDailySummarySubmissionNotification({
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount,
+        paymentCount,
+        createdBy: userId,
+      });
 
       res.status(201).json({
         success: true,

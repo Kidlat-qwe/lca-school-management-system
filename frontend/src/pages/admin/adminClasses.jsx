@@ -449,12 +449,29 @@ const initializePackageMerchSelections = useCallback(
 
   const fetchMerchandise = async (branchId) => {
     try {
-      const response = await apiRequest('/merchandise?limit=100');
-      // Filter merchandise by branch_id
-      const filteredMerchandise = (response.data || []).filter(
-        (item) => item.branch_id === branchId
-      );
-      setMerchandise(filteredMerchandise);
+      const normalizedBranchId = branchId ?? adminBranchId ?? null;
+      if (!normalizedBranchId) {
+        setMerchandise([]);
+        return;
+      }
+
+      const allMerchandise = [];
+      const limit = 100;
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await apiRequest(
+          `/merchandise?branch_id=${normalizedBranchId}&limit=${limit}&page=${page}`
+        );
+        const pageData = response.data || [];
+        allMerchandise.push(...pageData);
+
+        hasMore = pageData.length === limit;
+        page += 1;
+      }
+
+      setMerchandise(allMerchandise);
     } catch (err) {
       console.error('Error fetching merchandise:', err);
     }
@@ -3073,14 +3090,19 @@ const initializePackageMerchSelections = useCallback(
     };
   };
 
-  const getMerchandiseOptionLabel = (item) => {
+  const getMerchandiseOptionLabel = (item, options = {}) => {
     if (!item) return '';
+    const { includeStock = false } = options;
     const parts = [];
     // Build label from gender and type
     if (item.gender) parts.push(item.gender);
     if (item.type) parts.push(item.type);
     if (item.size) parts.push(`(${item.size})`);
-    return parts.length > 0 ? parts.join(' - ') : `Stock #${item.merchandise_id}`;
+    const baseLabel = parts.length > 0 ? parts.join(' - ') : `Variant #${item.merchandise_id}`;
+    if (!includeStock) {
+      return baseLabel;
+    }
+    return `${baseLabel} • Available: ${item.quantity ?? 0}`;
   };
 
   const getUniformCategory = (item) => {
@@ -9398,7 +9420,7 @@ setFormData({
                         ? packages.filter(pkg => pkg.package_type === 'Phase')
                         : packages.filter(pkg =>
                             pkg.package_type === 'Fullpayment' ||
-                            (pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) ||
+                            pkg.package_type === 'Installment' ||
                             pkg.package_type === 'Promo'
                           );
                     
@@ -9500,6 +9522,13 @@ setFormData({
                                     </div>
                                   )}
                                 </div>
+                              )}
+                              {selectedEnrollmentOption === 'per-phase' && pkg.package_type === 'Phase' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200 mb-2">
+                                  {pkg.phase_end != null
+                                    ? `From Phase ${pkg.phase_start} to Phase ${pkg.phase_end}`
+                                    : `Phase ${pkg.phase_start}`}
+                                </span>
                               )}
                               {pkg.details && pkg.details.length > 0 && (
                                 <div className="flex items-center space-x-2 mt-3">
@@ -10722,6 +10751,14 @@ setFormData({
                     if (hasFullpaymentPricing) {
                       return null;
                     }
+
+                    const isInstallmentCapablePackage =
+                      selectedPackage.package_type === 'Installment' ||
+                      (selectedPackage.package_type === 'Phase' && selectedPackage.payment_option === 'Installment');
+
+                    if (!isInstallmentCapablePackage) {
+                      return null;
+                    }
                     
                     return (
                     <div className="space-y-3">
@@ -11293,13 +11330,13 @@ setFormData({
                                     if (topSelection) {
                                       const topItem = merchandise.find(item => item.merchandise_id === topSelection.merchandise_id);
                                       if (topItem) {
-                                        filteredLabels.push(getMerchandiseOptionLabel(topItem));
+                                        filteredLabels.push(getMerchandiseOptionLabel(topItem, { includeStock: true }));
                                       }
                                     }
                                     if (bottomSelection) {
                                       const bottomItem = merchandise.find(item => item.merchandise_id === bottomSelection.merchandise_id);
                                       if (bottomItem) {
-                                        filteredLabels.push(getMerchandiseOptionLabel(bottomItem));
+                                        filteredLabels.push(getMerchandiseOptionLabel(bottomItem, { includeStock: true }));
                                       }
                                     }
                                   } else {
@@ -11311,7 +11348,7 @@ setFormData({
                                       const merchItem = merchandise.find(item => item.merchandise_id === selection.merchandise_id);
                                       if (merchItem) {
                                         const category = getUniformCategory(merchItem);
-                                        const label = getMerchandiseOptionLabel(merchItem);
+                                        const label = getMerchandiseOptionLabel(merchItem, { includeStock: true });
                                         if (label) {
                                           if (category === 'Top' && topItems.length === 0) {
                                             topItems.push(label);
@@ -11330,7 +11367,8 @@ setFormData({
                                   filteredLabels = selectionList
                                     .map(selection => {
                                       const label = getMerchandiseOptionLabel(
-                                      merchandise.find(item => item.merchandise_id === selection.merchandise_id)
+                                        merchandise.find(item => item.merchandise_id === selection.merchandise_id),
+                                        { includeStock: true }
                                       );
                                       return label;
                                     })
@@ -13401,7 +13439,11 @@ setFormData({
                   {packages.length > 0 ? (
                     <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc' }}>
                       {packages
-                        .filter(pkg => pkg.package_type !== 'Reserved')
+                        .filter(pkg => {
+                          if (pkg.package_type === 'Reserved') return false;
+                          if (upgradeEnrollmentOption === 'per-phase') return pkg.package_type === 'Phase';
+                          return pkg.package_type !== 'Phase';
+                        })
                         .filter(pkg => {
                           // Filter by level_tag if class has one
                           if (selectedClassForEnrollment?.level_tag) {

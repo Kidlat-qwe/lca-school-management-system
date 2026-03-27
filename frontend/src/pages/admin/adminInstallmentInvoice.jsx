@@ -57,6 +57,13 @@ const AdminInstallmentInvoice = () => {
     return `${year}-${month}-${day}`;
   };
 
+  const addMonths = (date, months) => {
+    const nextDate = new Date(date);
+    nextDate.setMonth(nextDate.getMonth() + months);
+    return nextDate;
+  };
+
+
   // Fetch branch name if not in userInfo
   useEffect(() => {
     const fetchBranchName = async () => {
@@ -181,45 +188,28 @@ const AdminInstallmentInvoice = () => {
     setSelectedInvoiceForGeneration(invoice);
     
     const months = getFrequencyMonths(invoice.frequency);
+    const issueDate = new Date();
+    issueDate.setHours(0, 0, 0, 0);
 
-    // Base "current" dates: use row's next_generation_date / next_invoice_month when present (so 2nd+ manual generate shows correct dates)
-    let issueDate, invoiceMonth, generationDate;
-    const hasStoredDates = invoice.next_generation_date && invoice.next_invoice_month;
-    if (hasStoredDates) {
-      const genYmd = String(invoice.next_generation_date).slice(0, 10);
-      const [gy, gm, gd] = genYmd.split('-').map(Number);
-      generationDate = new Date(gy, gm - 1, gd);
-      issueDate = new Date(generationDate);
-      const monthYmd = String(invoice.next_invoice_month).slice(0, 10);
-      const [my, mm] = monthYmd.split('-').map(Number);
-      invoiceMonth = new Date(my, mm - 1, 1);
-    } else {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      issueDate = new Date(today);
-      invoiceMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-      generationDate = new Date(invoiceMonth);
-      generationDate.setDate(25);
-    }
-    // Phase 1: due = class start. Phase 2+: invoice month = class start + generated_count months (Phase 2 = May, Phase 3 = June, etc.)
-    let dueDate;
-    const generatedCount = invoice.generated_count || 0;
-    const isFirstPhase = generatedCount === 0;
-    const classStartYmd = invoice.class_start_date ? String(invoice.class_start_date).slice(0, 10) : null;
-    if (isFirstPhase && classStartYmd) {
-      const [y, m, d] = classStartYmd.split('-').map(Number);
-      dueDate = new Date(y, m - 1, d);
-    } else if (classStartYmd) {
-      // Phase 2+: derive from class start - Phase 2 = May (class start April + 1), Phase 3 = June, etc.
-      const [cy, cm] = classStartYmd.split('-').map(Number);
-      invoiceMonth = new Date(cy, cm - 1 + generatedCount, 1); // class start month + generated_count
-      dueDate = new Date(invoiceMonth);
-      dueDate.setDate(5); // 5th of that month (e.g. May → 05/05)
-    } else {
-      // No class start: use row's month, due = 5th
-      dueDate = new Date(invoiceMonth);
-      dueDate.setDate(5);
-    }
+    const baseInvoiceMonth = invoice.next_invoice_month
+      ? parseYmdLocalNoon(String(invoice.next_invoice_month).slice(0, 10))
+      : null;
+    const baseGenerationDate = invoice.next_generation_date
+      ? parseYmdLocalNoon(String(invoice.next_generation_date).slice(0, 10))
+      : null;
+
+    const invoiceMonth = baseInvoiceMonth
+      ? addMonths(new Date(baseInvoiceMonth.getFullYear(), baseInvoiceMonth.getMonth(), 1), months)
+      : new Date(issueDate.getFullYear(), issueDate.getMonth() + 1, 1);
+    const dueDate = new Date(invoiceMonth);
+    dueDate.setDate(5);
+    const generationDate = baseGenerationDate
+      ? addMonths(new Date(baseGenerationDate.getFullYear(), baseGenerationDate.getMonth(), 25), months)
+      : (() => {
+          const date = new Date(invoiceMonth);
+          date.setDate(25);
+          return date;
+        })();
 
     // Next Invoice Detail = current invoice month + 1 month (default pattern until finished)
     const nextInvoiceMonth = new Date(invoiceMonth);
@@ -228,7 +218,7 @@ const AdminInstallmentInvoice = () => {
     const nextIssueDate = new Date(nextInvoiceMonth);
     nextIssueDate.setDate(25);
     const nextDueDate = new Date(nextInvoiceMonth);
-    nextDueDate.setDate(5); // 5th of next invoice month
+    nextDueDate.setDate(5);
 
     setGenerateFormData({
       issue_date: formatYmd(issueDate),
@@ -506,19 +496,19 @@ const AdminInstallmentInvoice = () => {
                           </div>
                         </td>
                     <td className="px-3 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">
+                      <div className="text-sm text-gray-900">
                         {invoice.next_generation_date
                           ? formatDateManila(invoice.next_generation_date)
                           : '-'}
-                          </div>
-                        </td>
+                      </div>
+                    </td>
                     <td className="px-3 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">
+                      <div className="text-sm text-gray-900">
                         {invoice.next_invoice_month
                           ? formatDateManila(invoice.next_invoice_month)
                           : '-'}
-                          </div>
-                        </td>
+                      </div>
+                    </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                       {invoice.total_phases !== null && invoice.total_phases !== undefined ? (
                         <div className="flex flex-col">
@@ -749,13 +739,14 @@ const AdminInstallmentInvoice = () => {
                             return;
                           }
 
-                          // due_date = issue month + 1, day 5
-                          const due = new Date(issue);
-                          due.setMonth(due.getMonth() + 1);
-                          due.setDate(5);
-
-                          const invoiceMonth = new Date(issue);
+                          const invoiceMonth = new Date(generateFormData.invoice_month || nextIssueYmd);
+                          if (Number.isNaN(invoiceMonth.getTime())) {
+                            invoiceMonth.setTime(issue.getTime());
+                          }
                           invoiceMonth.setDate(1);
+
+                          const due = new Date(invoiceMonth);
+                          due.setDate(5);
 
                           const months = getFrequencyMonths(selectedInvoiceForGeneration?.frequency);
                           const nextInvoiceMonth = new Date(invoiceMonth);
@@ -766,9 +757,7 @@ const AdminInstallmentInvoice = () => {
                           const nextIssue = new Date(nextInvoiceMonth);
                           nextIssue.setDate(25);
 
-                          // next_due_date = nextInvoiceMonth + 1 month, day 5
                           const nextDue = new Date(nextInvoiceMonth);
-                          nextDue.setMonth(nextDue.getMonth() + 1);
                           nextDue.setDate(5);
 
                           setGenerateFormData({
@@ -776,7 +765,7 @@ const AdminInstallmentInvoice = () => {
                             issue_date: nextIssueYmd,
                             due_date: formatYmd(due),
                             invoice_month: formatYmd(invoiceMonth),
-                            generation_date: formatYmd(issue),
+                            generation_date: generateFormData.generation_date || formatYmd(new Date(invoiceMonth.getFullYear(), invoiceMonth.getMonth(), 25)),
                             next_issue_date: formatYmd(nextIssue),
                             next_due_date: formatYmd(nextDue),
                             next_invoice_month: formatYmd(nextInvoiceMonth),
@@ -903,9 +892,7 @@ const AdminInstallmentInvoice = () => {
                           const nextIssue = new Date(monthFirst);
                           nextIssue.setDate(25);
                           
-                          // next_due_date = nextInvoiceMonth + 1 month, day 5
                           const due = new Date(monthFirst);
-                          due.setMonth(due.getMonth() + 1);
                           due.setDate(5);
 
                           setGenerateFormData({

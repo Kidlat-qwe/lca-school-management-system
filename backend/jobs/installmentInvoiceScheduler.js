@@ -3,14 +3,14 @@ import { processDueInstallmentInvoices } from '../utils/installmentInvoiceGenera
 
 /**
  * Start the scheduled job to process due installment invoices
- * Runs on the 25th of each month at 2:00 AM (configurable via environment variable)
- * This generates monthly invoices with due date on the 5th of the following month
+ * Runs daily at 2:00 AM by default (configurable via environment variable)
+ * so phase-based installment invoices can be generated relative to their actual phase start.
  */
 export const startInstallmentInvoiceScheduler = () => {
-  // Schedule: Run on 25th of each month at 2:00 AM (can be configured via env)
+  // Schedule: Run daily at 2:00 AM (can be configured via env).
   // Format: minute hour day month day-of-week
-  // '0 2 25 * *' = At 02:00 AM on the 25th of every month
-  const schedule = process.env.INSTALLMENT_INVOICE_SCHEDULE || '0 2 25 * *';
+  // '0 2 * * *' = At 02:00 AM every day
+  const schedule = process.env.INSTALLMENT_INVOICE_SCHEDULE || '0 2 * * *';
   
   console.log(`📅 Installment invoice scheduler configured: ${schedule}`);
   

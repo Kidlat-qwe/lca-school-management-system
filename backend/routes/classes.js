@@ -6,6 +6,8 @@ import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
+import { formatYmdLocal, parseYmdToLocalNoon } from '../utils/dateUtils.js';
+import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 
 const router = express.Router();
 
@@ -3677,6 +3679,31 @@ router.post(
           }
         }
       }
+
+      // Package-defined included merchandise (e.g. enroll per phase / Phase + Installment): ensure
+      // stock validation and deduction run even when the client omits lines in selected_merchandise.
+      if (package_id && packageMerchandiseMap && packageMerchandiseMap.size > 0) {
+        for (const [pkgMerchId, meta] of packageMerchandiseMap.entries()) {
+          if (meta && meta.is_included === false) continue;
+          const mid = parseInt(String(pkgMerchId), 10);
+          if (!Number.isFinite(mid) || mid <= 0) continue;
+
+          let covered = 0;
+          for (const [, info] of merchandiseToDeduct.entries()) {
+            if (Number(info.merchandise_id) === mid) covered += info.count || 0;
+          }
+          if (covered >= 1) continue;
+
+          const key = `${mid}_package_included`;
+          merchandiseToDeduct.set(key, {
+            merchandise_id: mid,
+            size: meta?.size || null,
+            merchandise_name: meta?.merchandise_name || null,
+            category: null,
+            count: 1,
+          });
+        }
+      }
       
       // Validate inventory for all merchandise
       console.log(`[Inventory Validation] Validating ${merchandiseToDeduct.size} merchandise items for branch ${branch_id}`);
@@ -3870,6 +3897,23 @@ router.post(
           }
         }
       }
+
+      // Stock deduction for package-included lines not represented in selected_merchandise (enroll per phase, etc.)
+      for (const [deductKey, merchInfo] of merchandiseToDeduct.entries()) {
+        if (!deductKey.endsWith('_package_included')) continue;
+        const merchLookup = await client.query(
+          `SELECT merchandise_id, quantity FROM merchandisestbl WHERE merchandise_id = $1`,
+          [merchInfo.merchandise_id]
+        );
+        if (merchLookup.rows.length === 0) continue;
+        const row = merchLookup.rows[0];
+        if (row.quantity === null || row.quantity === undefined) continue;
+        const newQuantity = Math.max(0, (parseInt(row.quantity, 10) || 0) - (merchInfo.count || 1));
+        await client.query(
+          `UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`,
+          [newQuantity, row.merchandise_id]
+        );
+      }
       
 
       // Ensure totalAmount is a valid number
@@ -3951,16 +3995,25 @@ router.post(
         console.log('package_id column check:', err.message);
       }
 
+      let pendingInstallmentGeneration = null;
+
       // Check if package requires downpayment
       // Note: For Installment packages, package_price is the monthly installment amount, not total
       let downpaymentInvoice = null;
       let downpaymentAmount = 0;
       let skipMainInvoice = false; // Flag to skip main invoice creation for Installment packages with downpayment
+      const isPhaseInstallmentPackage = Boolean(
+        package_id &&
+        packageData &&
+        packageData.package_type === 'Phase' &&
+        packageData.payment_option === 'Installment'
+      );
       
-      // For Installment packages, downpayment is REQUIRED
-      // package_price is the monthly installment amount, not a total
-      if (package_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))) {
-        if (!packageData.downpayment_amount) {
+      // Regular installment packages require a downpayment.
+      // Phase-installment packages may have an optional downpayment.
+      // package_price is the monthly installment amount, not a total.
+      if (package_id && packageData && (packageData.package_type === 'Installment' || isPhaseInstallmentPackage)) {
+        if (packageData.package_type === 'Installment' && !packageData.downpayment_amount) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
@@ -3971,9 +4024,16 @@ router.post(
         downpaymentAmount = parseFloat(packageData.downpayment_amount) || 0;
         
         if (downpaymentAmount > 0) {
+          const downpaymentDueDate = isPhaseInstallmentPackage
+            ? (() => {
+                const enrolledDate = parseYmdToLocalNoon(issueDateStr) || new Date();
+                const dueDate = new Date(enrolledDate.getTime());
+                dueDate.setDate(dueDate.getDate() + 7);
+                return formatYmdLocal(dueDate);
+              })()
+            : (dueDateStr || issueDateStr);
+
           // Create downpayment invoice
-          // Due date is set by admin/user (use dueDateStr from installment_settings or issueDateStr)
-          // NOT automatically set - admin controls the downpayment due date
           const downpaymentInvoiceResult = await client.query(
             `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -3984,7 +4044,7 @@ router.post(
               downpaymentAmount,
               'Unpaid',
               issueDateStr,
-              dueDateStr || issueDateStr,
+              downpaymentDueDate,
               req.user.userId || null,
               package_id || null,
             ]
@@ -4012,6 +4072,13 @@ router.post(
           // since package_price is the monthly installment amount, not a total to invoice
           skipMainInvoice = true;
         }
+      }
+
+      // Phase-installment packages do not create a package-price invoice.
+      // They either create an optional downpayment invoice or generate the first
+      // phase-based monthly invoice immediately after enrollment.
+      if (isPhaseInstallmentPackage) {
+        skipMainInvoice = true;
       }
 
       let newInvoice = null;
@@ -4691,6 +4758,21 @@ router.post(
             }
           }
 
+          let firstPhaseSchedule = null;
+          if (isPhaseInstallmentPackage) {
+            firstPhaseSchedule = await buildPhaseInstallmentSchedule({
+              db: client,
+              profile: {
+                class_id,
+                phase_start: profilePhaseStart,
+                total_phases: totalPhases,
+                generated_count: 0,
+              },
+              generatedCountOverride: 0,
+              issueDateOverride: issueDateStr,
+            });
+          }
+
           const profileResult = await client.query(
             `INSERT INTO installmentinvoiceprofilestbl 
              (student_id, branch_id, package_id, amount, frequency, description, 
@@ -4706,12 +4788,14 @@ router.post(
               installmentProfileAmount, // Calculated amount (may include downpayment adjustment)
               `${installment_settings.frequency_months} month(s)`,
               `Installment plan for ${studentCheck.rows[0].full_name} - ${classData.program_name}`,
-              dayOfMonth,
+              isPhaseInstallmentPackage && firstPhaseSchedule?.current_due_date
+                ? parseInt(String(firstPhaseSchedule.current_due_date).slice(-2), 10)
+                : dayOfMonth,
               true,
-              installment_settings.invoice_due_date,
-              nextInvoiceDueDate.toISOString().split('T')[0],
-              firstBillingMonth.toISOString().split('T')[0],
-              installment_settings.invoice_generation_date,
+              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_due_date : installment_settings.invoice_due_date,
+              isPhaseInstallmentPackage ? firstPhaseSchedule?.next_due_date : nextInvoiceDueDate.toISOString().split('T')[0],
+              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_invoice_month : firstBillingMonth.toISOString().split('T')[0],
+              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_generation_date : installment_settings.invoice_generation_date,
               req.user.fullName || req.user.email || null,
               class_id, // Store class_id for phase tracking
               totalPhases, // For Phase package: count in range. Else: curriculum total
@@ -4751,26 +4835,26 @@ router.post(
           // Only create the first installment invoice record if downpayment is NOT required
           // If downpayment is required, wait for downpayment payment before creating first installment record
           if (!hasDownpayment) {
-            // Create the first installment invoice record (legacy behavior - no downpayment)
+            // Create the first installment invoice record.
             const studentName = studentCheck.rows[0].full_name;
             const frequency = `${installment_settings.frequency_months} month(s)`;
-            const scheduledDate = installment_settings.invoice_due_date || installment_settings.invoice_generation_date;
+            const scheduledDate = isPhaseInstallmentPackage
+              ? firstPhaseSchedule.current_due_date
+              : (installment_settings.invoice_due_date || installment_settings.invoice_generation_date);
+            const nextInvoiceMonth = isPhaseInstallmentPackage
+              ? firstPhaseSchedule.current_invoice_month
+              : nextInvoiceDueDate.toISOString().split('T')[0];
+            const nextGenerationDate = isPhaseInstallmentPackage
+              ? firstPhaseSchedule.current_generation_date
+              : generationDate.toISOString().split('T')[0];
             
-            // Calculate next invoice month (first billing month + frequency)
-            const nextInvoiceMonth = new Date(nextInvoiceDueDate);
-            
-            // Calculate next generation date: should be the same as the first generation date
-            // This follows the settings from Classes.jsx where invoice generation date is configured
-            // Example: If first generation is Dec 1, 2025, next generation should also be Dec 1, 2025
-            const nextGenerationDate = new Date(generationDate);
-            // Keep the same date (first generation date) - don't add frequency
-            
-            await client.query(
+            const firstInstallmentRecordResult = await client.query(
               `INSERT INTO installmentinvoicestbl 
                (installmentinvoiceprofiles_id, scheduled_date, status, student_name, 
                 total_amount_including_tax, total_amount_excluding_tax, frequency, 
                 next_generation_date, next_invoice_month)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING *`,
               [
                 installmentProfile.installmentinvoiceprofiles_id,
                 scheduledDate,
@@ -4779,24 +4863,60 @@ router.post(
                 installmentProfileAmount, // Use calculated amount for installment invoice display
                 installmentProfileAmount, // Assuming no tax for now, or can be calculated separately
                 frequency,
-                nextGenerationDate.toISOString().split('T')[0], // First day of next billing month
-                nextInvoiceMonth.toISOString().split('T')[0],
+                nextGenerationDate,
+                nextInvoiceMonth,
               ]
             );
+
+            if (isPhaseInstallmentPackage) {
+              pendingInstallmentGeneration = {
+                installmentRecord: firstInstallmentRecordResult.rows[0],
+                profile: {
+                  student_id,
+                  branch_id,
+                  package_id: package_id || null,
+                  amount: installmentProfileAmount,
+                  frequency,
+                  description: `Installment plan for ${studentCheck.rows[0].full_name} - ${classData.program_name}`,
+                  generated_count: 0,
+                  class_id,
+                  total_phases: totalPhases,
+                  phase_start: profilePhaseStart,
+                },
+              };
+            }
           }
           // If hasDownpayment is true, the first installment invoice record will be created
           // automatically when the downpayment is paid (handled in payments.js)
         } catch (profileError) {
           console.error('Error creating installment profile:', profileError);
-          // Don't fail the enrollment if profile creation fails, just log it
-          // The invoice is already created, so we continue
+          if (isPhaseInstallmentPackage) {
+            throw profileError;
+          }
+          // Don't fail the enrollment if profile creation fails for non-phase installments.
         }
       }
 
       await client.query('COMMIT');
 
-      // Determine which invoice to return (downpayment invoice for Installment packages, main invoice otherwise)
-      const invoiceToReturn = skipMainInvoice && downpaymentInvoice ? downpaymentInvoice : newInvoice;
+      let generatedPhaseInvoice = null;
+      if (pendingInstallmentGeneration) {
+        const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
+        generatedPhaseInvoice = await generateInvoiceFromInstallment(
+          pendingInstallmentGeneration.installmentRecord,
+          pendingInstallmentGeneration.profile
+        );
+      }
+
+      // Determine which invoice to return (downpayment invoice for Installment packages, generated phase invoice for phase installments, main invoice otherwise)
+      let invoiceToReturn = skipMainInvoice && downpaymentInvoice ? downpaymentInvoice : newInvoice;
+      if (generatedPhaseInvoice?.invoice_id) {
+        const generatedInvoiceResult = await query(
+          'SELECT * FROM invoicestbl WHERE invoice_id = $1',
+          [generatedPhaseInvoice.invoice_id]
+        );
+        invoiceToReturn = generatedInvoiceResult.rows[0] || invoiceToReturn;
+      }
       
       if (!invoiceToReturn) {
         await client.query('ROLLBACK');
@@ -4821,6 +4941,8 @@ router.post(
       let message = 'Invoice generated. Student will be enrolled after payment is made.';
       if (skipMainInvoice && downpaymentInvoice) {
         message = 'Downpayment invoice generated. Monthly installment invoices will start after downpayment is paid.';
+      } else if (generatedPhaseInvoice?.invoice_id) {
+        message = `Phase ${generatedPhaseInvoice.current_phase_number || profilePhaseStart || 1} invoice generated. Student will be enrolled in that phase after payment is made.`;
       } else if (isFullpaymentEnrollment) {
         message = 'Invoice generated. Student will be enrolled in all phases after payment is made.';
       } else if (installmentProfile) {
