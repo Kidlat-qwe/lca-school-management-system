@@ -1,10 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { Country, State } from 'country-state-city';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import {
+  getSortedCountries,
+  findCountryCodeByName,
+  findStateCodeByName,
+  getStatesSorted,
+  getCitiesSorted,
+} from '../../utils/locationCascading';
+import { fetchPhCitiesForProvinceName } from '../../utils/phPsgcLocations';
 
 const AdminStudent = () => {
   const { signup, userInfo } = useAuth();
@@ -46,6 +55,51 @@ const AdminStudent = () => {
   const [existingGuardian, setExistingGuardian] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [phGuardianCities, setPhGuardianCities] = useState([]);
+  const [phGuardianCitiesLoading, setPhGuardianCitiesLoading] = useState(false);
+
+  const guardianCountryCode = useMemo(
+    () => findCountryCodeByName(formData.guardian_country),
+    [formData.guardian_country]
+  );
+  const guardianProvinceCode = useMemo(
+    () => findStateCodeByName(guardianCountryCode, formData.guardian_state_province_region),
+    [guardianCountryCode, formData.guardian_state_province_region]
+  );
+  const guardianStates = useMemo(
+    () => getStatesSorted(guardianCountryCode),
+    [guardianCountryCode]
+  );
+  const guardianCitiesNonPh = useMemo(
+    () => getCitiesSorted(guardianCountryCode, guardianProvinceCode),
+    [guardianCountryCode, guardianProvinceCode]
+  );
+  const guardianCities =
+    guardianCountryCode === 'PH' ? phGuardianCities : guardianCitiesNonPh;
+  const guardianCitiesLoading = guardianCountryCode === 'PH' && phGuardianCitiesLoading;
+
+  useEffect(() => {
+    if (guardianCountryCode !== 'PH' || !formData.guardian_state_province_region?.trim()) {
+      setPhGuardianCities([]);
+      setPhGuardianCitiesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPhGuardianCitiesLoading(true);
+    fetchPhCitiesForProvinceName(formData.guardian_state_province_region.trim())
+      .then((list) => {
+        if (!cancelled) setPhGuardianCities(list);
+      })
+      .catch(() => {
+        if (!cancelled) setPhGuardianCities([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPhGuardianCitiesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guardianCountryCode, formData.guardian_state_province_region]);
 
   useEffect(() => {
     fetchStudents();
@@ -1050,19 +1104,123 @@ const AdminStudent = () => {
                       </div>
 
                       <div>
+                        <label htmlFor="guardian_country" className="label-field">
+                          Country <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          id="guardian_country"
+                          value={guardianCountryCode}
+                          onChange={(e) => {
+                            const iso = e.target.value;
+                            const c = Country.getCountryByCode(iso);
+                            setFormData((prev) => ({
+                              ...prev,
+                              guardian_country: c?.name || '',
+                              guardian_state_province_region: '',
+                              guardian_city: '',
+                            }));
+                          }}
+                          className={`input-field w-full min-w-0 ${formErrors.guardian_country ? 'border-red-500' : ''}`}
+                          required
+                        >
+                          <option value="">Select Country</option>
+                          {getSortedCountries().map((c) => (
+                            <option key={c.isoCode} value={c.isoCode}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        {formErrors.guardian_country && (
+                          <p className="mt-1 text-sm text-red-600">{formErrors.guardian_country}</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="guardian_state_province_region" className="label-field">
+                          Province <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          id="guardian_state_province_region"
+                          value={guardianProvinceCode}
+                          onChange={(e) => {
+                            const stateIso = e.target.value;
+                            const st = State.getStateByCodeAndCountry(stateIso, guardianCountryCode);
+                            setFormData((prev) => ({
+                              ...prev,
+                              guardian_state_province_region: st?.name || '',
+                              guardian_city: '',
+                            }));
+                          }}
+                          disabled={!guardianCountryCode}
+                          className={`input-field w-full min-w-0 disabled:bg-gray-100 disabled:cursor-not-allowed ${formErrors.guardian_state_province_region ? 'border-red-500' : ''}`}
+                          required
+                        >
+                          <option value="">
+                            {guardianCountryCode ? 'Select Province' : 'Select country first'}
+                          </option>
+                          {guardianStates.map((s) => (
+                            <option key={`${s.countryCode}-${s.isoCode}`} value={s.isoCode}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                        {formErrors.guardian_state_province_region && (
+                          <p className="mt-1 text-sm text-red-600">{formErrors.guardian_state_province_region}</p>
+                        )}
+                      </div>
+
+                      <div>
                         <label htmlFor="guardian_city" className="label-field">
                           City <span className="text-red-500">*</span>
                         </label>
-                        <input
-                          type="text"
+                        <select
                           id="guardian_city"
-                          name="guardian_city"
                           value={formData.guardian_city}
-                          onChange={handleInputChange}
-                          className={`input-field ${formErrors.guardian_city ? 'border-red-500' : ''}`}
+                          onChange={(e) =>
+                            setFormData((prev) => ({ ...prev, guardian_city: e.target.value }))
+                          }
+                          disabled={
+                            guardianCountryCode === 'PH'
+                              ? !formData.guardian_state_province_region?.trim() ||
+                                guardianCitiesLoading
+                              : !guardianProvinceCode
+                          }
+                          className={`input-field w-full min-w-0 disabled:bg-gray-100 disabled:cursor-not-allowed ${formErrors.guardian_city ? 'border-red-500' : ''}`}
                           required
-                          placeholder="City"
-                        />
+                        >
+                          <option value="">
+                            {guardianCountryCode === 'PH'
+                              ? !formData.guardian_state_province_region?.trim()
+                                ? 'Select province first'
+                                : guardianCitiesLoading
+                                  ? 'Loading cities…'
+                                  : guardianCities.length === 0
+                                    ? 'No cities found for this province'
+                                    : 'Select City'
+                              : !guardianProvinceCode
+                                ? 'Select province first'
+                                : guardianCities.length === 0
+                                  ? 'No cities listed — pick another province or contact support'
+                                  : 'Select City'}
+                          </option>
+                          {formData.guardian_city &&
+                            (guardianCountryCode === 'PH'
+                              ? formData.guardian_state_province_region
+                              : guardianProvinceCode) &&
+                            !guardianCities.some((ct) => ct.name === formData.guardian_city) && (
+                              <option value={formData.guardian_city}>
+                                {formData.guardian_city} (saved)
+                              </option>
+                            )}
+                          {guardianCities.map((city) => (
+                            <option
+                              key={city.latitude != null ? `${city.name}-${city.latitude}` : city.name}
+                              value={city.name}
+                            >
+                              {city.name}
+                            </option>
+                          ))}
+                        </select>
                         {formErrors.guardian_city && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.guardian_city}</p>
                         )}
@@ -1084,44 +1242,6 @@ const AdminStudent = () => {
                         />
                         {formErrors.guardian_postal_code && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.guardian_postal_code}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label htmlFor="guardian_state_province_region" className="label-field">
-                          State/Province/Region <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          id="guardian_state_province_region"
-                          name="guardian_state_province_region"
-                          value={formData.guardian_state_province_region}
-                          onChange={handleInputChange}
-                          className={`input-field ${formErrors.guardian_state_province_region ? 'border-red-500' : ''}`}
-                          required
-                          placeholder="State/Province/Region"
-                        />
-                        {formErrors.guardian_state_province_region && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.guardian_state_province_region}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label htmlFor="guardian_country" className="label-field">
-                          Country <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          id="guardian_country"
-                          name="guardian_country"
-                          value={formData.guardian_country}
-                          onChange={handleInputChange}
-                          className={`input-field ${formErrors.guardian_country ? 'border-red-500' : ''}`}
-                          required
-                          placeholder="Country"
-                        />
-                        {formErrors.guardian_country && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.guardian_country}</p>
                         )}
                       </div>
                     </div>
