@@ -48,7 +48,7 @@ router.get(
       // Since last_login is stored as timestamp without time zone in Philippines time,
       // we format it directly (it's already in Philippines timezone)
       let sql = hasLastLoginColumn
-        ? `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, 
+        ? `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
                   CASE 
                     WHEN last_login IS NOT NULL 
@@ -56,7 +56,7 @@ router.get(
                     ELSE NULL
                   END as last_login
            FROM userstbl WHERE 1=1`
-        : `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, 
+        : `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
                   NULL as last_login
            FROM userstbl WHERE 1=1`;
@@ -279,12 +279,27 @@ router.put(
       .optional()
       .custom((value) => value === null || value === undefined || typeof value === 'string')
       .withMessage('Phone number must be a string or empty'),
+    body('lrn')
+      .optional()
+      .custom((value) => value === null || value === undefined || typeof value === 'string')
+      .withMessage('LRN must be a string or empty'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const { full_name, user_type, gender, date_of_birth, phone_number, branch_id, level_tag, profile_picture_url, email } = req.body;
+      const {
+        full_name,
+        user_type,
+        gender,
+        date_of_birth,
+        phone_number,
+        branch_id,
+        level_tag,
+        profile_picture_url,
+        email,
+        lrn,
+      } = req.body;
 
       // Check if user exists
       const existingUser = await query('SELECT * FROM userstbl WHERE user_id = $1', [id]);
@@ -369,6 +384,7 @@ router.put(
         branch_id,
         level_tag,
         profile_picture_url,
+        lrn,
       };
 
       Object.entries(fields).forEach(([key, value]) => {
@@ -376,7 +392,7 @@ router.put(
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           // Convert empty strings to null for optional fields
-          const optionalFields = ['gender', 'date_of_birth', 'phone_number', 'branch_id', 'level_tag', 'profile_picture_url'];
+          const optionalFields = ['gender', 'date_of_birth', 'phone_number', 'branch_id', 'level_tag', 'profile_picture_url', 'lrn'];
           if (optionalFields.includes(key)) {
             if (value === '' || value === null) {
               params.push(null);

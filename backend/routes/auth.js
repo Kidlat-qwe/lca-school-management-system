@@ -66,7 +66,18 @@ router.post(
   verifyFirebaseToken,
   async (req, res, next) => {
     try {
-      const { firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag } = req.body;
+      const {
+        firebase_uid,
+        email,
+        full_name,
+        user_type,
+        branch_id,
+        gender,
+        date_of_birth,
+        phone_number,
+        level_tag,
+        lrn,
+      } = req.body;
 
       // Verify that the Firebase UID from the token matches the one in the request
       if (req.user.uid !== firebase_uid) {
@@ -85,16 +96,51 @@ router.post(
       );
 
       if (existingUser.rows.length > 0) {
-        // Update existing user
+        // Update existing user (omit lrn column unless client sent it, to avoid wiping stored LRN)
         console.log('Updating existing user in PostgreSQL...');
-        const result = await query(
-          `UPDATE userstbl 
-           SET email = $1, full_name = $2, user_type = $3, branch_id = $4, 
-               gender = $5, date_of_birth = $6, phone_number = $7, level_tag = $8
-           WHERE firebase_uid = $9
-           RETURNING *`,
-          [email, full_name, user_type, branch_id || null, gender || null, date_of_birth || null, phone_number || null, level_tag || null, firebase_uid]
-        );
+        const lrnNormalized =
+          lrn !== undefined && lrn !== null && String(lrn).trim()
+            ? String(lrn).trim().slice(0, 50)
+            : null;
+        const result =
+          lrn !== undefined
+            ? await query(
+                `UPDATE userstbl 
+                 SET email = $1, full_name = $2, user_type = $3, branch_id = $4, 
+                     gender = $5, date_of_birth = $6, phone_number = $7, level_tag = $8, lrn = $9
+                 WHERE firebase_uid = $10
+                 RETURNING *`,
+                [
+                  email,
+                  full_name,
+                  user_type,
+                  branch_id || null,
+                  gender || null,
+                  date_of_birth || null,
+                  phone_number || null,
+                  level_tag || null,
+                  lrnNormalized,
+                  firebase_uid,
+                ]
+              )
+            : await query(
+                `UPDATE userstbl 
+                 SET email = $1, full_name = $2, user_type = $3, branch_id = $4, 
+                     gender = $5, date_of_birth = $6, phone_number = $7, level_tag = $8
+                 WHERE firebase_uid = $9
+                 RETURNING *`,
+                [
+                  email,
+                  full_name,
+                  user_type,
+                  branch_id || null,
+                  gender || null,
+                  date_of_birth || null,
+                  phone_number || null,
+                  level_tag || null,
+                  firebase_uid,
+                ]
+              );
 
         console.log('✅ User updated in PostgreSQL:', result.rows[0].user_id);
 
@@ -107,10 +153,21 @@ router.post(
         // Create new user in PostgreSQL
         console.log('Creating new user in PostgreSQL...');
         const result = await query(
-          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *`,
-          [firebase_uid, email, full_name, user_type, branch_id || null, gender || null, date_of_birth || null, phone_number || null, level_tag || null]
+          [
+            firebase_uid,
+            email,
+            full_name,
+            user_type,
+            branch_id || null,
+            gender || null,
+            date_of_birth || null,
+            phone_number || null,
+            level_tag || null,
+            lrn && String(lrn).trim() ? String(lrn).trim().slice(0, 50) : null,
+          ]
         );
 
         console.log('✅ User created in PostgreSQL:', result.rows[0].user_id);
@@ -153,7 +210,18 @@ router.post(
         });
       }
 
-      const { email, password, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag } = req.body;
+      const {
+        email,
+        password,
+        full_name,
+        user_type,
+        branch_id,
+        gender,
+        date_of_birth,
+        phone_number,
+        level_tag,
+        lrn,
+      } = req.body;
 
       console.log('Creating user via Firebase Auth REST API:', { email, user_type });
 
@@ -186,10 +254,21 @@ router.post(
       // Step 2: Create user in PostgreSQL
       try {
         const result = await query(
-          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *`,
-          [firebaseUser.uid, email, full_name, user_type, branch_id || null, gender || null, date_of_birth || null, phone_number || null, level_tag || null]
+          [
+            firebaseUser.uid,
+            email,
+            full_name,
+            user_type,
+            branch_id || null,
+            gender || null,
+            date_of_birth || null,
+            phone_number || null,
+            level_tag || null,
+            lrn && String(lrn).trim() ? String(lrn).trim().slice(0, 50) : null,
+          ]
         );
 
         console.log('✅ User created in PostgreSQL:', result.rows[0].user_id);

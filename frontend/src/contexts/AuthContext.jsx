@@ -49,6 +49,9 @@ export const AuthProvider = ({ children }) => {
             date_of_birth: userData.date_of_birth || null,
             phone_number: userData.phone_number || null,
             level_tag: userData.level_tag || null,
+            lrn: userData.lrn !== undefined && userData.lrn !== null && String(userData.lrn).trim()
+              ? String(userData.lrn).trim().slice(0, 50)
+              : null,
           }),
         });
         

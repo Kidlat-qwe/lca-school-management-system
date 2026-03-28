@@ -32,7 +32,9 @@ const Student = () => {
     full_name: '',
     email: '',
     password: '',
-    phone_number: '',
+    date_of_birth: '',
+    gender: '',
+    lrn: '',
     branch_id: '',
     level_tag: '',
     // Guardian fields
@@ -191,7 +193,9 @@ const Student = () => {
       full_name: '',
       email: '',
       password: DEFAULT_PASSWORD_STUDENT,
-      phone_number: '',
+      date_of_birth: '',
+      gender: '',
+      lrn: '',
       branch_id: '',
       level_tag: '',
       guardian_name: '',
@@ -220,7 +224,9 @@ const Student = () => {
       full_name: student.full_name || '',
       email: student.email || '',
       password: '',
-      phone_number: student.phone_number || '',
+      date_of_birth: student.date_of_birth ? String(student.date_of_birth).slice(0, 10) : '',
+      gender: student.gender || '',
+      lrn: student.lrn || '',
       branch_id: student.branch_id ? student.branch_id.toString() : '',
       level_tag: student.level_tag || '',
       guardian_name: '',
@@ -312,6 +318,8 @@ const Student = () => {
       if (!editingStudent && passwordToUse.length < 6) errors.password = 'Password must be at least 6 characters';
       if (!formData.branch_id) errors.branch_id = 'Branch is required';
       if (!formData.level_tag) errors.level_tag = 'Level tag is required';
+      if (!formData.date_of_birth) errors.date_of_birth = 'Date of birth is required';
+      if (!formData.gender) errors.gender = 'Gender is required';
       // Guardian fields - ALL REQUIRED
       if (!formData.guardian_name.trim()) errors.guardian_name = 'Guardian name is required';
       if (!formData.guardian_email.trim()) errors.guardian_email = 'Guardian email is required';
@@ -334,9 +342,11 @@ const Student = () => {
         // Update existing student
         const payload = {
           full_name: formData.full_name.trim(),
-          phone_number: formData.phone_number || null,
           branch_id: parseInt(formData.branch_id),
           level_tag: formData.level_tag,
+          gender: formData.gender,
+          date_of_birth: formData.date_of_birth,
+          lrn: formData.lrn.trim() ? formData.lrn.trim().slice(0, 50) : null,
         };
 
         if (formData.password.trim()) {
@@ -388,9 +398,11 @@ const Student = () => {
         const userData = {
           full_name: formData.full_name.trim(),
           user_type: 'Student',
-          phone_number: formData.phone_number || null,
           branch_id: parseInt(formData.branch_id),
           level_tag: formData.level_tag,
+          gender: formData.gender,
+          date_of_birth: formData.date_of_birth,
+          lrn: formData.lrn.trim() ? formData.lrn.trim().slice(0, 50) : null,
         };
 
         const result = await signup(formData.email, (formData.password && formData.password.trim()) || DEFAULT_PASSWORD_STUDENT, userData, false);
@@ -524,14 +536,15 @@ const Student = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}
+              style={{ width: '100%', minWidth: '1100px', tableLayout: 'fixed' }}
             >
               <colgroup>
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '100px' }} />
                 <col style={{ width: '150px' }} />
-                <col style={{ width: '120px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '100px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '90px' }} />
               </colgroup>
@@ -576,8 +589,11 @@ const Student = () => {
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
                     <span>Branch</span>
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    Phone Number
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '110px', minWidth: '110px' }}>
+                    Date of Birth
+                  </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
+                    LRN
                   </th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
                     Last Login
@@ -590,7 +606,7 @@ const Student = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center">
+                    <td colSpan={8} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || filterBranch
                           ? 'No matching students. Try adjusting your search or filters.'
@@ -654,7 +670,12 @@ const Student = () => {
                     </td>
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900 truncate">
-                        {student.phone_number || '-'}
+                        {student.date_of_birth ? formatDateManila(student.date_of_birth) : '-'}
+                      </div>
+                    </td>
+                    <td className="px-3 py-4">
+                      <div className="text-sm text-gray-900 truncate" title={student.lrn || ''}>
+                        {student.lrn || '-'}
                       </div>
                     </td>
                     <td className="px-3 py-4">
@@ -997,17 +1018,59 @@ const Student = () => {
                       )}
 
                       <div>
-                        <label htmlFor="phone_number" className="label-field">
-                          Phone Number
+                        <label htmlFor="date_of_birth" className="label-field">
+                          Date of Birth <span className="text-red-500">*</span>
                         </label>
                         <input
-                          type="tel"
-                          id="phone_number"
-                          name="phone_number"
-                          value={formData.phone_number}
+                          type="date"
+                          id="date_of_birth"
+                          name="date_of_birth"
+                          value={formData.date_of_birth}
                           onChange={handleInputChange}
-                          className="input-field"
-                          placeholder="e.g., +639123456789"
+                          className={`input-field ${formErrors.date_of_birth ? 'border-red-500' : ''}`}
+                          required
+                        />
+                        {formErrors.date_of_birth && (
+                          <p className="mt-1 text-sm text-red-600">{formErrors.date_of_birth}</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="gender" className="label-field">
+                          Gender <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          id="gender"
+                          name="gender"
+                          value={formData.gender}
+                          onChange={handleInputChange}
+                          className={`input-field ${formErrors.gender ? 'border-red-500' : ''}`}
+                          required
+                        >
+                          <option value="">Select Gender</option>
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                          <option value="Other">Other</option>
+                        </select>
+                        {formErrors.gender && (
+                          <p className="mt-1 text-sm text-red-600">{formErrors.gender}</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="lrn" className="label-field">
+                          LRN (Learner Reference Number)
+                        </label>
+                        <input
+                          type="text"
+                          id="lrn"
+                          name="lrn"
+                          value={formData.lrn}
+                          onChange={handleInputChange}
+                          className="input-field w-full min-w-0"
+                          placeholder="Optional"
+                          maxLength={50}
+                          autoComplete="off"
                         />
                       </div>
 
