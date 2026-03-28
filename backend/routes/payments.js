@@ -140,6 +140,8 @@ router.get(
     queryValidator('student_id').optional().isInt().withMessage('Student ID must be an integer'),
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('issue_date').optional().isISO8601().withMessage('issue_date must be YYYY-MM-DD'),
+    queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
+    queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -147,7 +149,17 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { invoice_id, student_id, branch_id, issue_date, status, page = 1, limit = 20 } = req.query;
+      const {
+        invoice_id,
+        student_id,
+        branch_id,
+        issue_date,
+        issue_date_from: issueDateFrom,
+        issue_date_to: issueDateTo,
+        status,
+        page = 1,
+        limit = 20,
+      } = req.query;
       const pageNum = parseInt(page) || 1;
       const limitNum = parseInt(limit) || 20;
       const offset = (pageNum - 1) * limitNum;
@@ -197,7 +209,28 @@ router.get(
         params.push(student_id);
       }
 
-      if (issue_date) {
+      const fromTrim = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
+      const toTrim = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
+      const useIssueRange = Boolean(fromTrim || toTrim);
+
+      if (useIssueRange) {
+        if (fromTrim && toTrim && fromTrim > toTrim) {
+          return res.status(400).json({
+            success: false,
+            message: 'issue_date_from must be on or before issue_date_to',
+          });
+        }
+        if (fromTrim) {
+          paramCount++;
+          sql += ` AND p.issue_date >= $${paramCount}::date`;
+          params.push(fromTrim);
+        }
+        if (toTrim) {
+          paramCount++;
+          sql += ` AND p.issue_date <= $${paramCount}::date`;
+          params.push(toTrim);
+        }
+      } else if (issue_date) {
         paramCount++;
         sql += ` AND p.issue_date = $${paramCount}::date`;
         params.push(issue_date);
@@ -261,7 +294,18 @@ router.get(
         countParams.push(student_id);
       }
 
-      if (issue_date) {
+      if (useIssueRange) {
+        if (fromTrim) {
+          countParamCount++;
+          countSql += ` AND p.issue_date >= $${countParamCount}::date`;
+          countParams.push(fromTrim);
+        }
+        if (toTrim) {
+          countParamCount++;
+          countSql += ` AND p.issue_date <= $${countParamCount}::date`;
+          countParams.push(toTrim);
+        }
+      } else if (issue_date) {
         countParamCount++;
         countSql += ` AND p.issue_date = $${countParamCount}::date`;
         countParams.push(issue_date);

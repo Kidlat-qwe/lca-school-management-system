@@ -11,6 +11,8 @@ const StudentPaymentLogs = () => {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
@@ -120,8 +122,26 @@ const StudentPaymentLogs = () => {
     
     const matchesStatus = !filterStatus || payment.status === filterStatus;
     const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
-    
-    return matchesSearch && matchesStatus && matchesPaymentMethod;
+    const issueDay = payment.issue_date ? String(payment.issue_date).slice(0, 10) : '';
+    const hasRange = Boolean(filterIssueDateFrom || filterIssueDateTo);
+    const rangeInvalid =
+      hasRange &&
+      filterIssueDateFrom &&
+      filterIssueDateTo &&
+      filterIssueDateFrom > filterIssueDateTo;
+    let matchesIssueRange = true;
+    if (rangeInvalid) {
+      matchesIssueRange = false;
+    } else if (hasRange) {
+      if (!issueDay) {
+        matchesIssueRange = false;
+      } else {
+        if (filterIssueDateFrom && issueDay < filterIssueDateFrom) matchesIssueRange = false;
+        if (filterIssueDateTo && issueDay > filterIssueDateTo) matchesIssueRange = false;
+      }
+    }
+
+    return matchesSearch && matchesStatus && matchesPaymentMethod && matchesIssueRange;
   });
 
   const itemsPerPage = 10;
@@ -133,7 +153,7 @@ const StudentPaymentLogs = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filterStatus, filterPaymentMethod]);
+  }, [searchTerm, filterStatus, filterPaymentMethod, filterIssueDateFrom, filterIssueDateTo]);
 
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, totalPages));
@@ -144,14 +164,14 @@ const StudentPaymentLogs = () => {
       setExportLoading(true);
       
       // Use current payments data
-      if (payments.length === 0) {
+      if (filteredPayments.length === 0) {
         alert('No payment records found to export.');
         setExportLoading(false);
         return;
       }
 
       // Prepare data for Excel
-      const excelData = payments.map(payment => ({
+      const excelData = filteredPayments.map(payment => ({
         'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
         'Invoice Description': payment.invoice_description || '-',
         'Payment Method': payment.payment_method || '-',
@@ -216,7 +236,7 @@ const StudentPaymentLogs = () => {
         </div>
         <button
           onClick={handleExportToExcel}
-          disabled={exportLoading || payments.length === 0}
+          disabled={exportLoading || filteredPayments.length === 0}
           className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
         >
           {exportLoading ? (
@@ -244,7 +264,7 @@ const StudentPaymentLogs = () => {
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="relative">
             <input
               type="text"
@@ -263,6 +283,52 @@ const StudentPaymentLogs = () => {
                 </svg>
               </button>
             )}
+          </div>
+          <div className="sm:col-span-2 lg:col-span-1">
+            <span className="block text-xs font-medium text-gray-600 mb-1">Payment date</span>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
+              <div className="flex-1 min-w-0">
+                <label htmlFor="student-payment-logs-issue-date-from" className="sr-only">
+                  From
+                </label>
+                <input
+                  id="student-payment-logs-issue-date-from"
+                  type="date"
+                  value={filterIssueDateFrom}
+                  onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                  aria-label="Payment date from"
+                  className="w-full min-h-[42px] px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent text-sm"
+                />
+                <span className="text-[10px] text-gray-500 mt-0.5 block sm:hidden">From</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <label htmlFor="student-payment-logs-issue-date-to" className="sr-only">
+                  To
+                </label>
+                <input
+                  id="student-payment-logs-issue-date-to"
+                  type="date"
+                  value={filterIssueDateTo}
+                  onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                  aria-label="Payment date to"
+                  className="w-full min-h-[42px] px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent text-sm"
+                />
+                <span className="text-[10px] text-gray-500 mt-0.5 block sm:hidden">To</span>
+              </div>
+              {filterIssueDateFrom || filterIssueDateTo ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterIssueDateFrom('');
+                    setFilterIssueDateTo('');
+                  }}
+                  className="text-sm font-medium text-amber-700 hover:text-amber-900 shrink-0 pb-2 sm:pb-0"
+                >
+                  Clear dates
+                </button>
+              ) : null}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Inclusive range. Leave both empty for all dates.</p>
           </div>
           <div className="relative status-filter-dropdown">
             <button

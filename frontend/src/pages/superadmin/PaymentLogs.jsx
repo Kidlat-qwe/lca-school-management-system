@@ -16,6 +16,9 @@ const PaymentLogs = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  /** YYYY-MM-DD; empty = no bound (server-side issue_date_from / issue_date_to) */
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
@@ -57,7 +60,7 @@ const PaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterStatus]);
+  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -94,6 +97,8 @@ const PaymentLogs = () => {
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
       if (filterStatus) params.set('status', filterStatus);
+      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       const response = await apiRequest(`/payments?${params.toString()}`);
       setPayments(response.data || []);
       if (response.pagination) {
@@ -334,10 +339,14 @@ const PaymentLogs = () => {
       const limit = 100;
       
       const fetchPage = async (branchId, page = 1) => {
-        const url = branchId
-          ? `/payments?branch_id=${branchId}&limit=${limit}&page=${page}`
-          : `/payments?limit=${limit}&page=${page}`;
-        return apiRequest(url);
+        const params = new URLSearchParams({
+          limit: String(limit),
+          page: String(page),
+        });
+        if (branchId) params.set('branch_id', String(branchId));
+        if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
+        if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        return apiRequest(`/payments?${params.toString()}`);
       };
 
       const fetchAllForBranch = async (branchId) => {
@@ -460,6 +469,49 @@ const PaymentLogs = () => {
 
       {/* Payment Logs List */}
       <div className="bg-white rounded-lg shadow">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end px-3 sm:px-4 py-3 border-b border-gray-200 bg-gray-50/90">
+          <div className="flex flex-col gap-1 min-w-0">
+            <label htmlFor="payment-logs-issue-date-from" className="text-xs font-medium text-gray-600">
+              From
+            </label>
+            <input
+              id="payment-logs-issue-date-from"
+              type="date"
+              value={filterIssueDateFrom}
+              onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+              className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
+            />
+          </div>
+          <div className="flex flex-col gap-1 min-w-0">
+            <label htmlFor="payment-logs-issue-date-to" className="text-xs font-medium text-gray-600">
+              To
+            </label>
+            <input
+              id="payment-logs-issue-date-to"
+              type="date"
+              value={filterIssueDateTo}
+              onChange={(e) => setFilterIssueDateTo(e.target.value)}
+              className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pb-0.5">
+            {filterIssueDateFrom || filterIssueDateTo ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterIssueDateFrom('');
+                  setFilterIssueDateTo('');
+                }}
+                className="text-sm font-medium text-primary-600 hover:text-primary-800 px-2 py-1.5 rounded-md hover:bg-primary-50"
+              >
+                Clear dates
+              </button>
+            ) : null}
+          </div>
+          <p className="text-xs text-gray-500 sm:ml-auto sm:pb-2 w-full sm:w-auto">
+            Inclusive range on payment date. Leave both empty for all dates.
+          </p>
+        </div>
           {/* Table fits viewport - no horizontal scroll; compact responsive layout */}
           <div className="rounded-lg overflow-hidden">
             <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
