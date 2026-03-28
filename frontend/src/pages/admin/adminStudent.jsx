@@ -341,7 +341,6 @@ const AdminStudent = () => {
       if (!editingStudent && passwordToUse.length < 6) errors.password = 'Password must be at least 6 characters';
       if (!formData.branch_id) errors.branch_id = 'Branch is required';
       if (!formData.level_tag) errors.level_tag = 'Level tag is required';
-      if (!formData.date_of_birth) errors.date_of_birth = 'Date of birth is required';
       if (!formData.gender) errors.gender = 'Gender is required';
       // Guardian fields - ALL REQUIRED
       if (!formData.guardian_name.trim()) errors.guardian_name = 'Guardian name is required';
@@ -371,7 +370,7 @@ const AdminStudent = () => {
           branch_id: finalBranchId,
           level_tag: formData.level_tag,
           gender: formData.gender,
-          date_of_birth: formData.date_of_birth,
+          date_of_birth: formData.date_of_birth || null,
           lrn: formData.lrn.trim() ? formData.lrn.trim().slice(0, 50) : null,
         };
 
@@ -427,7 +426,7 @@ const AdminStudent = () => {
           branch_id: finalBranchId,
           level_tag: formData.level_tag,
           gender: formData.gender,
-          date_of_birth: formData.date_of_birth,
+          date_of_birth: formData.date_of_birth || null,
           lrn: formData.lrn.trim() ? formData.lrn.trim().slice(0, 50) : null,
         };
 
@@ -884,7 +883,7 @@ const AdminStudent = () => {
 
                     <div>
                       <label htmlFor="date_of_birth" className="label-field">
-                        Date of Birth <span className="text-red-500">*</span>
+                        Date of Birth
                       </label>
                       <input
                         type="date"
@@ -893,7 +892,6 @@ const AdminStudent = () => {
                         value={formData.date_of_birth}
                         onChange={handleInputChange}
                         className={`input-field ${formErrors.date_of_birth ? 'border-red-500' : ''}`}
-                        required
                       />
                       {formErrors.date_of_birth && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.date_of_birth}</p>
