@@ -128,14 +128,18 @@ const AdminDailySummarySale = () => {
         method: 'POST',
         body: JSON.stringify({ summary_date: today }),
       });
-      setSuccess('Daily summary submitted successfully. Superadmin and Superfinance will verify your submission.');
+      setSuccess('Daily summary submitted successfully and auto-verified.');
       await fetchCheckToday();
       await fetchPreview();
       if (activeTab === TAB_DETAILS) {
         fetchSummaryHistory();
       }
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to submit');
+      const msg = err.response?.data?.message || err.message || 'Failed to submit';
+      setError(msg);
+      if (err.response?.status === 409) {
+        fetchCheckToday();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -243,38 +247,37 @@ const AdminDailySummarySale = () => {
             {/* Left: status + submit */}
             <div>
               {existing && (
-                <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 mb-4">
-                  <p className="text-sm font-medium text-amber-800">
-                    Already submitted for today. Status: <span className="font-semibold">{existing.status}</span>
+                <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 mb-4">
+                  <p className="text-sm font-medium text-green-800">
+                    End of day already submitted for today. Status: <span className="font-semibold">{existing.status}</span>
                   </p>
                   {existing.submitted_at && (
-                    <p className="text-xs text-amber-700 mt-1">
+                    <p className="text-xs text-green-700 mt-1">
                       Submitted at: {formatDateManila(existing.submitted_at)}
                     </p>
                   )}
+                  <p className="text-xs text-green-700 mt-2">Only one EOD per day is allowed. You can submit again on the next business day.</p>
                 </div>
               )}
-              {!existing && (
-                <form onSubmit={handleSubmit}>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed py-2 px-4 text-sm font-medium rounded-lg"
-                  >
-                    {submitting ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Submitting...
-                      </span>
-                    ) : (
-                      'Submit Daily Summary'
-                    )}
-                  </button>
-                </form>
-              )}
+              <form onSubmit={handleSubmit}>
+                <button
+                  type="submit"
+                  disabled={submitting || !!existing}
+                  className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed py-2 px-4 text-sm font-medium rounded-lg"
+                >
+                  {submitting ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Submitting...
+                    </span>
+                  ) : (
+                    'Submit Daily Summary'
+                  )}
+                </button>
+              </form>
             </div>
             {/* Right: guidelines */}
             <div>
@@ -282,7 +285,7 @@ const AdminDailySummarySale = () => {
               <ul className="space-y-2 text-sm text-gray-600">
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
-                  <span>You can only submit for today&apos;s date.</span>
+                  <span>Only one submission per branch per calendar day. Totals include all payments dated today for this branch.</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
@@ -290,7 +293,7 @@ const AdminDailySummarySale = () => {
                 </li>
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
-                  <span>Superadmin or Superfinance will verify your submission for daily closing tracking.</span>
+                  <span>Your submission is auto-verified after it is sent.</span>
                 </li>
               </ul>
               <p className="mt-4 text-xs text-gray-500">

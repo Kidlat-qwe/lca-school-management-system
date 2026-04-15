@@ -5,9 +5,15 @@ import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
+import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 
 const FinancePaymentLogs = () => {
   const { userInfo } = useAuth();
+  /** main = pending + approved (excludes Returned); return = payments you sent back to the branch */
+  const [financeLogTab, setFinanceLogTab] = useState('main');
+  const [returnReasonInput, setReturnReasonInput] = useState('');
+  const [returnActionLoading, setReturnActionLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -50,7 +56,7 @@ const FinancePaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo]);
+  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo, financeLogTab]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -89,6 +95,12 @@ const FinancePaymentLogs = () => {
       if (filterStatus) params.set('status', filterStatus);
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (financeLogTab === 'return') {
+        params.set('approval_status', 'Returned');
+        params.set('returned_by_me', 'true');
+      } else {
+        params.set('exclude_approval_status', 'Returned');
+      }
       const response = await apiRequest(`/payments?${params.toString()}`);
       setPayments(response.data || []);
       if (response.pagination) {
@@ -132,6 +144,7 @@ const FinancePaymentLogs = () => {
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
     setReferenceModalInput(''); // Finance must retype the reference number from the image
+    setReturnReasonInput('');
     setShowReferenceModal(true);
   };
 
@@ -139,6 +152,25 @@ const FinancePaymentLogs = () => {
     setShowReferenceModal(false);
     setSelectedPaymentForReference(null);
     setReferenceModalInput('');
+    setReturnReasonInput('');
+  };
+
+  const handleReturnToBranch = async () => {
+    if (!selectedPaymentForReference) return;
+    setReturnActionLoading(true);
+    try {
+      await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/return`, {
+        method: 'PUT',
+        body: JSON.stringify({ reason: returnReasonInput.trim() || undefined }),
+      });
+      appAlert('Payment returned to branch for correction.');
+      closeReferenceModal();
+      await fetchPayments(pagination.page);
+    } catch (err) {
+      appAlert(err.message || 'Failed to return payment.');
+    } finally {
+      setReturnActionLoading(false);
+    }
   };
 
   const handleUpdateReferenceNumber = async (e) => {
@@ -148,16 +180,16 @@ const FinancePaymentLogs = () => {
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
 
     if (!originalRef) {
-      alert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
+      appAlert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
       return;
     }
     if (!enteredRef) {
-      alert('Please enter the reference number exactly as shown on the receipt image.');
+      appAlert('Please enter the reference number exactly as shown on the receipt image.');
       return;
     }
 
     if (enteredRef !== originalRef) {
-      alert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
+      appAlert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
       return;
     }
 
@@ -176,7 +208,7 @@ const FinancePaymentLogs = () => {
       closeReferenceModal();
       await fetchPayments(pagination.page);
     } catch (err) {
-      alert(err.message || 'Failed to save and approve payment.');
+      appAlert(err.message || 'Failed to save and approve payment.');
     } finally {
       setReferenceModalUpdating(false);
     }
@@ -331,6 +363,12 @@ const FinancePaymentLogs = () => {
         });
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        if (financeLogTab === 'return') {
+          params.set('approval_status', 'Returned');
+          params.set('returned_by_me', 'true');
+        } else {
+          params.set('exclude_approval_status', 'Returned');
+        }
         return apiRequest(`/payments?${params.toString()}`);
       };
       const fetchAllForBranch = async (branchId) => {
@@ -353,7 +391,7 @@ const FinancePaymentLogs = () => {
       const allPayments = results.flat();
 
       if (allPayments.length === 0) {
-        alert('No payment records found to export.');
+        appAlert('No payment records found to export.');
         setExportLoading(false);
         return;
       }
@@ -411,7 +449,7 @@ const FinancePaymentLogs = () => {
       setExportLoading(false);
     } catch (error) {
       console.error('Export error:', error);
-      alert('Failed to export payment logs. Please try again.');
+      appAlert('Failed to export payment logs. Please try again.');
       setExportLoading(false);
     }
   };
@@ -427,15 +465,20 @@ const FinancePaymentLogs = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
-          <p className="text-sm text-gray-500 mt-1">View and manage all payment records</p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payment Logs</h1>
+          <p className="mt-1 text-sm text-gray-600 max-w-2xl">
+            <span className="font-medium text-gray-800">Payment logs</span> lists all active records (pending verification
+            and approved). Use <span className="font-medium text-gray-800">Return to branch</span> in the verification modal
+            when the reference and attachment do not match. <span className="font-medium text-gray-800">Return</span> shows
+            payments you sent back to the branch for correction.
+          </p>
         </div>
         <button
+          type="button"
           onClick={handleExportClick}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          className="flex shrink-0 items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -444,11 +487,11 @@ const FinancePaymentLogs = () => {
         </button>
       </div>
 
+      <BranchPaymentLogTabs value={financeLogTab} onChange={setFinanceLogTab} />
+
       {/* Error Message */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {error}
-        </div>
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
       {/* Payment Logs List */}
@@ -636,7 +679,9 @@ const FinancePaymentLogs = () => {
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterStatus || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
-                          : 'No payment records found.'}
+                          : financeLogTab === 'return'
+                            ? 'No payments you have returned to a branch yet.'
+                            : 'No payment records found.'}
                       </p>
                     </td>
                   </tr>
@@ -665,7 +710,33 @@ const FinancePaymentLogs = () => {
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
-                        {approvalLoadingId === payment.payment_id ? (
+                        {financeLogTab === 'return' ? (
+                          <div className="space-y-1.5">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-100 text-amber-900">
+                              Returned to branch
+                            </span>
+                            {payment.return_reason && (
+                              <p className="text-xs text-gray-600 leading-snug line-clamp-3" title={payment.return_reason}>
+                                {payment.return_reason}
+                              </p>
+                            )}
+                            {payment.returned_at && (
+                              <p className="text-xs text-gray-500">Sent back {payment.returned_at}</p>
+                            )}
+                            {payment.payment_attachment_url && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAttachmentViewerUrl(payment.payment_attachment_url);
+                                  setShowAttachmentViewer(true);
+                                }}
+                                className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
+                              >
+                                View attachment
+                              </button>
+                            )}
+                          </div>
+                        ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
@@ -902,23 +973,46 @@ const FinancePaymentLogs = () => {
                     onChange={(e) => setReferenceModalInput(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                    required
                   />
+                </div>
+                <div className="mb-4 pt-4 border-t border-gray-200">
+                  <p className="text-xs text-gray-600 mb-2">
+                    If the reference and attachment do not match, return the payment to the branch with an optional note.
+                  </p>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Note to branch (optional)</label>
+                  <textarea
+                    value={returnReasonInput}
+                    onChange={(e) => setReturnReasonInput(e.target.value)}
+                    rows={2}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
+                    placeholder="e.g. Reference on image does not match encoded reference"
+                    disabled={referenceModalUpdating || returnActionLoading}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleReturnToBranch}
+                    className="mt-3 w-full sm:w-auto px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md border border-amber-200 disabled:opacity-50"
+                    disabled={referenceModalUpdating || returnActionLoading}
+                  >
+                    {returnActionLoading ? 'Returning...' : 'Return to branch'}
+                  </button>
                 </div>
                 <div className="flex justify-end gap-3">
                   <button
                     type="button"
                     onClick={closeReferenceModal}
                     className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                    disabled={referenceModalUpdating}
+                    disabled={referenceModalUpdating || returnActionLoading}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={referenceModalUpdating}
+                    disabled={referenceModalUpdating || returnActionLoading}
                   >
-                    {referenceModalUpdating ? 'Saving...' : 'Done'}
+                    {referenceModalUpdating ? 'Saving...' : 'Verify & approve'}
                   </button>
                 </div>
               </form>

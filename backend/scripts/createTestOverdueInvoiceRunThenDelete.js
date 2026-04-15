@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { getClient } from '../config/database.js';
+import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,13 +55,13 @@ async function main() {
     dueDate.setDate(dueDate.getDate() - 1);
 
     await client.query('BEGIN');
-    const invResult = await client.query(
-      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    const inv = await insertInvoiceWithArNumber(
+      client,
+      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, invoice_ar_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING invoice_id, invoice_description, due_date, branch_id`,
       ['TEMP', branch.branch_id, 1000, 'Unpaid', null, issueDate, dueDate, null]
     );
-    const inv = invResult.rows[0];
     testInvoiceId = inv.invoice_id;
 
     await client.query(

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -162,7 +163,7 @@ const AdminPricingList = () => {
     // Verify pricing list belongs to admin's branch
     const pricingList = pricingLists.find(pl => pl.pricinglist_id === pricingListId);
     if (pricingList && pricingList.branch_id !== adminBranchId) {
-      alert('You can only delete pricing lists from your branch.');
+      appAlert('You can only delete pricing lists from your branch.');
       return;
     }
     
@@ -176,7 +177,7 @@ const AdminPricingList = () => {
       });
       fetchPricingLists();
     } catch (err) {
-      alert(err.message || 'Failed to delete pricing list');
+      appAlert(err.message || 'Failed to delete pricing list');
     }
   };
 
@@ -198,7 +199,7 @@ const AdminPricingList = () => {
     
     // Verify pricing list belongs to admin's branch
     if (pricingList.branch_id !== adminBranchId) {
-      alert('You can only edit pricing lists from your branch.');
+      appAlert('You can only edit pricing lists from your branch.');
       return;
     }
     

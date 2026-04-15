@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -230,7 +231,7 @@ const InstallmentInvoice = () => {
       
       // Show success message
       setError(''); // Clear any previous errors
-      alert('Invoice generated successfully!');
+      appAlert('Invoice generated successfully!');
     } catch (err) {
       setGenerateFormErrors({ submit: err.message || 'Failed to generate invoice' });
       console.error('Error generating invoice:', err);

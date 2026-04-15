@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -184,7 +185,7 @@ const Package = () => {
       });
       fetchPackages();
     } catch (err) {
-      alert(err.message || 'Failed to delete package');
+      appAlert(err.message || 'Failed to delete package');
     }
   };
 
@@ -548,7 +549,7 @@ const Package = () => {
     } catch (err) {
       console.error('Error fetching package details:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Failed to fetch package details';
-      alert(`Error: ${errorMessage}`);
+      appAlert(`Error: ${errorMessage}`);
       // Still open the modal with the package item we have
       setSelectedPackageForDetails(packageItem);
     }
@@ -567,11 +568,11 @@ const Package = () => {
 
   const addPackageDetail = async () => {
     if (newDetail.type === 'pricing' && !newDetail.pricinglist_id) {
-      alert('Please select a pricing list');
+      appAlert('Please select a pricing list');
       return;
     }
     if (newDetail.type === 'merchandise' && !newDetail.merchandise_id) {
-      alert('Please select merchandise');
+      appAlert('Please select merchandise');
       return;
     }
 
@@ -583,7 +584,7 @@ const Package = () => {
       if (newDetail.type === 'pricing' && newDetail.pricinglist_id) {
         pricinglistId = parseInt(newDetail.pricinglist_id);
         if (isNaN(pricinglistId) || pricinglistId <= 0) {
-          alert('Invalid pricing list ID');
+          appAlert('Invalid pricing list ID');
           return;
         }
       }
@@ -591,13 +592,13 @@ const Package = () => {
       if (newDetail.type === 'merchandise' && newDetail.merchandise_id) {
         merchandiseId = parseInt(newDetail.merchandise_id);
         if (isNaN(merchandiseId) || merchandiseId <= 0) {
-          alert('Invalid merchandise ID');
+          appAlert('Invalid merchandise ID');
           return;
         }
         // Verify merchandise exists in our fetched data
         const merchandiseItem = merchandise.find(m => m.merchandise_id === merchandiseId);
         if (!merchandiseItem) {
-          alert('Selected merchandise not found. Please refresh and try again.');
+          appAlert('Selected merchandise not found. Please refresh and try again.');
           return;
         }
       }
@@ -612,7 +613,7 @@ const Package = () => {
 
       // Ensure we have at least one ID
       if (!pricinglistId && !merchandiseId) {
-        alert('Please select either a pricing list or merchandise');
+        appAlert('Please select either a pricing list or merchandise');
         return;
       }
 
@@ -636,7 +637,7 @@ const Package = () => {
       const errorMessage = err.response?.data?.errors 
         ? err.response.data.errors.map(e => e.msg).join(', ')
         : (err.response?.data?.message || err.message || 'Failed to add package detail');
-      alert(errorMessage);
+      appAlert(errorMessage);
     }
   };
 
@@ -655,7 +656,7 @@ const Package = () => {
       const updatedPackages = await apiRequest(`/packages/${selectedPackageForDetails.package_id}`);
       setSelectedPackageForDetails(updatedPackages.data);
     } catch (err) {
-      alert(err.message || 'Failed to remove package detail');
+      appAlert(err.message || 'Failed to remove package detail');
     }
   };
 

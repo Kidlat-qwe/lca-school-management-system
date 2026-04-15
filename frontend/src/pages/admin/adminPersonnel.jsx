@@ -5,6 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const AdminPersonnel = () => {
   const { signup, userInfo } = useAuth();
@@ -157,7 +158,7 @@ const AdminPersonnel = () => {
     // Verify personnel belongs to admin's branch
     const person = personnel.find(p => p.user_id === userId);
     if (person && person.branch_id !== adminBranchId) {
-      alert('You can only delete personnel from your branch.');
+      appAlert('You can only delete personnel from your branch.');
       return;
     }
     
@@ -171,7 +172,7 @@ const AdminPersonnel = () => {
       });
       fetchPersonnel();
     } catch (err) {
-      alert(err.message || 'Failed to delete personnel');
+      appAlert(err.message || 'Failed to delete personnel');
     }
   };
 
@@ -207,13 +208,13 @@ const AdminPersonnel = () => {
     
     // Verify personnel belongs to admin's branch
     if (person.branch_id !== adminBranchId) {
-      alert('You can only edit personnel from your branch.');
+      appAlert('You can only edit personnel from your branch.');
       return;
     }
     
     // Prevent editing Admin users if current user is Admin
     if (currentUserType === 'Admin' && person.user_type === 'Admin') {
-      alert('You cannot edit Admin accounts. Only Superadmin can edit Admin accounts.');
+      appAlert('You cannot edit Admin accounts. Only Superadmin can edit Admin accounts.');
       return;
     }
     

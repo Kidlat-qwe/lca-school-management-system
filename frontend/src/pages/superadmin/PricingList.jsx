@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -150,7 +151,7 @@ const PricingList = () => {
       });
       fetchPricingLists();
     } catch (err) {
-      alert(err.message || 'Failed to delete pricing list');
+      appAlert(err.message || 'Failed to delete pricing list');
     }
   };
 

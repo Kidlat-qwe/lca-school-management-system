@@ -16,10 +16,11 @@ import {
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
-const StatsCard = ({ title, value, icon, accent, subtitle }) => (
+const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
   <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
     <div className="flex items-start justify-between">
       <div className="flex-1">
@@ -28,7 +29,7 @@ const StatsCard = ({ title, value, icon, accent, subtitle }) => (
         {subtitle && <p className="mt-2 text-xs font-medium text-gray-500">{subtitle}</p>}
       </div>
       <div className={`ml-4 flex h-14 w-14 items-center justify-center rounded-xl ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
-        <span className="text-2xl">{icon}</span>
+        <DashboardStatIcon name={iconName} className="h-7 w-7 text-white drop-shadow-sm" />
       </div>
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
@@ -139,26 +140,26 @@ const AdminFinancialDashboard = () => {
             title="Students (Branch)"
             value={(totals.total_students || 0).toLocaleString()}
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            icon="🎓"
+            iconName="users"
           />
           <StatsCard
             title="Teachers (Branch)"
             value={(totals.total_teachers || 0).toLocaleString()}
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-            icon="👩‍🏫"
+            iconName="academicCap"
           />
           <StatsCard
             title="Active Classes"
             value={(totals.active_classes || 0).toLocaleString()}
             accent="bg-gradient-to-br from-orange-400 to-orange-500"
-            icon="📚"
+            iconName="bookOpen"
           />
           <StatsCard
             title="Total Invoice Amount"
             value={formatCurrency(totalInvoiceAmount)}
             subtitle="Sum of invoice totals by status"
             accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
-            icon="💳"
+            iconName="creditCard"
           />
         </div>
 

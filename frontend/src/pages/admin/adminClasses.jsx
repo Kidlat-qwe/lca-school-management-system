@@ -5,6 +5,8 @@ import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
+import { calculateSessionDate } from '../../utils/sessionCalculation';
+import { appAlert } from '../../utils/appAlert';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -96,6 +98,7 @@ const AdminClasses = () => {
   const [ackReceiptsLoading, setAckReceiptsLoading] = useState(false);
   const [ackReceiptsError, setAckReceiptsError] = useState('');
   const [ackSearchTerm, setAckSearchTerm] = useState('');
+  const [debouncedAckSearch, setDebouncedAckSearch] = useState('');
   const [selectedAckReceipt, setSelectedAckReceipt] = useState(null);
   const [isViewStudentsModalOpen, setIsViewStudentsModalOpen] = useState(false);
   const [viewStudentsStep, setViewStudentsStep] = useState('phase-selection'); // 'phase-selection' or 'students-list'
@@ -426,7 +429,7 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const fetchAckReceiptsForEnrollment = async (branchId, search = '') => {
+  const fetchAckReceiptsForEnrollment = useCallback(async (branchId, search = '') => {
     try {
       setAckReceiptsLoading(true);
       setAckReceiptsError('');
@@ -445,7 +448,18 @@ const initializePackageMerchSelections = useCallback(
     } finally {
       setAckReceiptsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAckSearch(ackSearchTerm.trim()), 350);
+    return () => clearTimeout(t);
+  }, [ackSearchTerm]);
+
+  useEffect(() => {
+    if (enrollStep !== 'ack-receipt-selection' || !selectedClassForEnrollment) return;
+    const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
+    fetchAckReceiptsForEnrollment(branchId, debouncedAckSearch);
+  }, [debouncedAckSearch, enrollStep, selectedClassForEnrollment, fetchAckReceiptsForEnrollment]);
 
   const fetchMerchandise = async (branchId) => {
     try {
@@ -881,7 +895,7 @@ const initializePackageMerchSelections = useCallback(
       setSavingAttendance(true);
 
       if (!attendanceData || !attendanceData.students) {
-        alert('No attendance data available');
+        appAlert('No attendance data available');
         return;
       }
 
@@ -924,12 +938,12 @@ const initializePackageMerchSelections = useCallback(
           }
         }
       } else {
-        alert('Please generate class sessions first before marking attendance.');
+        appAlert('Please generate class sessions first before marking attendance.');
         return;
       }
     } catch (err) {
       console.error('Error saving attendance:', err);
-      alert(err.message || 'Failed to save attendance');
+      appAlert(err.message || 'Failed to save attendance');
     } finally {
       setSavingAttendance(false);
     }
@@ -994,7 +1008,7 @@ const initializePackageMerchSelections = useCallback(
     // Verify class belongs to admin's branch
     const classItem = classes.find(c => c.class_id === classId);
     if (classItem && classItem.branch_id !== adminBranchId) {
-      alert('You can only delete classes from your branch.');
+      appAlert('You can only delete classes from your branch.');
       return;
     }
     
@@ -1008,104 +1022,8 @@ const initializePackageMerchSelections = useCallback(
       });
       fetchClasses();
     } catch (err) {
-      alert(err.message || 'Failed to delete class');
+      appAlert(err.message || 'Failed to delete class');
     }
-  };
-
-  // Helper function to calculate session date
-  const calculateSessionDate = (startDate, daysOfWeek, phaseNumber, sessionNumber, sessionsPerPhase) => {
-    if (!startDate || !daysOfWeek || daysOfWeek.length === 0 || !phaseNumber || !sessionNumber) {
-      return null;
-    }
-
-    const dayMap = {
-      'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-      'Thursday': 4, 'Friday': 5, 'Saturday': 6
-    };
-
-    const sortedDays = [...daysOfWeek].sort((a, b) => {
-      const dayA = typeof a === 'string' ? dayMap[a] : dayMap[a.day_of_week];
-      const dayB = typeof b === 'string' ? dayMap[b] : dayMap[b.day_of_week];
-      return dayA - dayB;
-    });
-
-    const dayNames = sortedDays.map(day => typeof day === 'string' ? day : day.day_of_week);
-    const dayNumbers = dayNames.map(day => dayMap[day]);
-
-    // Parse start date as local date (YYYY-MM-DD format from database)
-    // Treat as Asia/Manila UTC+8 - parse as local date components
-    const [year, month, day] = startDate.split('-').map(Number);
-    
-    // Create date object in local timezone (UTC+8) - use noon to avoid DST/timezone edge cases
-    const start = new Date(year, month - 1, day, 12, 0, 0);
-    const startDayOfWeek = start.getDay(); // 0 = Sunday, 1 = Monday, etc.
-
-    // Calculate which session number this is (1-indexed across all phases)
-    const overallSessionNumber = sessionsPerPhase 
-      ? (phaseNumber - 1) * sessionsPerPhase + sessionNumber
-      : sessionNumber;
-
-    // Session index (0-indexed)
-    const sessionIndex = overallSessionNumber - 1;
-    
-    // Which day in the cycle (0 = first enabled day, 1 = second enabled day, etc.)
-    const dayIndexInCycle = sessionIndex % dayNames.length;
-    
-    // Which week (0 = first week, 1 = second week, etc.)
-    const weekOffset = Math.floor(sessionIndex / dayNames.length);
-
-    // Get the target day name and number for this session
-    const targetDayName = dayNames[dayIndexInCycle];
-    const targetDayNumber = dayMap[targetDayName];
-
-    // Find the first enabled day in the cycle
-    const firstDayNumber = dayNumbers[0];
-    
-    // Check if start date is already on an enabled day
-    let baseDate;
-    let baseDayOfWeek;
-    
-    if (dayNumbers.includes(startDayOfWeek)) {
-      // Start date is on an enabled day, use it as the base
-      baseDate = new Date(year, month - 1, day, 12, 0, 0);
-      baseDayOfWeek = startDayOfWeek;
-    } else {
-      // Start date is not on an enabled day, find the next enabled day
-      let daysUntilFirstDay = firstDayNumber - startDayOfWeek;
-      if (daysUntilFirstDay < 0) {
-        daysUntilFirstDay += 7; // Next week
-      }
-      baseDate = new Date(year, month - 1, day + daysUntilFirstDay, 12, 0, 0);
-      baseDayOfWeek = firstDayNumber;
-    }
-    
-    // Find which position the base day is in the enabled days cycle
-    const baseDayIndex = dayNumbers.indexOf(baseDayOfWeek);
-    
-    // Calculate which day in the cycle this session should be on
-    const targetDayIndex = dayIndexInCycle;
-    
-    // Calculate how many days to add from base date
-    let daysToAdd = 0;
-    
-    if (targetDayIndex >= baseDayIndex) {
-      // Target day is same week or later in the cycle
-      daysToAdd = (targetDayIndex - baseDayIndex) + (weekOffset * 7);
-    } else {
-      // Target day is earlier in the cycle, need to go to next week
-      daysToAdd = (dayNames.length - baseDayIndex) + targetDayIndex + (weekOffset * 7);
-    }
-    
-    // Calculate the final session date
-    const sessionDate = new Date(baseDate);
-    sessionDate.setDate(baseDate.getDate() + daysToAdd);
-
-    // Format as YYYY-MM-DD (using local date components to avoid timezone conversion)
-    // This ensures we get the correct date in UTC+8 timezone
-    const resultYear = sessionDate.getFullYear();
-    const resultMonth = String(sessionDate.getMonth() + 1).padStart(2, '0');
-    const resultDay = String(sessionDate.getDate()).padStart(2, '0');
-    return `${resultYear}-${resultMonth}-${resultDay}`;
   };
 
   // Calculate which phase is currently active based on today's date
@@ -1158,7 +1076,8 @@ const initializePackageMerchSelections = useCallback(
           daysOfWeek,
           firstSession.phase_number,
           firstSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -1168,7 +1087,8 @@ const initializePackageMerchSelections = useCallback(
           daysOfWeek,
           lastSession.phase_number,
           lastSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -1197,7 +1117,8 @@ const initializePackageMerchSelections = useCallback(
             daysOfWeek,
             firstSession.phase_number,
             firstSession.phase_session_number,
-            sessionsPerPhase
+            sessionsPerPhase,
+            classDetails.number_of_phase
           )
         : null);
 
@@ -1227,7 +1148,8 @@ const initializePackageMerchSelections = useCallback(
           daysOfWeek,
           lastSession.phase_number,
           lastSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -1363,7 +1285,7 @@ const initializePackageMerchSelections = useCallback(
     );
 
     if (!reason || reason.trim() === '') {
-      alert(isPending ? 'Removal cancelled. Reason is required.' : 'Unenrollment cancelled. Reason is required.');
+      appAlert(isPending ? 'Removal cancelled. Reason is required.' : 'Unenrollment cancelled. Reason is required.');
       return;
     }
 
@@ -1395,10 +1317,10 @@ const initializePackageMerchSelections = useCallback(
         const successCount = results.filter(r => r.success === true).length;
         const failCount = results.filter(r => r.success === false).length;
         if (successCount > 0) {
-          alert(`Student ${studentName} has been unenrolled and removed from the class.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
+          appAlert(`Student ${studentName} has been unenrolled and removed from the class.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
           await fetchEnrolledStudents(classId);
         } else {
-          alert('Failed to unenroll student. Please try again.');
+          appAlert('Failed to unenroll student. Please try again.');
         }
         return;
       }
@@ -1407,19 +1329,19 @@ const initializePackageMerchSelections = useCallback(
         // Pending (installment, downpayment paid, not yet in classstudentstbl): remove via deactivating installment profile
         const res = await apiRequest(`/students/class/${classId}/pending/${student.user_id}`, { method: 'DELETE' });
         if (res?.success) {
-          alert(`${studentName} has been removed from the class.`);
+          appAlert(`${studentName} has been removed from the class.`);
           await fetchEnrolledStudents(classId);
         } else {
-          alert(res?.message || 'Failed to remove student from class. Please try again.');
+          appAlert(res?.message || 'Failed to remove student from class. Please try again.');
         }
         return;
       }
 
-      alert('No active enrollment or pending record found for this student.');
+      appAlert('No active enrollment or pending record found for this student.');
     } catch (err) {
       console.error('Error unenrolling/removing student:', err);
       const msg = err.response?.data?.message || err.message || 'Failed to unenroll student. Please try again.';
-      alert(msg);
+      appAlert(msg);
     } finally {
       setLoadingEnrolledStudents(false);
     }
@@ -1929,7 +1851,7 @@ const initializePackageMerchSelections = useCallback(
 
   const handleContinueToSchedule = () => {
     if (selectedMergeTargetClasses.length === 0) {
-      alert('Please select at least one class to merge with');
+      appAlert('Please select at least one class to merge with');
       return;
     }
     setMergeStep('choose-schedule');
@@ -2028,22 +1950,22 @@ const initializePackageMerchSelections = useCallback(
 
   const handleMergeReview = () => {
     if (!selectedClassForMerge || selectedMergeTargetClasses.length === 0) {
-      alert('Please select at least one class to merge with');
+      appAlert('Please select at least one class to merge with');
       return;
     }
     if (!mergeFormData.room_id || mergeFormData.room_id === '') {
-      alert('Please select a room for the merged class');
+      appAlert('Please select a room for the merged class');
       return;
     }
     // Validate schedule based on selected mode
     if (useSourceSchedule) {
       if (!sourceClassSchedule || sourceClassSchedule.length === 0 || sourceClassSchedule.filter(s => s.start_time && s.end_time).length === 0) {
-        alert('Source class does not have a schedule configured. Please use manual schedule setup.');
+        appAlert('Source class does not have a schedule configured. Please use manual schedule setup.');
         return;
       }
     } else {
       if (!manualSchedule || manualSchedule.length === 0 || manualSchedule.filter(s => s.start_time && s.end_time).length === 0) {
-        alert('Please configure the schedule for the merged class');
+        appAlert('Please configure the schedule for the merged class');
         return;
       }
       // Check for conflicts before proceeding
@@ -2051,7 +1973,7 @@ const initializePackageMerchSelections = useCallback(
         const conflictMessages = mergeScheduleConflicts.map(c => 
           `${c.day} ${c.start_time}-${c.end_time}: ${c.message}`
         ).join('\n');
-        alert(`Cannot proceed: Schedule conflicts detected.\n\n${conflictMessages}\n\nPlease resolve these conflicts before continuing.`);
+        appAlert(`Cannot proceed: Schedule conflicts detected.\n\n${conflictMessages}\n\nPlease resolve these conflicts before continuing.`);
         return;
       }
     }
@@ -2060,7 +1982,7 @@ const initializePackageMerchSelections = useCallback(
 
   const handleMergeSubmit = async () => {
     if (!selectedClassForMerge || selectedMergeTargetClasses.length === 0) {
-      alert('Please select at least one class to merge with');
+      appAlert('Please select at least one class to merge with');
       return;
     }
 
@@ -2102,7 +2024,7 @@ const initializePackageMerchSelections = useCallback(
         }),
       });
 
-      alert(`Classes merged successfully! ${response.data.enrollment_stats?.unique_students || response.data.students_moved || 0} students moved to the new merged class.`);
+      appAlert(`Classes merged successfully! ${response.data.enrollment_stats?.unique_students || response.data.students_moved || 0} students moved to the new merged class.`);
       closeMergeModal();
       fetchClasses(); // Refresh classes list
     } catch (err) {
@@ -2111,9 +2033,9 @@ const initializePackageMerchSelections = useCallback(
         const conflictMessages = err.response.data.conflicts.map(c => 
           `${c.day} ${c.start_time}-${c.end_time}: ${c.message || 'Schedule conflict'}`
         ).join('\n');
-        alert(`Cannot merge classes: Schedule conflicts detected.\n\n${conflictMessages}\n\nPlease resolve these conflicts and try again.`);
+        appAlert(`Cannot merge classes: Schedule conflicts detected.\n\n${conflictMessages}\n\nPlease resolve these conflicts and try again.`);
       } else {
-        alert(err.response?.data?.message || err.message || 'Failed to merge classes');
+        appAlert(err.response?.data?.message || err.message || 'Failed to merge classes');
       }
       console.error('Error merging classes:', err);
     } finally {
@@ -2146,7 +2068,7 @@ const initializePackageMerchSelections = useCallback(
       setMergeHistory(response.data || []);
     } catch (err) {
       console.error('Error fetching merge history:', err);
-      alert(err.message || 'Failed to fetch merge history');
+      appAlert(err.message || 'Failed to fetch merge history');
       setMergeHistory([]);
     } finally {
       setLoadingMergeHistory(false);
@@ -2170,12 +2092,12 @@ const initializePackageMerchSelections = useCallback(
   const handleUndoMerge = async (mergeHistoryId, mergedClassId) => {
     const latestHistory = mergeHistory.find(h => h.merge_history_id === mergeHistoryId);
     if (!latestHistory) {
-      alert('Merge history not found');
+      appAlert('Merge history not found');
       return;
     }
 
     if (latestHistory.is_undone) {
-      alert('This merge has already been undone');
+      appAlert('This merge has already been undone');
       return;
     }
 
@@ -2201,7 +2123,7 @@ const initializePackageMerchSelections = useCallback(
         method: 'POST',
       });
 
-      alert(`Merge undone successfully! ${response.data.restored_classes.length} class(es) restored.`);
+      appAlert(`Merge undone successfully! ${response.data.restored_classes.length} class(es) restored.`);
       closeMergeHistoryModal();
       // If we're in detail view, go back to list view since the merged class is now deleted
       if (viewMode === 'detail' && selectedClassForDetails?.class_id === mergedClassId) {
@@ -2253,7 +2175,7 @@ const initializePackageMerchSelections = useCallback(
         }
       } else {
         // Regular error - show alert
-        alert(err.message || 'Failed to undo merge');
+        appAlert(err.message || 'Failed to undo merge');
       }
       console.error('Error undoing merge:', err);
     } finally {
@@ -2291,9 +2213,9 @@ const initializePackageMerchSelections = useCallback(
     // Allow upgrade for Fee Paid and Expired reservations
     if (reservation.status !== 'Fee Paid' && reservation.status !== 'Expired') {
       if (reservation.status === 'Reserved') {
-        alert(`Cannot upgrade reservation. The reservation fee must be paid first. Current status: ${reservation.status}`);
+        appAlert(`Cannot upgrade reservation. The reservation fee must be paid first. Current status: ${reservation.status}`);
       } else {
-        alert(`Cannot upgrade reservation. Current status: ${reservation.status}`);
+        appAlert(`Cannot upgrade reservation. Current status: ${reservation.status}`);
       }
       return;
     }
@@ -2365,7 +2287,7 @@ const initializePackageMerchSelections = useCallback(
       // - When upgradeEnrollmentOption === 'per-phase': use Phase-type package for per-phase enrollment
       if (upgradeStep === 'review') {
         if (!upgradeSelectedPackage) {
-          alert('Please select a package');
+          appAlert('Please select a package');
           return;
         }
 
@@ -2417,7 +2339,7 @@ const initializePackageMerchSelections = useCallback(
         body: JSON.stringify(payload),
       });
 
-      alert('Reservation upgraded to enrollment successfully!');
+      appAlert('Reservation upgraded to enrollment successfully!');
       setIsUpgradeModalOpen(false);
       setSelectedReservationForUpgrade(null);
       setReservationFeePaid(0);
@@ -2459,9 +2381,9 @@ const initializePackageMerchSelections = useCallback(
         setAlternativeClasses(err.response.data.alternative_classes);
         setIsAlternativeClassesModalOpen(true);
       } else if (err.response?.data?.class_inactive) {
-        alert('Cannot re-upgrade expired reservation. The class is no longer active.');
+        appAlert('Cannot re-upgrade expired reservation. The class is no longer active.');
       } else {
-        alert(err.response?.data?.message || err.message || 'Failed to upgrade reservation');
+        appAlert(err.response?.data?.message || err.message || 'Failed to upgrade reservation');
       }
     } finally {
       setEnrollSubmitting(false);
@@ -2531,10 +2453,10 @@ const initializePackageMerchSelections = useCallback(
       if (selectedClassForEnrollment?.class_id === moveSourceClass.class_id) {
         await fetchEnrolledStudents(moveSourceClass.class_id);
       }
-      alert(`Student has been moved to "${targetName}" successfully.`);
+      appAlert(`Student has been moved to "${targetName}" successfully.`);
     } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to move student.';
-      alert(msg);
+      appAlert(msg);
     } finally {
       setMoveStudentSubmitting(false);
     }
@@ -2614,12 +2536,8 @@ const initializePackageMerchSelections = useCallback(
       setEnrollStep('package-selection');
     } else if (selectedEnrollmentOption === 'ack-receipt') {
       setSelectedAckReceipt(null);
-      const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
-      if (branchId) {
-        fetchAckReceiptsForEnrollment(branchId, ackSearchTerm);
-      } else {
-        fetchAckReceiptsForEnrollment(null, ackSearchTerm);
-      }
+      setAckSearchTerm('');
+      setDebouncedAckSearch('');
       setEnrollStep('ack-receipt-selection');
     }
   };
@@ -2644,6 +2562,12 @@ const initializePackageMerchSelections = useCallback(
     setSelectedPhaseNumber(null); // Reset phase selection
     setSelectedEnrollmentOption(null);
     setPerPhaseAmount(''); // Reset per-phase amount
+    setAckReceipts([]);
+    setAckReceiptsLoading(false);
+    setAckReceiptsError('');
+    setAckSearchTerm('');
+    setDebouncedAckSearch('');
+    setSelectedAckReceipt(null);
     updateInstallmentSettings({
       invoice_issue_date: '',
       billing_month: '',
@@ -2762,7 +2686,7 @@ const initializePackageMerchSelections = useCallback(
           const currentReserved = getCountableReservedStudents(); // Only count valid reservations
           const totalAfterAdd = currentEnrolled + currentReserved + 1;
           if (totalAfterAdd > selectedClassForEnrollment.max_students) {
-            alert(`Cannot add student. Class has a maximum of ${selectedClassForEnrollment.max_students} students. Currently enrolled: ${currentEnrolled}, Reserved: ${currentReserved}`);
+            appAlert(`Cannot add student. Class has a maximum of ${selectedClassForEnrollment.max_students} students. Currently enrolled: ${currentEnrolled}, Reserved: ${currentReserved}`);
             return prev;
           }
         }
@@ -3188,7 +3112,7 @@ const initializePackageMerchSelections = useCallback(
     });
 
     if (missingTypes.length > 0) {
-      alert(`Please select merchandise for: ${missingTypes.join(', ')}`);
+      appAlert(`Please select merchandise for: ${missingTypes.join(', ')}`);
       return false;
     }
 
@@ -3355,17 +3279,17 @@ const initializePackageMerchSelections = useCallback(
 
   const handleEnrollSubmit = async () => {
     if (selectedStudents.length === 0) {
-      alert('Please select a student');
+      appAlert('Please select a student');
       return;
     }
 
     if (selectedEnrollmentOption === 'ack-receipt') {
       if (!selectedAckReceipt) {
-        alert('Please select an acknowledgement receipt.');
+        appAlert('Please select an acknowledgement receipt.');
         return;
       }
       if (selectedStudents.length !== 1) {
-        alert('With Acknowledgement Receipt currently supports enrolling one student at a time. Please select exactly one student.');
+        appAlert('With Acknowledgement Receipt currently supports enrolling one student at a time. Please select exactly one student.');
         return;
       }
     }
@@ -3378,15 +3302,15 @@ const initializePackageMerchSelections = useCallback(
       // and included pricing/merchandise are defined by the package ? no extra selections needed.
       if (!isPhasePackage) {
         if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
-          alert('Please select a phase for per-phase enrollment');
+          appAlert('Please select a phase for per-phase enrollment');
           return;
         }
         if (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0) {
-          alert('Please enter a valid amount for per-phase enrollment');
+          appAlert('Please enter a valid amount for per-phase enrollment');
           return;
         }
         if (selectedPricingLists.length === 0 && selectedMerchandise.length === 0) {
-          alert('Please select at least one pricing list or merchandise for per-phase enrollment');
+          appAlert('Please select at least one pricing list or merchandise for per-phase enrollment');
           return;
         }
       }
@@ -3395,18 +3319,18 @@ const initializePackageMerchSelections = useCallback(
     // Validate reservation invoice settings for Reserved packages
     if (selectedPackage && selectedPackage.package_type === 'Reserved') {
       if (!reservationInvoiceSettings.issue_date) {
-        alert('Please enter an issue date for the reservation invoice');
+        appAlert('Please enter an issue date for the reservation invoice');
         return;
       }
       if (!reservationInvoiceSettings.due_date) {
-        alert('Please enter a due date for the reservation invoice');
+        appAlert('Please enter a due date for the reservation invoice');
         return;
       }
       // Validate that due date is after issue date
       const issueDate = new Date(reservationInvoiceSettings.issue_date);
       const dueDate = new Date(reservationInvoiceSettings.due_date);
       if (dueDate <= issueDate) {
-        alert('Due date must be after the issue date');
+        appAlert('Due date must be after the issue date');
         return;
       }
     }
@@ -3450,7 +3374,7 @@ const initializePackageMerchSelections = useCallback(
                 );
           
                 if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                  alert(`Please select a size for ${merchName} - ${category} for student: ${student.full_name}`);
+                  appAlert(`Please select a size for ${merchName} - ${category} for student: ${student.full_name}`);
                   return;
                 }
               }
@@ -3461,7 +3385,7 @@ const initializePackageMerchSelections = useCallback(
               );
               
               if (!studentSelection || !studentSelection.size || studentSelection.size.trim() === '') {
-                alert(`Please select a size for ${merchName} for student: ${student.full_name}`);
+                appAlert(`Please select a size for ${merchName} for student: ${student.full_name}`);
                 return;
               }
             }
@@ -3473,7 +3397,7 @@ const initializePackageMerchSelections = useCallback(
             );
             
             if (!studentSelection || !studentSelection.size || studentSelection.size.trim() === '') {
-              alert(`Please select a size for ${merchName} for student: ${student.full_name}`);
+              appAlert(`Please select a size for ${merchName} for student: ${student.full_name}`);
               return;
             }
           }
@@ -3487,7 +3411,7 @@ const initializePackageMerchSelections = useCallback(
       const itemsRequiringSizing = selectedMerchandise.filter(m => requiresSizingForMerchandise(m.merchandise_name));
       for (const item of itemsRequiringSizing) {
         if (!item.size || item.size.trim() === '') {
-          alert(`Please select a size for ${item.merchandise_name}`);
+          appAlert(`Please select a size for ${item.merchandise_name}`);
           return;
         }
       }
@@ -3501,7 +3425,7 @@ const initializePackageMerchSelections = useCallback(
       const totalAfterEnroll = currentEnrolled + currentReserved + selectedStudents.length;
       if (totalAfterEnroll > selectedClassForEnrollment.max_students) {
         const availableSlots = selectedClassForEnrollment.max_students - currentEnrolled - currentReserved;
-        alert(`Cannot ${selectedPackage?.package_type === 'Reserved' ? 'reserve' : 'enroll'} student. Class has a maximum of ${selectedClassForEnrollment.max_students} students. Currently enrolled: ${currentEnrolled}, Reserved: ${currentReserved}. You can only ${selectedPackage?.package_type === 'Reserved' ? 'reserve' : 'enroll'} ${availableSlots} more student${availableSlots !== 1 ? 's' : ''}.`);
+        appAlert(`Cannot ${selectedPackage?.package_type === 'Reserved' ? 'reserve' : 'enroll'} student. Class has a maximum of ${selectedClassForEnrollment.max_students} students. Currently enrolled: ${currentEnrolled}, Reserved: ${currentReserved}. You can only ${selectedPackage?.package_type === 'Reserved' ? 'reserve' : 'enroll'} ${availableSlots} more student${availableSlots !== 1 ? 's' : ''}.`);
         return;
       }
     }
@@ -3865,13 +3789,13 @@ const initializePackageMerchSelections = useCallback(
         });
         // Use a more detailed alert
         console.error('Enrollment Errors:', errors);
-        alert(errorMessage);
+        appAlert(errorMessage);
       } else if (invoices.length > 0) {
-        alert(`Successfully enrolled ${invoices.length} student(s)!`);
+        appAlert(`Successfully enrolled ${invoices.length} student(s)!`);
       }
     } catch (err) {
       console.error('Error enrolling students:', err);
-      alert(err.message || 'Failed to enroll students');
+      appAlert(err.message || 'Failed to enroll students');
     } finally {
       setEnrollSubmitting(false);
     }
@@ -3915,7 +3839,7 @@ const initializePackageMerchSelections = useCallback(
     
     // Verify class belongs to admin's branch
     if (classItem.branch_id !== adminBranchId) {
-      alert('You can only edit classes from your branch.');
+      appAlert('You can only edit classes from your branch.');
       return;
     }
     
@@ -4998,7 +4922,7 @@ setFormData({
       }
     } catch (error) {
       console.error('Error fetching class sessions:', error);
-      alert('Failed to load class sessions');
+      appAlert('Failed to load class sessions');
       setAvailableClassSessions({});
     } finally {
       setLoadingClassSessions(false);
@@ -5052,15 +4976,15 @@ setFormData({
 
   const handleNextToMakeupScheduling = () => {
     if (selectedSessionsToSuspend.length === 0) {
-      alert('Please select at least one session to suspend');
+      appAlert('Please select at least one session to suspend');
       return;
     }
     if (!suspensionFormData.suspension_name || !suspensionFormData.reason) {
-      alert('Please fill in suspension name and reason');
+      appAlert('Please fill in suspension name and reason');
       return;
     }
     if (!validateSamePhase()) {
-      alert('All selected sessions must be from the same phase');
+      appAlert('All selected sessions must be from the same phase');
       return;
     }
     setSuspensionStep('choose-strategy');
@@ -5140,7 +5064,7 @@ setFormData({
       s => s.makeup_date && s.makeup_start_time && s.makeup_end_time
     );
     if (!allFilled) {
-      alert('Please fill in all makeup schedules');
+      appAlert('Please fill in all makeup schedules');
       return false;
     }
     const phaseNumber = selectedSessionsToSuspend[0].phase_number;
@@ -5152,7 +5076,7 @@ setFormData({
     for (const schedule of makeupSchedules) {
       const makeupDate = new Date(schedule.makeup_date);
       if (makeupDate < phaseStartDate || makeupDate > phaseEndDate) {
-        alert(`Makeup dates must be within the phase date range (${formatDateManila(phaseStartDate)} - ${formatDateManila(phaseEndDate)})`);
+        appAlert(`Makeup dates must be within the phase date range (${formatDateManila(phaseStartDate)} - ${formatDateManila(phaseEndDate)})`);
         return false;
       }
     }
@@ -5161,7 +5085,7 @@ setFormData({
 
   const handleCreateSuspension = async () => {
     if (!selectedClassForSuspension) {
-      alert('No class selected');
+      appAlert('No class selected');
       return;
     }
     if (makeupStrategy === 'manual' && !validateMakeupSchedules()) return;
@@ -5197,7 +5121,7 @@ setFormData({
         } : {}),
       };
       await apiRequest('/suspensions', { method: 'POST', body: payload });
-      alert('Suspension created successfully with makeup schedules!');
+      appAlert('Suspension created successfully with makeup schedules!');
       setIsSuspensionModalOpen(false);
       setSelectedClassForSuspension(null);
       setSuspensionStep('select-sessions');
@@ -5213,7 +5137,7 @@ setFormData({
       }
     } catch (error) {
       console.error('Error creating suspension:', error);
-      alert(error.message || 'Failed to create suspension. Please try again.');
+      appAlert(error.message || 'Failed to create suspension. Please try again.');
     } finally {
       setCreatingSuspension(false);
     }
@@ -5532,7 +5456,8 @@ setFormData({
                           daysOfWeek,
                           session.phase_number,
                           session.phase_session_number,
-                          sessionsPerPhase
+                          sessionsPerPhase,
+                          selectedClassForDetails.number_of_phase
                         )
                       : null);
 
@@ -5710,7 +5635,8 @@ setFormData({
                               daysOfWeek,
                               session.phase_number,
                               session.phase_session_number,
-                              sessionsPerPhase
+                              sessionsPerPhase,
+                              selectedClassForDetails.number_of_phase
                             )
                           : null);
 
@@ -5950,7 +5876,8 @@ setFormData({
                 daysOfWeek,
                 parseInt(phaseNum),
                 parseInt(sessionNum),
-                sessionsPerPhase
+                sessionsPerPhase,
+                selectedClassForDetails.number_of_phase
               );
             }
           }
@@ -7420,8 +7347,8 @@ setFormData({
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     TEACHER
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    MAX STUDENTS
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    ENROLLED / MAX
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     START DATE & END DATE
@@ -7564,11 +7491,15 @@ setFormData({
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {classItem.max_students !== null && classItem.max_students !== undefined
-                            ? classItem.max_students
-                            : '-'}
-                                        </div>
+                        <div className="flex justify-center text-sm text-gray-900">
+                          {(() => {
+                            const enrolled = Number(classItem.enrolled_students ?? 0);
+                            if (classItem.max_students != null && classItem.max_students !== undefined) {
+                              return `${enrolled}/${classItem.max_students}`;
+                            }
+                            return enrolled > 0 ? String(enrolled) : '-';
+                          })()}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm text-gray-900">
@@ -7889,7 +7820,10 @@ setFormData({
 
                       {/* Skip holidays & VIP checkboxes - Step 1 */}
                       <div className="flex flex-wrap gap-6">
-                        <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <label
+                          className="inline-flex items-center gap-2 cursor-help"
+                          title="When enabled, sessions that fall on holidays are skipped when generating the class schedule."
+                        >
                           <input
                             type="checkbox"
                             name="skip_holidays"
@@ -7899,7 +7833,10 @@ setFormData({
                           />
                           <span className="text-sm font-medium text-gray-700">Skip classes on holidays</span>
                         </label>
-                        <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <label
+                          className="inline-flex items-center gap-2 cursor-help"
+                          title="VIP classes are treated as premium classes for special handling and display."
+                        >
                           <input
                             type="checkbox"
                             name="is_vip"
@@ -9249,48 +9186,21 @@ setFormData({
                     </p>
                   </div>
                   <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
-                        fetchAckReceiptsForEnrollment(branchId, ackSearchTerm);
-                      }}
-                      className="flex flex-col md:flex-row gap-3 md:items-end"
-                    >
-                      <div className="flex-1">
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
-                        <input
-                          type="text"
-                          value={ackSearchTerm}
-                          onChange={(e) => setAckSearchTerm(e.target.value)}
-                          className="input-field text-sm"
-                          placeholder="Search by AR number, name, reference no."
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          type="submit"
-                          className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                        >
-                          Search
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAckSearchTerm('');
-                            const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
-                            fetchAckReceiptsForEnrollment(branchId, '');
-                          }}
-                          className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                        >
-                          Reset
-                        </button>
-                      </div>
-                    </form>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+                      <input
+                        type="text"
+                        value={ackSearchTerm}
+                        onChange={(e) => setAckSearchTerm(e.target.value)}
+                        className="input-field text-sm w-full"
+                        placeholder="Search by name, contact, or reference no. (updates automatically)"
+                        autoComplete="off"
+                      />
+                    </div>
 
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts?</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -9308,11 +9218,10 @@ setFormData({
                         >
                           <table
                             className="min-w-full divide-y divide-gray-200 text-sm"
-                            style={{ width: '100%', minWidth: '900px' }}
+                            style={{ width: '100%', minWidth: '780px' }}
                           >
                             <thead className="bg-gray-50">
                               <tr>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">AR Number</th>
                                 <th className="px-4 py-3 text-left font-semibold text-gray-700">Payer</th>
                                 <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
                                 <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
@@ -9324,9 +9233,6 @@ setFormData({
                             <tbody className="bg-white divide-y divide-gray-200">
                               {ackReceipts.map((ar) => (
                                 <tr key={ar.ack_receipt_id}>
-                                  <td className="px-4 py-3 whitespace-nowrap text-gray-900 font-medium">
-                                    {ar.ack_receipt_number}
-                                  </td>
                                   <td className="px-4 py-3">
                                     <div className="text-gray-900">{ar.prospect_student_name}</div>
                                     {ar.prospect_student_contact && (
@@ -9367,7 +9273,7 @@ setFormData({
                                           (p) => p.package_id === ar.package_id
                                         );
                                         if (!pkg) {
-                                          alert(
+                                          appAlert(
                                             'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
                                           );
                                           return;
@@ -11702,18 +11608,18 @@ setFormData({
                   type="button"
                   onClick={() => {
                     if (selectedStudents.length === 0) {
-                      alert('Please select a student to continue');
+                      appAlert('Please select a student to continue');
                       return;
                     }
                     
                     // Validate per-phase enrollment requirements
                     if (selectedEnrollmentOption === 'per-phase') {
                       if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
-                        alert('Please select a phase for per-phase enrollment');
+                        appAlert('Please select a phase for per-phase enrollment');
                         return;
                       }
                       if (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0) {
-                        alert('Please enter a valid amount for per-phase enrollment');
+                        appAlert('Please enter a valid amount for per-phase enrollment');
                         return;
                       }
                     }
@@ -11754,7 +11660,7 @@ setFormData({
                                   );
                                   
                                   if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                                    alert(`Please select a size for ${typeName} (${category}) for student: ${student.full_name}`);
+                                    appAlert(`Please select a size for ${typeName} (${category}) for student: ${student.full_name}`);
                                     return;
                                   }
                                 }
@@ -11765,7 +11671,7 @@ setFormData({
                                 );
                                 
                                 if (!uniformSelection || !uniformSelection.size || uniformSelection.size.trim() === '') {
-                                  alert(`Please select a size for ${typeName} for student: ${student.full_name}`);
+                                  appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
                                   return;
                                 }
                               }
@@ -11815,7 +11721,7 @@ setFormData({
                   type="button"
                   onClick={() => {
                     if (selectedStudents.length === 0) {
-                      alert('Please select a student');
+                      appAlert('Please select a student');
                       setEnrollStep('student-selection');
                       return;
                     }
@@ -13185,14 +13091,14 @@ setFormData({
                   const substituteReason = document.getElementById('substituteReason').value;
                   
                   if (!substituteTeacherId) {
-                    alert('Please select a substitute teacher');
+                    appAlert('Please select a substitute teacher');
                     return;
                   }
                   
                   if (selectedSessionForSubstitute.classsession_id) {
                     handleAssignSubstitute(selectedSessionForSubstitute.classsession_id, substituteTeacherId, substituteReason);
                   } else {
-                    alert('Session not found. Please generate sessions first.');
+                    appAlert('Session not found. Please generate sessions first.');
                   }
                 }}
                 className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -14493,7 +14399,7 @@ setFormData({
                                   );
                                   
                                   if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                                    alert(`Please select a size for ${typeName} (${category}) for the student`);
+                                    appAlert(`Please select a size for ${typeName} (${category}) for the student`);
                                     return;
                                   }
                                 }
@@ -14504,7 +14410,7 @@ setFormData({
                                 );
                                 
                                 if (!uniformSelection || !uniformSelection.size || uniformSelection.size.trim() === '') {
-                                  alert(`Please select a size for ${typeName} for the student`);
+                                  appAlert(`Please select a size for ${typeName} for the student`);
                                   return;
                                 }
                               }
@@ -14525,15 +14431,15 @@ setFormData({
                   <button
                     onClick={() => {
                       if (!upgradePhaseNumber) {
-                        alert('Please select a phase');
+                        appAlert('Please select a phase');
                         return;
                       }
                       if (!upgradePerPhaseAmount || parseFloat(upgradePerPhaseAmount) <= 0) {
-                        alert('Please enter a valid per-phase amount');
+                        appAlert('Please enter a valid per-phase amount');
                         return;
                       }
                       if (upgradeSelectedPricingLists.length === 0 && upgradeSelectedMerchandise.length === 0) {
-                        alert('Please select at least one pricing list or merchandise');
+                        appAlert('Please select at least one pricing list or merchandise');
                         return;
                       }
                       setUpgradeStep('review');

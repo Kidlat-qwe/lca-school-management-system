@@ -4,6 +4,7 @@ import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -282,7 +283,7 @@ const AdminInvoice = () => {
     // Verify invoice belongs to admin's branch
     const invoice = invoices.find(inv => inv.invoice_id === invoiceId);
     if (invoice && invoice.branch_id !== adminBranchId) {
-      alert('You can only delete invoices from your branch.');
+      appAlert('You can only delete invoices from your branch.');
       return;
     }
     
@@ -296,7 +297,7 @@ const AdminInvoice = () => {
       });
       fetchInvoices();
     } catch (err) {
-      alert(err.message || 'Failed to delete invoice');
+      appAlert(err.message || 'Failed to delete invoice');
     }
   };
 
@@ -322,7 +323,7 @@ const AdminInvoice = () => {
     
     // Verify invoice belongs to admin's branch
     if (invoice.branch_id !== adminBranchId) {
-      alert('You can only edit invoices from your branch.');
+      appAlert('You can only edit invoices from your branch.');
       return;
     }
     
@@ -376,7 +377,7 @@ const AdminInvoice = () => {
 
   const addItem = () => {
     if (!newItem.description || !newItem.amount) {
-      alert('Please fill in description and amount');
+      appAlert('Please fill in description and amount');
       return;
     }
 
@@ -413,13 +414,13 @@ const AdminInvoice = () => {
 
   const addStudent = () => {
     if (!newStudentId) {
-      alert('Please select a student');
+      appAlert('Please select a student');
       return;
     }
 
     const studentId = parseInt(newStudentId);
     if (formData.students.includes(studentId)) {
-      alert('Student is already added');
+      appAlert('Student is already added');
       return;
     }
 
@@ -578,18 +579,43 @@ const AdminInvoice = () => {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       console.error('Download invoice PDF failed:', err);
-      alert(err.message || 'Failed to download invoice PDF');
+      appAlert(err.message || 'Failed to download invoice PDF');
+    }
+  };
+
+  const handleDownloadSOA = async (invoice) => {
+    setOpenMenuId(null);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${invoice.invoice_id}/pdf?doc_type=soa`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download SOA PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download SOA PDF failed:', err);
+      appAlert(err.message || 'Failed to download SOA PDF');
     }
   };
 
   const handleViewEditReceipt = async (invoice) => {
     setOpenMenuId(null);
-    alert('Receipt management is not yet implemented.');
+    appAlert('Receipt management is not yet implemented.');
   };
 
   const handleDeleteReceipt = async (invoice) => {
     setOpenMenuId(null);
-    alert('Receipt deletion is not yet implemented.');
+    appAlert('Receipt deletion is not yet implemented.');
   };
 
   const handleOpenPaymentModal = async (invoice) => {
@@ -619,7 +645,7 @@ const AdminInvoice = () => {
       setShowPaymentModal(true);
     } catch (err) {
       console.error('Error fetching invoice details:', err);
-      alert('Error loading invoice details. Please try again.');
+      appAlert('Error loading invoice details. Please try again.');
     }
   };
 
@@ -650,14 +676,14 @@ const AdminInvoice = () => {
       });
       
       if (response.success) {
-        alert(response.message || 'Email sent successfully!');
+        appAlert(response.message || 'Email sent successfully!');
       } else {
-        alert(response.message || 'Failed to send email');
+        appAlert(response.message || 'Failed to send email');
       }
     } catch (err) {
       console.error('Error sending overdue email:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Failed to send email';
-      alert(errorMessage);
+      appAlert(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -684,11 +710,11 @@ const AdminInvoice = () => {
     if (!file) return;
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     if (!allowed.includes(file.type)) {
-      alert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      alert('Image must be 5MB or less.');
+      appAlert('Image must be 5MB or less.');
       return;
     }
     setPaymentAttachmentUploading(true);
@@ -708,7 +734,7 @@ const AdminInvoice = () => {
       setPaymentFormData((prev) => ({ ...prev, attachment_url: data.imageUrl || '' }));
     } catch (err) {
       console.error('Payment attachment upload error:', err);
-      alert(err.message || 'Failed to upload image. Please try again.');
+      appAlert(err.message || 'Failed to upload image. Please try again.');
     } finally {
       setPaymentAttachmentUploading(false);
       e.target.value = '';
@@ -791,13 +817,13 @@ const AdminInvoice = () => {
         body: JSON.stringify(payload),
       });
       
-      alert('Payment recorded successfully!');
+      appAlert('Payment recorded successfully!');
       handleClosePaymentModal();
       fetchInvoices(); // Refresh invoice list to show updated status
     } catch (err) {
       console.error('Error submitting payment:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Error recording payment. Please try again.';
-      alert(`Error: ${errorMessage}`);
+      appAlert(`Error: ${errorMessage}`);
     } finally {
       setSubmittingPayment(false);
     }
@@ -842,7 +868,7 @@ const AdminInvoice = () => {
 
       setEditingStatus(false);
     } catch (err) {
-      alert(err.message || 'Failed to update invoice status');
+      appAlert(err.message || 'Failed to update invoice status');
       setTempStatus(selectedInvoiceForDetails.status); // Revert on error
     } finally {
       setUpdatingStatus(false);
@@ -861,7 +887,7 @@ const AdminInvoice = () => {
 
   const addInvoiceItem = async () => {
     if (!newItem.description || !newItem.amount) {
-      alert('Please fill in description and amount');
+      appAlert('Please fill in description and amount');
       return;
     }
 
@@ -902,7 +928,7 @@ const AdminInvoice = () => {
       
       setSelectedInvoiceForDetails(invoiceData);
     } catch (err) {
-      alert(err.message || 'Failed to add invoice item');
+      appAlert(err.message || 'Failed to add invoice item');
     }
   };
 
@@ -929,13 +955,13 @@ const AdminInvoice = () => {
       
       setSelectedInvoiceForDetails(invoiceData);
     } catch (err) {
-      alert(err.message || 'Failed to remove invoice item');
+      appAlert(err.message || 'Failed to remove invoice item');
     }
   };
 
   const addInvoiceStudent = async () => {
     if (!newStudentId) {
-      alert('Please select a student');
+      appAlert('Please select a student');
       return;
     }
 
@@ -952,7 +978,7 @@ const AdminInvoice = () => {
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       setSelectedInvoiceForDetails(updatedInvoice.data);
     } catch (err) {
-      alert(err.message || 'Failed to add student to invoice');
+      appAlert(err.message || 'Failed to add student to invoice');
     }
   };
 
@@ -971,7 +997,7 @@ const AdminInvoice = () => {
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       setSelectedInvoiceForDetails(updatedInvoice.data);
     } catch (err) {
-      alert(err.message || 'Failed to remove student from invoice');
+      appAlert(err.message || 'Failed to remove student from invoice');
     }
   };
 
@@ -992,6 +1018,7 @@ const AdminInvoice = () => {
       invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_id?.toString().includes(nameSearchTerm) ||
       invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      invoice.invoice_ar_number?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStudentName = !studentNameSearch ||
       (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
@@ -1051,9 +1078,10 @@ const AdminInvoice = () => {
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px', tableLayout: 'fixed' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1240px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '200px' }} />
+                <col style={{ width: '140px' }} />
                 <col style={{ width: '200px' }} />
                 <col style={{ width: '160px' }} />
                 <col style={{ width: '120px' }} />
@@ -1092,6 +1120,9 @@ const AdminInvoice = () => {
                         )}
                       </div>
                     </div>
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                    AR#
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
                     <div className="flex flex-col space-y-2">
@@ -1159,7 +1190,7 @@ const AdminInvoice = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center">
+                    <td colSpan={8} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || studentNameSearch || filterStatus
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -1181,7 +1212,7 @@ const AdminInvoice = () => {
                       </div>
                       {invoice.invoice_description && (
                         <div className="text-xs text-gray-500 mt-1">
-                          {invoice.invoice_description}
+                          {invoice.invoice_description.replace(/\s*-\s*AR\s+[A-Za-z0-9-]+/i, '')}
                         </div>
                       )}
                       {invoice.reservation && (
@@ -1206,6 +1237,11 @@ const AdminInvoice = () => {
                           )}
                         </div>
                       )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600" style={{ maxWidth: '140px' }}>
+                      <span className="text-sm" title={invoice.invoice_ar_number || ''}>
+                        {invoice.invoice_ar_number || '—'}
+                      </span>
                     </td>
                     <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
                       <div className="text-sm text-gray-900 min-w-0">
@@ -1333,6 +1369,21 @@ const AdminInvoice = () => {
                       <span>Download Invoice PDF</span>
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(null);
+                        setMenuPosition({ top: 0, right: 0 });
+                        handleDownloadSOA(selectedInvoice);
+                      }}
+                      className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      <span>Download / Print SOA</span>
+                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 9V4h12v5m0 4h2v7H4v-7h2m2 0h8m-8 0v4h8v-4" />
                       </svg>
                     </button>
                     <button

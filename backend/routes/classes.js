@@ -8,6 +8,8 @@ import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classC
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
+import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
+import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 
 const router = express.Router();
 
@@ -1234,6 +1236,11 @@ router.post(
           }
           
           console.log(`✅ Generated ${sessionsCreated} sessions out of ${sessions.length} for class ${newClass.class_id}`);
+          try {
+            await syncClassEndDateFromSessions(client, newClass.class_id);
+          } catch (e) {
+            console.error('⚠️ Could not sync class end_date from sessions:', e.message);
+          }
         } catch (sessionGenError) {
           // Log error but don't fail class creation
           console.error('❌ Error generating class sessions:', sessionGenError);
@@ -1657,6 +1664,11 @@ router.put(
                 }
 
                 console.log(`✅ Regenerated sessions: ${sessionsUpdated} updated, ${sessionsCreated} created`);
+                try {
+                  await syncClassEndDateFromSessions(client, parseInt(id, 10));
+                } catch (e) {
+                  console.error('⚠️ Could not sync class end_date from sessions:', e.message);
+                }
               } else {
                 console.log('⚠️ No schedules found for class, skipping session regeneration');
               }
@@ -1992,6 +2004,11 @@ router.get(
           }
           
           console.log(`✅ Auto-generated ${sessionsCreated} sessions for class ${id}`);
+          try {
+            await syncClassEndDateFromSessions(query, parseInt(id, 10));
+          } catch (e) {
+            console.error('⚠️ Could not sync class end_date from sessions:', e.message);
+          }
         } catch (autoGenError) {
           // Log error but don't fail the request
           console.error('❌ Error auto-generating sessions:', autoGenError);
@@ -2920,6 +2937,12 @@ router.post(
         }
       }
 
+      try {
+        await syncClassEndDateFromSessions(query, parseInt(class_id, 10));
+      } catch (e) {
+        console.error('Could not sync class end_date from sessions:', e.message);
+      }
+
       res.json({
         success: true,
         message: `Generated ${sessionsCreated} sessions for class`,
@@ -3379,9 +3402,10 @@ router.post(
             console.log('package_id column check:', err.message);
           }
 
-          const invoiceResult = await client.query(
-            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          const reservationInvoice = await insertInvoiceWithArNumber(
+            client,
+            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, invoice_ar_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
             [
               `Reservation Fee - ${packageName || 'Class Reservation'}`,
@@ -3394,8 +3418,6 @@ router.post(
               package_id || null, // Link invoice to package
             ]
           );
-
-          const reservationInvoice = invoiceResult.rows[0];
 
           // Link invoice to student
           await client.query(
@@ -4034,9 +4056,10 @@ router.post(
             : (dueDateStr || issueDateStr);
 
           // Create downpayment invoice
-          const downpaymentInvoiceResult = await client.query(
-            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          downpaymentInvoice = await insertInvoiceWithArNumber(
+            client,
+            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, invoice_ar_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
             [
               `Downpayment - ${invoiceDescription || packageName || 'Enrollment'}`,
@@ -4049,7 +4072,6 @@ router.post(
               package_id || null,
             ]
           );
-          downpaymentInvoice = downpaymentInvoiceResult.rows[0];
           
           // Link student to downpayment invoice
           await client.query(
@@ -4084,9 +4106,10 @@ router.post(
       let newInvoice = null;
       if (!skipMainInvoice) {
         // Create main invoice (for non-Installment packages or Installment without downpayment)
-        const invoiceResult = await client.query(
-          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        newInvoice = await insertInvoiceWithArNumber(
+          client,
+          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, invoice_ar_number)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING *`,
           [
             invoiceDescription, // Description based on enrollment type
@@ -4099,7 +4122,6 @@ router.post(
             package_id || null, // Link invoice to package for promo tracking
           ]
         );
-        newInvoice = invoiceResult.rows[0];
       }
 
       // Handle promo if provided (main invoice) OR on downpayment only (Installment packages)

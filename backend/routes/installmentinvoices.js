@@ -9,6 +9,7 @@ import {
   buildPhaseInstallmentSchedule,
   isPhaseInstallmentProfile,
 } from '../utils/phaseInstallmentUtils.js';
+import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 
 const router = express.Router();
 
@@ -928,9 +929,10 @@ router.post(
       const effectiveDueDate = due_date;
 
       // Create invoice (link to installment invoice profile for phase tracking)
-      const invoiceResult = await client.query(
-        `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      const newInvoice = await insertInvoiceWithArNumber(
+        client,
+        `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, invoice_ar_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
         [
           'TEMP',
@@ -946,8 +948,6 @@ router.post(
           installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile
         ]
       );
-
-      const newInvoice = invoiceResult.rows[0];
 
       // Update invoice description
       await client.query(

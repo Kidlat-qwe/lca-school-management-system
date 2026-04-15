@@ -94,13 +94,13 @@ const Sidebar = ({ isOpen, onClose }) => {
     },
     {
       name: 'Announcements',
-      path: '/superadmin/announcements', // Will be overridden in map function for Admin, Teacher, and Student
+      path: '/superadmin/announcements', // Will be overridden in map function per role/base path
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
         </svg>
       ),
-      roles: ['Superadmin', 'Admin', 'Teacher', 'Student'],
+      roles: ['Superadmin', 'Admin', 'Teacher', 'Student', 'Finance'],
     },
     {
       name: 'Branch',
@@ -262,20 +262,20 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Finance'],
       children: [
         {
-          name: 'Invoice',
-          path: '/superadmin/invoice', // Will be overridden in map function for Admin and Finance
-    },
-    {
-      name: 'Installment Invoice',
-      path: '/superadmin/installment-invoice', // Will be overridden in map function for Admin and Finance
-    },
-    {
-      name: 'Payment Logs',
-      path: '/superadmin/payment-logs', // Will be overridden in map function for Admin and Finance
-        },
-        {
           name: 'Acknowledgement Receipts',
           path: '/superadmin/acknowledgement-receipts', // Will be overridden in map function for Admin and Finance
+        },
+        {
+          name: 'Invoice',
+          path: '/superadmin/invoice', // Will be overridden in map function for Admin and Finance
+        },
+        {
+          name: 'Installment Invoice',
+          path: '/superadmin/installment-invoice', // Will be overridden in map function for Admin and Finance
+        },
+        {
+          name: 'Payment Logs',
+          path: '/superadmin/payment-logs', // Will be overridden in map function for Admin and Finance
         },
       ],
     },
@@ -285,6 +285,21 @@ const Sidebar = ({ isOpen, onClose }) => {
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+        </svg>
+      ),
+      roles: ['Superadmin', 'Admin'],
+    },
+    {
+      name: 'System Logs',
+      path: '/superadmin/system-logs',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
         </svg>
       ),
       roles: ['Superadmin', 'Admin'],
@@ -377,6 +392,10 @@ const Sidebar = ({ isOpen, onClose }) => {
           itemPath = '/teacher/announcements';
         } else if (basePath === '/student') {
           itemPath = '/student/announcements';
+        } else if (basePath === '/finance') {
+          itemPath = '/finance/announcements';
+        } else if (basePath === '/superfinance') {
+          itemPath = '/superfinance/announcements';
         }
       } else if (item.name === 'Room' && basePath === '/admin') {
         itemPath = '/admin/room';
@@ -384,6 +403,8 @@ const Sidebar = ({ isOpen, onClose }) => {
         itemPath = '/admin/report';
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
+      } else if (item.name === 'System Logs' && basePath === '/admin') {
+        itemPath = '/admin/system-logs';
       }
       // Handle Dashboard children paths for Superadmin, Admin, Finance/Superfinance
       let children = item.children;

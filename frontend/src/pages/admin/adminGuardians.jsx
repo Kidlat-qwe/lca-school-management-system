@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const AdminGuardians = () => {
   const [guardians, setGuardians] = useState([]);
@@ -304,7 +305,7 @@ const AdminGuardians = () => {
                     setGuardians(response.data || []);
                     setEditingGuardian(null);
                   } catch (err) {
-                    alert(err.response?.data?.message || err.message || 'Failed to update guardian');
+                    appAlert(err.response?.data?.message || err.message || 'Failed to update guardian');
                   } finally {
                     setSaving(false);
                   }

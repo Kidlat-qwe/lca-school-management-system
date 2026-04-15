@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { appAlert } from '../../utils/appAlert';
 
 const AdminMerchandise = () => {
   const { userInfo } = useAuth();
@@ -131,7 +132,7 @@ const AdminMerchandise = () => {
     // Verify merchandise belongs to admin's branch
     const item = merchandise.find(m => m.merchandise_id === merchandiseId);
     if (item && item.branch_id !== adminBranchId) {
-      alert('You can only delete merchandise from your branch.');
+      appAlert('You can only delete merchandise from your branch.');
       return;
     }
     
@@ -147,7 +148,7 @@ const AdminMerchandise = () => {
         fetchMerchandiseByBranch(adminBranchId);
       }
     } catch (err) {
-      alert(err.message || 'Failed to delete merchandise');
+      appAlert(err.message || 'Failed to delete merchandise');
     }
   };
 
@@ -176,7 +177,7 @@ const AdminMerchandise = () => {
         await fetchMerchandiseByBranch(adminBranchId);
       }
     } catch (err) {
-      alert(err.message || 'Failed to delete merchandise type');
+      appAlert(err.message || 'Failed to delete merchandise type');
     }
   };
 
@@ -269,7 +270,7 @@ const AdminMerchandise = () => {
   const openEditModal = (item) => {
     // Verify merchandise belongs to admin's branch
     if (item.branch_id !== adminBranchId) {
-      alert('You can only edit merchandise from your branch.');
+      appAlert('You can only edit merchandise from your branch.');
       return;
     }
     
@@ -590,9 +591,9 @@ const AdminMerchandise = () => {
       await fetchMerchandiseRequests();
       
       // Show success message
-      alert('Stock request submitted successfully! Superadmin will be notified.');
+      appAlert('Stock request submitted successfully! Superadmin will be notified.');
     } catch (err) {
-      alert(err.message || 'Failed to submit stock request');
+      appAlert(err.message || 'Failed to submit stock request');
       console.error('Error submitting request:', err);
     } finally {
       setSubmitting(false);
@@ -611,9 +612,9 @@ const AdminMerchandise = () => {
       
       // Refresh requests
       await fetchMerchandiseRequests();
-      alert('Request cancelled successfully');
+      appAlert('Request cancelled successfully');
     } catch (err) {
-      alert(err.message || 'Failed to cancel request');
+      appAlert(err.message || 'Failed to cancel request');
     }
   };
 
@@ -1529,7 +1530,7 @@ const AdminMerchandise = () => {
                           )}
                           {request.status === 'Rejected' && request.review_notes && (
                 <button
-                              onClick={() => alert(`Rejection reason: ${request.review_notes}`)}
+                              onClick={() => appAlert(`Rejection reason: ${request.review_notes}`)}
                               className="px-3 py-1 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
               >
                               View Notes

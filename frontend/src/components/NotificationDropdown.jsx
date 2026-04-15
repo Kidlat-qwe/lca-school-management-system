@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
+import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
 import ToastNotification from './ToastNotification';
 
 const NotificationDropdown = () => {
@@ -186,7 +187,7 @@ const NotificationDropdown = () => {
     setSelectedAnnouncement(null);
     
     // Navigate to announcements page with announcement ID as query parameter
-    const announcementsPath = getAnnouncementsPath();
+    const announcementsPath = getAnnouncementsPathForUser(userInfo);
     navigate(`${announcementsPath}?highlight=${announcement.announcement_id}`);
   };
 

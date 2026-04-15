@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Header from './Header';
 import Sidebar from './Sidebar';
+import NavigationActivityLogger from './NavigationActivityLogger';
 import HighPriorityAnnouncementModal from './HighPriorityAnnouncementModal';
 import { GlobalBranchFilterProvider } from '../contexts/GlobalBranchFilterContext';
 
@@ -11,6 +12,7 @@ const Layout = () => {
   return (
     <GlobalBranchFilterProvider>
       <div className="min-h-screen bg-gray-50 overflow-x-hidden">
+        <NavigationActivityLogger />
         <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
         <div className="flex pt-16">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />

@@ -4,6 +4,7 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
+import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
 
 const router = express.Router();
 
@@ -11,17 +12,12 @@ const router = express.Router();
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
-const generateAckReceiptNumber = () => {
-  const now = new Date();
-  const y = now.getFullYear().toString();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  const h = String(now.getHours()).padStart(2, '0');
-  const min = String(now.getMinutes()).padStart(2, '0');
-  const s = String(now.getSeconds()).padStart(2, '0');
-  const rand = Math.floor(Math.random() * 900) + 100;
-  return `AR-${y}${m}${d}-${h}${min}${s}-${rand}`;
-};
+/** Strip internal ack_receipt_number from API payloads (still stored for uniqueness). */
+function omitAckReceiptNumber(row) {
+  if (!row || typeof row !== 'object') return row;
+  const { ack_receipt_number: _n, ...rest } = row;
+  return rest;
+}
 
 /**
  * GET /api/sms/acknowledgement-receipts
@@ -86,8 +82,7 @@ router.get(
         paramCount += 1;
         const likeParam = `%${search}%`;
         sql += ` AND (
-          ar.ack_receipt_number ILIKE $${paramCount}
-          OR ar.prospect_student_name ILIKE $${paramCount}
+          ar.prospect_student_name ILIKE $${paramCount}
           OR COALESCE(ar.prospect_student_contact, '') ILIKE $${paramCount}
           OR COALESCE(ar.reference_number, '') ILIKE $${paramCount}
         )`;
@@ -127,8 +122,7 @@ router.get(
         countParamCount += 1;
         const likeParam = `%${search}%`;
         countSql += ` AND (
-          ar.ack_receipt_number ILIKE $${countParamCount}
-          OR ar.prospect_student_name ILIKE $${countParamCount}
+          ar.prospect_student_name ILIKE $${countParamCount}
           OR COALESCE(ar.prospect_student_contact, '') ILIKE $${countParamCount}
           OR COALESCE(ar.reference_number, '') ILIKE $${countParamCount}
         )`;
@@ -140,7 +134,7 @@ router.get(
 
       res.json({
         success: true,
-        data: result.rows,
+        data: result.rows.map(omitAckReceiptNumber),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -173,7 +167,12 @@ router.post(
     body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
     body('payment_amount').optional({ nullable: true }).isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
-    body('reference_number').optional({ nullable: true }).isString().withMessage('Reference number must be a string'),
+    body('reference_number')
+      .trim()
+      .notEmpty()
+      .withMessage('Reference number is required')
+      .isString()
+      .withMessage('Reference number must be a string'),
     body('payment_attachment_url').optional({ nullable: true }).isString().withMessage('Attachment URL must be a string'),
     body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
     body('installment_option')
@@ -211,7 +210,6 @@ router.post(
         prospect_student_contact,
         prospect_student_notes,
         package_id,
-        payment_amount,
         issue_date,
         reference_number,
         payment_attachment_url,
@@ -302,6 +300,14 @@ router.post(
 
         merchandiseItemsSnapshot = merchSnapshots;
         totalPaymentAmount = totalAmount;
+
+        if (totalPaymentAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Payment amount must be greater than 0. Check merchandise prices and quantities.',
+          });
+        }
       } else {
         // ── PACKAGE AR ─────────────────────────────────────────────────────
         if (!prospect_student_contact || !prospect_student_contact.trim()) {
@@ -321,7 +327,7 @@ router.post(
         }
 
         const pkgResult = await client.query(
-          `SELECT package_id, package_name, package_price, branch_id 
+          `SELECT package_id, package_name, package_price, branch_id, package_type, downpayment_amount, payment_option
            FROM packagestbl WHERE package_id = $1`,
           [package_id]
         );
@@ -339,13 +345,33 @@ router.post(
         packageNameSnapshot = pkg.package_name;
         packageAmountSnapshot = pkg.package_price;
         branchId = branchId || pkg.branch_id || null;
-        totalPaymentAmount = parseFloat(payment_amount) || 0;
+
+        const isInstallmentPkg =
+          (pkg.package_type || '').toLowerCase() === 'installment' ||
+          (pkg.package_type === 'Phase' && (pkg.payment_option || '').toLowerCase() === 'installment');
+        const downpayment = parseFloat(pkg.downpayment_amount ?? 0) || 0;
+        const monthly = parseFloat(pkg.package_price ?? 0) || 0;
+
+        if (isInstallmentPkg && downpayment > 0) {
+          const opt = installment_option === 'downpayment_plus_phase1' ? 'downpayment_plus_phase1' : 'downpayment_only';
+          totalPaymentAmount = opt === 'downpayment_plus_phase1' ? downpayment + monthly : downpayment;
+        } else {
+          totalPaymentAmount = monthly;
+        }
 
         if (!branchId) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
             message: 'Branch is required to create an acknowledgement receipt',
+          });
+        }
+
+        if (totalPaymentAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Payment amount must be greater than 0. Check package pricing.',
           });
         }
       }
@@ -361,8 +387,8 @@ router.post(
       }
 
       const createdBy = req.user.userId || null;
-      const ackNumber = generateAckReceiptNumber();
 
+      const ackNumber = await allocateNextArStyleNumber(client);
       const insertResult = await client.query(
         `INSERT INTO acknowledgement_receiptstbl (
            ack_receipt_number,
@@ -414,7 +440,6 @@ router.post(
           createdBy,
         ]
       );
-
       const ackReceipt = insertResult.rows[0];
 
       // ── For Merchandise AR: auto-generate invoice ─────────────────────────
@@ -441,21 +466,22 @@ router.post(
         }
 
         const today = new Date().toISOString().split('T')[0];
-        const invoiceDesc = `Merchandise - AR ${ackNumber}`;
+        const invoiceDesc = 'Merchandise (acknowledgement receipt)';
 
         const invoiceResult = await client.query(
-          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, ack_receipt_id)
-           VALUES ($1, $2, $3, 'Unpaid', $4, $5, $6, $7, $8)
+          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, ack_receipt_id, invoice_ar_number)
+           VALUES ($1, $2, $3, 'Unpaid', $4, $5, $6, $7, $8, $9)
            RETURNING *`,
           [
             invoiceDesc,
             branchId,
             totalPaymentAmount,
-            `Merchandise purchase via AR ${ackNumber} - ${prospect_student_name}`,
+            `Merchandise purchase (acknowledgement receipt) — ${prospect_student_name}`,
             today,
             today,
             createdBy,
             ackReceipt.ack_receipt_id,
+            ackNumber,
           ]
         );
 
@@ -481,15 +507,67 @@ router.post(
         );
 
         ackReceipt.invoice_id = newInvoice.invoice_id;
+
+        const itemsSumResult = await client.query(
+          `SELECT COALESCE(SUM(amount), 0) AS s FROM invoiceitemstbl WHERE invoice_id = $1`,
+          [newInvoice.invoice_id]
+        );
+        const itemTotal = parseFloat(itemsSumResult.rows[0].s) || 0;
+
+        const paymentInsert = await client.query(
+          `INSERT INTO paymenttbl (
+             invoice_id, student_id, branch_id, payment_method, payment_type,
+             payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url
+           )
+           VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5::date, 'Completed', $6, $7, $8, $9)
+           RETURNING *`,
+          [
+            newInvoice.invoice_id,
+            studentIdForInvoice,
+            branchId,
+            itemTotal,
+            issue_date,
+            reference_number?.trim() || null,
+            'Merchandise payment (acknowledgement receipt)',
+            createdBy,
+            payment_attachment_url || null,
+          ]
+        );
+        const newPayment = paymentInsert.rows[0];
+
+        await client.query(
+          `UPDATE invoicestbl SET status = 'Paid', amount = 0 WHERE invoice_id = $1`,
+          [newInvoice.invoice_id]
+        );
+
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
+          [newPayment.payment_id, ackReceipt.ack_receipt_id]
+        );
+
+        for (const item of merchandiseItemsSnapshot) {
+          const merchId = item.merchandise_id;
+          const qty = parseInt(item.quantity, 10) || 1;
+          await client.query(
+            `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
+            [qty, merchId]
+          );
+        }
+
+        ackReceipt.status = 'Paid';
+        ackReceipt.payment_id = newPayment.payment_id;
       }
 
       await client.query('COMMIT');
 
       res.status(201).json({
         success: true,
-        data: ackReceipt,
+        data: omitAckReceiptNumber(ackReceipt),
         ...(isMerchandise && ackReceipt.invoice_id
-          ? { message: 'Merchandise AR created. Invoice generated. Pay on the Payment/Invoice page to complete and deduct stock.' }
+          ? {
+              message:
+                'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
+            }
           : {}),
       });
     } catch (err) {
@@ -547,7 +625,7 @@ router.get(
 
       res.json({
         success: true,
-        data: ar,
+        data: omitAckReceiptNumber(ar),
       });
     } catch (err) {
       next(err);
@@ -592,6 +670,15 @@ router.post(
       }
 
       const ack = ackResult.rows[0];
+
+      const ackPayment = parseFloat(ack.payment_amount ?? 0) || 0;
+      if (ackPayment <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Acknowledgement receipt payment must be greater than zero.',
+        });
+      }
 
       if (!['Pending', 'Paid'].includes(ack.status)) {
         await client.query('ROLLBACK');
@@ -693,8 +780,8 @@ router.post(
           ack.issue_date,
           ack.reference_number || null,
           ack.prospect_student_notes
-            ? `Paid via AR ${ack.ack_receipt_number}: ${ack.prospect_student_notes}`
-            : `Paid via AR ${ack.ack_receipt_number}`,
+            ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
+            : 'Paid via acknowledgement receipt',
           createdBy,
           ack.payment_attachment_url || null,
         ]
@@ -853,7 +940,6 @@ router.post(
                 autoPayPhase1Data: ack.installment_option === 'downpayment_plus_phase1' ? {
                   student_id,
                   branch_id: profile.branch_id || invoice.branch_id || null,
-                  ack_receipt_number: ack.ack_receipt_number,
                   issue_date: ack.issue_date,
                   created_by: req.user.userId || null,
                   class_id: profile.class_id,
@@ -947,7 +1033,7 @@ router.post(
                     [
                       student_id,
                       classId,
-                      'System (Auto-enrolled via AR full payment)',
+                      'System (Auto-enrolled via acknowledgement receipt — full payment)',
                       phase,
                     ]
                   );
@@ -990,7 +1076,7 @@ router.post(
             // Step 2: If "downpayment_plus_phase1", auto-pay Phase 1 and generate Phase 2
             if (autoPayPhase1 && autoPayPhase1Data) {
               try {
-                const { student_id: sid, branch_id: bid, ack_receipt_number, issue_date: ackDate,
+                const { student_id: sid, branch_id: bid, issue_date: ackDate,
                   created_by: createdBy, class_id, phase_1_amount, profile_id } = autoPayPhase1Data;
 
                 // Create payment for Phase 1 invoice — carry over AR reference and attachment
@@ -1006,7 +1092,7 @@ router.post(
                     phase_1_amount,
                     ackDate,
                     autoPayPhase1Data.reference_number || null,
-                    `Phase 1 auto-paid via AR ${ack_receipt_number} (Downpayment + Phase 1 option)`,
+                    'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
                     createdBy,
                     autoPayPhase1Data.payment_attachment_url || null,
                   ]
@@ -1030,7 +1116,7 @@ router.post(
                     await dbQuery(
                       `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
                        VALUES ($1, $2, $3, $4)`,
-                      [sid, class_id, 'System (Auto-enrolled via AR Downpayment + Phase 1)', enrollPhase]
+                      [sid, class_id, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', enrollPhase]
                     );
                     console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase ${enrollPhase}`);
                   }
@@ -1069,8 +1155,7 @@ router.post(
         message: 'Acknowledgement receipt attached and payment recorded successfully',
         data: {
           acknowledgement_receipt: {
-            ack_receipt_id: ack.ack_receipt_id,
-            ack_receipt_number: ack.ack_receipt_number,
+            ...omitAckReceiptNumber(ack),
             status: 'Enrolled',
             invoice_id,
             payment_id: newPayment.payment_id,

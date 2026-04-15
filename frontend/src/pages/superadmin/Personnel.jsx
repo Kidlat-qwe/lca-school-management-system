@@ -6,6 +6,7 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const Personnel = () => {
   const { signup } = useAuth();
@@ -187,7 +188,7 @@ const Personnel = () => {
       });
       fetchPersonnel(); // Refresh the list
     } catch (err) {
-      alert(err.message || 'Failed to delete personnel');
+      appAlert(err.message || 'Failed to delete personnel');
     }
   };
 

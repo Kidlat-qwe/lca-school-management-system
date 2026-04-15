@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
+import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
 
 const HighPriorityAnnouncementModal = () => {
   const { userInfo } = useAuth();
@@ -9,23 +10,6 @@ const HighPriorityAnnouncementModal = () => {
   const [highPriorityAnnouncement, setHighPriorityAnnouncement] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-
-  // Get announcements page path based on user role
-  const getAnnouncementsPath = () => {
-    const userType = userInfo?.user_type || userInfo?.userType;
-    switch (userType) {
-      case 'Superadmin':
-        return '/superadmin/announcements';
-      case 'Admin':
-        return '/admin/announcements';
-      case 'Teacher':
-        return '/teacher/announcements';
-      case 'Student':
-        return '/student/announcements';
-      default:
-        return '/superadmin/announcements';
-    }
-  };
 
   // Check for unread high priority announcements
   const checkHighPriorityAnnouncements = async () => {
@@ -82,13 +66,13 @@ const HighPriorityAnnouncementModal = () => {
       setHighPriorityAnnouncement(null);
 
       // Navigate to announcements page with highlight
-      const announcementsPath = getAnnouncementsPath();
+      const announcementsPath = getAnnouncementsPathForUser(userInfo);
       navigate(`${announcementsPath}?highlight=${highPriorityAnnouncement.announcement_id}`);
     } catch (error) {
       console.error('Error marking announcement as read:', error);
       // Still navigate even if marking as read fails
       setIsVisible(false);
-      const announcementsPath = getAnnouncementsPath();
+      const announcementsPath = getAnnouncementsPathForUser(userInfo);
       navigate(`${announcementsPath}?highlight=${highPriorityAnnouncement.announcement_id}`);
     }
   };

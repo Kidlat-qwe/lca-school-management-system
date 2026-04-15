@@ -7,6 +7,7 @@ import ProfilePictureModal from './ProfilePictureModalS3';
 import NotificationDropdown from './NotificationDropdown';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../config/firebase';
+import { appAlert } from '../utils/appAlert';
 
 const Header = ({ onMenuClick }) => {
   const { userInfo, logout } = useAuth();
@@ -26,6 +27,9 @@ const Header = ({ onMenuClick }) => {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const profileMenuRef = useRef(null);
   const [branchName, setBranchName] = useState(null);
+  const [branchNickname, setBranchNickname] = useState(null);
+  const userType = userInfo?.user_type || userInfo?.userType || '';
+  const isBranchAdmin = userType === 'Admin';
 
   // Fetch branch name if user has a branch_id
   useEffect(() => {
@@ -35,7 +39,8 @@ const Header = ({ onMenuClick }) => {
         try {
           const response = await apiRequest(`/branches/${branchId}`);
           if (response && response.data) {
-            setBranchName(response.data.branch_name);
+            setBranchName(response.data.branch_name || response.data.branch_nickname || null);
+            setBranchNickname(response.data.branch_nickname || response.data.branch_name || null);
           }
         } catch (err) {
           console.error('Error fetching branch name:', err);
@@ -140,7 +145,7 @@ const Header = ({ onMenuClick }) => {
       setIsResettingPassword(true);
       await sendPasswordResetEmail(auth, resetEmail.trim());
       
-      alert('Password reset email sent! Please check your inbox and follow the instructions to reset your password.');
+      appAlert('Password reset email sent! Please check your inbox and follow the instructions to reset your password.');
       setIsPasswordResetModalOpen(false);
       setResetEmail('');
     } catch (error) {
@@ -194,7 +199,7 @@ const Header = ({ onMenuClick }) => {
               </h1>
             )}
           </div>
-          {shouldShowBranchFilter && (
+          {(shouldShowBranchFilter || isBranchAdmin) && (
             <div className="hidden lg:flex items-center pl-3 flex-shrink-0">
               <div className="w-[240px] max-w-[280px]">
                 <label htmlFor="global_branch_filter" className="sr-only">
@@ -203,17 +208,25 @@ const Header = ({ onMenuClick }) => {
                 <div className="relative">
                   <select
                     id="global_branch_filter"
-                    value={selectedBranchId}
+                    value={isBranchAdmin ? (branchNickname || branchName || 'Your Branch') : selectedBranchId}
                     onChange={(e) => setSelectedBranchId(e.target.value)}
                     className="w-full appearance-none rounded-lg border border-[#c78d14] bg-[#f8d373] px-4 py-2 pr-10 text-sm font-medium text-gray-900 text-left shadow-sm transition-colors focus:border-[#a86f00] focus:outline-none focus:ring-2 focus:ring-[#f4b428]"
-                    disabled={loadingBranches}
+                    disabled={loadingBranches || isBranchAdmin}
                   >
-                    <option value="">Global Branch Filter</option>
-                    {branches.map((branch) => (
-                      <option key={branch.branch_id} value={branch.branch_id}>
-                        {branch.branch_name}
+                    {isBranchAdmin ? (
+                      <option value={branchNickname || branchName || 'Your Branch'}>
+                        {branchNickname || branchName || 'Your Branch'}
                       </option>
-                    ))}
+                    ) : (
+                      <>
+                        <option value="">Global Branch Filter</option>
+                        {branches.map((branch) => (
+                          <option key={branch.branch_id} value={branch.branch_id}>
+                            {branch.branch_nickname || branch.branch_name}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                   <svg
                     className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-700"

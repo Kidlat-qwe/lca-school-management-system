@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -143,7 +144,7 @@ const Program = () => {
       });
       fetchPrograms(); // Refresh the list
     } catch (err) {
-      alert(err.message || 'Failed to delete program');
+      appAlert(err.message || 'Failed to delete program');
     }
   };
 

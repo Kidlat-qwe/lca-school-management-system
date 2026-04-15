@@ -1,7 +1,9 @@
 import { query, getClient } from '../config/database.js';
+import { insertInvoiceWithArNumber } from './invoiceArNumber.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
+  getPhaseDueDateYmd,
   isPhaseInstallmentProfile,
 } from './phaseInstallmentUtils.js';
 
@@ -177,16 +179,10 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       const isFirstInvoice = (profile.generated_count || 0) === 0;
       
       if (isFirstInvoice && profile.class_id) {
-        // First installment: due date = class start date
-        const classResult = await client.query(
-          'SELECT start_date FROM classestbl WHERE class_id = $1',
-          [profile.class_id]
-        );
-        
-        if (classResult.rows.length > 0 && classResult.rows[0].start_date) {
-          dueDate = typeof classResult.rows[0].start_date === 'string'
-            ? parseYmdToLocalNoon(classResult.rows[0].start_date)
-            : new Date(classResult.rows[0].start_date);
+        // First installment for class-based profile: due before first session of Phase 1.
+        const firstPhaseDueYmd = await getPhaseDueDateYmd(client, profile.class_id, 1);
+        if (firstPhaseDueYmd) {
+          dueDate = parseYmdToLocalNoon(firstPhaseDueYmd);
         } else {
           dueDate = new Date(issueDate);
           dueDate.setMonth(dueDate.getMonth() + 1);
@@ -204,9 +200,10 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     const finalInvoiceAmount = Math.max(0, baseAmount - promoDiscount);
     
     // Create invoice (link to installment invoice profile for phase tracking)
-    const invoiceResult = await client.query(
-      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    const newInvoice = await insertInvoiceWithArNumber(
+      client,
+      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id, invoice_ar_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         'TEMP', // Temporary, will be updated
@@ -223,8 +220,6 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         shouldApplyPromoToMonthly ? promoId : null, // Link promo if discount applied
       ]
     );
-    
-    const newInvoice = invoiceResult.rows[0];
     
     // Update invoice description
     await client.query(

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -229,7 +230,7 @@ const Room = () => {
       });
       fetchRooms();
     } catch (err) {
-      alert(err.message || 'Failed to delete room');
+      appAlert(err.message || 'Failed to delete room');
     }
   };
 
@@ -441,7 +442,7 @@ const Room = () => {
       setRoomClassSchedules(summarized);
     } catch (err) {
       console.error('Error fetching room class schedules:', err);
-      alert(err.message || 'Failed to load class schedules');
+      appAlert(err.message || 'Failed to load class schedules');
       setRoomClassSchedules([]);
     } finally {
       setClassSchedulesLoading(false);

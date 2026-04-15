@@ -3,6 +3,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -165,7 +166,7 @@ const StudentPaymentLogs = () => {
       
       // Use current payments data
       if (filteredPayments.length === 0) {
-        alert('No payment records found to export.');
+        appAlert('No payment records found to export.');
         setExportLoading(false);
         return;
       }
@@ -213,7 +214,7 @@ const StudentPaymentLogs = () => {
       setExportLoading(false);
     } catch (error) {
       console.error('Export error:', error);
-      alert('Failed to export payment logs. Please try again.');
+      appAlert('Failed to export payment logs. Please try again.');
       setExportLoading(false);
     }
   };

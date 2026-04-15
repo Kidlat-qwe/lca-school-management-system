@@ -178,6 +178,56 @@ router.get(
         `;
       const invoiceStatusResult = await query(invoiceStatusQuery, branchParams);
 
+      // Completed payments split by Finance/Superfinance approval (same rules as Payment Logs)
+      const paymentVerificationQuery = branchFilter
+        ? `
+          SELECT
+            COUNT(*) FILTER (
+              WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+            )::bigint AS verified_count,
+            COALESCE(
+              SUM(p.payable_amount) FILTER (
+                WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+              ),
+              0
+            ) AS verified_amount,
+            COUNT(*) FILTER (
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+            )::bigint AS unverified_count,
+            COALESCE(
+              SUM(p.payable_amount) FILTER (
+                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              ),
+              0
+            ) AS unverified_amount
+          FROM paymenttbl p
+          WHERE p.branch_id = $1
+        `
+        : `
+          SELECT
+            COUNT(*) FILTER (
+              WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+            )::bigint AS verified_count,
+            COALESCE(
+              SUM(p.payable_amount) FILTER (
+                WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+              ),
+              0
+            ) AS verified_amount,
+            COUNT(*) FILTER (
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+            )::bigint AS unverified_count,
+            COALESCE(
+              SUM(p.payable_amount) FILTER (
+                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              ),
+              0
+            ) AS unverified_amount
+          FROM paymenttbl p
+        `;
+      const paymentVerificationResult = await query(paymentVerificationQuery, branchParams);
+      const pvRow = paymentVerificationResult.rows[0] || {};
+
       const reservationStatusQuery = branchFilter
         ? `
           SELECT
@@ -295,6 +345,12 @@ router.get(
             branch_id: row.branch_id,
             branch_name: row.branch_name,
           })),
+          payment_verification: {
+            verified_count: parseInt(pvRow.verified_count, 10) || 0,
+            verified_amount: parseFloat(pvRow.verified_amount) || 0,
+            unverified_count: parseInt(pvRow.unverified_count, 10) || 0,
+            unverified_amount: parseFloat(pvRow.unverified_amount) || 0,
+          },
           crossing_procedures: {
             total_violations: crossingProceduresResult.rows.length,
             violations: crossingProceduresResult.rows.map((row) => ({

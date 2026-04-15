@@ -39,8 +39,10 @@ import settingsRoutes from './routes/settings.js';
 import reportsRoutes from './routes/reports.js';
 import dailySummarySalesRoutes from './routes/dailySummarySales.js';
 import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
+import systemLogsRoutes from './routes/systemLogs.js';
 
 // Import middleware
+import { activityLogger } from './middleware/activityLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 // Import configs (this will initialize database and Firebase connections)
@@ -136,6 +138,9 @@ app.get('/health', (req, res) => {
 // API routes
 const API_VERSION = '/api/sms';
 
+// Log mutating API requests after response (req.user set by route auth)
+app.use(API_VERSION, activityLogger);
+
 app.use(`${API_VERSION}/auth`, authRoutes);
 app.use(`${API_VERSION}/users`, usersRoutes);
 app.use(`${API_VERSION}/branches`, branchesRoutes);
@@ -168,6 +173,7 @@ app.use(`${API_VERSION}/settings`, settingsRoutes);
 app.use(`${API_VERSION}/reports`, reportsRoutes);
 app.use(`${API_VERSION}/daily-summary-sales`, dailySummarySalesRoutes);
 app.use(`${API_VERSION}/cash-deposit-summaries`, cashDepositSummariesRoutes);
+app.use(`${API_VERSION}/system-logs`, systemLogsRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

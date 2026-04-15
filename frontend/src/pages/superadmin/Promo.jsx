@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -248,7 +249,7 @@ const Promo = () => {
       });
       fetchPromos();
     } catch (err) {
-      alert(err.message || 'Failed to delete promo');
+      appAlert(err.message || 'Failed to delete promo');
     }
   };
 
@@ -416,19 +417,19 @@ const Promo = () => {
 
   const handleAddMerchandise = () => {
     if (!newMerchandise.merchandise_id) {
-      alert('Please select merchandise');
+      appAlert('Please select merchandise');
       return;
     }
 
     const merchItem = merchandise.find(m => m.merchandise_id === parseInt(newMerchandise.merchandise_id));
     if (!merchItem) {
-      alert('Merchandise not found');
+      appAlert('Merchandise not found');
       return;
     }
 
     // Check if already added
     if (formData.selectedMerchandise.some(m => m.merchandise_id === parseInt(newMerchandise.merchandise_id))) {
-      alert('This merchandise is already added');
+      appAlert('This merchandise is already added');
       return;
     }
 

@@ -7,7 +7,7 @@ import { formatDateManila } from '../../utils/dateUtils';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const CALENDAR_START_HOUR = 6;
-const CALENDAR_END_HOUR = 23;
+const CALENDAR_END_HOUR = 21;
 const HOURS = Array.from(
   { length: CALENDAR_END_HOUR - CALENDAR_START_HOUR + 1 },
   (_, i) => i + CALENDAR_START_HOUR

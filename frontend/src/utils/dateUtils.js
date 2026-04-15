@@ -40,6 +40,16 @@ export const todayManilaYMD = () => {
 };
 
 /**
+ * First calendar day of the current month in Asia/Manila as YYYY-MM-DD.
+ * @returns {string}
+ */
+export const firstDayOfMonthManilaYMD = () => {
+  const ymd = todayManilaYMD();
+  const [y, m] = ymd.split('-');
+  return `${y}-${m}-01`;
+};
+
+/**
  * Format session code: p{phase}s{session}_{MMDDYY}_{HHMMam/pm}
  * Example: p1s1_020926_0100PM
  * @param {number} phaseNumber - Phase number

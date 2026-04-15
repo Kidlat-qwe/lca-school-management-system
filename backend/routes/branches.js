@@ -93,7 +93,11 @@ router.post(
   [
     body('branch_name').notEmpty().withMessage('Branch name is required'),
     body('branch_email').optional().isEmail().withMessage('Valid email is required'),
-    body('branch_nickname').optional().isString().withMessage('Nickname must be a string'),
+    body('branch_nickname')
+      .notEmpty()
+      .withMessage('Branch nickname is required')
+      .isString()
+      .withMessage('Nickname must be a string'),
     body('branch_address').optional().isString().withMessage('Address must be a string'),
     body('branch_phone_number').optional().isString().withMessage('Phone number must be a string'),
     body('status').optional().isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
@@ -130,7 +134,7 @@ router.post(
         [
           branch_name,
           branch_email || null,
-          branch_nickname || null,
+          branch_nickname,
           branch_address || null,
           branch_phone_number || null,
           status || 'Active',

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
+import { appAlert } from '../../utils/appAlert';
 
 const Merchandise = () => {
   const [branches, setBranches] = useState([]);
@@ -123,7 +124,7 @@ const Merchandise = () => {
         fetchMerchandiseByBranch(selectedBranchId);
       }
     } catch (err) {
-      alert(err.message || 'Failed to delete merchandise');
+      appAlert(err.message || 'Failed to delete merchandise');
     }
   };
 
@@ -152,7 +153,7 @@ const Merchandise = () => {
         await fetchMerchandiseByBranch(selectedBranchId);
       }
     } catch (err) {
-      alert(err.message || 'Failed to delete merchandise type');
+      appAlert(err.message || 'Failed to delete merchandise type');
     }
   };
 
@@ -262,11 +263,11 @@ const Merchandise = () => {
         }),
       });
       
-      alert('Request approved successfully! Admin will be notified.');
+      appAlert('Request approved successfully! Admin will be notified.');
       closeReviewModal();
       await fetchAllRequests();
     } catch (err) {
-      alert(err.message || 'Failed to approve request');
+      appAlert(err.message || 'Failed to approve request');
       console.error('Error approving request:', err);
     } finally {
       setSubmitting(false);
@@ -275,7 +276,7 @@ const Merchandise = () => {
 
   const handleRejectRequest = async (requestId, notes) => {
     if (!notes || notes.trim() === '') {
-      alert('Please provide a reason for rejection');
+      appAlert('Please provide a reason for rejection');
       return;
     }
 
@@ -286,11 +287,11 @@ const Merchandise = () => {
         body: JSON.stringify({ review_notes: notes }),
       });
       
-      alert('Request rejected. Admin will be notified.');
+      appAlert('Request rejected. Admin will be notified.');
       closeReviewModal();
       await fetchAllRequests();
     } catch (err) {
-      alert(err.message || 'Failed to reject request');
+      appAlert(err.message || 'Failed to reject request');
       console.error('Error rejecting request:', err);
     } finally {
       setSubmitting(false);

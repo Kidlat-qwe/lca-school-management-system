@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
 import { useAuth } from '../../contexts/AuthContext';
+import { appAlert } from '../../utils/appAlert';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 
@@ -17,6 +18,7 @@ const AcknowledgementReceiptsPage = () => {
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const searchHydratedRef = useRef(false);
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 50,
@@ -150,6 +152,18 @@ const AcknowledgementReceiptsPage = () => {
     e.preventDefault();
     fetchReceipts(1);
   };
+
+  useEffect(() => {
+    if (!searchHydratedRef.current) {
+      searchHydratedRef.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      fetchReceipts(1);
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm]);
 
   const resetCreateForm = () => {
     setArType('Package');
@@ -410,11 +424,11 @@ const AcknowledgementReceiptsPage = () => {
     if (!file) return;
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     if (!allowed.includes(file.type)) {
-      alert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      alert('Image must be 5 MB or less.');
+      appAlert('Image must be 5 MB or less.');
       return;
     }
     setAttachmentUploading(true);
@@ -432,7 +446,7 @@ const AcknowledgementReceiptsPage = () => {
       setCreateFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
     } catch (err) {
       console.error('AR attachment upload error:', err);
-      alert(err.message || 'Failed to upload image. Please try again.');
+      appAlert(err.message || 'Failed to upload image. Please try again.');
     } finally {
       setAttachmentUploading(false);
       e.target.value = '';
@@ -459,6 +473,8 @@ const AcknowledgementReceiptsPage = () => {
       const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
       if (merchandiseSelections.length === 0 || configuredCount === 0) {
         errors.merchandise = 'Select at least one merchandise item and configure size';
+      } else if (merchandiseTotalAmount() <= 0) {
+        errors.merchandise = 'Total payment must be greater than 0';
       }
       const levelTag = (createFormData.level_tag || '').trim();
       if (!levelTag) {
@@ -521,8 +537,11 @@ const AcknowledgementReceiptsPage = () => {
         if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
         if (!payload.level_tag) delete payload.level_tag;
       } else {
-        const isInstallmentPkg = selectedPackage &&
-          (selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment');
+        const isInstallmentPkg =
+          !!selectedPackage &&
+          (((selectedPackage.package_type || '').toLowerCase() === 'installment') ||
+            (selectedPackage.package_type === 'Phase' &&
+              (selectedPackage.payment_option || '').toLowerCase() === 'installment'));
         payload = {
           ar_type: 'Package',
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
@@ -548,14 +567,14 @@ const AcknowledgementReceiptsPage = () => {
         body: JSON.stringify(payload),
       });
 
-      alert(isMerch && result.message
+      appAlert(isMerch && result.message
         ? result.message
         : 'Acknowledgement Receipt created successfully.');
       setShowCreateModal(false);
       await fetchReceipts(1);
     } catch (err) {
       console.error('Error creating acknowledgement receipt:', err);
-      alert(err.message || 'Failed to create acknowledgement receipt. Please try again.');
+      appAlert(err.message || 'Failed to create acknowledgement receipt. Please try again.');
     } finally {
       setCreating(false);
     }
@@ -596,7 +615,7 @@ const AcknowledgementReceiptsPage = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input-field text-sm"
-              placeholder="Search by AR number or name"
+              placeholder="Search by name, contact, or reference number"
             />
           </div>
           <div className="w-full md:w-48">
@@ -905,7 +924,7 @@ const AcknowledgementReceiptsPage = () => {
                     onClick={() => {
                       if (branchModalStep === 1) {
                         if (!selectedBranchId) {
-                          alert('Please select a branch.');
+                          appAlert('Please select a branch.');
                           return;
                         }
                         setBranchModalStep(2);
@@ -1208,7 +1227,7 @@ const AcknowledgementReceiptsPage = () => {
                       />
                     </div>
                     <div>
-                      <label className="label-field text-xs">Reference Number</label>
+                      <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
                       <input
                         type="text"
                         name="reference_number"
@@ -1216,6 +1235,7 @@ const AcknowledgementReceiptsPage = () => {
                         onChange={handleCreateInputChange}
                         placeholder="e.g. GCash transaction ID, bank ref"
                         className="input-field text-sm"
+                        required
                       />
                     </div>
                     <div>
@@ -1356,22 +1376,26 @@ const AcknowledgementReceiptsPage = () => {
                       Payment Amount <span className="text-red-500">*</span>
                     </label>
                     <input
-                      type="number"
-                      step="0.01"
-                      min="0"
+                      type="text"
+                      readOnly
+                      tabIndex={-1}
                       name="payment_amount"
-                      value={createFormData.payment_amount}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${
+                      value={
+                        createFormData.payment_amount === '' || createFormData.payment_amount == null
+                          ? ''
+                          : `₱${Number(createFormData.payment_amount).toLocaleString('en-PH', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}`
+                      }
+                      className={`input-field text-sm bg-gray-100 cursor-not-allowed ${
                         createFormErrors.payment_amount ? 'border-red-500' : ''
                       }`}
-                      readOnly={
-                        !!(selectedPackage && (
-                          (selectedPackage.package_type || '').toLowerCase() === 'installment' ||
-                          (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')
-                        ))
-                      }
+                      aria-readonly="true"
                     />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Amount is set from the selected package (and installment option if applicable); it cannot be edited.
+                    </p>
                     {createFormErrors.payment_amount && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_amount}</p>
                     )}
@@ -1435,7 +1459,7 @@ const AcknowledgementReceiptsPage = () => {
                 }
 
                 <div>
-                  <label className="label-field text-xs">Reference Number (optional)</label>
+                  <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
                   <input
                     type="text"
                     name="reference_number"
@@ -1443,6 +1467,7 @@ const AcknowledgementReceiptsPage = () => {
                     onChange={handleCreateInputChange}
                     placeholder="e.g. GCash transaction ID, bank ref, etc."
                     className="input-field text-sm"
+                    required
                     disabled={creating}
                   />
                 </div>
@@ -1504,7 +1529,14 @@ const AcknowledgementReceiptsPage = () => {
                   <button
                     type="submit"
                     className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={creating || attachmentUploading}
+                    disabled={
+                      creating ||
+                      attachmentUploading ||
+                      (arType === 'Package' &&
+                        (!createFormData.package_id ||
+                          !(parseFloat(createFormData.payment_amount) > 0))) ||
+                      (arType === 'Merchandise' && merchandiseTotalAmount() <= 0)
+                    }
                   >
                     {creating ? 'Saving?' : 'Done'}
                   </button>

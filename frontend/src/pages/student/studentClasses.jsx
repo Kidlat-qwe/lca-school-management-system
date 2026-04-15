@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
+import { calculateSessionDate } from '../../utils/sessionCalculation';
 
 const StudentClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -122,77 +123,6 @@ const StudentClasses = () => {
     }
   };
 
-  // Calculate session date based on start date, days of week, phase, and session number
-  const calculateSessionDate = (startDate, daysOfWeek, phaseNumber, sessionNumber, sessionsPerPhase) => {
-    if (!startDate || !daysOfWeek || daysOfWeek.length === 0) {
-      return null;
-    }
-
-    const dayMap = {
-      'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-      'Thursday': 4, 'Friday': 5, 'Saturday': 6
-    };
-
-    const sortedDays = [...daysOfWeek].sort((a, b) => {
-      const dayA = typeof a === 'string' ? dayMap[a] : dayMap[a.day_of_week];
-      const dayB = typeof b === 'string' ? dayMap[b] : dayMap[b.day_of_week];
-      return dayA - dayB;
-    });
-
-    const dayNames = sortedDays.map(day => typeof day === 'string' ? day : day.day_of_week);
-    const dayNumbers = dayNames.map(day => dayMap[day]);
-
-    const [year, month, day] = startDate.split('-').map(Number);
-    const start = new Date(year, month - 1, day, 12, 0, 0);
-    const startDayOfWeek = start.getDay();
-
-    const overallSessionNumber = sessionsPerPhase 
-      ? (phaseNumber - 1) * sessionsPerPhase + sessionNumber
-      : sessionNumber;
-
-    const sessionIndex = overallSessionNumber - 1;
-    const dayIndexInCycle = sessionIndex % dayNames.length;
-    const weekOffset = Math.floor(sessionIndex / dayNames.length);
-
-    const targetDayName = dayNames[dayIndexInCycle];
-    const targetDayNumber = dayMap[targetDayName];
-    const firstDayNumber = dayNumbers[0];
-    
-    let baseDate;
-    let baseDayOfWeek;
-    
-    if (dayNumbers.includes(startDayOfWeek)) {
-      baseDate = new Date(year, month - 1, day, 12, 0, 0);
-      baseDayOfWeek = startDayOfWeek;
-    } else {
-      let daysUntilFirstDay = firstDayNumber - startDayOfWeek;
-      if (daysUntilFirstDay < 0) {
-        daysUntilFirstDay += 7;
-      }
-      baseDate = new Date(year, month - 1, day + daysUntilFirstDay, 12, 0, 0);
-      baseDayOfWeek = firstDayNumber;
-    }
-    
-    const baseDayIndex = dayNumbers.indexOf(baseDayOfWeek);
-    const targetDayIndex = dayIndexInCycle;
-    
-    let daysToAdd = 0;
-    
-    if (targetDayIndex >= baseDayIndex) {
-      daysToAdd = (targetDayIndex - baseDayIndex) + (weekOffset * 7);
-    } else {
-      daysToAdd = (dayNames.length - baseDayIndex) + targetDayIndex + (weekOffset * 7);
-    }
-    
-    const sessionDate = new Date(baseDate);
-    sessionDate.setDate(baseDate.getDate() + daysToAdd);
-
-    const resultYear = sessionDate.getFullYear();
-    const resultMonth = String(sessionDate.getMonth() + 1).padStart(2, '0');
-    const resultDay = String(sessionDate.getDate()).padStart(2, '0');
-    return `${resultYear}-${resultMonth}-${resultDay}`;
-  };
-
   // Calculate which phase is currently active based on today's date
   const calculateActivePhase = (phaseSessions, classSessions, classDetails, daysOfWeek, sessionsPerPhase) => {
     if (!phaseSessions || phaseSessions.length === 0 || !classDetails.start_date) {
@@ -238,7 +168,8 @@ const StudentClasses = () => {
           daysOfWeek,
           firstSession.phase_number,
           firstSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -248,7 +179,8 @@ const StudentClasses = () => {
           daysOfWeek,
           lastSession.phase_number,
           lastSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -273,7 +205,8 @@ const StudentClasses = () => {
             daysOfWeek,
             firstSession.phase_number,
             firstSession.phase_session_number,
-            sessionsPerPhase
+            sessionsPerPhase,
+            classDetails.number_of_phase
           )
         : null);
 
@@ -303,7 +236,8 @@ const StudentClasses = () => {
           daysOfWeek,
           lastSession.phase_number,
           lastSession.phase_session_number,
-          sessionsPerPhase
+          sessionsPerPhase,
+          classDetails.number_of_phase
         );
       }
 
@@ -670,7 +604,8 @@ const StudentClasses = () => {
                                         daysOfWeek,
                                         session.phase_number,
                                         session.phase_session_number,
-                                        sessionsPerPhase
+                                        sessionsPerPhase,
+                                        selectedClassForDetails.number_of_phase
                                       )
                                     : null);
 
@@ -899,7 +834,7 @@ const StudentClasses = () => {
                     Room
                   </th>
                   <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Max Students
+                    Enrolled / Max
                   </th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Start Date & End Date
@@ -945,7 +880,13 @@ const StudentClasses = () => {
                     </td>
                     <td className="px-3 py-4 text-center">
                       <div className="text-sm text-gray-900">
-                        {classItem.max_students || 'N/A'}
+                        {(() => {
+                          const enrolled = Number(classItem.enrolled_students ?? 0);
+                          if (classItem.max_students != null && classItem.max_students !== undefined) {
+                            return `${enrolled}/${classItem.max_students}`;
+                          }
+                          return enrolled > 0 ? String(enrolled) : 'N/A';
+                        })()}
                       </div>
                     </td>
                     <td className="px-3 py-4">

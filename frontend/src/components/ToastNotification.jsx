@@ -2,29 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
+import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
 
 const ToastNotification = ({ notification, onClose, duration = 2500 }) => {
   const { userInfo } = useAuth();
   const navigate = useNavigate();
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
-
-  // Get announcements page path based on user role
-  const getAnnouncementsPath = () => {
-    const userType = userInfo?.user_type || userInfo?.userType;
-    switch (userType) {
-      case 'Superadmin':
-        return '/superadmin/announcements';
-      case 'Admin':
-        return '/admin/announcements';
-      case 'Teacher':
-        return '/teacher/announcements';
-      case 'Student':
-        return '/student/announcements';
-      default:
-        return '/superadmin/announcements';
-    }
-  };
 
   // Show toast with animation
   useEffect(() => {
@@ -63,13 +47,13 @@ const ToastNotification = ({ notification, onClose, duration = 2500 }) => {
       }
 
       // Navigate to announcements page
-      const announcementsPath = getAnnouncementsPath();
+      const announcementsPath = getAnnouncementsPathForUser(userInfo);
       navigate(`${announcementsPath}?highlight=${notification.announcement_id}`);
       handleClose();
     } catch (error) {
       console.error('Error handling toast click:', error);
       // Still navigate even if marking as read fails
-      const announcementsPath = getAnnouncementsPath();
+      const announcementsPath = getAnnouncementsPathForUser(userInfo);
       navigate(`${announcementsPath}?highlight=${notification.announcement_id}`);
       handleClose();
     }

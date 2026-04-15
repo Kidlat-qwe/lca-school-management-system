@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
@@ -23,6 +24,8 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
+    queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
+    queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -113,11 +116,16 @@ router.get(
       }
 
       const { branch_id, status } = req.query;
+      const issueDateFrom = req.query.issue_date_from ? String(req.query.issue_date_from).trim().slice(0, 10) : '';
+      const issueDateTo = req.query.issue_date_to ? String(req.query.issue_date_to).trim().slice(0, 10) : '';
+      const useIssueRange = Boolean(issueDateFrom || issueDateTo);
 
       let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
                         TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
                         TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
                         i.created_by,
+                        i.ack_receipt_id,
+                        i.invoice_ar_number,
                         ar.prospect_student_name as ar_prospect_student_name,
                         CASE 
                           WHEN i.status NOT IN ('Paid', 'Cancelled') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE 
@@ -145,6 +153,25 @@ router.get(
         paramCount++;
         sql += ` AND i.status = $${paramCount}`;
         params.push(status);
+      }
+
+      if (useIssueRange) {
+        if (issueDateFrom && issueDateTo && issueDateFrom > issueDateTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'issue_date_from must be on or before issue_date_to',
+          });
+        }
+        if (issueDateFrom) {
+          paramCount++;
+          sql += ` AND i.issue_date >= $${paramCount}::date`;
+          params.push(issueDateFrom);
+        }
+        if (issueDateTo) {
+          paramCount++;
+          sql += ` AND i.issue_date <= $${paramCount}::date`;
+          params.push(issueDateTo);
+        }
       }
 
       // Return all matching invoices, ordered from newest to oldest
@@ -363,17 +390,20 @@ router.get(
 
 /**
  * GET /api/sms/invoices/:id/pdf
- * Download invoice as PDF
+ * Download invoice or SOA as PDF
  */
 router.get(
   '/:id/pdf',
   [
     param('id').isInt().withMessage('Invoice ID must be an integer'),
+    queryValidator('doc_type').optional().isIn(['invoice', 'soa']).withMessage('doc_type must be invoice or soa'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      const docType = req.query?.doc_type === 'soa' ? 'soa' : 'invoice';
+      const isSoa = docType === 'soa';
 
       // Fetch invoice
       const invoiceResult = await query(
@@ -474,9 +504,9 @@ router.get(
       const totalPayments = paymentsResult.rows.reduce((sum, p) => sum + (Number(p.payable_amount) || 0), 0);
       const amountDue = grandTotal - totalPayments;
 
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isSoa ? 'landscape' : 'portrait' });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename=invoice-${id}.pdf`);
+      res.setHeader('Content-Disposition', `inline; filename=${isSoa ? 'soa' : 'invoice'}-${id}.pdf`);
 
       doc.pipe(res);
 
@@ -491,6 +521,176 @@ router.get(
         if (levelMatch) return levelMatch[1];
         return '';
       };
+
+      if (isSoa) {
+        const pageWidth = doc.page.width;
+        const pageHeight = doc.page.height;
+        const left = 40;
+        const right = pageWidth - 40;
+        let y = 40;
+        const contentWidth = right - left;
+        const currency = (v) => `PHP ${(Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const issueDateLabel = formatDate(invoice.issue_date) || '-';
+        const dueDateLabel = formatDate(invoice.due_date) || '-';
+        const studentNames = studentsResult.rows.length > 0
+          ? studentsResult.rows.map((s) => s.full_name || 'Student').join(', ')
+          : 'No student linked';
+        const studentEmails = studentsResult.rows.length > 0
+          ? studentsResult.rows.map((s) => s.email).filter(Boolean).join(', ') || '-'
+          : '-';
+        const studentPhones = studentsResult.rows.length > 0
+          ? studentsResult.rows.map((s) => s.phone_number).filter(Boolean).join(', ') || '-'
+          : '-';
+
+        // Header band
+        doc.save();
+        doc.rect(left, y, contentWidth, 74).fill('#f8fafc');
+        doc.restore();
+        if (hasLogo) {
+          doc.image(logoPath, left + 12, y + 12, { width: 46, height: 46 });
+        }
+        doc.font('Helvetica-Bold').fontSize(17).fillColor('#111827')
+          .text('LITTLE CHAMPIONS ACADEMY INC.', hasLogo ? left + 70 : left + 12, y + 14);
+        doc.font('Helvetica').fontSize(9).fillColor('#4b5563')
+          .text(branchInfo?.branch_address || (branchInfo?.branch_name || ''), hasLogo ? left + 70 : left + 12, y + 36, {
+            width: 360,
+          });
+        doc.font('Helvetica-Bold').fontSize(22).fillColor('#111827')
+          .text('Statement of Account', right - 280, y + 20, { width: 260, align: 'right' });
+        y += 92;
+
+        // Summary strip
+        const summaryWidth = (contentWidth - 24) / 4;
+        const summaryItems = [
+          { label: 'Invoice Number', value: `INV-${invoice.invoice_id}` },
+          { label: 'Issue Date', value: issueDateLabel },
+          { label: 'Due Date', value: dueDateLabel },
+          { label: 'Current Status', value: invoice.status || '-' },
+        ];
+        summaryItems.forEach((item, idx) => {
+          const x = left + idx * (summaryWidth + 8);
+          doc.save();
+          doc.roundedRect(x, y, summaryWidth, 48, 4).fill('#eef2ff');
+          doc.restore();
+          doc.font('Helvetica').fontSize(8).fillColor('#4338ca').text(item.label, x + 10, y + 10);
+          doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827').text(item.value, x + 10, y + 24, {
+            width: summaryWidth - 20,
+          });
+        });
+        y += 62;
+
+        // Account information
+        doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827').text('Account Information', left, y);
+        y += 16;
+        doc.font('Helvetica').fontSize(9).fillColor('#374151')
+          .text(`Student Name(s): ${studentNames}`, left, y, { width: contentWidth });
+        y += 12;
+        doc.text(`Email: ${studentEmails}`, left, y, { width: contentWidth });
+        y += 12;
+        doc.text(`Phone: ${studentPhones}`, left, y, { width: contentWidth });
+        y += 16;
+
+        // Itemized charges table
+        const cDesc = left + 8;
+        const cBase = left + 430;
+        const cDiscount = left + 530;
+        const cPenalty = left + 620;
+        const cTax = left + 700;
+        const cNet = left + 780;
+
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Itemized Charges', left, y);
+        y += 14;
+        doc.save();
+        doc.rect(left, y, contentWidth, 22).fill('#f3f4f6');
+        doc.restore();
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#111827');
+        doc.text('Description', cDesc, y + 7, { width: 380 });
+        doc.text('Base', cBase, y + 7, { width: 80, align: 'right' });
+        doc.text('Discount', cDiscount, y + 7, { width: 80, align: 'right' });
+        doc.text('Penalty', cPenalty, y + 7, { width: 70, align: 'right' });
+        doc.text('Tax', cTax, y + 7, { width: 70, align: 'right' });
+        doc.text('Net', cNet, y + 7, { width: 70, align: 'right' });
+        y += 24;
+
+        if (items.length === 0) {
+          doc.font('Helvetica').fontSize(9).fillColor('#6b7280').text('No itemized charges available.', left + 8, y + 6);
+          y += 24;
+        } else {
+          items.forEach((item, index) => {
+            const amt = Number(item.amount) || 0;
+            const discount = Number(item.discount_amount) || 0;
+            const penalty = Number(item.penalty_amount) || 0;
+            const taxPct = Number(item.tax_percentage) || 0;
+            const taxableBase = amt - discount + penalty;
+            const tax = taxableBase * (taxPct / 100);
+            const netAmount = taxableBase + tax;
+
+            if (y + 18 > pageHeight - 130) {
+              doc.addPage({ size: 'A4', layout: 'landscape', margin: 40 });
+              y = 40;
+            }
+
+            if (index % 2 === 0) {
+              doc.save();
+              doc.rect(left, y, contentWidth, 18).fill('#fafafa');
+              doc.restore();
+            }
+            doc.font('Helvetica').fontSize(8).fillColor('#111827');
+            doc.text(item.description || '-', cDesc, y + 5, { width: 380, ellipsis: true });
+            doc.text(currency(amt), cBase, y + 5, { width: 80, align: 'right' });
+            doc.text(currency(discount), cDiscount, y + 5, { width: 80, align: 'right' });
+            doc.text(currency(penalty), cPenalty, y + 5, { width: 70, align: 'right' });
+            doc.text(currency(tax), cTax, y + 5, { width: 70, align: 'right' });
+            doc.text(currency(netAmount), cNet, y + 5, { width: 70, align: 'right' });
+            y += 18;
+          });
+        }
+
+        y += 10;
+
+        // Payment history + totals
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Payment History', left, y);
+        y += 14;
+        if (paymentsResult.rows.length === 0) {
+          doc.font('Helvetica').fontSize(9).fillColor('#6b7280').text('No completed payments recorded yet.', left + 8, y);
+          y += 14;
+        } else {
+          paymentsResult.rows.forEach((payment) => {
+            const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '-';
+            const method = payment.payment_method || 'Payment';
+            const ref = payment.reference_number ? ` • Ref: ${payment.reference_number}` : '';
+            doc.font('Helvetica').fontSize(8.5).fillColor('#374151')
+              .text(`${paymentDate} • ${method}${ref}`, left + 8, y, { width: 620 });
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
+              .text(currency(payment.payable_amount), cNet, y, { width: 70, align: 'right' });
+            y += 12;
+          });
+        }
+
+        // Totals panel
+        const panelW = 260;
+        const panelX = right - panelW;
+        const panelY = Math.min(y + 10, pageHeight - 115);
+        doc.save();
+        doc.roundedRect(panelX, panelY, panelW, 98, 6).fill('#ecfeff');
+        doc.restore();
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#0f172a').text('Account Summary', panelX + 12, panelY + 10);
+        doc.font('Helvetica').fontSize(9).fillColor('#0f172a');
+        doc.text(`Total Charges: ${currency(grandTotal)}`, panelX + 12, panelY + 30);
+        doc.text(`Total Paid: ${currency(totalPayments)}`, panelX + 12, panelY + 46);
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(amountDue > 0 ? '#991b1b' : '#166534');
+        doc.text(`Outstanding Balance: ${currency(amountDue)}`, panelX + 12, panelY + 66);
+
+        // Footer note
+        doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text(
+          'Generated by Little Champions Academy billing system. Please keep this Statement of Account for your records.',
+          left,
+          pageHeight - 36,
+          { width: contentWidth, align: 'center' }
+        );
+        doc.end();
+        return;
+      }
 
       // Header Section
       const headerY = 50;
@@ -510,16 +710,16 @@ router.get(
         doc.text(branchAddress, schoolNameX, headerY + 20);
       }
 
-      // INVOICE text on the right
+      // Document title on the right
       doc.fontSize(32).fillColor('#000000').font('Helvetica-Bold');
-      doc.text('INVOICE', 400, headerY, { align: 'right', width: 150 });
+      doc.text(isSoa ? 'SOA' : 'INVOICE', 400, headerY, { align: 'right', width: 150 });
 
       // Invoice Details Section
       let currentY = headerY + 70;
       doc.fontSize(10).fillColor('#333333').font('Helvetica');
-      doc.text(`Invoice Number: INV-${invoice.invoice_id}`, 50, currentY);
+      doc.text(`${isSoa ? 'SOA' : 'Invoice'} Number: INV-${invoice.invoice_id}`, 50, currentY);
       currentY += 12;
-      doc.text(`Invoice Date: ${formatDate(invoice.issue_date)}`, 50, currentY);
+      doc.text(`${isSoa ? 'Statement' : 'Invoice'} Date: ${formatDate(invoice.issue_date)}`, 50, currentY);
       currentY += 12;
       doc.text(`Invoice Due Date: ${formatDate(invoice.due_date)}`, 50, currentY);
 
@@ -1010,9 +1210,10 @@ router.post(
       const createdBy = req.user.userId || null;
 
       // Create invoice with temporary description (will be updated with INV-{invoice_id})
-      const invoiceResult = await client.query(
-        `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      const newInvoice = await insertInvoiceWithArNumber(
+        client,
+        `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, invoice_ar_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           'TEMP', // Temporary description, will be updated with INV-{invoice_id}
@@ -1025,8 +1226,6 @@ router.post(
           createdBy,
         ]
       );
-
-      const newInvoice = invoiceResult.rows[0];
 
       // Update invoice description with format INV-{invoice_id}
       await client.query(
@@ -1460,7 +1659,8 @@ router.get(
         `SELECT DISTINCT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
                 TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
                 TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
-                i.created_by
+                i.created_by,
+                i.invoice_ar_number
          FROM invoicestbl i
          INNER JOIN invoicestudentstbl inv_student ON i.invoice_id = inv_student.invoice_id
          WHERE inv_student.student_id = $1

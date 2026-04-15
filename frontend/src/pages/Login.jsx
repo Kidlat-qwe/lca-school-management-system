@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../config/firebase';
+import { appAlert } from '../utils/appAlert';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -31,7 +32,7 @@ const Login = () => {
     try {
       setIsResettingPassword(true);
       await sendPasswordResetEmail(auth, resetEmail.trim());
-      alert('Password reset email sent! Check your inbox (and spam folder for Gmail) and follow the link to set a new password.');
+      appAlert('Password reset email sent! Check your inbox (and spam folder for Gmail) and follow the link to set a new password.');
       setIsForgotPasswordOpen(false);
       setResetEmail('');
     } catch (err) {

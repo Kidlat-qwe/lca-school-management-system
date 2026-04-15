@@ -23,13 +23,14 @@ router.get(
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     queryValidator('exclude_user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid exclude_user_type'),
+    queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { branch_id, user_type, exclude_user_type, page = 1, limit = 20 } = req.query;
+      const { branch_id, user_type, exclude_user_type, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
       // Check if last_login column exists
@@ -82,6 +83,17 @@ router.get(
         params.push(exclude_user_type);
       }
 
+      if (search && String(search).trim()) {
+        paramCount++;
+        sql += ` AND (
+          COALESCE(full_name, '') ILIKE $${paramCount}
+          OR COALESCE(email, '') ILIKE $${paramCount}
+          OR COALESCE(phone_number, '') ILIKE $${paramCount}
+          OR COALESCE(lrn, '') ILIKE $${paramCount}
+        )`;
+        params.push(`%${String(search).trim()}%`);
+      }
+
       // For non-superadmin users, filter by their branch
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
@@ -115,6 +127,17 @@ router.get(
         countParamCount++;
         countSql += ` AND user_type != $${countParamCount}`;
         countParams.push(exclude_user_type);
+      }
+
+      if (search && String(search).trim()) {
+        countParamCount++;
+        countSql += ` AND (
+          COALESCE(full_name, '') ILIKE $${countParamCount}
+          OR COALESCE(email, '') ILIKE $${countParamCount}
+          OR COALESCE(phone_number, '') ILIKE $${countParamCount}
+          OR COALESCE(lrn, '') ILIKE $${countParamCount}
+        )`;
+        countParams.push(`%${String(search).trim()}%`);
       }
 
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {

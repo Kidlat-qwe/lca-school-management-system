@@ -16,21 +16,24 @@ import {
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
+import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
-const StatsCard = ({ title, value, icon, accent, trend }) => (
+const StatsCard = ({ title, value, iconName, accent, trend, trendClassName = 'text-emerald-600' }) => (
   <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
     <div className="flex items-start justify-between">
       <div className="flex-1">
         <p className="text-sm font-medium text-gray-600">{title}</p>
-        <p className="mt-3 text-3xl font-bold tracking-tight text-gray-900">{value.toLocaleString()}</p>
+        <p className="mt-3 text-3xl font-bold tracking-tight text-gray-900">
+          {typeof value === 'number' ? value.toLocaleString() : value}
+        </p>
         {trend && (
-          <p className="mt-2 text-xs font-medium text-emerald-600">{trend}</p>
+          <p className={`mt-2 text-xs font-medium ${trendClassName}`}>{trend}</p>
         )}
       </div>
       <div className={`ml-4 flex h-14 w-14 items-center justify-center rounded-xl ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
-        <span className="text-2xl">{icon}</span>
+        <DashboardStatIcon name={iconName} className="h-7 w-7 text-white drop-shadow-sm" />
       </div>
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
@@ -91,6 +94,20 @@ const FinancialDashboard = () => {
     () => metrics?.crossing_procedures || { total_violations: 0, violations: [] },
     [metrics]
   );
+
+  const paymentVerification = useMemo(
+    () =>
+      metrics?.payment_verification || {
+        verified_count: 0,
+        verified_amount: 0,
+        unverified_count: 0,
+        unverified_amount: 0,
+      },
+    [metrics]
+  );
+
+  const formatPeso = (n) =>
+    `₱${(Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const totals = metrics?.totals || {
     total_branches: 0,
@@ -160,26 +177,55 @@ const FinancialDashboard = () => {
             title="Total Branches"
             value={totals.total_branches}
             accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
-            icon="🏢"
+            iconName="building"
           />
           <StatsCard
             title="Total Students"
             value={totals.total_students}
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            icon="🎓"
+            iconName="users"
           />
           <StatsCard
             title="Total Teachers"
             value={totals.total_teachers}
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-            icon="👩‍🏫"
+            iconName="academicCap"
           />
           <StatsCard
             title="Active Classes"
             value={totals.active_classes}
             accent="bg-gradient-to-br from-orange-400 to-orange-500"
-            icon="📚"
+            iconName="bookOpen"
           />
+        </div>
+
+        {/* Finance / Superfinance payment verification (same approval_status as Payment Logs) */}
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Payment verification (Finance & Superfinance)</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Completed payments only. <span className="font-medium text-gray-700">Verified</span> means approval status is
+              Approved in Payment Logs (Finance branch users or Superfinance org-wide).{' '}
+              <span className="font-medium text-gray-700">Unverified</span> are still Pending or not yet approved.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <StatsCard
+              title="Verified payments"
+              value={paymentVerification.verified_count}
+              trend={`${formatPeso(paymentVerification.verified_amount)} total amount`}
+              accent="bg-gradient-to-br from-teal-400 to-teal-600"
+              iconName="shieldCheck"
+            />
+            <StatsCard
+              title="Unverified payments"
+              value={paymentVerification.unverified_count}
+              trend={`${formatPeso(paymentVerification.unverified_amount)} total amount`}
+              trendClassName="text-amber-800"
+              accent="bg-gradient-to-br from-amber-400 to-amber-600"
+              iconName="clock"
+            />
+          </div>
         </div>
 
         {/* Crossing Procedures Alert */}

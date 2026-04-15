@@ -81,6 +81,13 @@ export const getPhaseStartDate = async (db, classId, phaseNumber) => {
   return normalizeDateInput(value);
 };
 
+export const getPhaseDueDateYmd = async (db, classId, phaseNumber, dueDaysBefore = PHASE_INSTALLMENT_DUE_DAYS_BEFORE) => {
+  const phaseStart = await getPhaseStartDate(db, classId, phaseNumber);
+  if (!phaseStart) return null;
+  const dueDate = subtractDays(phaseStart, dueDaysBefore);
+  return dueDate ? formatYmdLocal(dueDate) : null;
+};
+
 /**
  * Builds invoice/generation dates from the earliest class session per phase (MIN scheduled_date).
  *

@@ -1,5 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { usePreventWheelChangingNumberInputs } from './hooks/usePreventWheelChangingNumberInputs';
 import { AuthProvider } from './contexts/AuthContext';
+import { AlertModalProvider } from './contexts/AlertModalContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -29,6 +31,7 @@ import CalendarSchedule from './pages/superadmin/CalendarSchedule';
 import Holidays from './pages/superadmin/Holidays';
 import Announcements from './pages/superadmin/Announcements';
 import Settings from './pages/superadmin/Settings';
+import SystemLogs from './pages/superadmin/SystemLogs';
 import AdminFinancialDashboard from './pages/admin/adminFinancialDashboard';
 import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
@@ -79,8 +82,11 @@ import SuperfinanceAcknowledgementReceipts from './pages/superfinance/superfinan
 import SuperfinanceDailySummarySales from './pages/superfinance/superfinanceDailySummarySales';
 
 function App() {
+  usePreventWheelChangingNumberInputs();
+
   return (
     <AuthProvider>
+      <AlertModalProvider>
       <Router>
         <Routes>
           {/* Public Routes */}
@@ -122,6 +128,7 @@ function App() {
             <Route path="holidays" element={<Holidays />} />
             <Route path="announcements" element={<Announcements />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="system-logs" element={<SystemLogs />} />
           </Route>
           
           {/* Admin Routes */}
@@ -157,6 +164,7 @@ function App() {
             <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
             <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
+            <Route path="system-logs" element={<SystemLogs />} />
           </Route>
           
           {/* Teacher Routes */}
@@ -212,6 +220,7 @@ function App() {
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<FinanceAcknowledgementReceipts />} />
+            <Route path="announcements" element={<TeacherAnnouncements />} />
           </Route>
           
           {/* Superfinance Routes - Finance role with no branch (manages all branches) */}
@@ -232,6 +241,7 @@ function App() {
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<SuperfinanceAcknowledgementReceipts />} />
             <Route path="daily-summary-sales" element={<SuperfinanceDailySummarySales />} />
+            <Route path="announcements" element={<TeacherAnnouncements />} />
           </Route>
           
           {/* Default redirect */}
@@ -241,6 +251,7 @@ function App() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Router>
+      </AlertModalProvider>
     </AuthProvider>
   );
 }

@@ -13,6 +13,7 @@ const StudentAnnouncements = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [titleSearchTerm, setTitleSearchTerm] = useState('');
+  const [debouncedTitleSearchTerm, setDebouncedTitleSearchTerm] = useState('');
   const [filterRecipientGroup, setFilterRecipientGroup] = useState('');
   const [filterCreatedOn, setFilterCreatedOn] = useState('');
   const [openRecipientGroupDropdown, setOpenRecipientGroupDropdown] = useState(false);
@@ -34,8 +35,15 @@ const StudentAnnouncements = () => {
   ];
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedTitleSearchTerm(titleSearchTerm.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [titleSearchTerm]);
+
+  useEffect(() => {
     fetchAnnouncements();
-  }, [currentPage, itemsPerPage, titleSearchTerm, filterRecipientGroup, filterCreatedOn]);
+  }, [currentPage, itemsPerPage, debouncedTitleSearchTerm, filterRecipientGroup, filterCreatedOn]);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -145,8 +153,8 @@ const StudentAnnouncements = () => {
       const recipientGroupFilter = filterRecipientGroup || (userInfo?.user_type || 'Students');
       params.append('recipient_group', recipientGroupFilter);
 
-      if (titleSearchTerm) {
-        params.append('title', titleSearchTerm);
+      if (debouncedTitleSearchTerm) {
+        params.append('title', debouncedTitleSearchTerm);
       }
       if (filterCreatedOn) {
         params.append('created_on', filterCreatedOn);

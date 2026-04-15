@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
@@ -155,7 +156,7 @@ const DailySummarySalesApprovalPage = () => {
       });
       await fetchRecords(pagination.page);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to verify');
+      appAlert(err.response?.data?.message || err.message || 'Failed to verify');
     } finally {
       setApprovingId(null);
     }
@@ -174,7 +175,7 @@ const DailySummarySalesApprovalPage = () => {
       setRejectModal({ open: false, id: null, remarks: '' });
       await fetchRecords(pagination.page);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to flag');
+      appAlert(err.response?.data?.message || err.message || 'Failed to flag');
     } finally {
       setApprovingId(null);
     }
@@ -225,7 +226,7 @@ const DailySummarySalesApprovalPage = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Verify branch submissions for both end-of-shift closing and cash deposit confirmation.
+          End-of-shift submissions are auto-verified after branch admin submit. Cash deposit summaries can still be reviewed and verified here.
         </p>
       </div>
 
@@ -311,20 +312,19 @@ const DailySummarySalesApprovalPage = () => {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
               ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Submitted By</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Approved By</th>
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 8 : 7} className="px-4 py-8 text-center text-gray-500">
                   Loading...
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 8 : 7} className="px-4 py-8 text-center text-gray-500">
                   {isCashDepositTab ? 'No cash deposit summaries found.' : 'No daily summaries found.'}
                 </td>
               </tr>
@@ -346,7 +346,6 @@ const DailySummarySalesApprovalPage = () => {
                     <td className="px-4 py-3">{statusBadge(record.status)}</td>
                   ) : null}
                   <td className="px-4 py-3 text-sm text-gray-600">{record.submitted_by_name || '-'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-600">{record.approved_by_name || '-'}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap align-middle">
                     <div className="inline-flex items-center justify-end">
                       <button
@@ -400,7 +399,7 @@ const DailySummarySalesApprovalPage = () => {
               >
                 View details
               </button>
-              {selectedRecord?.status === 'Submitted' ? (
+              {isCashDepositTab && selectedRecord?.status === 'Submitted' ? (
                 <>
                   <button
                     type="button"

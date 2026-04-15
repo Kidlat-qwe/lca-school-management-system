@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -224,7 +225,7 @@ const StudentInvoice = () => {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       console.error('Download invoice PDF failed:', err);
-      alert(err.message || 'Failed to download invoice PDF');
+      appAlert(err.message || 'Failed to download invoice PDF');
     }
   };
 
@@ -266,6 +267,7 @@ const StudentInvoice = () => {
       invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_id?.toString().includes(nameSearchTerm) ||
       invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      invoice.invoice_ar_number?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
     return matchesSearch && matchesStatus;
@@ -403,12 +405,15 @@ const StudentInvoice = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '1000px' }}
+              style={{ width: '100%', minWidth: '1140px' }}
             >
               <thead className="bg-white">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Invoice ID
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    AR#
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Description
@@ -433,7 +438,7 @@ const StudentInvoice = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center">
+                    <td colSpan={8} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || filterStatus
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -446,6 +451,9 @@ const StudentInvoice = () => {
                   <tr key={invoice.invoice_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       INV-{invoice.invoice_id}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      <span className="text-sm">{invoice.invoice_ar_number || '—'}</span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {invoice.invoice_description || '-'}

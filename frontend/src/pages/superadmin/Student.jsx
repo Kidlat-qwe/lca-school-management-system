@@ -6,14 +6,17 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const Student = () => {
   const { signup } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [debouncedNameSearchTerm, setDebouncedNameSearchTerm] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
@@ -69,7 +72,18 @@ const Student = () => {
 
   useEffect(() => {
     fetchStudents();
-  }, [currentPage, itemsPerPage, filterBranch]);
+  }, [currentPage, itemsPerPage, filterBranch, debouncedNameSearchTerm]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedNameSearchTerm(nameSearchTerm.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [nameSearchTerm]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [nameSearchTerm]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -138,13 +152,16 @@ const Student = () => {
 
   const fetchStudents = async () => {
     try {
-      setLoading(true);
+      if (!hasLoadedOnce) {
+        setLoading(true);
+      }
       const params = new URLSearchParams({
         user_type: 'Student',
         limit: String(itemsPerPage),
         page: String(currentPage),
       });
       if (filterBranch) params.set('branch_id', filterBranch);
+      if (debouncedNameSearchTerm) params.set('search', debouncedNameSearchTerm);
       const response = await apiRequest(`/users?${params.toString()}`);
       const list = (response.data || []).filter((s) => s.user_type === 'Student');
       setStudents(list);
@@ -154,7 +171,10 @@ const Student = () => {
       setError(err.message || 'Failed to fetch students');
       console.error('Error fetching students:', err);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnce) {
+        setLoading(false);
+        setHasLoadedOnce(true);
+      }
     }
   };
 
@@ -179,7 +199,7 @@ const Student = () => {
       });
       fetchStudents();
     } catch (err) {
-      alert(err.message || 'Failed to delete student');
+      appAlert(err.message || 'Failed to delete student');
     }
   };
 
@@ -481,12 +501,9 @@ const Student = () => {
   };
 
   const filteredStudents = students.filter((student) => {
-    const matchesName = !nameSearchTerm || 
-      student.full_name?.toLowerCase().includes(nameSearchTerm.toLowerCase());
-    
     const matchesBranch = !filterBranch || student.branch_id?.toString() === filterBranch;
-    
-    return matchesName && matchesBranch;
+
+    return matchesBranch;
   });
 
   const uniqueBranches = [...new Set(students.map(s => s.branch_id).filter(Boolean))].sort((a, b) => a - b);

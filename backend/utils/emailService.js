@@ -14,10 +14,19 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_SECURE = process.env.SMTP_SECURE === 'true'; // true for 465, false for other ports
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASSWORD = process.env.SMTP_PASSWORD;
-// IMPORTANT:
-// - The SMTP envelope "from" must be owned by SMTP_USER to avoid sender rejection.
-// - We set the display name to "no-reply" while keeping the actual email address as SMTP_FROM/SMTP_USER.
-const SMTP_FROM_EMAIL = process.env.SMTP_FROM || SMTP_USER; // must be a real/owned mailbox
+// IMPORTANT: Many SMTP servers (incl. SpaceMail/cPanel) reject mail when From ≠ authenticated SMTP_USER.
+const rawSmtpFrom = (process.env.SMTP_FROM || '').trim();
+const rawSmtpUser = (SMTP_USER || '').trim();
+let envelopeFromEmail = rawSmtpFrom || rawSmtpUser;
+if (rawSmtpUser && rawSmtpFrom && rawSmtpFrom.toLowerCase() !== rawSmtpUser.toLowerCase()) {
+  console.warn(
+    `[emailService] SMTP_FROM (${rawSmtpFrom}) does not match SMTP_USER (${rawSmtpUser}). Using SMTP_USER as the From address so messages are accepted. Set SMTP_FROM to the same mailbox as SMTP_USER in .env if you use a different display name only via a provider that allows aliases.`
+  );
+  envelopeFromEmail = rawSmtpUser;
+} else if (!envelopeFromEmail) {
+  envelopeFromEmail = rawSmtpUser || rawSmtpFrom;
+}
+const SMTP_FROM_EMAIL = envelopeFromEmail;
 const SMTP_FROM = SMTP_FROM_EMAIL ? `no-reply <${SMTP_FROM_EMAIL}>` : undefined;
 
 // Create transporter
@@ -611,10 +620,102 @@ export const sendOverduePaymentReminderEmail = async ({
   }
 };
 
+/**
+ * Send generic system notification email.
+ * @param {Object} options
+ * @param {string|string[]} options.to - Recipient email(s)
+ * @param {string} options.subject - Email subject
+ * @param {string} options.html - Email HTML body
+ * @returns {Promise<Object>} Email send result
+ */
+export const sendSystemNotificationEmail = async ({
+  to,
+  subject,
+  html,
+}) => {
+  const normalizedRecipients = Array.isArray(to)
+    ? to.map((x) => String(x || '').trim()).filter(Boolean)
+    : [String(to || '').trim()].filter(Boolean);
+
+  if (normalizedRecipients.length === 0 || !subject || !html) {
+    throw new Error('Missing required email parameters');
+  }
+
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
+    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
+  }
+
+  const mailOptions = {
+    from: SMTP_FROM,
+    to: normalizedRecipients,
+    subject,
+    html,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ System notification email sent successfully:', {
+      to: normalizedRecipients,
+      messageId: info.messageId,
+      subject,
+    });
+    return {
+      success: true,
+      messageId: info.messageId,
+    };
+  } catch (error) {
+    console.error('❌ Error sending system notification email:', error);
+    throw error;
+  }
+};
+
+const BASIC_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Dedupe and drop invalid-looking addresses (empty / no @).
+ */
+export const normalizeNotificationRecipients = (list) => {
+  const seen = new Set();
+  const out = [];
+  for (const r of list || []) {
+    const e = String(r || '').trim();
+    if (!e || !BASIC_EMAIL_RE.test(e)) continue;
+    const k = e.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+  }
+  return out;
+};
+
+/**
+ * Send the same system notification to each recipient in separate SMTP transactions.
+ * More reliable than one message with many To: addresses on strict providers.
+ */
+export const sendSystemNotificationEmailToEach = async ({ recipients, subject, html }) => {
+  const unique = normalizeNotificationRecipients(recipients);
+  const summary = { attempted: unique.length, sent: 0, failed: 0, errors: [] };
+  for (const email of unique) {
+    try {
+      await sendSystemNotificationEmail({ to: email, subject, html });
+      summary.sent += 1;
+    } catch (e) {
+      summary.failed += 1;
+      const message = e?.message || String(e);
+      summary.errors.push({ email, message });
+      console.error(`[emailService] sendSystemNotificationEmailToEach failed for ${email}:`, message);
+    }
+  }
+  return summary;
+};
+
 export default {
   verifySMTPConnection,
   sendInvoiceEmail,
   sendSuspensionEmail,
   sendOverduePaymentReminderEmail,
+  sendSystemNotificationEmail,
+  sendSystemNotificationEmailToEach,
+  normalizeNotificationRecipients,
 };
 

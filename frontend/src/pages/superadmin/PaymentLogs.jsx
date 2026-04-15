@@ -6,10 +6,20 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import * as XLSX from 'xlsx';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
+import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
+import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 
 const PaymentLogs = () => {
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
+  /** main = all except Returned; return = finance sent back for reference/attachment fix */
+  const [branchLogTab, setBranchLogTab] = useState('main');
+  const [returnFixPayment, setReturnFixPayment] = useState(null);
+  const [returnFixRef, setReturnFixRef] = useState('');
+  const [returnFixAttachment, setReturnFixAttachment] = useState('');
+  const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
+  const [returnFixLoading, setReturnFixLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -60,7 +70,7 @@ const PaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo]);
+  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo, branchLogTab]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -99,6 +109,11 @@ const PaymentLogs = () => {
       if (filterStatus) params.set('status', filterStatus);
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (branchLogTab === 'return') {
+        params.set('approval_status', 'Returned');
+      } else {
+        params.set('exclude_approval_status', 'Returned');
+      }
       const response = await apiRequest(`/payments?${params.toString()}`);
       setPayments(response.data || []);
       if (response.pagination) {
@@ -175,17 +190,17 @@ const PaymentLogs = () => {
 
     // Require both values
     if (!originalRef) {
-      alert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
+      appAlert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
       return;
     }
     if (!enteredRef) {
-      alert('Please enter the reference number exactly as shown on the receipt image.');
+      appAlert('Please enter the reference number exactly as shown on the receipt image.');
       return;
     }
 
     // Enforce match between encoded reference and verifier input
     if (enteredRef !== originalRef) {
-      alert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
+      appAlert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
       return;
     }
 
@@ -204,9 +219,78 @@ const PaymentLogs = () => {
       closeReferenceModal();
       await fetchPayments(pagination.page);
     } catch (err) {
-      alert(err.message || 'Failed to save and approve payment.');
+      appAlert(err.message || 'Failed to save and approve payment.');
     } finally {
       setReferenceModalUpdating(false);
+    }
+  };
+
+  const openReturnFixModal = (payment) => {
+    setReturnFixPayment(payment);
+    setReturnFixRef((payment.reference_number || '').trim());
+    setReturnFixAttachment(payment.payment_attachment_url || '');
+  };
+
+  const closeReturnFixModal = () => {
+    setReturnFixPayment(null);
+    setReturnFixRef('');
+    setReturnFixAttachment('');
+    setReturnFixAttachmentUploading(false);
+  };
+
+  const handleReturnFixAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      appAlert('Image must be 5MB or less.');
+      return;
+    }
+    setReturnFixAttachmentUploading(true);
+    try {
+      const imageUrl = await uploadInvoicePaymentImage(file);
+      setReturnFixAttachment(imageUrl);
+    } catch (err) {
+      console.error('Return-fix attachment upload:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setReturnFixAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearReturnFixAttachment = () => {
+    setReturnFixAttachment('');
+  };
+
+  const submitReturnFix = async (e) => {
+    e?.preventDefault();
+    if (!returnFixPayment) return;
+    setReturnFixLoading(true);
+    try {
+      const refTrim = returnFixRef.trim();
+      const attTrim = returnFixAttachment.trim();
+      await apiRequest(`/payments/${returnFixPayment.payment_id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          reference_number: refTrim || undefined,
+          attachment_url: attTrim === '' ? null : attTrim,
+        }),
+      });
+      await apiRequest(`/payments/${returnFixPayment.payment_id}/resubmit-for-verification`, {
+        method: 'PUT',
+      });
+      appAlert('Payment updated and sent back to Finance for verification.');
+      closeReturnFixModal();
+      await fetchPayments(pagination.page);
+    } catch (err) {
+      appAlert(err.message || 'Failed to update and resubmit.');
+    } finally {
+      setReturnFixLoading(false);
     }
   };
 
@@ -369,7 +453,7 @@ const PaymentLogs = () => {
       allPayments = results.flat();
 
       if (allPayments.length === 0) {
-        alert('No payment records found to export.');
+        appAlert('No payment records found to export.');
         setExportLoading(false);
         return;
       }
@@ -427,7 +511,7 @@ const PaymentLogs = () => {
       setExportLoading(false);
     } catch (error) {
       console.error('Export error:', error);
-      alert('Failed to export payment logs. Please try again.');
+      appAlert('Failed to export payment logs. Please try again.');
       setExportLoading(false);
     }
   };
@@ -443,15 +527,19 @@ const PaymentLogs = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
-          <p className="text-sm text-gray-500 mt-1">View and manage all payment records</p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payment Logs</h1>
+          <p className="mt-1 text-sm text-gray-600 max-w-2xl">
+            View and manage all payment records. Use the <span className="font-medium text-gray-800">Return</span> tab for
+            items Finance sent back when the reference did not match the attachment — update details, then resubmit for
+            verification.
+          </p>
         </div>
         <button
+          type="button"
           onClick={handleExportClick}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          className="flex shrink-0 items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -460,11 +548,11 @@ const PaymentLogs = () => {
         </button>
       </div>
 
+      <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} />
+
       {/* Error Message */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {error}
-        </div>
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
       {/* Payment Logs List */}
@@ -662,7 +750,28 @@ const PaymentLogs = () => {
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
-                        {approvalLoadingId === payment.payment_id ? (
+                        {branchLogTab === 'return' ? (
+                          <div className="space-y-1.5">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800">
+                              Returned
+                            </span>
+                            {payment.return_reason && (
+                              <p className="text-xs text-gray-600 leading-snug line-clamp-3" title={payment.return_reason}>
+                                {payment.return_reason}
+                              </p>
+                            )}
+                            {payment.returned_by_name && (
+                              <p className="text-xs text-gray-500">By {payment.returned_by_name}</p>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openReturnFixModal(payment)}
+                              className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
+                            >
+                              Update reference & resubmit
+                            </button>
+                          </div>
+                        ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
@@ -899,6 +1008,7 @@ const PaymentLogs = () => {
                     onChange={(e) => setReferenceModalInput(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                    required
                   />
                 </div>
                 <div className="flex justify-end gap-3">
@@ -916,6 +1026,115 @@ const PaymentLogs = () => {
                     disabled={referenceModalUpdating}
                   >
                     {referenceModalUpdating ? 'Saving...' : 'Done'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Returned payment: fix reference / attachment and resubmit (portaled) */}
+      {returnFixPayment && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+          onClick={closeReturnFixModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">Fix &amp; resubmit for verification</h2>
+                <button
+                  type="button"
+                  onClick={closeReturnFixModal}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={returnFixLoading}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-2">
+                INV-{returnFixPayment.invoice_id} · {returnFixPayment.student_name || 'N/A'}
+              </p>
+              {returnFixPayment.return_reason && (
+                <div className="mb-4 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-900">
+                  <span className="font-medium">Finance note: </span>
+                  {returnFixPayment.return_reason}
+                </div>
+              )}
+              <form onSubmit={submitReturnFix}>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference number</label>
+                  <input
+                    type="text"
+                    value={returnFixRef}
+                    onChange={(e) => setReturnFixRef(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="Match the value on the receipt image"
+                  />
+                </div>
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Proof of payment (image)</label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Upload a new receipt or proof if you are replacing the image (JPEG, PNG, WebP, or GIF, max 5MB).
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={handleReturnFixAttachmentChange}
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                  />
+                  {returnFixAttachmentUploading && (
+                    <p className="text-xs text-amber-600 mt-2">Uploading image…</p>
+                  )}
+                  {returnFixAttachment && !returnFixAttachmentUploading && (
+                    <div className="mt-3 flex flex-col sm:flex-row sm:items-start gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAttachmentViewerUrl(returnFixAttachment);
+                          setShowAttachmentViewer(true);
+                        }}
+                        className="shrink-0 rounded-lg border border-gray-200 overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      >
+                        <img
+                          src={returnFixAttachment}
+                          alt="Proof of payment preview"
+                          className="max-h-36 w-auto max-w-full object-contain"
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearReturnFixAttachment}
+                        className="text-sm font-medium text-red-600 hover:text-red-800 self-start"
+                      >
+                        Remove image
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeReturnFixModal}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                  >
+                    {returnFixLoading ? 'Saving...' : 'Save & resubmit to Finance'}
                   </button>
                 </div>
               </form>

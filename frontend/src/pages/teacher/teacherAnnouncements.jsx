@@ -5,6 +5,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const RECIPIENT_GROUPS = [
   { value: 'All', label: 'All' },
@@ -73,6 +74,7 @@ const TeacherAnnouncements = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
   const highlightedRowRef = useRef(null);
+  const searchHydratedRef = useRef(false);
 
   useEffect(() => {
     fetchAnnouncements();
@@ -278,7 +280,7 @@ const TeacherAnnouncements = () => {
       });
       fetchAnnouncements();
     } catch (err) {
-      alert(err.message || 'Failed to delete announcement');
+      appAlert(err.message || 'Failed to delete announcement');
     }
   };
 
@@ -499,6 +501,22 @@ const TeacherAnnouncements = () => {
     setCurrentPage(1);
     fetchAnnouncements();
   };
+
+  useEffect(() => {
+    if (!searchHydratedRef.current) {
+      searchHydratedRef.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (currentPage !== 1) {
+        setCurrentPage(1);
+      } else {
+        fetchAnnouncements();
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [titleSearchTerm]);
 
   const handleReset = () => {
     setTitleSearchTerm('');

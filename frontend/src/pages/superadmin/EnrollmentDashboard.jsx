@@ -15,10 +15,11 @@ import {
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 
 const COLORS = ['#22C55E', '#94A3B8', '#F7C844', '#4F46E5'];
 
-const StatsCard = ({ title, value, icon, accent, description }) => (
+const StatsCard = ({ title, value, iconName, accent, description }) => (
   <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all hover:shadow-md">
     <div className="flex items-start justify-between">
       <div className="flex-1 min-w-0">
@@ -29,7 +30,7 @@ const StatsCard = ({ title, value, icon, accent, description }) => (
         )}
       </div>
       <div className={`ml-4 flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl ${accent}`}>
-        <span className="text-xl">{icon}</span>
+        <DashboardStatIcon name={iconName} className="h-6 w-6 text-white drop-shadow-sm" />
       </div>
     </div>
   </div>
@@ -148,28 +149,28 @@ const EnrollmentDashboard = () => {
         <StatsCard
           title="Total Students"
           value={totalStudents}
-          icon="🎓"
+          iconName="users"
           accent="bg-gradient-to-br from-slate-400 to-slate-500"
           description="All students in the system (active + inactive)."
         />
         <StatsCard
           title="Active Students"
           value={activeStudents}
-          icon="✅"
+          iconName="checkCircle"
           accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
           description="Currently enrolled in at least one class."
         />
         <StatsCard
           title="Inactive Students"
           value={inactiveStudents}
-          icon="⏸️"
+          iconName="userMinus"
           accent="bg-gradient-to-br from-amber-400 to-amber-500"
           description="Not enrolled in any class (e.g. new, dropped, or reserved only)."
         />
         <StatsCard
           title="Reserved Only"
           value={reservedOnly}
-          icon="📋"
+          iconName="clipboardList"
           accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
           description="Have a reservation but no active enrollment yet."
         />

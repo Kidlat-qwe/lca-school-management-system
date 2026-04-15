@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import { appAlert } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -151,7 +152,7 @@ const SuperfinanceInstallmentInvoice = () => {
       const generatedCount = invoice.generated_count || 0;
       const maxInvoices = invoice.total_phases - 1; // Deduct 1 for Phase 1 already paid
       if (generatedCount >= maxInvoices) {
-        alert(`Phase limit reached. Already generated ${generatedCount} of ${maxInvoices} installment invoices (Phase 1 was paid via initial package). Cannot generate more invoices.`);
+        appAlert(`Phase limit reached. Already generated ${generatedCount} of ${maxInvoices} installment invoices (Phase 1 was paid via initial package). Cannot generate more invoices.`);
         return;
       }
     }
@@ -272,7 +273,7 @@ const SuperfinanceInstallmentInvoice = () => {
       
       // Show success message
       setError(''); // Clear any previous errors
-      alert('Invoice generated successfully!');
+      appAlert('Invoice generated successfully!');
     } catch (err) {
       setGenerateFormErrors({ submit: err.message || 'Failed to generate invoice' });
       console.error('Error generating invoice:', err);
