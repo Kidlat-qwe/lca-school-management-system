@@ -516,6 +516,8 @@ router.get(
           cs.removed_at,
           cs.removed_reason,
           cs.removed_by,
+          active_profile.package_id as current_package_id,
+          active_profile.package_name as current_package_name,
           u.user_id,
           u.full_name,
           u.email,
@@ -528,6 +530,16 @@ router.get(
           CASE WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' THEN true ELSE false END as shouldCount
          FROM classstudentstbl cs
          INNER JOIN userstbl u ON cs.student_id = u.user_id
+         LEFT JOIN LATERAL (
+           SELECT ip.package_id, pkg.package_name
+           FROM installmentinvoiceprofilestbl ip
+           LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
+           WHERE ip.student_id = cs.student_id
+             AND ip.class_id = cs.class_id
+             AND ip.is_active = true
+           ORDER BY ip.installmentinvoiceprofiles_id DESC
+           LIMIT 1
+         ) active_profile ON true
          WHERE cs.class_id = $1`,
         [classId]
       );
@@ -548,6 +560,8 @@ router.get(
             ELSE 'Pending Enrollment (Downpayment Not Paid)'
           END as enrolled_by,
           1 as phase_number, -- Default to Phase 1 for pending students
+          ip.package_id as current_package_id,
+          pkg.package_name as current_package_name,
           u.user_id,
           u.full_name,
           u.email,
@@ -559,6 +573,7 @@ router.get(
           'pending' as student_type
          FROM installmentinvoiceprofilestbl ip
          INNER JOIN userstbl u ON ip.student_id = u.user_id
+         LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
          LEFT JOIN classstudentstbl cs ON ip.student_id = cs.student_id AND cs.class_id = $1
          WHERE ip.class_id = $1
            AND cs.classstudent_id IS NULL -- Not enrolled yet (Phase 1 not paid)

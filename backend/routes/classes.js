@@ -23,6 +23,322 @@ const getHolidayRangeFromStartDate = (startDate) => {
   };
 };
 
+const roundCurrency = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const isInstallmentLikePackage = (pkg) => (
+  pkg && (
+    pkg.package_type === 'Installment'
+    || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')
+  )
+);
+
+const getPackageChangeBlockedResult = (code, message, extra = {}) => ({
+  success: true,
+  data: {
+    allowed: false,
+    code,
+    message,
+    ...extra,
+  },
+});
+
+const buildPackageChangePreview = async ({ client, classId, studentId, targetPackageId }) => {
+  const [classResult, studentResult, currentProfileResult, targetPackageResult] = await Promise.all([
+    client.query(
+      `SELECT c.class_id, c.branch_id, c.program_id, c.class_name, c.level_tag,
+              p.program_name
+       FROM classestbl c
+       LEFT JOIN programstbl p ON c.program_id = p.program_id
+       WHERE c.class_id = $1`,
+      [classId]
+    ),
+    client.query(
+      `SELECT user_id, full_name, email
+       FROM userstbl
+       WHERE user_id = $1 AND user_type = 'Student'`,
+      [studentId]
+    ),
+    client.query(
+      `SELECT
+          ip.installmentinvoiceprofiles_id,
+          ip.student_id,
+          ip.class_id,
+          ip.package_id,
+          ip.amount,
+          ip.total_phases,
+          ip.generated_count,
+          ip.downpayment_paid,
+          ip.downpayment_invoice_id,
+          ip.phase_start,
+          ip.is_active,
+          p.package_name,
+          p.package_type,
+          p.payment_option,
+          p.package_price,
+          p.downpayment_amount,
+          p.branch_id AS package_branch_id
+       FROM installmentinvoiceprofilestbl ip
+       LEFT JOIN packagestbl p ON ip.package_id = p.package_id
+       WHERE ip.class_id = $1
+         AND ip.student_id = $2
+         AND ip.is_active = true
+       ORDER BY ip.installmentinvoiceprofiles_id DESC`,
+      [classId, studentId]
+    ),
+    client.query(
+      `SELECT
+          package_id,
+          package_name,
+          branch_id,
+          status,
+          package_price,
+          package_type,
+          payment_option,
+          downpayment_amount,
+          phase_start,
+          phase_end
+       FROM packagestbl
+       WHERE package_id = $1`,
+      [targetPackageId]
+    ),
+  ]);
+
+  if (classResult.rows.length === 0) {
+    return getPackageChangeBlockedResult('class_not_found', 'Class not found.');
+  }
+  if (studentResult.rows.length === 0) {
+    return getPackageChangeBlockedResult('student_not_found', 'Student not found.');
+  }
+  if (targetPackageResult.rows.length === 0) {
+    return getPackageChangeBlockedResult('target_package_not_found', 'Target package not found.');
+  }
+
+  const classRow = classResult.rows[0];
+  const studentRow = studentResult.rows[0];
+  const targetPackage = targetPackageResult.rows[0];
+
+  if (currentProfileResult.rows.length === 0) {
+    return getPackageChangeBlockedResult(
+      'missing_active_profile',
+      'This student does not have an active installment package profile for this class.',
+      {
+        class: classRow,
+        student: studentRow,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  if (currentProfileResult.rows.length > 1) {
+    return getPackageChangeBlockedResult(
+      'ambiguous_active_profiles',
+      'This student has multiple active package profiles for this class. Automatic package change is blocked.',
+      {
+        class: classRow,
+        student: studentRow,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  const currentProfile = currentProfileResult.rows[0];
+
+  if (!currentProfile.package_id) {
+    return getPackageChangeBlockedResult(
+      'missing_current_package',
+      'The active financial profile does not have a linked package. Automatic package change is blocked.',
+      {
+        class: classRow,
+        student: studentRow,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  if (Number(currentProfile.package_id) === Number(targetPackage.package_id)) {
+    return getPackageChangeBlockedResult(
+      'same_package',
+      'The target package is the same as the student’s current package.',
+      {
+        class: classRow,
+        student: studentRow,
+      }
+    );
+  }
+
+  if (targetPackage.status && targetPackage.status !== 'Active') {
+    return getPackageChangeBlockedResult(
+      'inactive_target_package',
+      'The selected package is not active.',
+      {
+        class: classRow,
+        student: studentRow,
+      }
+    );
+  }
+
+  if (
+    targetPackage.branch_id != null
+    && classRow.branch_id != null
+    && Number(targetPackage.branch_id) !== Number(classRow.branch_id)
+  ) {
+    return getPackageChangeBlockedResult(
+      'target_package_branch_mismatch',
+      'The selected package does not belong to this class branch.',
+      {
+        class: classRow,
+        student: studentRow,
+      }
+    );
+  }
+
+  if (!isInstallmentLikePackage(currentProfile) || !isInstallmentLikePackage(targetPackage)) {
+    return getPackageChangeBlockedResult(
+      'unsupported_package_type',
+      'Automatic package change currently supports installment-style packages only.',
+      {
+        class: classRow,
+        student: studentRow,
+        current_package: currentProfile,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  const activeEnrollmentResult = await client.query(
+    `SELECT COUNT(*) AS count
+     FROM classstudentstbl
+     WHERE student_id = $1
+       AND class_id = $2
+       AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+    [studentId, classId]
+  );
+
+  if (parseInt(activeEnrollmentResult.rows[0]?.count || 0, 10) <= 0) {
+    return getPackageChangeBlockedResult(
+      'not_currently_enrolled',
+      'This student does not have an active enrollment record in the selected class.',
+      {
+        class: classRow,
+        student: studentRow,
+      }
+    );
+  }
+
+  const [paidRecurringResult, totalPaidResult, partialRecurringResult] = await Promise.all([
+    client.query(
+      `SELECT COUNT(*) AS paid_count
+       FROM invoicestbl i
+       WHERE i.installmentinvoiceprofiles_id = $1
+         AND i.status = 'Paid'
+         AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)`,
+      [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
+    ),
+    client.query(
+      `SELECT COALESCE(SUM(p.payable_amount), 0) AS total_paid
+       FROM paymenttbl p
+       INNER JOIN invoicestbl i ON i.invoice_id = p.invoice_id
+       WHERE i.installmentinvoiceprofiles_id = $1
+         AND p.status = 'Completed'`,
+      [currentProfile.installmentinvoiceprofiles_id]
+    ),
+    client.query(
+      `SELECT COUNT(DISTINCT i.invoice_id) AS partial_count
+       FROM invoicestbl i
+       INNER JOIN paymenttbl p ON p.invoice_id = i.invoice_id
+       WHERE i.installmentinvoiceprofiles_id = $1
+         AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
+         AND p.status = 'Completed'
+         AND COALESCE(i.status, '') <> 'Paid'`,
+      [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
+    ),
+  ]);
+
+  if (parseInt(partialRecurringResult.rows[0]?.partial_count || 0, 10) > 0) {
+    return getPackageChangeBlockedResult(
+      'partial_recurring_payment_detected',
+      'This student has a partial or in-progress recurring payment. Automatic package change is blocked for now.',
+      {
+        class: classRow,
+        student: studentRow,
+        current_package: currentProfile,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  const recurringPaidCount = parseInt(paidRecurringResult.rows[0]?.paid_count || 0, 10);
+  const currentPaidTotal = roundCurrency(totalPaidResult.rows[0]?.total_paid || 0);
+  const targetDownpayment = roundCurrency(targetPackage.downpayment_amount || 0);
+  const targetRecurringAmount = roundCurrency(targetPackage.package_price || 0);
+
+  if (targetRecurringAmount <= 0 && recurringPaidCount > 0) {
+    return getPackageChangeBlockedResult(
+      'invalid_target_amount',
+      'The selected package does not have a valid recurring amount for this comparison.',
+      {
+        class: classRow,
+        student: studentRow,
+        current_package: currentProfile,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  const targetEquivalentTotal = roundCurrency(targetDownpayment + (recurringPaidCount * targetRecurringAmount));
+  const difference = roundCurrency(targetEquivalentTotal - currentPaidTotal);
+  const phaseStart = currentProfile.phase_start != null ? parseInt(currentProfile.phase_start, 10) : 1;
+  const lastPaidPhase = recurringPaidCount > 0 ? phaseStart + recurringPaidCount - 1 : null;
+
+  let allowed = true;
+  let code = 'adjustment_required';
+  let message = 'A package change adjustment invoice can be created.';
+
+  if (difference < 0) {
+    allowed = false;
+    code = 'negative_difference_blocked';
+    message = 'The student has already paid more than the target package equivalent total. Automatic package change is blocked.';
+  } else if (difference === 0) {
+    allowed = false;
+    code = 'no_difference';
+    message = 'There is no additional amount to invoice for this package change.';
+  }
+
+  return {
+    success: true,
+    data: {
+      allowed,
+      code,
+      message,
+      class: classRow,
+      student: studentRow,
+      current_package: {
+        package_id: currentProfile.package_id,
+        package_name: currentProfile.package_name,
+        package_type: currentProfile.package_type,
+        payment_option: currentProfile.payment_option,
+        downpayment_amount: roundCurrency(currentProfile.downpayment_amount || 0),
+        recurring_amount: roundCurrency(currentProfile.package_price || currentProfile.amount || 0),
+      },
+      target_package: {
+        package_id: targetPackage.package_id,
+        package_name: targetPackage.package_name,
+        package_type: targetPackage.package_type,
+        payment_option: targetPackage.payment_option,
+        downpayment_amount: targetDownpayment,
+        recurring_amount: targetRecurringAmount,
+      },
+      current_profile_id: currentProfile.installmentinvoiceprofiles_id,
+      recurring_paid_count: recurringPaidCount,
+      current_paid_total: currentPaidTotal,
+      target_equivalent_total: targetEquivalentTotal,
+      difference,
+      last_paid_phase: lastPaidPhase,
+      phase_start: phaseStart,
+    },
+  };
+};
+
 /**
  * Check if a schedule conflicts with existing active class schedules in a room
  * @param {number} roomId - Room ID
@@ -577,6 +893,205 @@ router.post(
         success: true,
         message: `Student moved to the other class successfully (${moveCount} enrollment(s), phase preserved).`,
         data: { student_id, source_class_id, target_class_id, enrollments_moved: moveCount },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/:id/students/:studentId/package-change-preview
+ * Preview the one-time package change adjustment amount.
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/:id/students/:studentId/package-change-preview',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    body('target_package_id').isInt().withMessage('target_package_id must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const classId = parseInt(req.params.id, 10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const targetPackageId = parseInt(req.body.target_package_id, 10);
+
+      const preview = await buildPackageChangePreview({
+        client,
+        classId,
+        studentId,
+        targetPackageId,
+      });
+
+      res.json(preview);
+    } catch (error) {
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/:id/students/:studentId/package-change-invoice
+ * Create a one-time adjustment invoice for a package change.
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/:id/students/:studentId/package-change-invoice',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    body('target_package_id').isInt().withMessage('target_package_id must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const classId = parseInt(req.params.id, 10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const targetPackageId = parseInt(req.body.target_package_id, 10);
+      const createdBy = req.user.userId || null;
+
+      const preview = await buildPackageChangePreview({
+        client,
+        classId,
+        studentId,
+        targetPackageId,
+      });
+
+      if (!preview?.data?.allowed) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(preview);
+      }
+
+      const details = preview.data;
+      const duplicateResult = await client.query(
+        `SELECT invoice_id
+         FROM invoicestbl
+         WHERE remarks LIKE $1
+           AND status NOT IN ('Paid', 'Cancelled')
+         ORDER BY invoice_id DESC
+         LIMIT 1`,
+        [
+          `%PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};TO_PACKAGE_ID:${details.target_package.package_id};%`,
+        ]
+      );
+
+      if (duplicateResult.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `An active package change adjustment invoice already exists (INV-${duplicateResult.rows[0].invoice_id}).`,
+          data: {
+            allowed: false,
+            code: 'existing_adjustment_invoice',
+            invoice_id: duplicateResult.rows[0].invoice_id,
+          },
+        });
+      }
+
+      const issueDate = formatYmdLocal(new Date());
+      const dueDate = issueDate;
+      const invoiceDescription = `Package change adjustment - ${details.target_package.package_name}`;
+      const remarks =
+        `PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};FROM_PACKAGE_ID:${details.current_package.package_id};TO_PACKAGE_ID:${details.target_package.package_id};CURRENT_PAID:${details.current_paid_total.toFixed(2)};TARGET_EQUIVALENT:${details.target_equivalent_total.toFixed(2)};RECURRING_PAID_COUNT:${details.recurring_paid_count}`;
+
+      const newInvoice = await insertInvoiceWithArNumber(
+        client,
+        `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, package_id, invoice_ar_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          invoiceDescription,
+          details.class.branch_id || null,
+          details.difference,
+          'Unpaid',
+          remarks,
+          issueDate,
+          dueDate,
+          createdBy,
+          details.target_package.package_id,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+         VALUES ($1, $2, $3)`,
+        [
+          newInvoice.invoice_id,
+          `Package change from ${details.current_package.package_name} to ${details.target_package.package_name}`,
+          details.difference,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO invoicestudentstbl (invoice_id, student_id)
+         VALUES ($1, $2)`,
+        [newInvoice.invoice_id, studentId]
+      );
+
+      // Keep the active installment profile in sync so Installment Invoice logs
+      // and future generated invoices use the updated plan amount/package.
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET package_id = $1,
+             amount = $2
+         WHERE installmentinvoiceprofiles_id = $3`,
+        [
+          details.target_package.package_id,
+          details.target_package.recurring_amount,
+          details.current_profile_id,
+        ]
+      );
+
+      await client.query(
+        `UPDATE installmentinvoicestbl
+         SET total_amount_including_tax = $1,
+             total_amount_excluding_tax = $2
+         WHERE installmentinvoiceprofiles_id = $3`,
+        [
+          details.target_package.recurring_amount,
+          details.target_package.recurring_amount,
+          details.current_profile_id,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      const [itemsResult, studentsResult] = await Promise.all([
+        query('SELECT * FROM invoiceitemstbl WHERE invoice_id = $1', [newInvoice.invoice_id]),
+        query(
+          `SELECT inv_student.*, u.full_name, u.email
+           FROM invoicestudentstbl inv_student
+           JOIN userstbl u ON inv_student.student_id = u.user_id
+           WHERE inv_student.invoice_id = $1`,
+          [newInvoice.invoice_id]
+        ),
+      ]);
+
+      res.status(201).json({
+        success: true,
+        message: `Adjustment invoice created and installment plan updated successfully (INV-${newInvoice.invoice_id}).`,
+        data: {
+          preview: details,
+          invoice: {
+            ...newInvoice,
+            items: itemsResult.rows,
+            students: studentsResult.rows,
+          },
+        },
       });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});

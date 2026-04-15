@@ -780,6 +780,10 @@ const AdminInvoice = () => {
     if (!refNum) {
       errors.reference_number = 'Reference number is required';
     }
+    const attachmentUrl = (paymentFormData.attachment_url || '').trim();
+    if (!attachmentUrl) {
+      errors.attachment_url = 'Attachment is required';
+    }
 
     setPaymentFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -2423,8 +2427,8 @@ const AdminInvoice = () => {
                 </div>
 
                 <div>
-                  <label className="label-field text-xs">Attachment (image)</label>
-                  <p className="text-xs text-gray-500 mb-1">Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 5MB)</p>
+                  <label className="label-field text-xs">Attachment (image) *</label>
+                  <p className="text-xs text-gray-500 mb-1">Upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 5MB)</p>
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
@@ -2434,6 +2438,9 @@ const AdminInvoice = () => {
                   />
                   {paymentAttachmentUploading && (
                     <p className="text-xs text-amber-600 mt-1">Uploading?</p>
+                  )}
+                  {paymentFormErrors.attachment_url && (
+                    <p className="text-xs text-red-500 mt-1">{paymentFormErrors.attachment_url}</p>
                   )}
                   {paymentFormData.attachment_url && !paymentAttachmentUploading && (
                     <div className="mt-2">

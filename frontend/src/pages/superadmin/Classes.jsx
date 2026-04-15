@@ -177,6 +177,18 @@ const Classes = () => {
   const [moveStudentSubmitting, setMoveStudentSubmitting] = useState(false);
   /** Source class when moving (from View Students or Enroll modal) */
   const [moveSourceClass, setMoveSourceClass] = useState(null);
+  const [openViewStudentMenuKey, setOpenViewStudentMenuKey] = useState(null);
+  const [viewStudentMenuPosition, setViewStudentMenuPosition] = useState({ top: 0, right: 0 });
+  const [viewStudentMenuTarget, setViewStudentMenuTarget] = useState(null);
+  const [isChangePackageModalOpen, setIsChangePackageModalOpen] = useState(false);
+  const [studentToChangePackage, setStudentToChangePackage] = useState(null);
+  const [changePackageSourceClass, setChangePackageSourceClass] = useState(null);
+  const [changePackageOptions, setChangePackageOptions] = useState([]);
+  const [loadingChangePackageOptions, setLoadingChangePackageOptions] = useState(false);
+  const [selectedTargetPackageForChange, setSelectedTargetPackageForChange] = useState(null);
+  const [changePackagePreview, setChangePackagePreview] = useState(null);
+  const [loadingChangePackagePreview, setLoadingChangePackagePreview] = useState(false);
+  const [changePackageSubmitting, setChangePackageSubmitting] = useState(false);
   const [conflictData, setConflictData] = useState(null); // Store conflict details from undo error
   const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
   const [pendingConflictData, setPendingConflictData] = useState(null); // Store conflict data while switching to detail view
@@ -568,6 +580,14 @@ const initializePackageMerchSelections = useCallback(
       if (openMenuId && !event.target.closest('.action-menu-container') && !event.target.closest('.action-menu-overlay')) {
         setOpenMenuId(null);
       }
+      if (
+        openViewStudentMenuKey &&
+        !event.target.closest('.view-student-action-menu-container') &&
+        !event.target.closest('.view-student-action-menu-overlay')
+      ) {
+        setOpenViewStudentMenuKey(null);
+        setViewStudentMenuTarget(null);
+      }
       if (openSessionMenuId && !event.target.closest('.session-action-menu-container') && !event.target.closest('.session-action-menu-overlay')) {
         setOpenSessionMenuId(null);
       }
@@ -590,7 +610,7 @@ const initializePackageMerchSelections = useCallback(
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
-  }, [openMenuId, openSessionMenuId, openBranchDropdown, openProgramDropdown, showStudentDropdown, showTeacherDropdown]);
+  }, [openMenuId, openViewStudentMenuKey, openSessionMenuId, openBranchDropdown, openProgramDropdown, showStudentDropdown, showTeacherDropdown]);
 
   const handleSessionMenuClick = (sessionKey, event) => {
     const button = event.currentTarget;
@@ -693,6 +713,33 @@ const initializePackageMerchSelections = useCallback(
       });
       setOpenMenuId(classId);
     }
+  };
+
+  const closeViewStudentActionMenu = () => {
+    setOpenViewStudentMenuKey(null);
+    setViewStudentMenuTarget(null);
+  };
+
+  const handleViewStudentActionMenuClick = (student, menuKey, event) => {
+    const button = event.currentTarget;
+    const rect = button.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+    const estimatedDropdownHeight = 96;
+    const spaceBelow = viewportHeight - rect.bottom;
+    const top = spaceBelow >= estimatedDropdownHeight
+      ? rect.bottom + 4
+      : Math.max(8, rect.top - estimatedDropdownHeight - 4);
+    const right = Math.max(8, viewportWidth - rect.right);
+
+    if (openViewStudentMenuKey === menuKey) {
+      closeViewStudentActionMenu();
+      return;
+    }
+
+    setViewStudentMenuPosition({ top, right });
+    setViewStudentMenuTarget(student);
+    setOpenViewStudentMenuKey(menuKey);
   };
 
   const fetchClasses = async () => {
@@ -1352,6 +1399,7 @@ const initializePackageMerchSelections = useCallback(
   const openMoveStudentModal = async (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
     if (!sourceClass) return;
+    closeViewStudentActionMenu();
     setMoveSourceClass(sourceClass);
     setStudentToMove(student);
     setSelectedTargetClassForMove(null);
@@ -1410,6 +1458,123 @@ const initializePackageMerchSelections = useCallback(
       appAlert(msg);
     } finally {
       setMoveStudentSubmitting(false);
+    }
+  };
+
+  const isInstallmentLikePackage = (pkg) => (
+    pkg && (pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment'))
+  );
+
+  const formatMoney = (value) => `₱${Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const openChangePackageModal = async (student, sourceClassOverride = null) => {
+    const sourceClass = sourceClassOverride ?? selectedClassForView;
+    if (!sourceClass) return;
+    closeViewStudentActionMenu();
+    const currentPackageId = Number(student?.current_package_id || 0);
+
+    setStudentToChangePackage(student);
+    setChangePackageSourceClass(sourceClass);
+    setSelectedTargetPackageForChange(null);
+    setChangePackagePreview(null);
+    setChangePackageOptions([]);
+    setIsChangePackageModalOpen(true);
+    setLoadingChangePackageOptions(true);
+
+    try {
+      const response = await apiRequest(`/packages?branch_id=${sourceClass.branch_id}&limit=100`);
+      const options = (response.data || []).filter(
+        (pkg) => pkg.status === 'Active'
+          && isInstallmentLikePackage(pkg)
+          && (!currentPackageId || Number(pkg.package_id) !== currentPackageId)
+      );
+      setChangePackageOptions(options);
+    } catch (err) {
+      console.error('Error fetching package change options:', err);
+      setChangePackageOptions([]);
+      appAlert(err.message || 'Failed to load package options.');
+    } finally {
+      setLoadingChangePackageOptions(false);
+    }
+  };
+
+  const closeChangePackageModal = () => {
+    setIsChangePackageModalOpen(false);
+    setStudentToChangePackage(null);
+    setChangePackageSourceClass(null);
+    setChangePackageOptions([]);
+    setSelectedTargetPackageForChange(null);
+    setChangePackagePreview(null);
+    setLoadingChangePackageOptions(false);
+    setLoadingChangePackagePreview(false);
+    setChangePackageSubmitting(false);
+  };
+
+  const fetchPackageChangePreview = async (targetPackage) => {
+    if (!targetPackage || !changePackageSourceClass || !studentToChangePackage) return;
+
+    setLoadingChangePackagePreview(true);
+    setChangePackagePreview(null);
+    try {
+      const response = await apiRequest(
+        `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-preview`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            target_package_id: targetPackage.package_id,
+          }),
+        }
+      );
+      setChangePackagePreview(response.data || null);
+    } catch (err) {
+      console.error('Error fetching package change preview:', err);
+      setChangePackagePreview({
+        allowed: false,
+        code: 'preview_failed',
+        message: err.response?.data?.message || err.message || 'Failed to evaluate the package change.',
+      });
+    } finally {
+      setLoadingChangePackagePreview(false);
+    }
+  };
+
+  const handleChangePackageSelection = async (packageId) => {
+    const targetPackage = changePackageOptions.find((pkg) => pkg.package_id === Number(packageId)) || null;
+    setSelectedTargetPackageForChange(targetPackage);
+    setChangePackagePreview(null);
+
+    if (targetPackage) {
+      await fetchPackageChangePreview(targetPackage);
+    }
+  };
+
+  const handleCreatePackageChangeInvoice = async () => {
+    if (!selectedTargetPackageForChange || !changePackageSourceClass || !studentToChangePackage || !changePackagePreview?.allowed) {
+      return;
+    }
+
+    setChangePackageSubmitting(true);
+    try {
+      const response = await apiRequest(
+        `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-invoice`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            target_package_id: selectedTargetPackageForChange.package_id,
+          }),
+        }
+      );
+
+      closeChangePackageModal();
+      appAlert(response.message || 'Package change adjustment invoice created successfully.');
+    } catch (err) {
+      console.error('Error creating package change invoice:', err);
+      appAlert(err.response?.data?.message || err.message || 'Failed to create package change invoice.');
+    } finally {
+      setChangePackageSubmitting(false);
     }
   };
 
@@ -2492,6 +2657,7 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const closeViewStudentsModal = () => {
+    closeViewStudentActionMenu();
     setIsViewStudentsModalOpen(false);
     setSelectedClassForView(null);
     setViewStudentsStep('phase-selection');
@@ -13343,14 +13509,20 @@ const initializePackageMerchSelections = useCallback(
                                 <td className="px-3 py-3 text-sm text-gray-500 max-w-[120px] truncate" title={enrolledByRaw}>{enrolledByShort}</td>
                                 <td className="px-3 py-3 whitespace-nowrap">
                                   {!isReserved && !isPending ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => openMoveStudentModal(student, selectedClassForView)}
-                                      className="text-xs font-medium text-sky-600 hover:text-sky-800 hover:underline"
-                                      title="Move to another class (same program)"
-                                    >
-                                      Move
-                                    </button>
+                                    <div className="relative view-student-action-menu-container">
+                                      <button
+                                        type="button"
+                                        onClick={(event) => handleViewStudentActionMenuClick(student, uniqueKey, event)}
+                                        className="inline-flex items-center justify-center rounded-full p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                        title="Open actions"
+                                        aria-haspopup="menu"
+                                        aria-expanded={openViewStudentMenuKey === uniqueKey}
+                                      >
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                        </svg>
+                                      </button>
+                                    </div>
                                   ) : (
                                     <span className="text-xs text-gray-400">—</span>
                                   )}
@@ -13379,6 +13551,222 @@ const initializePackageMerchSelections = useCallback(
                 </button>
               </div>
             )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {openViewStudentMenuKey && viewStudentMenuTarget && selectedClassForView && createPortal(
+        <>
+          <div
+            className="fixed inset-0 z-[10000] bg-transparent"
+            onClick={closeViewStudentActionMenu}
+          />
+          <div
+            className="fixed view-student-action-menu-overlay z-[10001] w-40 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg"
+            style={{
+              top: `${viewStudentMenuPosition.top}px`,
+              right: `${viewStudentMenuPosition.right}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  closeViewStudentActionMenu();
+                  openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
+                }}
+                className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
+              >
+                Move
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeViewStudentActionMenu();
+                  openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
+                }}
+                className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+              >
+                Update Plan
+              </button>
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
+
+      {isChangePackageModalOpen && studentToChangePackage && changePackageSourceClass && createPortal(
+        <div
+          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
+          onClick={closeChangePackageModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">Update Plan</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Create a one-time invoice for the package difference only.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeChangePackageModal}
+                className="text-gray-400 hover:text-gray-500 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                <div className="text-sm text-gray-900">
+                  <span className="font-semibold">{studentToChangePackage.full_name}</span>
+                  <span className="text-gray-500"> · {changePackageSourceClass.class_name || changePackageSourceClass.level_tag}</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  This does not replace the student&apos;s future billing profile. It only creates the adjustment invoice.
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="change-package-select" className="block text-sm font-medium text-gray-700 mb-1">
+                  Target package <span className="text-red-500">*</span>
+                </label>
+                {loadingChangePackageOptions ? (
+                  <div className="py-3 text-sm text-gray-500">Loading package options...</div>
+                ) : changePackageOptions.length === 0 ? (
+                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">
+                    No installment-style packages are available for this branch.
+                  </div>
+                ) : (
+                  <select
+                    id="change-package-select"
+                    value={selectedTargetPackageForChange?.package_id ?? ''}
+                    onChange={(e) => handleChangePackageSelection(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
+                  >
+                    <option value="">— Select package —</option>
+                    {changePackageOptions.map((pkg) => (
+                      <option key={pkg.package_id} value={pkg.package_id}>
+                        {pkg.package_name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {loadingChangePackagePreview && (
+                <div className="flex items-center justify-center py-10">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200 border-t-gray-500"></div>
+                </div>
+              )}
+
+              {!loadingChangePackagePreview && changePackagePreview && (
+                <div className="space-y-4">
+                  <div
+                    className={`rounded-lg border px-4 py-3 ${
+                      changePackagePreview.allowed
+                        ? 'border-emerald-200 bg-emerald-50'
+                        : 'border-amber-200 bg-amber-50'
+                    }`}
+                  >
+                    <p className={`text-sm font-medium ${changePackagePreview.allowed ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {changePackagePreview.message}
+                    </p>
+                  </div>
+
+                  {changePackagePreview.current_package && changePackagePreview.target_package && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="rounded-lg border border-gray-200 p-4">
+                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Current package</h3>
+                        <div className="space-y-2 text-sm text-gray-600">
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Package</span>
+                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.current_package.package_name}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Downpayment</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.downpayment_amount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Recurring amount</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.recurring_amount)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 p-4">
+                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Target package</h3>
+                        <div className="space-y-2 text-sm text-gray-600">
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Package</span>
+                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.target_package.package_name}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Downpayment</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.downpayment_amount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Recurring amount</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.recurring_amount)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Calculation summary</h3>
+                    <div className="space-y-2 text-sm text-gray-600">
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Paid recurring phases</span>
+                        <span className="font-medium text-gray-900">{changePackagePreview.recurring_paid_count ?? 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Current package paid total</span>
+                        <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_paid_total)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Target package equivalent total</span>
+                        <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_equivalent_total)}</span>
+                      </div>
+                      <div className="border-t border-gray-200 pt-2 flex items-center justify-between gap-4">
+                        <span className="font-semibold text-gray-900">Additional amount to invoice</span>
+                        <span className={`font-semibold ${changePackagePreview.difference > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {formatMoney(changePackagePreview.difference)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeChangePackageModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreatePackageChangeInvoice}
+                disabled={!changePackagePreview?.allowed || !selectedTargetPackageForChange || changePackageSubmitting}
+                className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {changePackageSubmitting ? 'Creating...' : 'Create Adjustment Invoice'}
+              </button>
+            </div>
           </div>
         </div>,
         document.body
