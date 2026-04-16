@@ -400,8 +400,28 @@ const initializePackageMerchSelections = useCallback(
 
   const fetchStudents = async (branchId) => {
     try {
-      const response = await apiRequest(`/users?user_type=Student&branch_id=${branchId}&limit=100`);
-      setStudents(response.data || []);
+      if (!branchId) {
+        setStudents([]);
+        return;
+      }
+
+      const allStudents = [];
+      const limit = 100; // backend max limit
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await apiRequest(
+          `/users?user_type=Student&branch_id=${branchId}&limit=${limit}&page=${page}`
+        );
+        const pageData = response.data || [];
+        allStudents.push(...pageData);
+
+        hasMore = pageData.length === limit;
+        page += 1;
+      }
+
+      setStudents(allStudents);
     } catch (err) {
       console.error('Error fetching students:', err);
     }
