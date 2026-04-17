@@ -143,6 +143,7 @@ const notifyPaymentReturnedToBranch = async ({
   invoiceId,
   reason,
   returnedByUserId,
+  makerUserId,
 }) => {
   try {
     if (!branchId) return;
@@ -172,6 +173,16 @@ const notifyPaymentReturnedToBranch = async ({
        VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5)`,
       ['Payment returned for correction', body, ['Admin'], branchId, returnedByUserId]
     );
+
+    // Also notify the original payment maker directly so the exact encoder is informed.
+    if (makerUserId && Number(makerUserId) !== Number(returnedByUserId)) {
+      const makerBody = `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id)
+         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6)`,
+        ['Payment returned — action needed', makerBody, ['All'], branchId, returnedByUserId, makerUserId]
+      );
+    }
   } catch (err) {
     console.error('notifyPaymentReturnedToBranch:', err?.message || err);
   }
@@ -2172,7 +2183,7 @@ router.put(
       const userBranchId = req.user.branchId;
 
       const paymentCheck = await query(
-        'SELECT payment_id, branch_id, invoice_id, approval_status, status FROM paymenttbl WHERE payment_id = $1',
+        'SELECT payment_id, branch_id, invoice_id, approval_status, status, created_by FROM paymenttbl WHERE payment_id = $1',
         [id]
       );
 
@@ -2227,6 +2238,7 @@ router.put(
         invoiceId: payment.invoice_id,
         reason,
         returnedByUserId: userId,
+        makerUserId: payment.created_by,
       });
 
       res.json({

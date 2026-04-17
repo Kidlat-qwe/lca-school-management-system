@@ -234,6 +234,9 @@ router.get(
       // 1. Announcement has no branch_id (applies to all branches)
       // 2. Announcement's branch_id matches user's branch_id
       // 3. User has no branch_id (Superadmin/Superfinance) - show all announcements
+      // Targeted notification logic:
+      // - If target_user_id is set, only that user can see it.
+      // - If target_user_id is NULL, fallback to recipient group matching.
       // Note: Using COALESCE to handle case where announcement_readstbl might not exist yet
       let sql = `
         SELECT 
@@ -260,7 +263,11 @@ router.get(
         WHERE a.status = 'Active'
           AND a.created_by != $1
           AND (
-            $2 = ANY(a.recipient_groups) OR 'All' = ANY(a.recipient_groups)
+            a.target_user_id = $1
+            OR (
+              a.target_user_id IS NULL
+              AND ($2 = ANY(a.recipient_groups) OR 'All' = ANY(a.recipient_groups))
+            )
           )
           AND (
             a.branch_id IS NULL 
@@ -298,6 +305,73 @@ router.get(
       });
     } catch (error) {
       console.error('Error fetching notifications:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/announcements/read-all
+ * Mark all currently visible active notifications as read for the current user
+ * Access: All authenticated users
+ * NOTE: This route must be defined BEFORE /:id to avoid route matching conflicts
+ */
+router.post(
+  '/read-all',
+  async (req, res, next) => {
+    try {
+      const userId = req.user.userId || req.user.user_id;
+      const userType = req.user.userType || req.user.user_type;
+      const userBranchId = req.user.branchId || req.user.branch_id;
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const recipientGroup = mapUserTypeToRecipientGroup(userType, userBranchId);
+
+      const result = await query(
+        `WITH visible_announcements AS (
+           SELECT a.announcement_id
+           FROM announcementstbl a
+           WHERE a.status = 'Active'
+             AND a.created_by != $1
+             AND (
+               a.target_user_id = $1
+               OR (
+                 a.target_user_id IS NULL
+                 AND ($2 = ANY(a.recipient_groups) OR 'All' = ANY(a.recipient_groups))
+               )
+             )
+             AND (
+               a.branch_id IS NULL
+               OR a.branch_id = $3
+               OR $3 IS NULL
+             )
+             AND (
+               a.start_date IS NULL OR a.start_date::date <= $4::date
+             )
+             AND (
+               a.end_date IS NULL OR a.end_date::date >= $4::date
+             )
+         )
+         INSERT INTO announcement_readstbl (announcement_id, user_id)
+         SELECT v.announcement_id, $1
+         FROM visible_announcements v
+         LEFT JOIN announcement_readstbl ar
+           ON ar.announcement_id = v.announcement_id
+          AND ar.user_id = $1
+         WHERE ar.announcement_id IS NULL
+         ON CONFLICT (announcement_id, user_id) DO NOTHING
+         RETURNING announcement_id`,
+        [userId, recipientGroup, userBranchId, today]
+      );
+
+      res.json({
+        success: true,
+        message: 'All notifications marked as read',
+        data: {
+          marked_count: result.rows.length,
+        },
+      });
+    } catch (error) {
+      console.error('Error marking all announcements as read:', error);
       next(error);
     }
   }
