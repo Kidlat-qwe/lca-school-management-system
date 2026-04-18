@@ -6,6 +6,7 @@ import { query, getClient } from '../config/database.js';
 import {
   sendInvoiceEmail,
   sendSystemNotificationEmail,
+  sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
 import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
@@ -329,6 +330,47 @@ const notifyPaymentResubmittedForVerification = async ({
        VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
       ['Payment resubmitted for verification', body, ['Finance'], branchId, resubmittedByUserId, 'payment-logs', 'notificationTab=main']
     );
+
+    try {
+      const financeRecipientsRes = await query(
+        `SELECT DISTINCT TRIM(email) AS email
+         FROM userstbl
+         WHERE COALESCE(TRIM(email), '') <> ''
+           AND (
+             LOWER(TRIM(user_type)) = 'superfinance'
+             OR (
+               LOWER(TRIM(user_type)) = 'finance'
+               AND ($1::int IS NULL OR branch_id = $1)
+             )
+           )`,
+        [branchId ?? null]
+      );
+      const recipients = normalizeNotificationRecipients(
+        (financeRecipientsRes.rows || []).map((r) => r.email)
+      );
+      if (recipients.length > 0) {
+        const subject = `Payment resubmitted for verification — ${invLabel} (${branchName})`;
+        const html = `
+          <!DOCTYPE html>
+          <html><head><meta charset="UTF-8"></head>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <p>Hi Finance Team,</p>
+            <p><strong>${escapeHtml(submittedBy)}</strong> resubmitted <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong>.</p>
+            <p>Please review this payment in <strong>Payment Logs</strong> under your main verification queue.</p>
+            <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
+          </body></html>`;
+        await sendSystemNotificationEmailToEach({
+          recipients,
+          subject,
+          html,
+        });
+      }
+    } catch (emailErr) {
+      console.error(
+        'notifyPaymentResubmittedForVerification email:',
+        emailErr?.message || emailErr
+      );
+    }
   } catch (err) {
     console.error('notifyPaymentResubmittedForVerification:', err?.message || err);
   }

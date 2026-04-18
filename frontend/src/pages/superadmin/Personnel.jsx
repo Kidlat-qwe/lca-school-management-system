@@ -231,6 +231,7 @@ const Personnel = () => {
       ...prev,
       branch_id: '', // Super accounts don't have a branch
       user_type: 'Superadmin', // Default to Superadmin
+      password: getDefaultPasswordForUserType('Superadmin'),
     }));
   };
 

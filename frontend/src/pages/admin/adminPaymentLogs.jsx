@@ -9,6 +9,7 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
+import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 
 /** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
 const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
@@ -1645,48 +1646,14 @@ const AdminPaymentLogs = () => {
         document.body
       )}
 
-      {/* Attachment viewer modal (portaled so overlay covers header) */}
-      {showAttachmentViewer && attachmentViewerUrl && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center px-4 py-2 border-b border-gray-200">
-              <span className="text-sm font-medium text-gray-700">Payment attachment</span>
-              <button
-                type="button"
-                onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md"
-                aria-label="Close"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 p-4 overflow-auto flex items-center justify-center">
-              {/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(attachmentViewerUrl) ? (
-                <img
-                  src={attachmentViewerUrl}
-                  alt="Payment attachment"
-                  className="max-w-full max-h-[75vh] w-auto object-contain rounded-lg"
-                />
-              ) : (
-                <iframe
-                  src={attachmentViewerUrl}
-                  title="Payment attachment"
-                  className="w-full min-h-[70vh] border-0 rounded-lg bg-gray-100"
-                />
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <PaymentAttachmentViewerModal
+        open={showAttachmentViewer && Boolean(attachmentViewerUrl)}
+        url={attachmentViewerUrl}
+        onClose={() => {
+          setShowAttachmentViewer(false);
+          setAttachmentViewerUrl(null);
+        }}
+      />
 
       {/* Payment Method filter dropdown - portaled to avoid table overflow clipping */}
       {openPaymentMethodDropdown && paymentMethodDropdownRect && createPortal(

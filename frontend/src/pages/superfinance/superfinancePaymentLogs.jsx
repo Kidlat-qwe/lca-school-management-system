@@ -9,6 +9,7 @@ import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
+import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 
 const SuperfinancePaymentLogs = () => {
   const location = useLocation();
@@ -1045,10 +1046,11 @@ const SuperfinancePaymentLogs = () => {
                 </div>
                 <div className="mb-4 pt-4 border-t border-gray-200">
                   <p className="text-xs text-gray-600 mb-2">
-                    If the reference and attachment do not match, return the payment to the branch with a short note (required).
+                    If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span> and enter a short note (notes are required only for that action). You can <span className="font-medium text-gray-800">Verify &amp; approve</span> without a note.
                   </p>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Note to branch <span className="text-red-600">*</span>
+                    Note to branch{' '}
+                    <span className="text-gray-500 font-normal">(required when returning)</span>
                   </label>
                   <textarea
                     value={returnReasonInput}
@@ -1056,8 +1058,6 @@ const SuperfinancePaymentLogs = () => {
                     rows={2}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
                     placeholder="e.g. Reference on image does not match encoded reference"
-                    required
-                    aria-required="true"
                     disabled={referenceModalUpdating || returnActionLoading}
                   />
                   <button
@@ -1094,47 +1094,14 @@ const SuperfinancePaymentLogs = () => {
       )}
 
       {/* Attachment viewer modal (portaled so overlay covers header) */}
-      {showAttachmentViewer && attachmentViewerUrl && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center px-4 py-2 border-b border-gray-200">
-              <span className="text-sm font-medium text-gray-700">Payment attachment</span>
-              <button
-                type="button"
-                onClick={() => { setShowAttachmentViewer(false); setAttachmentViewerUrl(null); }}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md"
-                aria-label="Close"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 p-4 overflow-auto flex items-center justify-center">
-              {/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(attachmentViewerUrl) ? (
-                <img
-                  src={attachmentViewerUrl}
-                  alt="Payment attachment"
-                  className="max-w-full max-h-[75vh] w-auto object-contain rounded-lg"
-                />
-              ) : (
-                <iframe
-                  src={attachmentViewerUrl}
-                  title="Payment attachment"
-                  className="w-full min-h-[70vh] border-0 rounded-lg bg-gray-100"
-                />
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <PaymentAttachmentViewerModal
+        open={showAttachmentViewer && Boolean(attachmentViewerUrl)}
+        url={attachmentViewerUrl}
+        onClose={() => {
+          setShowAttachmentViewer(false);
+          setAttachmentViewerUrl(null);
+        }}
+      />
 
       {openApprovalMenuId && createPortal(
         (() => {
