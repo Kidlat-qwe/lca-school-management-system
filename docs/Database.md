@@ -699,8 +699,12 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     return_reason text COLLATE pg_catalog."default",
     returned_by integer,
     returned_at timestamp without time zone,
+    action_owner_user_id integer,
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
+
+COMMENT ON COLUMN public.paymenttbl.action_owner_user_id
+    IS 'User responsible when Finance returns a payment for correction — usually invoicestbl.created_by (invoice issuer). Drives Return tab (my_return_queue) and targeted notifications.';
 
 COMMENT ON COLUMN public.paymenttbl.approval_status
     IS 'Pending | Approved | Returned — Returned means sent back to branch for reference/attachment correction.';
@@ -1639,6 +1643,15 @@ ALTER TABLE IF EXISTS public.paymenttbl
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
     ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.paymenttbl
+    ADD CONSTRAINT paymenttbl_action_owner_user_id_fkey FOREIGN KEY (action_owner_user_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_paymenttbl_action_owner_user_id
+    ON public.paymenttbl(action_owner_user_id);
 
 
 ALTER TABLE IF EXISTS public.paymenttbl

@@ -3,16 +3,71 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
-import { sendInvoiceEmail } from '../utils/emailService.js';
+import {
+  sendInvoiceEmail,
+  sendSystemNotificationEmail,
+  normalizeNotificationRecipients,
+} from '../utils/emailService.js';
 import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule, getPhaseDueDateYmd } from '../utils/phaseInstallmentUtils.js';
+import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
+
+/** Branch-side owner for return fixes: invoice issuer, else payment encoder. */
+const getPaymentReturnOwnerId = (payment) =>
+  payment?.action_owner_user_id ?? payment?.created_by ?? null;
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
+ * Finance/Superfinance may edit returned payments for operational reasons.
+ * Admin must be the assigned owner; Superadmin may override.
+ */
+const assertBranchUserMayEditReturnedPayment = (req, payment) => {
+  if (!payment || payment.approval_status !== 'Returned') {
+    return { ok: true };
+  }
+  const ut = req.user.userType;
+  if (ut === 'Finance' || ut === 'Superfinance') {
+    return { ok: true };
+  }
+  if (ut === 'Superadmin') {
+    return { ok: true };
+  }
+  if (ut !== 'Admin') {
+    return { ok: false, status: 403, message: 'Access denied' };
+  }
+  const ownerId = getPaymentReturnOwnerId(payment);
+  const uid = req.user.userId;
+  if (ownerId == null) {
+    return {
+      ok: false,
+      status: 403,
+      message:
+        'This returned payment has no assigned invoice owner. Please contact a superadmin.',
+    };
+  }
+  if (Number(ownerId) === Number(uid)) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    status: 403,
+    message: 'Only the staff member who issued the invoice may fix this returned payment.',
+  };
+};
 
 const syncInstallmentEnrollmentForPaidInvoice = async ({
   client,
@@ -143,7 +198,7 @@ const notifyPaymentReturnedToBranch = async ({
   invoiceId,
   reason,
   returnedByUserId,
-  makerUserId,
+  actionOwnerUserId,
 }) => {
   try {
     if (!branchId) return;
@@ -166,22 +221,75 @@ const notifyPaymentReturnedToBranch = async ({
     const studentLabel = payRes.rows[0]?.student_label || 'Student';
     const invLabel = invoiceId != null ? `INV-${invoiceId}` : `Payment #${paymentId}`;
     const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
-    const body = `${returnedBy} returned ${invLabel} (${studentLabel}) at ${branchName} for reference or attachment correction.${reasonText}`;
+    const detailBody = `${returnedBy} returned ${invLabel} (${studentLabel}) at ${branchName} for reference or attachment correction.${reasonText}`;
 
-    await query(
-      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
-       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
-      ['Payment returned for correction', body, ['Admin'], branchId, returnedByUserId, 'payment-logs', 'notificationTab=return']
-    );
-
-    // Also notify the original payment maker directly so the exact encoder is informed.
-    if (makerUserId && Number(makerUserId) !== Number(returnedByUserId)) {
-      const makerBody = `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
+    if (actionOwnerUserId) {
+      const targetBody =
+        Number(actionOwnerUserId) === Number(returnedByUserId)
+          ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
+          : `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
       await query(
         `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
-         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
-        ['Payment returned — action needed', makerBody, ['All'], branchId, returnedByUserId, makerUserId, 'payment-logs', 'notificationTab=return']
+         VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+        [
+          'Payment returned — action needed',
+          targetBody,
+          ['All'],
+          branchId,
+          returnedByUserId,
+          actionOwnerUserId,
+          'payment-logs',
+          'notificationTab=return',
+        ]
       );
+    } else {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+        [
+          'Payment returned for correction',
+          detailBody,
+          ['Admin'],
+          branchId,
+          returnedByUserId,
+          'payment-logs',
+          'notificationTab=return',
+        ]
+      );
+    }
+
+    if (
+      actionOwnerUserId &&
+      Number(actionOwnerUserId) !== Number(returnedByUserId)
+    ) {
+      try {
+        const ownerRes = await query(
+          `SELECT full_name, email FROM userstbl WHERE user_id = $1`,
+          [actionOwnerUserId]
+        );
+        const rawEmail = ownerRes.rows[0]?.email;
+        const [to] = normalizeNotificationRecipients([rawEmail]);
+        if (to) {
+          const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
+          const subject = `Payment returned — ${invLabel} (${branchName})`;
+          const html = `
+            <!DOCTYPE html>
+            <html><head><meta charset="UTF-8"></head>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <p>Hi ${escapeHtml(ownerFirst)},</p>
+              <p><strong>${escapeHtml(returnedBy)}</strong> returned <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong> so you can fix the reference or attachment.</p>
+              ${reason && String(reason).trim() ? `<p><strong>Note from Finance:</strong> ${escapeHtml(String(reason).trim())}</p>` : ''}
+              <p>Open <strong>Payment Logs</strong> and use the <strong>Return</strong> tab to update this payment.</p>
+              <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
+            </body></html>`;
+          await sendSystemNotificationEmail({ to, subject, html });
+        }
+      } catch (emailErr) {
+        console.error(
+          'notifyPaymentReturnedToBranch email:',
+          emailErr?.message || emailErr
+        );
+      }
     }
   } catch (err) {
     console.error('notifyPaymentReturnedToBranch:', err?.message || err);
@@ -246,6 +354,7 @@ router.get(
     queryValidator('approval_status').optional().isString().withMessage('approval_status must be a string'),
     queryValidator('exclude_approval_status').optional().isString().withMessage('exclude_approval_status must be a string'),
     queryValidator('returned_by_me').optional().isString().withMessage('returned_by_me must be a string'),
+    queryValidator('my_return_queue').optional().isString().withMessage('my_return_queue must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -261,19 +370,31 @@ router.get(
         approval_status: approvalStatus,
         exclude_approval_status: excludeApprovalStatus,
         returned_by_me: returnedByMeRaw,
+        my_return_queue: myReturnQueueRaw,
         page = 1,
         limit = 20,
       } = req.query;
       const returnedByMe =
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
+      let myReturnQueue =
+        myReturnQueueRaw === '1' || String(myReturnQueueRaw || '').toLowerCase() === 'true';
+      if (myReturnQueue && !['Superadmin', 'Admin'].includes(req.user.userType)) {
+        myReturnQueue = false;
+      }
       const pageNum = parseInt(page) || 1;
       const limitNum = parseInt(limit) || 20;
       const offset = (pageNum - 1) * limitNum;
+
+      const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+      const ownerSelectSql = hasActionOwnerCol
+        ? 'p.action_owner_user_id'
+        : 'NULL::integer AS action_owner_user_id';
 
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                         p.payment_method, p.payment_type, p.payable_amount, 
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
+                        ${ownerSelectSql},
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                         p.approval_status, p.approved_by,
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
@@ -283,6 +404,7 @@ router.get(
                         returner.full_name as returned_by_name,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
+                        i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
                         ar.prospect_student_name as ar_prospect_student_name
@@ -384,6 +506,20 @@ router.get(
       if (returnedByMe) {
         paramCount++;
         sql += ` AND p.returned_by = $${paramCount}`;
+        params.push(req.user.userId);
+      }
+
+      if (myReturnQueue) {
+        paramCount++;
+        sql += ` AND p.approval_status = 'Returned'`;
+        if (hasActionOwnerCol) {
+          sql += ` AND (
+          p.action_owner_user_id = $${paramCount}
+          OR (p.action_owner_user_id IS NULL AND p.created_by = $${paramCount})
+        )`;
+        } else {
+          sql += ` AND p.created_by = $${paramCount}`;
+        }
         params.push(req.user.userId);
       }
 
@@ -496,6 +632,20 @@ router.get(
         countParams.push(req.user.userId);
       }
 
+      if (myReturnQueue) {
+        countParamCount++;
+        countSql += ` AND p.approval_status = 'Returned'`;
+        if (hasActionOwnerCol) {
+          countSql += ` AND (
+          p.action_owner_user_id = $${countParamCount}
+          OR (p.action_owner_user_id IS NULL AND p.created_by = $${countParamCount})
+        )`;
+        } else {
+          countSql += ` AND p.created_by = $${countParamCount}`;
+        }
+        countParams.push(req.user.userId);
+      }
+
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total);
 
@@ -548,6 +698,7 @@ router.get(
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
+                        i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
                         ar.prospect_student_name as ar_prospect_student_name
@@ -642,6 +793,7 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -698,9 +850,11 @@ router.get(
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
-                u.full_name as student_name, u.email as student_email
+                u.full_name as student_name, u.email as student_email,
+                i.invoice_ar_number AS invoice_ar_number
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
          WHERE p.invoice_id = $1
          ORDER BY p.payment_id DESC`,
         [invoice_id]
@@ -817,28 +971,54 @@ router.post(
 
       // Get created_by from authenticated user
       const createdBy = req.user.userId || null;
+      const actionOwnerUserId =
+        invoice.created_by != null ? invoice.created_by : createdBy;
+
+      const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
 
       // Create payment
-      const paymentResult = await client.query(
-        `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
+      const paymentResult = hasActionOwnerCol
+        ? await client.query(
+            `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
+                                 payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING *`,
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              payment_method,
+              payment_type,
+              payable_amount,
+              issue_date,
+              status,
+              reference_number || null,
+              remarks || null,
+              createdBy,
+              attachment_url || null,
+              actionOwnerUserId,
+            ]
+          )
+        : await client.query(
+            `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
                                  payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
-        [
-          invoice_id,
-          student_id,
-          branch_id,
-          payment_method,
-          payment_type,
-          payable_amount,
-          issue_date,
-          status,
-          reference_number || null,
-          remarks || null,
-          createdBy,
-          attachment_url || null,
-        ]
-      );
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              payment_method,
+              payment_type,
+              payable_amount,
+              issue_date,
+              status,
+              reference_number || null,
+              remarks || null,
+              createdBy,
+              attachment_url || null,
+            ]
+          );
 
       const newPayment = paymentResult.rows[0];
 
@@ -1234,6 +1414,7 @@ router.post(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -1332,6 +1513,15 @@ router.put(
         return res.status(403).json({
           success: false,
           message: 'Access denied',
+        });
+      }
+
+      const returnEdit = assertBranchUserMayEditReturnedPayment(req, payment);
+      if (!returnEdit.ok) {
+        await client.query('ROLLBACK');
+        return res.status(returnEdit.status).json({
+          success: false,
+          message: returnEdit.message,
         });
       }
 
@@ -1731,6 +1921,7 @@ router.put(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -2050,6 +2241,7 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -2171,21 +2363,23 @@ router.put(
   requireRole('Finance', 'Superfinance'),
   [
     param('id').isInt().withMessage('Payment ID must be an integer'),
-    body('reason').optional().isString().withMessage('reason must be a string'),
+    body('reason')
+      .trim()
+      .notEmpty()
+      .withMessage('Return notes are required')
+      .isString()
+      .withMessage('Return notes must be text'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const reason = req.body?.reason != null ? String(req.body.reason).trim() : '';
+      const reason = String(req.body.reason).trim();
       const userId = req.user.userId;
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      const paymentCheck = await query(
-        'SELECT payment_id, branch_id, invoice_id, approval_status, status, created_by FROM paymenttbl WHERE payment_id = $1',
-        [id]
-      );
+      const paymentCheck = await query('SELECT * FROM paymenttbl WHERE payment_id = $1', [id]);
 
       if (paymentCheck.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Payment not found' });
@@ -2229,7 +2423,7 @@ router.put(
          WHERE payment_id = $3
          RETURNING payment_id, approval_status, return_reason,
                    TO_CHAR(returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at, returned_by`,
-        [reason || null, userId, id]
+        [reason, userId, id]
       );
 
       void notifyPaymentReturnedToBranch({
@@ -2238,7 +2432,7 @@ router.put(
         invoiceId: payment.invoice_id,
         reason,
         returnedByUserId: userId,
-        makerUserId: payment.created_by,
+        actionOwnerUserId: getPaymentReturnOwnerId(payment),
       });
 
       res.json({
@@ -2267,10 +2461,7 @@ router.put(
     try {
       const { id } = req.params;
 
-      const paymentCheck = await query(
-        'SELECT payment_id, branch_id, invoice_id, approval_status FROM paymenttbl WHERE payment_id = $1',
-        [id]
-      );
+      const paymentCheck = await query('SELECT * FROM paymenttbl WHERE payment_id = $1', [id]);
 
       if (paymentCheck.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Payment not found' });
@@ -2287,6 +2478,14 @@ router.put(
 
       if (req.user.userType !== 'Superadmin' && req.user.branchId && payment.branch_id !== req.user.branchId) {
         return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+
+      const resubmitPerm = assertBranchUserMayEditReturnedPayment(req, payment);
+      if (!resubmitPerm.ok) {
+        return res.status(resubmitPerm.status).json({
+          success: false,
+          message: resubmitPerm.message,
+        });
       }
 
       const userId = req.user.userId;

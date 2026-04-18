@@ -14,26 +14,7 @@ import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
   // Target by email (leave empty to use STUDENT_NAMES)
-  'aizacata@gmail.com',
-  'amapiles.sureblocks@gmail.com',
-  'angelacertezarodriguez@gmail.com',
-  'cathquitat@gmail.com',
-  'cess.lagman03@gmail.com',
-  'chuanchengsolayao@gmail.com',
-  'ghia1730@gmail.com',
   'iveedy04@gmail.com',
-  'jezreelgarcia09@gmail.com',
-  'juliven_atienza@lifelinediag.com',
-  'margarette.mariano03@yahoo.com',
-  'marvinjanine2518@gmail.com',
-  'may778848@gmail.com',
-  'mizhaellepamintuan@gmail.com',
-  'ms.magalang2006@gmail.com',
-  'norigrijaldo39@gmail.com',
-  'rivasanthonette@gmail.com',
-  'sheltelbabon28@gmail.com',
-  'shielapolitico01@gmail.com',
-  'wenniebaldonado@gmail.com',
 ];
 
 const STUDENT_NAMES = [

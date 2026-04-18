@@ -117,6 +117,7 @@ const StudentPaymentLogs = () => {
   const filteredPayments = payments.filter((payment) => {
     const matchesSearch = !searchTerm || 
       payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.payment_id?.toString().includes(searchTerm) ||
       `INV-${payment.invoice_id}`.includes(searchTerm);
@@ -180,6 +181,7 @@ const StudentPaymentLogs = () => {
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
         'Payment Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
       }));
 
@@ -196,6 +198,7 @@ const StudentPaymentLogs = () => {
         { wch: 15 },  // Amount
         { wch: 12 },  // Status
         { wch: 15 },  // Payment Date
+        { wch: 10 },  // AR#
         { wch: 20 },  // Reference Number
       ];
 
@@ -440,7 +443,7 @@ const StudentPaymentLogs = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '1200px' }}
+              style={{ width: '100%', minWidth: '1280px' }}
             >
               <thead className="bg-white">
                 <tr>
@@ -466,6 +469,9 @@ const StudentPaymentLogs = () => {
                     Payment Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    AR#
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Reference
                   </th>
                 </tr>
@@ -473,7 +479,7 @@ const StudentPaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
+                    <td colSpan={9} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterStatus || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -507,6 +513,11 @@ const StudentPaymentLogs = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(payment.issue_date)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                      <span className="truncate block" title={payment.invoice_ar_number || ''}>
+                        {payment.invoice_ar_number || '—'}
+                      </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500" style={{ maxWidth: '180px' }}>
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>

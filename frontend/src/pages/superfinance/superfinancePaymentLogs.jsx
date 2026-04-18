@@ -195,11 +195,16 @@ const SuperfinancePaymentLogs = () => {
 
   const handleReturnToBranch = async () => {
     if (!selectedPaymentForReference) return;
+    const note = returnReasonInput.trim();
+    if (!note) {
+      appAlert('Please enter notes explaining why the payment is being returned.');
+      return;
+    }
     setReturnActionLoading(true);
     try {
       await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/return`, {
         method: 'PUT',
-        body: JSON.stringify({ reason: returnReasonInput.trim() || undefined }),
+        body: JSON.stringify({ reason: note }),
       });
       appAlert('Payment returned to branch for correction.');
       closeReferenceModal();
@@ -353,6 +358,7 @@ const SuperfinancePaymentLogs = () => {
     const matchesSearch = !searchTerm || 
       payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.student_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.payment_id?.toString().includes(searchTerm);
     
@@ -458,6 +464,7 @@ const SuperfinancePaymentLogs = () => {
         'Status': payment.status || 'N/A',
         'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
         'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
       }));
@@ -478,6 +485,7 @@ const SuperfinancePaymentLogs = () => {
         { wch: 12 },  // Status
         { wch: 25 },  // Branch
         { wch: 15 },  // Issue Date
+        { wch: 10 },  // AR#
         { wch: 20 },  // Reference Number
         { wch: 30 },  // Remarks
       ];
@@ -593,19 +601,20 @@ const SuperfinancePaymentLogs = () => {
         <div className="rounded-lg overflow-hidden">
           <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '13%' }} />
                 <col style={{ width: '9%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '14%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '11%' }} />
               </colgroup>
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <div className="flex flex-col space-y-2 max-w-[160px]">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
@@ -635,7 +644,7 @@ const SuperfinancePaymentLogs = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     STUDENT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
@@ -699,13 +708,16 @@ const SuperfinancePaymentLogs = () => {
                       )}
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <span>Branch</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     DATE
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
+                    AR#
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     REFERENCE
                   </th>
                 </tr>
@@ -713,7 +725,7 @@ const SuperfinancePaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center">
+                    <td colSpan={10} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -841,6 +853,11 @@ const SuperfinancePaymentLogs = () => {
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
                       {formatDate(payment.issue_date)}
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-600 min-w-0">
+                      <span className="truncate block" title={payment.invoice_ar_number || ''}>
+                        {payment.invoice_ar_number || '—'}
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
@@ -1028,15 +1045,19 @@ const SuperfinancePaymentLogs = () => {
                 </div>
                 <div className="mb-4 pt-4 border-t border-gray-200">
                   <p className="text-xs text-gray-600 mb-2">
-                    If the reference and attachment do not match, return the payment to the branch with an optional note.
+                    If the reference and attachment do not match, return the payment to the branch with a short note (required).
                   </p>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Note to branch (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Note to branch <span className="text-red-600">*</span>
+                  </label>
                   <textarea
                     value={returnReasonInput}
                     onChange={(e) => setReturnReasonInput(e.target.value)}
                     rows={2}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
                     placeholder="e.g. Reference on image does not match encoded reference"
+                    required
+                    aria-required="true"
                     disabled={referenceModalUpdating || returnActionLoading}
                   />
                   <button

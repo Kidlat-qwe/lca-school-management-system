@@ -5,6 +5,7 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
+import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 
 const router = express.Router();
 
@@ -514,25 +515,49 @@ router.post(
         );
         const itemTotal = parseFloat(itemsSumResult.rows[0].s) || 0;
 
-        const paymentInsert = await client.query(
-          `INSERT INTO paymenttbl (
+        const actionOwnerAck = newInvoice.created_by != null ? newInvoice.created_by : createdBy;
+        const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+
+        const paymentInsert = hasActionOwnerCol
+          ? await client.query(
+              `INSERT INTO paymenttbl (
+             invoice_id, student_id, branch_id, payment_method, payment_type,
+             payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id
+           )
+           VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5::date, 'Completed', $6, $7, $8, $9, $10)
+           RETURNING *`,
+              [
+                newInvoice.invoice_id,
+                studentIdForInvoice,
+                branchId,
+                itemTotal,
+                issue_date,
+                reference_number?.trim() || null,
+                'Merchandise payment (acknowledgement receipt)',
+                createdBy,
+                payment_attachment_url || null,
+                actionOwnerAck,
+              ]
+            )
+          : await client.query(
+              `INSERT INTO paymenttbl (
              invoice_id, student_id, branch_id, payment_method, payment_type,
              payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url
            )
            VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5::date, 'Completed', $6, $7, $8, $9)
            RETURNING *`,
-          [
-            newInvoice.invoice_id,
-            studentIdForInvoice,
-            branchId,
-            itemTotal,
-            issue_date,
-            reference_number?.trim() || null,
-            'Merchandise payment (acknowledgement receipt)',
-            createdBy,
-            payment_attachment_url || null,
-          ]
-        );
+              [
+                newInvoice.invoice_id,
+                studentIdForInvoice,
+                branchId,
+                itemTotal,
+                issue_date,
+                reference_number?.trim() || null,
+                'Merchandise payment (acknowledgement receipt)',
+                createdBy,
+                payment_attachment_url || null,
+              ]
+            );
         const newPayment = paymentInsert.rows[0];
 
         await client.query(
@@ -753,10 +778,46 @@ router.post(
       }
 
       const createdBy = req.user.userId || null;
+      const actionOwnerAr = invoice.created_by != null ? invoice.created_by : createdBy;
+      const hasActionOwnerColAr = await paymenttblHasActionOwnerUserIdColumn();
 
       // Create payment record from AR details — carry over reference_number and attachment from AR
-      const paymentResult = await client.query(
-        `INSERT INTO paymenttbl (
+      const paymentResult = hasActionOwnerColAr
+        ? await client.query(
+            `INSERT INTO paymenttbl (
+           invoice_id,
+           student_id,
+           branch_id,
+           payment_method,
+           payment_type,
+           payable_amount,
+           issue_date,
+           status,
+           reference_number,
+           remarks,
+           created_by,
+           payment_attachment_url,
+           action_owner_user_id
+         )
+         VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, 'Completed', $6, $7, $8, $9, $10)
+         RETURNING *`,
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              ack.payment_amount,
+              ack.issue_date,
+              ack.reference_number || null,
+              ack.prospect_student_notes
+                ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
+                : 'Paid via acknowledgement receipt',
+              createdBy,
+              ack.payment_attachment_url || null,
+              actionOwnerAr,
+            ]
+          )
+        : await client.query(
+            `INSERT INTO paymenttbl (
            invoice_id,
            student_id,
            branch_id,
@@ -772,20 +833,20 @@ router.post(
          )
          VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, 'Completed', $6, $7, $8, $9)
          RETURNING *`,
-        [
-          invoice_id,
-          student_id,
-          branch_id,
-          ack.payment_amount,
-          ack.issue_date,
-          ack.reference_number || null,
-          ack.prospect_student_notes
-            ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
-            : 'Paid via acknowledgement receipt',
-          createdBy,
-          ack.payment_attachment_url || null,
-        ]
-      );
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              ack.payment_amount,
+              ack.issue_date,
+              ack.reference_number || null,
+              ack.prospect_student_notes
+                ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
+                : 'Paid via acknowledgement receipt',
+              createdBy,
+              ack.payment_attachment_url || null,
+            ]
+          );
 
       const newPayment = paymentResult.rows[0];
 
@@ -1081,22 +1142,52 @@ router.post(
 
                 // Create payment for Phase 1 invoice — carry over AR reference and attachment
                 const phase1InvoiceId = generatedInvoice.invoice_id;
-                await dbQuery(
-                  `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
+                const phase1InvRow = await dbQuery(
+                  'SELECT created_by FROM invoicestbl WHERE invoice_id = $1',
+                  [phase1InvoiceId]
+                );
+                const phase1ActionOwner =
+                  phase1InvRow.rows[0]?.created_by != null
+                    ? phase1InvRow.rows[0].created_by
+                    : createdBy;
+
+                const hasColPhase1 = await paymenttblHasActionOwnerUserIdColumn();
+                if (hasColPhase1) {
+                  await dbQuery(
+                    `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
+                     payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
+                   VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', $6, $7, $8, $9, $10)`,
+                    [
+                      phase1InvoiceId,
+                      sid,
+                      bid,
+                      phase_1_amount,
+                      ackDate,
+                      autoPayPhase1Data.reference_number || null,
+                      'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
+                      createdBy,
+                      autoPayPhase1Data.payment_attachment_url || null,
+                      phase1ActionOwner,
+                    ]
+                  );
+                } else {
+                  await dbQuery(
+                    `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
                      payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
                    VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', $6, $7, $8, $9)`,
-                  [
-                    phase1InvoiceId,
-                    sid,
-                    bid,
-                    phase_1_amount,
-                    ackDate,
-                    autoPayPhase1Data.reference_number || null,
-                    'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
-                    createdBy,
-                    autoPayPhase1Data.payment_attachment_url || null,
-                  ]
-                );
+                    [
+                      phase1InvoiceId,
+                      sid,
+                      bid,
+                      phase_1_amount,
+                      ackDate,
+                      autoPayPhase1Data.reference_number || null,
+                      'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
+                      createdBy,
+                      autoPayPhase1Data.payment_attachment_url || null,
+                    ]
+                  );
+                }
 
                 // Mark Phase 1 invoice as Paid
                 await dbQuery(

@@ -148,7 +148,7 @@ const PaymentLogs = () => {
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
-        params.set('approval_status', 'Returned');
+        params.set('my_return_queue', 'true');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
         params.set('approval_status', 'Approved');
@@ -428,6 +428,7 @@ const PaymentLogs = () => {
     const matchesSearch = !searchTerm || 
       payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.student_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.payment_id?.toString().includes(searchTerm);
     
@@ -485,7 +486,7 @@ const PaymentLogs = () => {
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
         if (branchLogTab === 'return') {
-          params.set('approval_status', 'Returned');
+          params.set('my_return_queue', 'true');
         } else if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
@@ -536,6 +537,7 @@ const PaymentLogs = () => {
         'Status': payment.status || 'N/A',
         'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
         'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
       }));
@@ -556,6 +558,7 @@ const PaymentLogs = () => {
         { wch: 12 },  // Status
         { wch: 25 },  // Branch
         { wch: 15 },  // Issue Date
+        { wch: 10 },  // AR#
         { wch: 20 },  // Reference Number
         { wch: 30 },  // Remarks
       ];
@@ -670,19 +673,20 @@ const PaymentLogs = () => {
           <div className="rounded-lg overflow-hidden">
             <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '13%' }} />
                 <col style={{ width: '9%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '14%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '11%' }} />
               </colgroup>
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <div className="flex flex-col space-y-2 max-w-[160px]">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
@@ -712,7 +716,7 @@ const PaymentLogs = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     STUDENT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
@@ -776,13 +780,16 @@ const PaymentLogs = () => {
                       )}
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <span>Branch</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     DATE
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
+                    AR#
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     REFERENCE
                   </th>
                 </tr>
@@ -790,7 +797,7 @@ const PaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center">
+                    <td colSpan={10} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -911,6 +918,11 @@ const PaymentLogs = () => {
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
                       {formatDate(payment.issue_date)}
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-600 min-w-0">
+                      <span className="truncate block" title={payment.invoice_ar_number || ''}>
+                        {payment.invoice_ar_number || '—'}
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
                       <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
