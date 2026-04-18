@@ -505,6 +505,7 @@ const AdminPaymentLogs = () => {
       const limit = 100;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (adminBranchId) params.set('branch_id', String(adminBranchId));
+      params.set('issued_by_me', 'true');
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
@@ -625,6 +626,7 @@ const AdminPaymentLogs = () => {
       while (hasMore) {
         const params = new URLSearchParams({ limit: String(limit), page: String(page) });
         if (adminBranchId) params.set('branch_id', String(adminBranchId));
+        params.set('issued_by_me', 'true');
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
         if (branchLogTab === 'return') {
@@ -1288,6 +1290,11 @@ const AdminPaymentLogs = () => {
                       )}
                     </div>
                   </th>
+                  {branchLogTab === 'return' ? (
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Returned by
+                    </th>
+                  ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     Branch
                   </th>
@@ -1305,7 +1312,7 @@ const AdminPaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab === 'return' ? 11 : 10} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -1339,24 +1346,13 @@ const AdminPaymentLogs = () => {
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
                         {branchLogTab === 'return' ? (
-                          <div className="space-y-1.5">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800">
-                              Returned
-                            </span>
-                            {payment.return_reason && (
-                              <p className="text-xs text-gray-600 leading-snug line-clamp-3" title={payment.return_reason}>
-                                {payment.return_reason}
-                              </p>
-                            )}
-                            {payment.returned_by_name && (
-                              <p className="text-xs text-gray-500">By {payment.returned_by_name}</p>
-                            )}
+                          <div className="space-y-1">
                             <button
                               type="button"
                               onClick={() => openReturnFixModal(payment)}
                               className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
                             >
-                              Update reference &amp; resubmit
+                              Update reference and resubmit
                             </button>
                           </div>
                         ) : approvalLoadingId === payment.payment_id ? (
@@ -1404,6 +1400,13 @@ const AdminPaymentLogs = () => {
                         })()}
                       </div>
                     </td>
+                    {branchLogTab === 'return' ? (
+                      <td className="px-3 py-2.5 text-sm text-gray-800 align-top min-w-0">
+                        <span className="truncate block" title={payment.returned_by_name || ''}>
+                          {payment.returned_by_name || '—'}
+                        </span>
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
                       <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
                     </td>

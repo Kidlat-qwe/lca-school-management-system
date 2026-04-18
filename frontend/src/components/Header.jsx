@@ -29,7 +29,10 @@ const Header = ({ onMenuClick }) => {
   const [branchName, setBranchName] = useState(null);
   const [branchNickname, setBranchNickname] = useState(null);
   const userType = userInfo?.user_type || userInfo?.userType || '';
-  const isBranchAdmin = userType === 'Admin';
+  const userBranchId = userInfo?.branch_id || userInfo?.branchId;
+  const isBranchScopedUser =
+    userType === 'Admin' ||
+    (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined);
 
   // Fetch branch name if user has a branch_id
   useEffect(() => {
@@ -199,7 +202,7 @@ const Header = ({ onMenuClick }) => {
               </h1>
             )}
           </div>
-          {(shouldShowBranchFilter || isBranchAdmin) && (
+          {(shouldShowBranchFilter || isBranchScopedUser) && (
             <div className="hidden lg:flex items-center pl-3 flex-shrink-0">
               <div className="w-[240px] max-w-[280px]">
                 <label htmlFor="global_branch_filter" className="sr-only">
@@ -208,12 +211,12 @@ const Header = ({ onMenuClick }) => {
                 <div className="relative">
                   <select
                     id="global_branch_filter"
-                    value={isBranchAdmin ? (branchNickname || branchName || 'Your Branch') : selectedBranchId}
+                    value={isBranchScopedUser ? (branchNickname || branchName || 'Your Branch') : selectedBranchId}
                     onChange={(e) => setSelectedBranchId(e.target.value)}
                     className="w-full appearance-none rounded-lg border border-[#c78d14] bg-[#f8d373] px-4 py-2 pr-10 text-sm font-medium text-gray-900 text-left shadow-sm transition-colors focus:border-[#a86f00] focus:outline-none focus:ring-2 focus:ring-[#f4b428]"
-                    disabled={loadingBranches || isBranchAdmin}
+                    disabled={loadingBranches || isBranchScopedUser}
                   >
-                    {isBranchAdmin ? (
+                    {isBranchScopedUser ? (
                       <option value={branchNickname || branchName || 'Your Branch'}>
                         {branchNickname || branchName || 'Your Branch'}
                       </option>

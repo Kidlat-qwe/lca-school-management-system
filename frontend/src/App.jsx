@@ -220,6 +220,7 @@ function App() {
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<FinanceAcknowledgementReceipts />} />
+            <Route path="daily-summary-sales" element={<SuperfinanceDailySummarySales />} />
             <Route path="announcements" element={<TeacherAnnouncements />} />
           </Route>
           

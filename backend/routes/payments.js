@@ -20,9 +20,9 @@ const router = express.Router();
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
-/** Branch-side owner for return fixes: invoice issuer, else payment encoder. */
-const getPaymentReturnOwnerId = (payment) =>
-  payment?.action_owner_user_id ?? payment?.created_by ?? null;
+/** Branch-side owner for return fixes: invoice issuer first, then action owner, then payment encoder. */
+const getPaymentReturnOwnerId = (payment, invoiceCreatedBy) =>
+  invoiceCreatedBy ?? payment?.action_owner_user_id ?? payment?.created_by ?? null;
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -31,6 +31,29 @@ const escapeHtml = (value) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+let announcementTargetUserIdSupportPromise = null;
+const announcementstblHasTargetUserIdColumn = async () => {
+  if (!announcementTargetUserIdSupportPromise) {
+    announcementTargetUserIdSupportPromise = (async () => {
+      try {
+        const res = await query(
+          `SELECT 1
+           FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'announcementstbl'
+             AND column_name = 'target_user_id'
+           LIMIT 1`
+        );
+        return res.rows.length > 0;
+      } catch (err) {
+        console.error('announcementstblHasTargetUserIdColumn:', err?.message || err);
+        return false;
+      }
+    })();
+  }
+  return announcementTargetUserIdSupportPromise;
+};
 
 /**
  * Finance/Superfinance may edit returned payments for operational reasons.
@@ -200,9 +223,11 @@ const notifyPaymentReturnedToBranch = async ({
   reason,
   returnedByUserId,
   actionOwnerUserId,
+  invoiceOwnerUserId,
 }) => {
   try {
     if (!branchId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
     const [branchRes, userRes, payRes] = await Promise.all([
       query(
         `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
@@ -224,31 +249,14 @@ const notifyPaymentReturnedToBranch = async ({
     const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
     const detailBody = `${returnedBy} returned ${invLabel} (${studentLabel}) at ${branchName} for reference or attachment correction.${reasonText}`;
 
-    if (actionOwnerUserId) {
-      const targetBody =
-        Number(actionOwnerUserId) === Number(returnedByUserId)
-          ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
-          : `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
-      await query(
-        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
-         VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
-        [
-          'Payment returned — action needed',
-          targetBody,
-          ['All'],
-          branchId,
-          returnedByUserId,
-          actionOwnerUserId,
-          'payment-logs',
-          'notificationTab=return',
-        ]
-      );
-    } else {
+    if (!hasTargetUserIdColumn) {
+      // Fallback for environments that have not applied target_user_id migration yet.
+      // Admin recipient group is visible to branch admins; superadmin (branch_id NULL) also sees all.
       await query(
         `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
          VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
         [
-          'Payment returned for correction',
+          'Payment returned — action needed',
           detailBody,
           ['Admin'],
           branchId,
@@ -257,6 +265,85 @@ const notifyPaymentReturnedToBranch = async ({
           'notificationTab=return',
         ]
       );
+    } else {
+      const ownerTargetIds = Array.from(
+        new Set(
+          [invoiceOwnerUserId, actionOwnerUserId]
+            .map((id) => (id == null ? null : Number(id)))
+            .filter((id) => id != null && !Number.isNaN(id))
+        )
+      );
+
+      if (ownerTargetIds.length > 0) {
+        await Promise.all(
+          ownerTargetIds.map((targetUserId) => {
+            const targetBody =
+              Number(targetUserId) === Number(returnedByUserId)
+                ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
+                : `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
+            return query(
+              `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+               VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+              [
+                'Payment returned — action needed',
+                targetBody,
+                ['All'],
+                branchId,
+                returnedByUserId,
+                targetUserId,
+                'payment-logs',
+                'notificationTab=return',
+              ]
+            );
+          })
+        );
+      } else {
+        console.warn(
+          `notifyPaymentReturnedToBranch: skipped in-app announcement for payment_id=${paymentId} because action owner is missing`
+        );
+      }
+
+      // Always notify superadmins for visibility when Finance/Superfinance returns a payment.
+      try {
+        const superadminRes = await query(
+          `SELECT user_id
+           FROM userstbl
+           WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+        );
+        const superadminIds = (superadminRes.rows || [])
+          .map((row) => row.user_id)
+          .filter(
+            (uid) =>
+              uid != null &&
+              Number(uid) !== Number(actionOwnerUserId) &&
+              Number(uid) !== Number(invoiceOwnerUserId)
+          );
+        if (superadminIds.length > 0) {
+          await Promise.all(
+            superadminIds.map((superadminUserId) =>
+              query(
+                `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+                 VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+                [
+                  'Payment returned — superadmin review',
+                  detailBody,
+                  ['All'],
+                  branchId,
+                  returnedByUserId,
+                  superadminUserId,
+                  'payment-logs',
+                  'notificationTab=return',
+                ]
+              )
+            )
+          );
+        }
+      } catch (superadminNotifyErr) {
+        console.error(
+          'notifyPaymentReturnedToBranch superadmin notify:',
+          superadminNotifyErr?.message || superadminNotifyErr
+        );
+      }
     }
 
     if (
@@ -397,6 +484,7 @@ router.get(
     queryValidator('exclude_approval_status').optional().isString().withMessage('exclude_approval_status must be a string'),
     queryValidator('returned_by_me').optional().isString().withMessage('returned_by_me must be a string'),
     queryValidator('my_return_queue').optional().isString().withMessage('my_return_queue must be a string'),
+    queryValidator('issued_by_me').optional().isString().withMessage('issued_by_me must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -413,6 +501,7 @@ router.get(
         exclude_approval_status: excludeApprovalStatus,
         returned_by_me: returnedByMeRaw,
         my_return_queue: myReturnQueueRaw,
+        issued_by_me: issuedByMeRaw,
         page = 1,
         limit = 20,
       } = req.query;
@@ -420,8 +509,13 @@ router.get(
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
       let myReturnQueue =
         myReturnQueueRaw === '1' || String(myReturnQueueRaw || '').toLowerCase() === 'true';
-      if (myReturnQueue && !['Superadmin', 'Admin'].includes(req.user.userType)) {
+      let issuedByMe =
+        issuedByMeRaw === '1' || String(issuedByMeRaw || '').toLowerCase() === 'true';
+      if (myReturnQueue && !['Superadmin', 'Admin', 'Finance'].includes(req.user.userType)) {
         myReturnQueue = false;
+      }
+      if (issuedByMe && req.user.userType !== 'Admin') {
+        issuedByMe = false;
       }
       const pageNum = parseInt(page) || 1;
       const limitNum = parseInt(limit) || 20;
@@ -449,10 +543,16 @@ router.get(
                         i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
+                        payment_creator.full_name as payment_created_by_name,
+                        payment_creator.email as payment_created_by_email,
+                        invoice_issuer.full_name as invoice_issued_by_name,
+                        invoice_issuer.email as invoice_issued_by_email,
                         ar.prospect_student_name as ar_prospect_student_name
                  FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
                  LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                 LEFT JOIN userstbl payment_creator ON p.created_by = payment_creator.user_id
+                 LEFT JOIN userstbl invoice_issuer ON i.created_by = invoice_issuer.user_id
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN userstbl returner ON p.returned_by = returner.user_id
@@ -565,6 +665,16 @@ router.get(
         params.push(req.user.userId);
       }
 
+      if (issuedByMe) {
+        paramCount++;
+        if (hasActionOwnerCol) {
+          sql += ` AND COALESCE(p.action_owner_user_id, i.created_by, p.created_by) = $${paramCount}`;
+        } else {
+          sql += ` AND COALESCE(i.created_by, p.created_by) = $${paramCount}`;
+        }
+        params.push(req.user.userId);
+      }
+
       sql += ` ORDER BY p.payment_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -591,7 +701,10 @@ router.get(
       }
 
       // Get total count for pagination
-      let countSql = `SELECT COUNT(*) as total FROM paymenttbl p WHERE 1=1`;
+      let countSql = `SELECT COUNT(*) as total
+                      FROM paymenttbl p
+                      LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                      WHERE 1=1`;
       const countParams = [];
       let countParamCount = 0;
 
@@ -684,6 +797,16 @@ router.get(
         )`;
         } else {
           countSql += ` AND p.created_by = $${countParamCount}`;
+        }
+        countParams.push(req.user.userId);
+      }
+
+      if (issuedByMe) {
+        countParamCount++;
+        if (hasActionOwnerCol) {
+          countSql += ` AND COALESCE(p.action_owner_user_id, i.created_by, p.created_by) = $${countParamCount}`;
+        } else {
+          countSql += ` AND COALESCE(i.created_by, p.created_by) = $${countParamCount}`;
         }
         countParams.push(req.user.userId);
       }
@@ -2339,6 +2462,14 @@ router.put(
       }
 
       const payment = paymentCheck.rows[0];
+      let invoiceCreatedBy = null;
+      if (payment.invoice_id != null) {
+        const invoiceOwnerRes = await query(
+          'SELECT created_by FROM invoicestbl WHERE invoice_id = $1',
+          [payment.invoice_id]
+        );
+        invoiceCreatedBy = invoiceOwnerRes.rows[0]?.created_by ?? null;
+      }
 
       if (approve && payment.approval_status === 'Returned') {
         return res.status(400).json({
@@ -2428,6 +2559,14 @@ router.put(
       }
 
       const payment = paymentCheck.rows[0];
+      let invoiceCreatedBy = null;
+      if (payment.invoice_id != null) {
+        const invoiceOwnerRes = await query(
+          'SELECT created_by FROM invoicestbl WHERE invoice_id = $1',
+          [payment.invoice_id]
+        );
+        invoiceCreatedBy = invoiceOwnerRes.rows[0]?.created_by ?? null;
+      }
 
       if (payment.approval_status === 'Returned') {
         return res.status(400).json({
@@ -2474,7 +2613,8 @@ router.put(
         invoiceId: payment.invoice_id,
         reason,
         returnedByUserId: userId,
-        actionOwnerUserId: getPaymentReturnOwnerId(payment),
+        actionOwnerUserId: getPaymentReturnOwnerId(payment, invoiceCreatedBy),
+        invoiceOwnerUserId: invoiceCreatedBy,
       });
 
       res.json({

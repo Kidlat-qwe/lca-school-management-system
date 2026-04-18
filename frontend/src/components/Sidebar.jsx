@@ -336,6 +336,8 @@ const Sidebar = ({ isOpen, onClose }) => {
       if (item.name === 'Daily Summary Sales') {
         if (basePath === '/superfinance') {
           itemPath = '/superfinance/daily-summary-sales';
+        } else if (basePath === '/finance') {
+          itemPath = '/finance/daily-summary-sales';
         } else {
           itemPath = '/superadmin/daily-summary-sales';
         }

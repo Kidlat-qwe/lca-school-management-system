@@ -27,8 +27,10 @@ function getNotificationBasePath(navigationKey, userInfo) {
     case 'daily-summary-sales':
       if (userType === 'Superadmin') return '/superadmin/daily-summary-sales';
       if (userType === 'Superfinance') return '/superfinance/daily-summary-sales';
-      if (userType === 'Finance' && (branchId === null || branchId === undefined)) {
-        return '/superfinance/daily-summary-sales';
+      if (userType === 'Finance') {
+        return branchId === null || branchId === undefined
+          ? '/superfinance/daily-summary-sales'
+          : '/finance/daily-summary-sales';
       }
       return getAnnouncementsPathForUser(userInfo);
 

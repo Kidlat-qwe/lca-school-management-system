@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
@@ -8,6 +9,7 @@ import { appAlert } from '../../utils/appAlert';
 const ITEMS_PER_PAGE = 10;
 
 const FinanceInvoice = () => {
+  const { userInfo } = useAuth();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -237,6 +239,12 @@ const FinanceInvoice = () => {
 
   const fetchStudents = async () => {
     try {
+      const userType = userInfo?.user_type || userInfo?.userType;
+      // /users endpoint is restricted to Superadmin/Admin. Avoid 403 noise for Finance views.
+      if (userType === 'Finance' || userType === 'Superfinance') {
+        setStudents([]);
+        return;
+      }
       // Fetch users with user_type = 'Student'
       const response = await apiRequest('/users?limit=100');
       const studentUsers = (response.data || []).filter(user => user.user_type === 'Student');

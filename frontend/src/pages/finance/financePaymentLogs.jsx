@@ -48,6 +48,8 @@ const FinancePaymentLogs = () => {
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
+  const [showReturnDetailsModal, setShowReturnDetailsModal] = useState(false);
+  const [selectedReturnDetailsPayment, setSelectedReturnDetailsPayment] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const latestFetchIdRef = useRef(0);
 
@@ -119,7 +121,6 @@ const FinancePaymentLogs = () => {
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (financeLogTab === 'return') {
         params.set('approval_status', 'Returned');
-        params.set('returned_by_me', 'true');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
         params.set('approval_status', 'Approved');
@@ -175,7 +176,7 @@ const FinancePaymentLogs = () => {
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
-    setReferenceModalInput(''); // Finance must retype the reference number from the image
+    setReferenceModalInput(payment.reference_number || ''); // Prefill for faster cross-checking
     setReturnReasonInput('');
     setShowReferenceModal(true);
   };
@@ -185,6 +186,16 @@ const FinancePaymentLogs = () => {
     setSelectedPaymentForReference(null);
     setReferenceModalInput('');
     setReturnReasonInput('');
+  };
+
+  const openReturnDetailsModal = (payment) => {
+    setSelectedReturnDetailsPayment(payment);
+    setShowReturnDetailsModal(true);
+  };
+
+  const closeReturnDetailsModal = () => {
+    setShowReturnDetailsModal(false);
+    setSelectedReturnDetailsPayment(null);
   };
 
   const handleReturnToBranch = async () => {
@@ -200,9 +211,9 @@ const FinancePaymentLogs = () => {
         method: 'PUT',
         body: JSON.stringify({ reason: note }),
       });
-      appAlert('Payment returned to branch for correction.');
       closeReferenceModal();
       await fetchPayments(pagination.page);
+      appAlert('Payment returned to branch for correction.');
     } catch (err) {
       appAlert(err.message || 'Failed to return payment.');
     } finally {
@@ -306,6 +317,18 @@ const FinancePaymentLogs = () => {
     return `₱${parseFloat(amount).toFixed(2)}`;
   };
 
+  const formatInvoiceIssuedBy = (payment) => {
+    const name = (payment.invoice_issued_by_name || '').trim();
+    const email = (payment.invoice_issued_by_email || '').trim();
+    if (name) return name;
+    if (email) return email;
+    const recorderName = (payment.payment_created_by_name || '').trim();
+    const recorderEmail = (payment.payment_created_by_email || '').trim();
+    if (recorderName) return recorderName;
+    if (recorderEmail) return recorderEmail;
+    return '—';
+  };
+
   const getStatusBadge = (status) => {
     const statusColors = {
       'Completed': 'bg-green-100 text-green-800',
@@ -348,6 +371,10 @@ const FinancePaymentLogs = () => {
     const matchesSearch = !searchTerm || 
       payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.student_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_issued_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_issued_by_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.payment_created_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.payment_created_by_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.payment_id?.toString().includes(searchTerm);
@@ -404,7 +431,6 @@ const FinancePaymentLogs = () => {
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
         if (financeLogTab === 'return') {
           params.set('approval_status', 'Returned');
-          params.set('returned_by_me', 'true');
         } else if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
@@ -448,6 +474,7 @@ const FinancePaymentLogs = () => {
         'Invoice Description': payment.invoice_description || '-',
         'Student Name': payment.student_name || 'N/A',
         'Student Email': payment.student_email || '-',
+        'Issued by': formatInvoiceIssuedBy(payment),
         'Payment Method': payment.payment_method || '-',
         'Payment Type': payment.payment_type || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
@@ -469,6 +496,7 @@ const FinancePaymentLogs = () => {
         { wch: 30 },  // Invoice Description
         { wch: 25 },  // Student Name
         { wch: 30 },  // Student Email
+        { wch: 22 },  // Issued by
         { wch: 18 },  // Payment Method
         { wch: 18 },  // Payment Type
         { wch: 15 },  // Amount
@@ -592,7 +620,7 @@ const FinancePaymentLogs = () => {
               <colgroup>
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '13%' }} />
-                <col style={{ width: '9%' }} />
+                <col style={{ width: '10%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '14%' }} />
@@ -635,6 +663,9 @@ const FinancePaymentLogs = () => {
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     STUDENT
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Issued by
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
@@ -697,6 +728,11 @@ const FinancePaymentLogs = () => {
                       )}
                     </div>
                   </th>
+                  {financeLogTab === 'return' ? (
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Returned by
+                    </th>
+                  ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <div className="relative branch-filter-dropdown">
                       <button
@@ -734,12 +770,12 @@ const FinancePaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center">
+                    <td colSpan={financeLogTab === 'return' ? 12 : 11} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
                           : financeLogTab === 'return'
-                            ? 'No payments you have returned to a branch yet.'
+                            ? 'No returned payments found for this branch.'
                             : 'No payment records found.'}
                       </p>
                     </td>
@@ -758,6 +794,11 @@ const FinancePaymentLogs = () => {
                         )}
                       </div>
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
+                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
+                        {formatInvoiceIssuedBy(payment)}
+                      </span>
+                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
@@ -770,30 +811,14 @@ const FinancePaymentLogs = () => {
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
                         {financeLogTab === 'return' ? (
-                          <div className="space-y-1.5">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-100 text-amber-900">
-                              Returned to branch
-                            </span>
-                            {payment.return_reason && (
-                              <p className="text-xs text-gray-600 leading-snug line-clamp-3" title={payment.return_reason}>
-                                {payment.return_reason}
-                              </p>
-                            )}
-                            {payment.returned_at && (
-                              <p className="text-xs text-gray-500">Sent back {payment.returned_at}</p>
-                            )}
-                            {payment.payment_attachment_url && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setAttachmentViewerUrl(payment.payment_attachment_url);
-                                  setShowAttachmentViewer(true);
-                                }}
-                                className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
-                              >
-                                View attachment
-                              </button>
-                            )}
+                          <div className="space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => openReturnDetailsModal(payment)}
+                              className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
+                            >
+                              View details
+                            </button>
                           </div>
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
@@ -842,6 +867,13 @@ const FinancePaymentLogs = () => {
                         })()}
                       </div>
                     </td>
+                    {financeLogTab === 'return' ? (
+                      <td className="px-3 py-2.5 text-sm text-gray-800 align-top min-w-0">
+                        <span className="truncate block" title={payment.returned_by_name || ''}>
+                          {payment.returned_by_name || '—'}
+                        </span>
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
                       {(() => {
                         const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
@@ -1094,6 +1126,73 @@ const FinancePaymentLogs = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {showReturnDetailsModal && selectedReturnDetailsPayment && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+          onClick={closeReturnDetailsModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">Returned payment details</h2>
+                <button
+                  type="button"
+                  onClick={closeReturnDetailsModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="space-y-3 text-sm">
+                <p className="text-gray-700">
+                  <span className="font-medium">Payment:</span>{' '}
+                  {selectedReturnDetailsPayment.invoice_id
+                    ? `INV-${selectedReturnDetailsPayment.invoice_id}`
+                    : '-'}{' '}
+                  · {selectedReturnDetailsPayment.student_name || 'N/A'}
+                </p>
+                <p className="text-gray-700">
+                  <span className="font-medium">Returned by:</span>{' '}
+                  {selectedReturnDetailsPayment.returned_by_name || '—'}
+                </p>
+                <p className="text-gray-700">
+                  <span className="font-medium">Returned at:</span>{' '}
+                  {selectedReturnDetailsPayment.returned_at || '—'}
+                </p>
+                <p className="text-gray-700">
+                  <span className="font-medium">Reference number:</span>{' '}
+                  {selectedReturnDetailsPayment.reference_number || '—'}
+                </p>
+                <div>
+                  <p className="font-medium text-gray-700 mb-1">Return reason</p>
+                  <p className="text-gray-600 whitespace-pre-wrap">
+                    {selectedReturnDetailsPayment.return_reason || '—'}
+                  </p>
+                </div>
+                {selectedReturnDetailsPayment.payment_attachment_url ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentViewerUrl(selectedReturnDetailsPayment.payment_attachment_url);
+                      setShowAttachmentViewer(true);
+                    }}
+                    className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
+                  >
+                    View attachment
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>,

@@ -149,7 +149,7 @@ const PaymentLogs = () => {
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
-        params.set('my_return_queue', 'true');
+        params.set('approval_status', 'Returned');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
         params.set('approval_status', 'Approved');
@@ -385,6 +385,18 @@ const PaymentLogs = () => {
     return `₱${parseFloat(amount).toFixed(2)}`;
   };
 
+  const formatInvoiceIssuedBy = (payment) => {
+    const name = (payment.invoice_issued_by_name || '').trim();
+    const email = (payment.invoice_issued_by_email || '').trim();
+    if (name) return name;
+    if (email) return email;
+    const recorderName = (payment.payment_created_by_name || '').trim();
+    const recorderEmail = (payment.payment_created_by_email || '').trim();
+    if (recorderName) return recorderName;
+    if (recorderEmail) return recorderEmail;
+    return '—';
+  };
+
   const getStatusBadge = (status) => {
     const statusColors = {
       'Completed': 'bg-green-100 text-green-800',
@@ -429,6 +441,9 @@ const PaymentLogs = () => {
     const matchesSearch = !searchTerm || 
       payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.student_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_issued_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.invoice_issued_by_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      payment.returned_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       payment.payment_id?.toString().includes(searchTerm);
@@ -487,7 +502,7 @@ const PaymentLogs = () => {
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
         if (branchLogTab === 'return') {
-          params.set('my_return_queue', 'true');
+          params.set('approval_status', 'Returned');
         } else if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
@@ -527,42 +542,38 @@ const PaymentLogs = () => {
       }
 
       // Prepare data for Excel
-      const excelData = allPayments.map(payment => ({
-        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
-        'Invoice Description': payment.invoice_description || '-',
-        'Student Name': payment.student_name || 'N/A',
-        'Student Email': payment.student_email || '-',
-        'Payment Method': payment.payment_method || '-',
-        'Payment Type': payment.payment_type || '-',
-        'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
-        'Status': payment.status || 'N/A',
-        'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
-        'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
-        'AR#': payment.invoice_ar_number || '-',
-        'Reference Number': payment.reference_number || '-',
-        'Remarks': payment.remarks || '-',
-      }));
+      const excelData = allPayments.map((payment) => {
+        const row = {
+          'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+          'Invoice Description': payment.invoice_description || '-',
+          'Student Name': payment.student_name || 'N/A',
+          'Student Email': payment.student_email || '-',
+          'Issued by': formatInvoiceIssuedBy(payment),
+        };
+        if (branchLogTab === 'return') {
+          row['Returned by'] = payment.returned_by_name || '-';
+        }
+        row['Payment Method'] = payment.payment_method || '-';
+        row['Payment Type'] = payment.payment_type || '-';
+        row['Amount (₱)'] = payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00';
+        row['Status'] = payment.status || 'N/A';
+        row['Branch'] = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
+        row['Issue Date'] = payment.issue_date ? formatDate(payment.issue_date) : '-';
+        row['AR#'] = payment.invoice_ar_number || '-';
+        row['Reference Number'] = payment.reference_number || '-';
+        row['Remarks'] = payment.remarks || '-';
+        return row;
+      });
 
       // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(excelData);
 
       // Set column widths
-      ws['!cols'] = [
-        { wch: 12 },  // Invoice ID
-        { wch: 30 },  // Invoice Description
-        { wch: 25 },  // Student Name
-        { wch: 30 },  // Student Email
-        { wch: 18 },  // Payment Method
-        { wch: 18 },  // Payment Type
-        { wch: 15 },  // Amount
-        { wch: 12 },  // Status
-        { wch: 25 },  // Branch
-        { wch: 15 },  // Issue Date
-        { wch: 10 },  // AR#
-        { wch: 20 },  // Reference Number
-        { wch: 30 },  // Remarks
-      ];
+      const widthList = [12, 30, 25, 30, 22];
+      if (branchLogTab === 'return') widthList.push(22);
+      widthList.push(18, 18, 15, 12, 25, 15, 10, 20, 30);
+      ws['!cols'] = widthList.map((wch) => ({ wch }));
 
       // Add worksheet to workbook
       XLSX.utils.book_append_sheet(wb, ws, 'Payment Logs');
@@ -673,18 +684,36 @@ const PaymentLogs = () => {
           {/* Table fits viewport - no horizontal scroll; compact responsive layout */}
           <div className="rounded-lg overflow-hidden">
             <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
-              <colgroup>
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '13%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '11%' }} />
-              </colgroup>
+              {branchLogTab === 'return' ? (
+                <colgroup>
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '14%' }} />
+                </colgroup>
+              ) : (
+                <colgroup>
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
+              )}
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
@@ -719,6 +748,9 @@ const PaymentLogs = () => {
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     STUDENT
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Issued by
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
@@ -781,6 +813,11 @@ const PaymentLogs = () => {
                       )}
                     </div>
                   </th>
+                  {branchLogTab === 'return' ? (
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Returned by
+                    </th>
+                  ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     <span>Branch</span>
                   </th>
@@ -798,7 +835,7 @@ const PaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab === 'return' ? 12 : 11} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -820,6 +857,11 @@ const PaymentLogs = () => {
                         )}
                       </div>
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
+                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
+                        {formatInvoiceIssuedBy(payment)}
+                      </span>
+                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
@@ -832,24 +874,13 @@ const PaymentLogs = () => {
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
                         {branchLogTab === 'return' ? (
-                          <div className="space-y-1.5">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800">
-                              Returned
-                            </span>
-                            {payment.return_reason && (
-                              <p className="text-xs text-gray-600 leading-snug line-clamp-3" title={payment.return_reason}>
-                                {payment.return_reason}
-                              </p>
-                            )}
-                            {payment.returned_by_name && (
-                              <p className="text-xs text-gray-500">By {payment.returned_by_name}</p>
-                            )}
+                          <div className="space-y-1">
                             <button
                               type="button"
                               onClick={() => openReturnFixModal(payment)}
                               className="text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
                             >
-                              Update reference & resubmit
+                              Update reference and resubmit
                             </button>
                           </div>
                         ) : approvalLoadingId === payment.payment_id ? (
@@ -899,6 +930,13 @@ const PaymentLogs = () => {
                         })()}
                       </div>
                     </td>
+                    {branchLogTab === 'return' ? (
+                      <td className="px-3 py-2.5 text-sm text-gray-800 align-top min-w-0">
+                        <span className="truncate block" title={payment.returned_by_name || ''}>
+                          {payment.returned_by_name || '—'}
+                        </span>
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
                       {(() => {
                         const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
