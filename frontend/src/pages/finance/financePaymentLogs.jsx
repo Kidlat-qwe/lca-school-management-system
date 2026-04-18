@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
@@ -9,9 +10,13 @@ import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 
 const FinancePaymentLogs = () => {
+  const location = useLocation();
   const { userInfo } = useAuth();
   /** main = pending + approved (excludes Returned); return = payments you sent back to the branch */
-  const [financeLogTab, setFinanceLogTab] = useState('main');
+  const [financeLogTab, setFinanceLogTab] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('notificationTab') === 'return' ? 'return' : 'main';
+  });
   const [returnReasonInput, setReturnReasonInput] = useState('');
   const [returnActionLoading, setReturnActionLoading] = useState(false);
   const [payments, setPayments] = useState([]);
@@ -19,7 +24,7 @@ const FinancePaymentLogs = () => {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
@@ -43,11 +48,20 @@ const FinancePaymentLogs = () => {
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const latestFetchIdRef = useRef(0);
 
   useEffect(() => {
     fetchPayments(1);
     fetchBranches();
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const notificationTab = params.get('notificationTab');
+    if (notificationTab === 'main' || notificationTab === 'return') {
+      setFinanceLogTab(notificationTab);
+    }
+  }, [location.search]);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -56,7 +70,14 @@ const FinancePaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo, financeLogTab]);
+  }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, financeLogTab]);
+
+  useEffect(() => {
+    if (financeLogTab === 'return') {
+      setOpenStatusDropdown(false);
+      setStatusDropdownRect(null);
+    }
+  }, [financeLogTab]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -87,21 +108,29 @@ const FinancePaymentLogs = () => {
   }, [openBranchDropdown, openStatusDropdown, openPaymentMethodDropdown]);
 
   const fetchPayments = async (page = 1) => {
+    const fetchId = ++latestFetchIdRef.current;
     try {
       setLoading(true);
       const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterStatus) params.set('status', filterStatus);
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (financeLogTab === 'return') {
         params.set('approval_status', 'Returned');
         params.set('returned_by_me', 'true');
+      } else if (filterFinanceApproval === 'approved') {
+        params.set('status', 'Completed');
+        params.set('approval_status', 'Approved');
+        params.set('exclude_approval_status', 'Returned');
+      } else if (filterFinanceApproval === 'pending') {
+        params.set('status', 'Completed');
+        params.set('exclude_approval_status', 'Approved,Returned');
       } else {
         params.set('exclude_approval_status', 'Returned');
       }
       const response = await apiRequest(`/payments?${params.toString()}`);
+      if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
       if (response.pagination) {
         setPagination({
@@ -113,10 +142,12 @@ const FinancePaymentLogs = () => {
       }
       setError('');
     } catch (err) {
+      if (fetchId !== latestFetchIdRef.current) return;
       console.error('Error fetching payments:', err);
       setError('Failed to load payments. Please try again.');
       setPayments([]);
     } finally {
+      if (fetchId !== latestFetchIdRef.current) return;
       setLoading(false);
     }
   };
@@ -302,11 +333,6 @@ const FinancePaymentLogs = () => {
     );
   };
 
-  const getUniqueStatuses = () => {
-    const statuses = [...new Set(payments.map(p => p.status).filter(Boolean))];
-    return statuses.sort();
-  };
-
   const getUniquePaymentMethods = () => {
     const methods = [...new Set(payments.map(p => p.payment_method).filter(Boolean))];
     return methods.sort();
@@ -320,10 +346,16 @@ const FinancePaymentLogs = () => {
       payment.payment_id?.toString().includes(searchTerm);
     
     const matchesBranch = !filterBranch || payment.branch_id?.toString() === filterBranch;
-    const matchesStatus = !filterStatus || payment.status === filterStatus;
+    const matchesFinanceApproval =
+      financeLogTab === 'return' ||
+      !filterFinanceApproval ||
+      (filterFinanceApproval === 'approved' &&
+        (payment.approval_status || 'Pending') === 'Approved') ||
+      (filterFinanceApproval === 'pending' &&
+        (payment.approval_status || 'Pending') !== 'Approved');
     const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
     
-    return matchesSearch && matchesBranch && matchesStatus && matchesPaymentMethod;
+    return matchesSearch && matchesBranch && matchesFinanceApproval && matchesPaymentMethod;
   });
 
   const handleExportClick = () => {
@@ -366,6 +398,13 @@ const FinancePaymentLogs = () => {
         if (financeLogTab === 'return') {
           params.set('approval_status', 'Returned');
           params.set('returned_by_me', 'true');
+        } else if (filterFinanceApproval === 'approved') {
+          params.set('status', 'Completed');
+          params.set('approval_status', 'Approved');
+          params.set('exclude_approval_status', 'Returned');
+        } else if (filterFinanceApproval === 'pending') {
+          params.set('status', 'Completed');
+          params.set('exclude_approval_status', 'Approved,Returned');
         } else {
           params.set('exclude_approval_status', 'Returned');
         }
@@ -618,27 +657,34 @@ const FinancePaymentLogs = () => {
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setStatusDropdownRect(rect);
-                          setOpenStatusDropdown(!openStatusDropdown);
-                          setOpenPaymentMethodDropdown(false);
-                          setPaymentMethodDropdownRect(null);
-                          setOpenBranchDropdown(false);
-                          setBranchDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Payment Status</span>
-                        {filterStatus && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
+                      {financeLogTab === 'return' ? (
+                        <span className="inline-flex items-center space-x-1 text-gray-500">Return status</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setStatusDropdownRect(rect);
+                            setOpenStatusDropdown(!openStatusDropdown);
+                            setOpenPaymentMethodDropdown(false);
+                            setPaymentMethodDropdownRect(null);
+                            setOpenBranchDropdown(false);
+                            setBranchDropdownRect(null);
+                          }}
+                          className="flex items-center space-x-1 hover:text-gray-700"
+                        >
+                          <span title="Finance approval — same as Financial Dashboard verified / unverified">
+                            Approval
+                          </span>
+                          {filterFinanceApproval ? (
+                            <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full" aria-hidden />
+                          ) : null}
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
@@ -677,7 +723,7 @@ const FinancePaymentLogs = () => {
                   <tr>
                     <td colSpan={9} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
-                        {searchTerm || filterBranch || filterStatus || filterPaymentMethod
+                        {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
                           : financeLogTab === 'return'
                             ? 'No payments you have returned to a branch yet.'
@@ -872,14 +918,14 @@ const FinancePaymentLogs = () => {
         document.body
       )}
 
-      {/* Status filter dropdown - portaled to avoid table overflow clipping */}
-      {openStatusDropdown && statusDropdownRect && createPortal(
+      {/* Approval filter (finance verification) — portaled to avoid table overflow clipping */}
+      {financeLogTab === 'main' && openStatusDropdown && statusDropdownRect && createPortal(
         <div
-          className="fixed status-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          className="fixed status-filter-dropdown-portal w-52 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
           style={{
             top: `${statusDropdownRect.bottom + 4}px`,
             left: `${statusDropdownRect.left}px`,
-            minWidth: `${Math.max(statusDropdownRect.width, 192)}px`,
+            minWidth: `${Math.max(statusDropdownRect.width, 208)}px`,
           }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
@@ -888,33 +934,44 @@ const FinancePaymentLogs = () => {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setFilterStatus('');
+              setFilterFinanceApproval('');
               setOpenStatusDropdown(false);
               setStatusDropdownRect(null);
             }}
             className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-              !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              !filterFinanceApproval ? 'bg-gray-100 font-medium' : 'text-gray-700'
             }`}
           >
-            All Statuses
+            All approvals
           </button>
-          {getUniqueStatuses().map((status) => (
-            <button
-              key={status}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFilterStatus(status);
-                setOpenStatusDropdown(false);
-                setStatusDropdownRect(null);
-              }}
-              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-              }`}
-            >
-              {status}
-            </button>
-          ))}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterFinanceApproval('approved');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              filterFinanceApproval === 'approved' ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            Approved (verified)
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterFinanceApproval('pending');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              filterFinanceApproval === 'pending' ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            Pending approval
+          </button>
         </div>,
         document.body
       )}

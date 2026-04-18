@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
 
 const Merchandise = () => {
+  const location = useLocation();
   const [branches, setBranches] = useState([]);
   const [merchandise, setMerchandise] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -54,6 +56,13 @@ const Merchandise = () => {
       fetchMerchandiseByBranch(selectedBranchId);
     }
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('notificationTab') === 'requests') {
+      setActiveTab('requests');
+    }
+  }, [location.search]);
 
   const fetchBranches = async () => {
     try {

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
-import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
+import { getNotificationDestination } from '../utils/notificationNavigation';
 
 const HighPriorityAnnouncementModal = () => {
   const { userInfo } = useAuth();
@@ -65,15 +65,12 @@ const HighPriorityAnnouncementModal = () => {
       setIsVisible(false);
       setHighPriorityAnnouncement(null);
 
-      // Navigate to announcements page with highlight
-      const announcementsPath = getAnnouncementsPathForUser(userInfo);
-      navigate(`${announcementsPath}?highlight=${highPriorityAnnouncement.announcement_id}`);
+      navigate(getNotificationDestination(highPriorityAnnouncement, userInfo));
     } catch (error) {
       console.error('Error marking announcement as read:', error);
       // Still navigate even if marking as read fails
       setIsVisible(false);
-      const announcementsPath = getAnnouncementsPathForUser(userInfo);
-      navigate(`${announcementsPath}?highlight=${highPriorityAnnouncement.announcement_id}`);
+      navigate(getNotificationDestination(highPriorityAnnouncement, userInfo));
     }
   };
 

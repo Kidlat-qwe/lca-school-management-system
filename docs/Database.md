@@ -13,9 +13,9 @@ CREATE TABLE IF NOT EXISTS public.acknowledgement_receiptstbl
     prospect_student_notes text COLLATE pg_catalog."default",
     student_id integer,
     branch_id integer,
-    package_id integer NOT NULL,
-    package_name_snapshot character varying(255) COLLATE pg_catalog."default" NOT NULL,
-    package_amount_snapshot numeric(10, 2) NOT NULL,
+    package_id integer,
+    package_name_snapshot character varying(255) COLLATE pg_catalog."default",
+    package_amount_snapshot numeric(10, 2),
     payment_amount numeric(10, 2) NOT NULL,
     issue_date date NOT NULL,
     invoice_id integer,
@@ -26,14 +26,25 @@ CREATE TABLE IF NOT EXISTS public.acknowledgement_receiptstbl
     reference_number character varying(255) COLLATE pg_catalog."default" DEFAULT NULL::character varying,
     payment_attachment_url text COLLATE pg_catalog."default",
     level_tag character varying(100) COLLATE pg_catalog."default",
+    ar_type character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Package'::character varying,
+    merchandise_items_snapshot jsonb,
     CONSTRAINT acknowledgement_receiptstbl_pkey PRIMARY KEY (ack_receipt_id)
 );
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.ack_receipt_number
+    IS 'Human-readable AR id; must be unique (enforced by idx_ack_receipts_number).';
 
 COMMENT ON COLUMN public.acknowledgement_receiptstbl.installment_option
     IS 'For installment packages: downpayment_only | downpayment_plus_phase1. NULL for non-installment packages.';
 
 COMMENT ON COLUMN public.acknowledgement_receiptstbl.level_tag
     IS 'Level/program tag for the prospect (e.g. from package or manual).';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.ar_type
+    IS 'Type of AR: Package (enrollment) or Merchandise (buy merchandise only)';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.merchandise_items_snapshot
+    IS 'For Merchandise AR: snapshot of purchased items [{merchandise_id, merchandise_name, size, quantity, price, branch_id}]';
 
 CREATE TABLE IF NOT EXISTS public.announcement_readstbl
 (
@@ -72,6 +83,7 @@ CREATE TABLE IF NOT EXISTS public.announcementstbl
     start_date date,
     end_date date,
     attachment_url text COLLATE pg_catalog."default",
+    target_user_id integer,
     CONSTRAINT announcementstbl_pkey PRIMARY KEY (announcement_id)
 );
 
@@ -107,6 +119,19 @@ COMMENT ON COLUMN public.announcementstbl.end_date
 
 COMMENT ON COLUMN public.announcementstbl.attachment_url
     IS 'Optional S3 URL for attached file (e.g. PDF, document). Stored under psms/announcement_files/ in bucket.';
+
+COMMENT ON COLUMN public.announcementstbl.target_user_id
+    IS 'Optional direct recipient user ID. If set, only this user receives the announcement in notifications.';
+
+CREATE TABLE IF NOT EXISTS public.ar_number_counter
+(
+    year smallint NOT NULL,
+    last_value integer NOT NULL DEFAULT 0,
+    CONSTRAINT ar_number_counter_pkey PRIMARY KEY (year)
+);
+
+COMMENT ON TABLE public.ar_number_counter
+    IS 'Yearly sequence for YY + 4-digit AR numbers (shared across invoices and acknowledgement receipts).';
 
 CREATE TABLE IF NOT EXISTS public.attendancetbl
 (
@@ -165,6 +190,46 @@ CREATE TABLE IF NOT EXISTS public.branchestbl
     CONSTRAINT branchestbl_pkey PRIMARY KEY (branch_id),
     CONSTRAINT branchestbl_branch_email_key UNIQUE (branch_email)
 );
+
+CREATE TABLE IF NOT EXISTS public.cash_deposit_summarytbl
+(
+    cash_deposit_summary_id serial NOT NULL,
+    branch_id integer NOT NULL,
+    start_date date NOT NULL,
+    end_date date NOT NULL,
+    total_deposit_amount numeric(12, 2) NOT NULL DEFAULT 0,
+    total_cash_amount numeric(12, 2) NOT NULL DEFAULT 0,
+    payment_count integer NOT NULL DEFAULT 0,
+    completed_cash_count integer NOT NULL DEFAULT 0,
+    status character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Submitted'::character varying,
+    submitted_by integer,
+    submitted_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    approved_by integer,
+    approved_at timestamp without time zone,
+    remarks text COLLATE pg_catalog."default",
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT cash_deposit_summarytbl_pkey PRIMARY KEY (cash_deposit_summary_id),
+    CONSTRAINT cash_deposit_summarytbl_branch_period_unique UNIQUE (branch_id, start_date, end_date)
+);
+
+COMMENT ON TABLE public.cash_deposit_summarytbl
+    IS 'Cash deposit summaries per branch and date range. Admin submits deposit-ready cash totals; Superadmin/Superfinance verify.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.total_deposit_amount
+    IS 'Sum of payable_amount from paymenttbl for Cash payments with status Completed within the stored date range.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.total_cash_amount
+    IS 'Sum of payable_amount from paymenttbl for all Cash payments within the stored date range.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.payment_count
+    IS 'Number of Cash payment rows included in total_cash_amount.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.completed_cash_count
+    IS 'Number of Completed Cash payment rows included in total_deposit_amount.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.status
+    IS 'Submitted (awaiting approval), Approved, Rejected';
 
 CREATE TABLE IF NOT EXISTS public.class_merge_historytbl
 (
@@ -316,6 +381,40 @@ COMMENT ON TABLE public.custom_holidaystbl
 COMMENT ON COLUMN public.custom_holidaystbl.branch_id
     IS 'NULL = applies to all branches; non-NULL = branch-specific holiday.';
 
+CREATE TABLE IF NOT EXISTS public.daily_summary_salestbl
+(
+    daily_summary_id serial NOT NULL,
+    branch_id integer NOT NULL,
+    summary_date date NOT NULL,
+    total_amount numeric(12, 2) NOT NULL DEFAULT 0,
+    payment_count integer NOT NULL DEFAULT 0,
+    status character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Submitted'::character varying,
+    submitted_by integer,
+    submitted_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    approved_by integer,
+    approved_at timestamp without time zone,
+    remarks text COLLATE pg_catalog."default",
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT daily_summary_salestbl_pkey PRIMARY KEY (daily_summary_id),
+    CONSTRAINT daily_summary_salestbl_branch_date_unique UNIQUE (branch_id, summary_date)
+);
+
+COMMENT ON TABLE public.daily_summary_salestbl
+    IS 'Daily sales summary per branch. Admin submits for today; Superadmin/Superfinance approve. Amount from Payment Logs.';
+
+COMMENT ON COLUMN public.daily_summary_salestbl.summary_date
+    IS 'Date of the summary (must be today when Admin submits)';
+
+COMMENT ON COLUMN public.daily_summary_salestbl.total_amount
+    IS 'Sum of payable_amount from paymenttbl for branch_id and issue_date = summary_date (snapshot at submit)';
+
+COMMENT ON COLUMN public.daily_summary_salestbl.payment_count
+    IS 'Number of payments included in total_amount';
+
+COMMENT ON COLUMN public.daily_summary_salestbl.status
+    IS 'Submitted (awaiting approval), Approved, Rejected';
+
 CREATE TABLE IF NOT EXISTS public.guardianstbl
 (
     guardian_id serial NOT NULL,
@@ -359,6 +458,7 @@ CREATE TABLE IF NOT EXISTS public.installmentinvoiceprofilestbl
     promo_apply_scope character varying(50) COLLATE pg_catalog."default",
     promo_months_to_apply integer,
     promo_months_applied integer DEFAULT 0,
+    phase_start integer,
     CONSTRAINT installmentinvoiceprofilestbl_pkey PRIMARY KEY (installmentinvoiceprofiles_id)
 );
 
@@ -388,6 +488,9 @@ COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_months_to_apply
 
 COMMENT ON COLUMN public.installmentinvoiceprofilestbl.promo_months_applied
     IS 'Counter tracking how many monthly invoices have received promo discount.';
+
+COMMENT ON COLUMN public.installmentinvoiceprofilestbl.phase_start
+    IS 'First phase of package range (for Phase packages). NULL = Phase 1. Used for enrollment and installment progress.';
 
 CREATE TABLE IF NOT EXISTS public.installmentinvoicestbl
 (
@@ -432,6 +535,8 @@ CREATE TABLE IF NOT EXISTS public.invoicestbl
     package_id integer,
     promo_id integer,
     late_penalty_applied_for_due_date date,
+    ack_receipt_id integer,
+    invoice_ar_number character varying(50) COLLATE pg_catalog."default",
     CONSTRAINT invoicestbl_pkey PRIMARY KEY (invoice_id)
 );
 
@@ -443,6 +548,12 @@ COMMENT ON COLUMN public.invoicestbl.package_id
 
 COMMENT ON COLUMN public.invoicestbl.promo_id
     IS 'Links invoice to promo that was applied. Used to track promo usage and discounts.';
+
+COMMENT ON COLUMN public.invoicestbl.ack_receipt_id
+    IS 'Links invoice to acknowledgement receipt (for merchandise AR auto-generated invoices)';
+
+COMMENT ON COLUMN public.invoicestbl.invoice_ar_number
+    IS 'AR#: 2-digit year + 4-digit sequence (e.g. 260001). Existing legacy invoices may be NULL.';
 
 CREATE TABLE IF NOT EXISTS public.invoicestudentstbl
 (
@@ -524,11 +635,15 @@ CREATE TABLE IF NOT EXISTS public.merchandisestbl
     image_url character varying(500) COLLATE pg_catalog."default",
     gender character varying(20) COLLATE pg_catalog."default",
     type character varying(30) COLLATE pg_catalog."default",
+    remarks text COLLATE pg_catalog."default",
     CONSTRAINT merchandisestbl_pkey PRIMARY KEY (merchandise_id)
 );
 
 COMMENT ON COLUMN public.merchandisestbl.image_url
     IS 'URL to merchandise image stored in Supabase storage. Used for displaying merchandise in card-based UI.';
+
+COMMENT ON COLUMN public.merchandisestbl.remarks
+    IS 'Optional remarks or notes for the merchandise item';
 
 CREATE TABLE IF NOT EXISTS public.packagedetailstbl
 (
@@ -552,11 +667,15 @@ CREATE TABLE IF NOT EXISTS public.packagestbl
     phase_start integer,
     phase_end integer,
     downpayment_amount numeric(10, 2) DEFAULT NULL::numeric,
+    payment_option character varying(50) COLLATE pg_catalog."default" DEFAULT NULL::character varying,
     CONSTRAINT packagestbl_pkey PRIMARY KEY (package_id)
 );
 
 COMMENT ON COLUMN public.packagestbl.downpayment_amount
     IS 'Downpayment amount required before starting installment invoices. Only applicable for Installment package type.';
+
+COMMENT ON COLUMN public.packagestbl.payment_option
+    IS 'Payment structure for Phase packages only: Fullpayment (pay in full) or Installment (downpayment + monthly). NULL or Fullpayment = pay in full. Only applicable when package_type = Phase.';
 
 CREATE TABLE IF NOT EXISTS public.paymenttbl
 (
@@ -577,11 +696,14 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     approved_by integer,
     approved_at timestamp without time zone,
     payment_attachment_url text COLLATE pg_catalog."default",
+    return_reason text COLLATE pg_catalog."default",
+    returned_by integer,
+    returned_at timestamp without time zone,
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
 
 COMMENT ON COLUMN public.paymenttbl.approval_status
-    IS 'Internal approval status for finance team confirmation: Pending (default), Approved. Does not affect student payment status.';
+    IS 'Pending | Approved | Returned — Returned means sent back to branch for reference/attachment correction.';
 
 COMMENT ON COLUMN public.paymenttbl.approved_by
     IS 'User ID of the finance team member (Superadmin/Superfinance/Finance) who approved the payment';
@@ -591,6 +713,15 @@ COMMENT ON COLUMN public.paymenttbl.approved_at
 
 COMMENT ON COLUMN public.paymenttbl.payment_attachment_url
     IS 'S3 URL of attached image (e.g. receipt/proof) for this payment record';
+
+COMMENT ON COLUMN public.paymenttbl.return_reason
+    IS 'Why Finance returned this payment for correction (reference vs attachment).';
+
+COMMENT ON COLUMN public.paymenttbl.returned_by
+    IS 'Finance/Superfinance user who returned the payment.';
+
+COMMENT ON COLUMN public.paymenttbl.returned_at
+    IS 'When the payment was returned for correction.';
 
 CREATE TABLE IF NOT EXISTS public.phasesessionstbl
 (
@@ -859,6 +990,28 @@ COMMENT ON COLUMN public.suspensionperiodstbl.affected_class_ids
 COMMENT ON COLUMN public.suspensionperiodstbl.auto_reschedule
     IS 'Whether to automatically extend class end dates to reschedule suspended sessions';
 
+CREATE TABLE IF NOT EXISTS public.system_logstbl
+(
+    system_log_id serial NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    user_id integer,
+    user_full_name character varying(255) COLLATE pg_catalog."default",
+    user_type character varying(50) COLLATE pg_catalog."default",
+    branch_id integer,
+    http_method character varying(12) COLLATE pg_catalog."default" NOT NULL,
+    http_status smallint,
+    request_path text COLLATE pg_catalog."default" NOT NULL,
+    action character varying(32) COLLATE pg_catalog."default" NOT NULL,
+    entity_type character varying(96) COLLATE pg_catalog."default",
+    summary text COLLATE pg_catalog."default" NOT NULL,
+    details jsonb,
+    ip_address character varying(64) COLLATE pg_catalog."default",
+    CONSTRAINT system_logstbl_pkey PRIMARY KEY (system_log_id)
+);
+
+COMMENT ON TABLE public.system_logstbl
+    IS 'Append-only API activity log for authenticated mutating requests';
+
 CREATE TABLE IF NOT EXISTS public.system_settingstbl
 (
     setting_id serial NOT NULL,
@@ -904,6 +1057,7 @@ CREATE TABLE IF NOT EXISTS public.userstbl
     profile_picture_url character varying(255) COLLATE pg_catalog."default",
     firebase_uid character varying(255) COLLATE pg_catalog."default",
     last_login timestamp without time zone,
+    lrn character varying(50) COLLATE pg_catalog."default",
     CONSTRAINT userstbl_pkey PRIMARY KEY (user_id),
     CONSTRAINT userstbl_email_key UNIQUE (email),
     CONSTRAINT userstbl_firebase_uid_key UNIQUE (firebase_uid)
@@ -911,6 +1065,9 @@ CREATE TABLE IF NOT EXISTS public.userstbl
 
 COMMENT ON COLUMN public.userstbl.last_login
     IS 'Timestamp of the user''s last successful login (stored in UTC+8/Asia/Manila timezone)';
+
+COMMENT ON COLUMN public.userstbl.lrn
+    IS 'Learner Reference Number (optional).';
 
 ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
     ADD CONSTRAINT ack_receipts_branch_id_fkey FOREIGN KEY (branch_id)
@@ -992,6 +1149,15 @@ CREATE INDEX IF NOT EXISTS idx_announcement_created_by
     ON public.announcementstbl(created_by);
 
 
+ALTER TABLE IF EXISTS public.announcementstbl
+    ADD CONSTRAINT announcementstbl_target_user_id_fkey FOREIGN KEY (target_user_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_announcement_target_user_id
+    ON public.announcementstbl(target_user_id);
+
+
 ALTER TABLE IF EXISTS public.attendancetbl
     ADD CONSTRAINT attendancetbl_classsession_id_fkey FOREIGN KEY (classsession_id)
     REFERENCES public.classsessionstbl (classsession_id) MATCH SIMPLE
@@ -1017,6 +1183,29 @@ ALTER TABLE IF EXISTS public.attendancetbl
     ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_attendance_student_id
     ON public.attendancetbl(student_id);
+
+
+ALTER TABLE IF EXISTS public.cash_deposit_summarytbl
+    ADD CONSTRAINT cash_deposit_summarytbl_approved_by_fkey FOREIGN KEY (approved_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.cash_deposit_summarytbl
+    ADD CONSTRAINT cash_deposit_summarytbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_cash_deposit_summary_branch_id
+    ON public.cash_deposit_summarytbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.cash_deposit_summarytbl
+    ADD CONSTRAINT cash_deposit_summarytbl_submitted_by_fkey FOREIGN KEY (submitted_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.class_merge_historytbl
@@ -1174,6 +1363,29 @@ ALTER TABLE IF EXISTS public.custom_holidaystbl
     ON DELETE SET NULL;
 
 
+ALTER TABLE IF EXISTS public.daily_summary_salestbl
+    ADD CONSTRAINT daily_summary_salestbl_approved_by_fkey FOREIGN KEY (approved_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.daily_summary_salestbl
+    ADD CONSTRAINT daily_summary_salestbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_daily_summary_branch_id
+    ON public.daily_summary_salestbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.daily_summary_salestbl
+    ADD CONSTRAINT daily_summary_salestbl_submitted_by_fkey FOREIGN KEY (submitted_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
 ALTER TABLE IF EXISTS public.guardianstbl
     ADD CONSTRAINT guardianstbl_student_id_fkey FOREIGN KEY (student_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
@@ -1253,6 +1465,15 @@ ALTER TABLE IF EXISTS public.invoiceitemstbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_invoiceitem_invoice_id
     ON public.invoiceitemstbl(invoice_id);
+
+
+ALTER TABLE IF EXISTS public.invoicestbl
+    ADD CONSTRAINT invoicestbl_ack_receipt_id_fkey FOREIGN KEY (ack_receipt_id)
+    REFERENCES public.acknowledgement_receiptstbl (ack_receipt_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_invoicestbl_ack_receipt_id
+    ON public.invoicestbl(ack_receipt_id);
 
 
 ALTER TABLE IF EXISTS public.invoicestbl
@@ -1427,6 +1648,13 @@ ALTER TABLE IF EXISTS public.paymenttbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_payment_invoice_id
     ON public.paymenttbl(invoice_id);
+
+
+ALTER TABLE IF EXISTS public.paymenttbl
+    ADD CONSTRAINT paymenttbl_returned_by_fkey FOREIGN KEY (returned_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.paymenttbl
@@ -1660,6 +1888,22 @@ ALTER TABLE IF EXISTS public.suspensionperiodstbl
     ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_suspension_created_by
     ON public.suspensionperiodstbl(created_by);
+
+
+ALTER TABLE IF EXISTS public.system_logstbl
+    ADD CONSTRAINT system_logstbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.system_logstbl
+    ADD CONSTRAINT system_logstbl_user_id_fkey FOREIGN KEY (user_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_system_logstbl_user_id
+    ON public.system_logstbl(user_id);
 
 
 ALTER TABLE IF EXISTS public.system_settingstbl

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,6 +8,7 @@ import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
 
 const AdminMerchandise = () => {
+  const location = useLocation();
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -80,6 +82,13 @@ const AdminMerchandise = () => {
       fetchMerchandiseRequests();
     }
   }, [adminBranchId]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('notificationTab') === 'requests') {
+      setActiveTab('requests');
+    }
+  }, [location.search]);
 
   // Auto-set branch_id from adminBranchId when available
   useEffect(() => {

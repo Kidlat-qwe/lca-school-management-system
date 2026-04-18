@@ -169,18 +169,18 @@ const notifyPaymentReturnedToBranch = async ({
     const body = `${returnedBy} returned ${invLabel} (${studentLabel}) at ${branchName} for reference or attachment correction.${reasonText}`;
 
     await query(
-      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5)`,
-      ['Payment returned for correction', body, ['Admin'], branchId, returnedByUserId]
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+      ['Payment returned for correction', body, ['Admin'], branchId, returnedByUserId, 'payment-logs', 'notificationTab=return']
     );
 
     // Also notify the original payment maker directly so the exact encoder is informed.
     if (makerUserId && Number(makerUserId) !== Number(returnedByUserId)) {
       const makerBody = `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
       await query(
-        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id)
-         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6)`,
-        ['Payment returned — action needed', makerBody, ['All'], branchId, returnedByUserId, makerUserId]
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+        ['Payment returned — action needed', makerBody, ['All'], branchId, returnedByUserId, makerUserId, 'payment-logs', 'notificationTab=return']
       );
     }
   } catch (err) {
@@ -217,9 +217,9 @@ const notifyPaymentResubmittedForVerification = async ({
     const body = `${submittedBy} resubmitted ${invLabel} (${studentLabel}) at ${branchName} for finance verification. Please review it in Payment Logs.`;
 
     await query(
-      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5)`,
-      ['Payment resubmitted for verification', body, ['Finance'], branchId, resubmittedByUserId]
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+      ['Payment resubmitted for verification', body, ['Finance'], branchId, resubmittedByUserId, 'payment-logs', 'notificationTab=main']
     );
   } catch (err) {
     console.error('notifyPaymentResubmittedForVerification:', err?.message || err);

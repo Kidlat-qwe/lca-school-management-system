@@ -273,8 +273,8 @@ router.post(
       }
       
       await dbQuery(
-        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           'New Merchandise Stock Request',
           notificationBody,
@@ -282,6 +282,8 @@ router.post(
           'Active',
           'High',
           req.user.userId,
+          'merchandise',
+          'notificationTab=requests',
         ]
       );
 
@@ -435,8 +437,8 @@ router.put(
       const requesterNameText = requesterName.rows[0]?.full_name || requesterName.rows[0]?.email || 'Admin';
       
       await client.query(
-        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           'Merchandise Request Approved',
           `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} has been approved. ${review_notes ? `Notes: ${review_notes}` : 'The stock has been added to your inventory.'}`,
@@ -445,6 +447,8 @@ router.put(
           'Medium',
           request.requested_branch_id,
           req.user.userId,
+          'merchandise',
+          'notificationTab=requests',
         ]
       );
 
@@ -520,8 +524,8 @@ router.put(
 
       // Create notification for Admin who made the request
       await dbQuery(
-        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           'Merchandise Request Rejected',
           `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} has been rejected. Reason: ${review_notes}`,
@@ -530,6 +534,8 @@ router.put(
           'Medium',
           request.requested_branch_id,
           req.user.userId,
+          'merchandise',
+          'notificationTab=requests',
         ]
       );
 

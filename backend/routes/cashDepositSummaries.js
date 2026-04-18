@@ -146,9 +146,9 @@ const createCashDepositSubmissionNotification = async ({
   const body = `${submittedBy} submitted Cash Deposit Summary for ${branchName} (${startDate} to ${endDate}). Deposit amount: ₱${formattedDeposit}; Total cash: ₱${formattedCash}; Payments: ${paymentCount || 0}.`;
 
   await query(
-    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-     VALUES ($1, $2, $3, 'Active', 'High', $4, $5)`,
-    ['Cash Deposit Summary Submitted', body, ['Admin', 'Finance'], branchId, createdBy]
+    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+     VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
+    ['Cash Deposit Summary Submitted', body, ['Admin', 'Finance'], branchId, createdBy, 'daily-summary-sales', 'notificationTab=cashDeposit']
   );
 };
 

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
-import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
+import { getNotificationDestination } from '../utils/notificationNavigation';
 
 const ToastNotification = ({ notification, onClose, duration = 2500 }) => {
   const { userInfo } = useAuth();
@@ -46,15 +46,12 @@ const ToastNotification = ({ notification, onClose, duration = 2500 }) => {
         });
       }
 
-      // Navigate to announcements page
-      const announcementsPath = getAnnouncementsPathForUser(userInfo);
-      navigate(`${announcementsPath}?highlight=${notification.announcement_id}`);
+      navigate(getNotificationDestination(notification, userInfo));
       handleClose();
     } catch (error) {
       console.error('Error handling toast click:', error);
       // Still navigate even if marking as read fails
-      const announcementsPath = getAnnouncementsPathForUser(userInfo);
-      navigate(`${announcementsPath}?highlight=${notification.announcement_id}`);
+      navigate(getNotificationDestination(notification, userInfo));
       handleClose();
     }
   };

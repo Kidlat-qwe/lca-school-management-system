@@ -581,9 +581,9 @@ const createDailySummarySubmissionNotification = async ({
   const body = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${Number(totalAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
 
   await query(
-    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by)
-     VALUES ($1, $2, $3, 'Active', 'High', $4, $5)`,
-    ['End of Shift Submitted', body, ['Admin', 'Finance'], branchId, createdBy]
+    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+     VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
+    ['End of Shift Submitted', body, ['Admin', 'Finance'], branchId, createdBy, 'daily-summary-sales', 'notificationTab=endOfShift']
   );
 };
 

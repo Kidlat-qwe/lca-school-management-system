@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
-import { getAnnouncementsPathForUser } from '../utils/announcementsNav';
+import { getNotificationDestination } from '../utils/notificationNavigation';
 import ToastNotification from './ToastNotification';
 
 const NotificationDropdown = () => {
@@ -17,23 +17,6 @@ const NotificationDropdown = () => {
   const [toastNotifications, setToastNotifications] = useState([]);
   const [previousNotificationIds, setPreviousNotificationIds] = useState(new Set());
   const dropdownRef = useRef(null);
-
-  // Get announcements page path based on user role
-  const getAnnouncementsPath = () => {
-    const userType = userInfo?.user_type || userInfo?.userType;
-    switch (userType) {
-      case 'Superadmin':
-        return '/superadmin/announcements';
-      case 'Admin':
-        return '/admin/announcements';
-      case 'Teacher':
-        return '/teacher/announcements';
-      case 'Student':
-        return '/student/announcements';
-      default:
-        return '/superadmin/announcements';
-    }
-  };
 
   // Fetch notifications
   const fetchNotifications = async (showToasts = false) => {
@@ -208,9 +191,8 @@ const NotificationDropdown = () => {
     setIsOpen(false);
     setSelectedAnnouncement(null);
     
-    // Navigate to announcements page with announcement ID as query parameter
-    const announcementsPath = getAnnouncementsPathForUser(userInfo);
-    navigate(`${announcementsPath}?highlight=${announcement.announcement_id}`);
+    // Navigate to the notification's parent/source page.
+    navigate(getNotificationDestination(announcement, userInfo));
   };
 
   // Format date

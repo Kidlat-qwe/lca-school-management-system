@@ -66,6 +66,8 @@ router.get(
           a.title,
           a.body,
           a.recipient_groups,
+          a.navigation_key,
+          a.navigation_query,
           a.status,
           a.priority,
           a.branch_id,

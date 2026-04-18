@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
@@ -10,14 +11,34 @@ import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 
+/** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
+const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
+  'Cash',
+  'Online Banking',
+  'Credit Card',
+  'E-wallets',
+];
+
+const getReturnFixPaymentMethodOptions = (currentValue) => {
+  const c = (currentValue || '').trim();
+  if (!c) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
+  if (RETURN_FIX_PAYMENT_METHOD_OPTIONS.includes(c)) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
+  return [c, ...RETURN_FIX_PAYMENT_METHOD_OPTIONS];
+};
+
 const PaymentLogs = () => {
+  const location = useLocation();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   /** main = all except Returned; return = finance sent back for reference/attachment fix */
-  const [branchLogTab, setBranchLogTab] = useState('main');
+  const [branchLogTab, setBranchLogTab] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('notificationTab') === 'return' ? 'return' : 'main';
+  });
   const [returnFixPayment, setReturnFixPayment] = useState(null);
   const [returnFixRef, setReturnFixRef] = useState('');
   const [returnFixAttachment, setReturnFixAttachment] = useState('');
+  const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('Cash');
   const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
   const [returnFixLoading, setReturnFixLoading] = useState(false);
   const [payments, setPayments] = useState([]);
@@ -25,7 +46,8 @@ const PaymentLogs = () => {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  /** Finance approval filter — matches the Approval column and dashboard "verified" (Approved) vs pending */
+  const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
   /** YYYY-MM-DD; empty = no bound (server-side issue_date_from / issue_date_to) */
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
@@ -50,6 +72,7 @@ const PaymentLogs = () => {
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const latestFetchIdRef = useRef(0);
 
   useEffect(() => {
     fetchPayments(1);
@@ -57,10 +80,25 @@ const PaymentLogs = () => {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const notificationTab = params.get('notificationTab');
+    if (notificationTab === 'main' || notificationTab === 'return') {
+      setBranchLogTab(notificationTab);
+    }
+  }, [location.search]);
+
+  useEffect(() => {
     setFilterBranch(globalBranchId || '');
     setOpenBranchDropdown(false);
     setBranchDropdownRect(null);
   }, [globalBranchId]);
+
+  useEffect(() => {
+    if (branchLogTab === 'return') {
+      setOpenStatusDropdown(false);
+      setStatusDropdownRect(null);
+    }
+  }, [branchLogTab]);
 
   // Refetch when branch or status filter changes (server-side filter), reset to page 1
   const isInitialMount = useRef(true);
@@ -70,7 +108,7 @@ const PaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo, branchLogTab]);
+  }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, branchLogTab]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -101,20 +139,28 @@ const PaymentLogs = () => {
   }, [openBranchDropdown, openStatusDropdown, openPaymentMethodDropdown, openApprovalMenuId]);
 
   const fetchPayments = async (page = 1) => {
+    const fetchId = ++latestFetchIdRef.current;
     try {
       setLoading(true);
       const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterStatus) params.set('status', filterStatus);
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
         params.set('approval_status', 'Returned');
+      } else if (filterFinanceApproval === 'approved') {
+        params.set('status', 'Completed');
+        params.set('approval_status', 'Approved');
+        params.set('exclude_approval_status', 'Returned');
+      } else if (filterFinanceApproval === 'pending') {
+        params.set('status', 'Completed');
+        params.set('exclude_approval_status', 'Approved,Returned');
       } else {
         params.set('exclude_approval_status', 'Returned');
       }
       const response = await apiRequest(`/payments?${params.toString()}`);
+      if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
       if (response.pagination) {
         setPagination({
@@ -126,10 +172,12 @@ const PaymentLogs = () => {
       }
       setError('');
     } catch (err) {
+      if (fetchId !== latestFetchIdRef.current) return;
       console.error('Error fetching payments:', err);
       setError('Failed to load payments. Please try again.');
       setPayments([]);
     } finally {
+      if (fetchId !== latestFetchIdRef.current) return;
       setLoading(false);
     }
   };
@@ -229,12 +277,14 @@ const PaymentLogs = () => {
     setReturnFixPayment(payment);
     setReturnFixRef((payment.reference_number || '').trim());
     setReturnFixAttachment(payment.payment_attachment_url || '');
+    setReturnFixPaymentMethod((payment.payment_method || 'Cash').trim() || 'Cash');
   };
 
   const closeReturnFixModal = () => {
     setReturnFixPayment(null);
     setReturnFixRef('');
     setReturnFixAttachment('');
+    setReturnFixPaymentMethod('Cash');
     setReturnFixAttachmentUploading(false);
   };
 
@@ -279,6 +329,7 @@ const PaymentLogs = () => {
         body: JSON.stringify({
           reference_number: refTrim || undefined,
           attachment_url: attTrim === '' ? null : attTrim,
+          payment_method: returnFixPaymentMethod.trim() || undefined,
         }),
       });
       await apiRequest(`/payments/${returnFixPayment.payment_id}/resubmit-for-verification`, {
@@ -351,7 +402,9 @@ const PaymentLogs = () => {
   const getPaymentMethodBadge = (method) => {
     const methodColors = {
       'Cash': 'bg-blue-100 text-blue-800',
+      'Online Banking': 'bg-pink-100 text-pink-800',
       'Credit Card': 'bg-purple-100 text-purple-800',
+      'E-wallets': 'bg-indigo-100 text-indigo-800',
       'Debit Card': 'bg-indigo-100 text-indigo-800',
       'Bank Transfer': 'bg-teal-100 text-teal-800',
       'Check': 'bg-orange-100 text-orange-800',
@@ -364,11 +417,6 @@ const PaymentLogs = () => {
         {method || 'N/A'}
       </span>
     );
-  };
-
-  const getUniqueStatuses = () => {
-    const statuses = [...new Set(payments.map(p => p.status).filter(Boolean))];
-    return statuses.sort();
   };
 
   const getUniquePaymentMethods = () => {
@@ -384,10 +432,16 @@ const PaymentLogs = () => {
       payment.payment_id?.toString().includes(searchTerm);
     
     const matchesBranch = !filterBranch || payment.branch_id?.toString() === filterBranch;
-    const matchesStatus = !filterStatus || payment.status === filterStatus;
+    const matchesFinanceApproval =
+      branchLogTab === 'return' ||
+      !filterFinanceApproval ||
+      (filterFinanceApproval === 'approved' &&
+        (payment.approval_status || 'Pending') === 'Approved') ||
+      (filterFinanceApproval === 'pending' &&
+        (payment.approval_status || 'Pending') !== 'Approved');
     const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
     
-    return matchesSearch && matchesBranch && matchesStatus && matchesPaymentMethod;
+    return matchesSearch && matchesBranch && matchesFinanceApproval && matchesPaymentMethod;
   });
 
   const handleExportClick = () => {
@@ -430,6 +484,18 @@ const PaymentLogs = () => {
         if (branchId) params.set('branch_id', String(branchId));
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        if (branchLogTab === 'return') {
+          params.set('approval_status', 'Returned');
+        } else if (filterFinanceApproval === 'approved') {
+          params.set('status', 'Completed');
+          params.set('approval_status', 'Approved');
+          params.set('exclude_approval_status', 'Returned');
+        } else if (filterFinanceApproval === 'pending') {
+          params.set('status', 'Completed');
+          params.set('exclude_approval_status', 'Approved,Returned');
+        } else {
+          params.set('exclude_approval_status', 'Returned');
+        }
         return apiRequest(`/payments?${params.toString()}`);
       };
 
@@ -680,27 +746,34 @@ const PaymentLogs = () => {
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setStatusDropdownRect(rect);
-                          setOpenStatusDropdown(!openStatusDropdown);
-                          setOpenPaymentMethodDropdown(false);
-                          setPaymentMethodDropdownRect(null);
-                          setOpenBranchDropdown(false);
-                          setBranchDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Payment Status</span>
-                        {filterStatus && (
-                          <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full"></span>
-                        )}
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
+                      {branchLogTab === 'return' ? (
+                        <span className="inline-flex items-center space-x-1 text-gray-500">Return status</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setStatusDropdownRect(rect);
+                            setOpenStatusDropdown(!openStatusDropdown);
+                            setOpenPaymentMethodDropdown(false);
+                            setPaymentMethodDropdownRect(null);
+                            setOpenBranchDropdown(false);
+                            setBranchDropdownRect(null);
+                          }}
+                          className="flex items-center space-x-1 hover:text-gray-700"
+                        >
+                          <span title="Finance approval — same as Financial Dashboard verified / unverified">
+                            Approval
+                          </span>
+                          {filterFinanceApproval ? (
+                            <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full" aria-hidden />
+                          ) : null}
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[12%]">
@@ -719,7 +792,7 @@ const PaymentLogs = () => {
                   <tr>
                     <td colSpan={9} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
-                        {searchTerm || filterBranch || filterStatus || filterPaymentMethod
+                        {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
                           : 'No payment records yet.'}
                       </p>
@@ -907,14 +980,14 @@ const PaymentLogs = () => {
         document.body
       )}
 
-      {/* Status filter dropdown - portaled to avoid table overflow clipping */}
-      {openStatusDropdown && statusDropdownRect && createPortal(
+      {/* Approval filter (finance verification) — portaled to avoid table overflow clipping */}
+      {branchLogTab === 'main' && openStatusDropdown && statusDropdownRect && createPortal(
         <div
-          className="fixed status-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
+          className="fixed status-filter-dropdown-portal w-52 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
           style={{
             top: `${statusDropdownRect.bottom + 4}px`,
             left: `${statusDropdownRect.left}px`,
-            minWidth: `${Math.max(statusDropdownRect.width, 192)}px`,
+            minWidth: `${Math.max(statusDropdownRect.width, 208)}px`,
           }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
@@ -923,33 +996,44 @@ const PaymentLogs = () => {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setFilterStatus('');
+              setFilterFinanceApproval('');
               setOpenStatusDropdown(false);
               setStatusDropdownRect(null);
             }}
             className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-              !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
+              !filterFinanceApproval ? 'bg-gray-100 font-medium' : 'text-gray-700'
             }`}
           >
-            All Statuses
+            All approvals
           </button>
-          {getUniqueStatuses().map((status) => (
-            <button
-              key={status}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFilterStatus(status);
-                setOpenStatusDropdown(false);
-                setStatusDropdownRect(null);
-              }}
-              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-              }`}
-            >
-              {status}
-            </button>
-          ))}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterFinanceApproval('approved');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              filterFinanceApproval === 'approved' ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            Approved (verified)
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilterFinanceApproval('pending');
+              setOpenStatusDropdown(false);
+              setStatusDropdownRect(null);
+            }}
+            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
+              filterFinanceApproval === 'pending' ? 'bg-gray-100 font-medium' : 'text-gray-700'
+            }`}
+          >
+            Pending approval
+          </button>
         </div>,
         document.body
       )}
@@ -1069,6 +1153,27 @@ const PaymentLogs = () => {
                 </div>
               )}
               <form onSubmit={submitReturnFix}>
+                <div className="mb-4">
+                  <label htmlFor="return_fix_payment_method" className="block text-sm font-medium text-gray-700 mb-2">
+                    Payment method
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Change this if it does not match your proof of payment (for example cash vs online banking).
+                  </p>
+                  <select
+                    id="return_fix_payment_method"
+                    value={returnFixPaymentMethod}
+                    onChange={(e) => setReturnFixPaymentMethod(e.target.value)}
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white text-sm"
+                  >
+                    {getReturnFixPaymentMethodOptions(returnFixPaymentMethod).map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Reference number</label>
                   <input

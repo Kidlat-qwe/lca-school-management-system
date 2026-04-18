@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
@@ -10,6 +11,7 @@ const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
 
 const DailySummarySalesApprovalPage = () => {
+  const location = useLocation();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [activeTab, setActiveTab] = useState(TAB_END_OF_SHIFT);
   const [records, setRecords] = useState([]);
@@ -97,6 +99,16 @@ const DailySummarySalesApprovalPage = () => {
     setVerifyData(null);
     fetchRecords(1);
   }, [activeTab, filterStatus, filterDate, globalBranchId, fetchRecords]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const notificationTab = params.get('notificationTab');
+    if (notificationTab === TAB_CASH_DEPOSIT) {
+      setActiveTab(TAB_CASH_DEPOSIT);
+    } else if (notificationTab === TAB_END_OF_SHIFT) {
+      setActiveTab(TAB_END_OF_SHIFT);
+    }
+  }, [location.search]);
 
   useEffect(() => {
     if (!detailModal.open || !detailModal.record?.[recordIdField]) {
