@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Cropper from 'react-easy-crop';
 import { apiRequest } from '../config/api';
+import { appConfirm } from '../utils/appAlert';
 import { useAuth } from '../contexts/AuthContext';
 
 // Helper function to create image from URL
@@ -162,7 +163,14 @@ const ProfilePictureModalS3 = ({ isOpen, onClose, currentProfilePicture }) => {
   };
 
   const handleRemove = async () => {
-    if (!window.confirm('Are you sure you want to remove your profile picture?')) {
+    if (
+      !(await appConfirm({
+        title: 'Remove profile picture',
+        message: 'Are you sure you want to remove your profile picture?',
+        destructive: true,
+        confirmLabel: 'Remove',
+      }))
+    ) {
       return;
     }
 

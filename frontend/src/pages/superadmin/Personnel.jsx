@@ -6,7 +6,7 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Personnel = () => {
   const { signup } = useAuth();
@@ -178,7 +178,14 @@ const Personnel = () => {
 
   const handleDelete = async (userId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this personnel?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete personnel',
+        message: 'Are you sure you want to delete this personnel?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

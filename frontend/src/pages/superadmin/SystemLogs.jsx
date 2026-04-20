@@ -17,6 +17,92 @@ const formatLogTime = (iso) => {
   }
 };
 
+const ACTION_BADGE_STYLES = {
+  GET: 'bg-blue-50 text-blue-700 border border-blue-200',
+  POST: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  UPDATE: 'bg-amber-50 text-amber-700 border border-amber-200',
+  DELETE: 'bg-red-50 text-red-700 border border-red-200',
+};
+
+const formatHttpStatusLabel = (status) => {
+  const code = Number(status);
+  if (!Number.isFinite(code)) return '';
+  if (code >= 500) return 'Server error';
+  if (code >= 400) return 'Request failed';
+  if (code >= 300) return 'Redirect or cache';
+  if (code >= 200) return 'Successful';
+  return 'Informational';
+};
+
+const toPageName = (path = '') => {
+  if (!path || typeof path !== 'string') return 'a page';
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length === 0) return 'home page';
+  const last = parts[parts.length - 1];
+  return last
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
+const toRequestLabel = (path = '') => {
+  if (!path || typeof path !== 'string') return 'an API endpoint';
+  const cleaned = path.replace(/^\/api\/sms\/?/i, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  if (parts.length === 0) return 'API base endpoint';
+  const primary = parts[0].replace(/[-_]/g, ' ');
+  if (parts.length === 1) return `${primary} endpoint`;
+  return `${primary} endpoint (${parts.slice(1).join('/')})`;
+};
+
+const getFriendlySummary = (row) => {
+  const raw = String(row?.summary || '').trim();
+  const method = String(row?.http_method || row?.action || '').toUpperCase();
+  const path = String(row?.request_path || '').trim();
+  const actor = String(row?.user_full_name || 'User').trim();
+  const role = String(row?.user_type || '').trim();
+  const actorLabel = role ? `${actor} (${role})` : actor;
+  const status = row?.http_status != null ? Number(row.http_status) : null;
+  const statusText = formatHttpStatusLabel(status);
+
+  const navMatch = raw.match(/^(.+?) navigated to\s+([^\s]+)\s*[—-]\s*(.+)$/i);
+  if (navMatch) {
+    const pagePath = navMatch[2];
+    const appName = navMatch[3];
+    return {
+      title: `${actorLabel} opened ${toPageName(pagePath)}.`,
+      detail: appName ? `App: ${appName}` : `Path: ${pagePath}`,
+    };
+  }
+
+  const apiMatch = raw.match(/^(.+?)\s+(GET|POST|PUT|PATCH|DELETE)\s+([^\s]+)\s*[-–—>]+\s*(\d{3})$/i);
+  if (apiMatch) {
+    const apiMethod = apiMatch[2].toUpperCase();
+    const apiPath = apiMatch[3];
+    const apiStatus = Number(apiMatch[4]);
+    const apiStatusText = formatHttpStatusLabel(apiStatus);
+    return {
+      title: `${actorLabel} sent ${apiMethod} request to ${toRequestLabel(apiPath)}.`,
+      detail: `Result: ${apiStatus}${apiStatusText ? ` (${apiStatusText})` : ''}`,
+    };
+  }
+
+  const actionWord =
+    method === 'GET'
+      ? 'viewed'
+      : method === 'POST'
+        ? 'created'
+        : method === 'UPDATE'
+          ? 'updated'
+          : method === 'DELETE'
+            ? 'deleted'
+            : 'performed an action on';
+  const entity = row?.entity_type ? String(row.entity_type).replace(/[_-]/g, ' ') : 'system data';
+  return {
+    title: `${actorLabel} ${actionWord} ${entity}.`,
+    detail: raw || `${method || 'ACTION'} ${path || ''}${status ? ` -> ${status}` : ''}`.trim(),
+  };
+};
+
 const SystemLogs = () => {
   const { userInfo } = useAuth();
   const isAdminOnly = (userInfo?.user_type || userInfo?.userType) === 'Admin';
@@ -197,8 +283,8 @@ const SystemLogs = () => {
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[200px]">
                   Request
                 </th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[240px]">
-                  Summary
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[260px]">
+                  What Happened
                 </th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   IP
@@ -230,7 +316,11 @@ const SystemLogs = () => {
                       {r.branch_name || '—'}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      <span className="inline-flex px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded font-medium ${
+                          ACTION_BADGE_STYLES[r.action] || 'bg-gray-100 text-gray-800 border border-gray-200'
+                        }`}
+                      >
                         {r.action}
                       </span>
                     </td>
@@ -254,7 +344,19 @@ const SystemLogs = () => {
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-700 font-mono break-all max-w-xs">{r.request_path}</td>
-                    <td className="px-3 py-2 text-xs text-gray-800">{r.summary}</td>
+                    <td className="px-3 py-2 text-xs text-gray-800">
+                      {(() => {
+                        const info = getFriendlySummary(r);
+                        return (
+                          <div title={r.summary || ''} className="max-w-[360px]">
+                            <p className="text-gray-900 font-medium leading-5">{info.title}</p>
+                            {info.detail ? (
+                              <p className="text-gray-500 leading-5 mt-0.5 break-words">{info.detail}</p>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-2 text-xs text-gray-500 font-mono whitespace-nowrap">{r.ip_address || '—'}</td>
                   </tr>
                 ))

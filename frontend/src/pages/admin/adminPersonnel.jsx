@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const AdminPersonnel = () => {
   const { signup, userInfo } = useAuth();
@@ -162,7 +162,14 @@ const AdminPersonnel = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this personnel?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete personnel',
+        message: 'Are you sure you want to delete this personnel?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

@@ -2,8 +2,13 @@ import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
-import { query, getClient } from '../config/database.js';
+import pool, { query, getClient } from '../config/database.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
+import {
+  getChainFinancialSummary,
+  getChainRootInvoiceId,
+  resolveInvoiceDisplayDescription,
+} from '../utils/balanceInvoice.js';
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
@@ -124,11 +129,13 @@ router.get(
                         TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
                         TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
                         i.created_by,
+                        i.installmentinvoiceprofiles_id,
+                        i.parent_invoice_id, i.balance_invoice_id, i.invoice_chain_root_id,
                         i.ack_receipt_id,
                         i.invoice_ar_number,
                         ar.prospect_student_name as ar_prospect_student_name,
-                        CASE 
-                          WHEN i.status NOT IN ('Paid', 'Cancelled') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE 
+                        CASE
+                          WHEN i.status IN ('Unpaid', 'Pending', 'Draft') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
                           THEN 'Unpaid'
                           ELSE i.status
                         END as computed_status
@@ -238,17 +245,86 @@ router.get(
             }
 
             const items = itemsResult.rows || [];
-            // Use effective amount from items when present (e.g. downpayment with promo discount)
-            const effectiveAmount = items.length > 0
-              ? Math.max(0, items.reduce((sum, i) => sum + (Number(i.amount) || 0) - (Number(i.discount_amount) || 0) + (Number(i.penalty_amount) || 0), 0))
-              : invoice.amount;
+            const baseAmountFromItems = items.length > 0
+              ? Math.max(
+                  0,
+                  items.reduce(
+                    (sum, i) =>
+                      sum +
+                      (Number(i.amount) || 0) -
+                      (Number(i.discount_amount) || 0) +
+                      (Number(i.penalty_amount) || 0),
+                    0
+                  )
+                )
+              : null;
+
+            const paymentsResult = await query(
+              `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid
+               FROM paymenttbl
+               WHERE invoice_id = $1 AND status = 'Completed'`,
+              [invoice.invoice_id]
+            );
+            const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+
+            // For itemized invoices, compute remaining from items - completed payments.
+            // For non-itemized/manual invoices, invoicestbl.amount is already treated as remaining.
+            const effectiveAmount =
+              baseAmountFromItems !== null
+                ? Math.max(0, baseAmountFromItems - totalPaid)
+                : Number(invoice.amount) || 0;
+
+            const canRecordPayment =
+              !invoice.balance_invoice_id &&
+              invoice.status !== 'Balance Invoiced' &&
+              invoice.status !== 'Paid' &&
+              invoice.status !== 'Cancelled';
+            const displayDescription = await resolveInvoiceDisplayDescription(pool, invoice);
+            let chainSummary = null;
+            if (invoice.parent_invoice_id || invoice.balance_invoice_id || invoice.invoice_chain_root_id) {
+              try {
+                chainSummary = await getChainFinancialSummary(pool, invoice.invoice_id);
+              } catch (chainError) {
+                console.error(`getChainFinancialSummary for invoice ${invoice.invoice_id}:`, chainError);
+              }
+            }
+            let effectiveStatus = invoice.computed_status || invoice.status;
+            if (
+              invoice.balance_invoice_id &&
+              totalPaid > 0 &&
+              effectiveStatus !== 'Paid' &&
+              effectiveStatus !== 'Cancelled'
+            ) {
+              effectiveStatus = 'Partially Paid';
+            } else if (
+              chainSummary &&
+              Number(chainSummary.leaf_invoice_id) === Number(invoice.invoice_id) &&
+              invoice.parent_invoice_id &&
+              !invoice.balance_invoice_id &&
+              effectiveStatus !== 'Paid' &&
+              effectiveStatus !== 'Cancelled' &&
+              Number(chainSummary.total_paid_in_chain) > 0 &&
+              Number(chainSummary.remaining_on_leaf) > 0
+            ) {
+              effectiveStatus = 'Balance Invoiced';
+            }
 
             return {
               ...invoice,
               amount: effectiveAmount,
-              status: invoice.computed_status || invoice.status, // Use computed status if available
+              status: effectiveStatus,
+              display_description: displayDescription,
+              paid_amount:
+                effectiveStatus === 'Balance Invoiced'
+                  ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
+                  : totalPaid,
+              balance_invoice_amount:
+                effectiveStatus === 'Balance Invoiced'
+                  ? Number(chainSummary?.remaining_on_leaf ?? effectiveAmount)
+                  : null,
               items,
               students: studentsWithDisplayName,
+              can_record_payment: canRecordPayment,
               reservation: reservation ? {
                 reserved_id: reservation.reserved_id,
                 status: reservation.reservation_status,
@@ -334,6 +410,8 @@ router.get(
         };
       });
 
+      const resChainRootId = await getChainRootInvoiceId(pool, id);
+
       // Check if this invoice is linked to a reservation
       const reservationResult = await query(
         `SELECT r.reserved_id, r.status as reservation_status, r.due_date as reservation_due_date,
@@ -342,8 +420,8 @@ router.get(
          FROM reservedstudentstbl r
          LEFT JOIN classestbl c ON r.class_id = c.class_id
          LEFT JOIN userstbl u ON r.student_id = u.user_id
-         WHERE r.invoice_id = $1`,
-        [id]
+         WHERE r.invoice_id = $1 OR r.invoice_id = $2`,
+        [id, resChainRootId]
       );
 
       const reservation = reservationResult.rows.length > 0 ? reservationResult.rows[0] : null;
@@ -360,17 +438,94 @@ router.get(
       }
 
       const items = itemsResult.rows || [];
-      const effectiveAmount = items.length > 0
-        ? Math.max(0, items.reduce((sum, i) => sum + (Number(i.amount) || 0) - (Number(i.discount_amount) || 0) + (Number(i.penalty_amount) || 0), 0))
-        : invoiceRow.amount;
+      const baseAmountFromItems = items.length > 0
+        ? Math.max(
+            0,
+            items.reduce(
+              (sum, i) =>
+                sum +
+                (Number(i.amount) || 0) -
+                (Number(i.discount_amount) || 0) +
+                (Number(i.penalty_amount) || 0),
+              0
+            )
+          )
+        : null;
+
+      const paymentsResult = await query(
+        `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid
+         FROM paymenttbl
+         WHERE invoice_id = $1 AND status = 'Completed'`,
+        [id]
+      );
+      const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+
+      const effectiveAmount =
+        baseAmountFromItems !== null
+          ? Math.max(0, baseAmountFromItems - totalPaid)
+          : Number(invoiceRow.amount) || 0;
+
+      let chainSummary = null;
+      try {
+        chainSummary = await getChainFinancialSummary(pool, id);
+      } catch (e) {
+        console.error('getChainFinancialSummary:', e);
+      }
+      let effectiveStatus = invoiceRow.status;
+      if (
+        invoiceRow.balance_invoice_id &&
+        totalPaid > 0 &&
+        effectiveStatus !== 'Paid' &&
+        effectiveStatus !== 'Cancelled'
+      ) {
+        effectiveStatus = 'Partially Paid';
+      } else if (
+        chainSummary &&
+        Number(chainSummary.leaf_invoice_id) === Number(invoiceRow.invoice_id) &&
+        invoiceRow.parent_invoice_id &&
+        !invoiceRow.balance_invoice_id &&
+        effectiveStatus !== 'Paid' &&
+        effectiveStatus !== 'Cancelled' &&
+        Number(chainSummary.total_paid_in_chain) > 0 &&
+        Number(chainSummary.remaining_on_leaf) > 0
+      ) {
+        effectiveStatus = 'Balance Invoiced';
+      }
+
+      const displayDescription = await resolveInvoiceDisplayDescription(pool, invoiceRow);
+
+      let continuedToInvoice = null;
+      if (invoiceRow.balance_invoice_id) {
+        const tip = await query(
+          `SELECT * FROM invoicestbl WHERE invoice_id = $1`,
+          [invoiceRow.balance_invoice_id]
+        );
+        continuedToInvoice = tip.rows[0]
+          ? {
+              ...tip.rows[0],
+              display_description: await resolveInvoiceDisplayDescription(pool, tip.rows[0]),
+            }
+          : null;
+      }
+
+      const canRecordPayment =
+        !invoiceRow.balance_invoice_id &&
+        invoiceRow.status !== 'Balance Invoiced' &&
+        invoiceRow.status !== 'Paid' &&
+        invoiceRow.status !== 'Cancelled';
 
       res.json({
         success: true,
         data: {
           ...invoiceRow,
+          status: effectiveStatus,
           amount: effectiveAmount,
+          display_description: displayDescription,
           items,
           students: studentsWithDisplayName,
+          chain_summary: chainSummary,
+          continued_to_invoice: continuedToInvoice,
+          can_record_payment: canRecordPayment,
           reservation: reservation ? {
             reserved_id: reservation.reserved_id,
             status: reservation.reservation_status,
@@ -592,11 +747,18 @@ router.get(
 
         // Itemized charges table
         const cDesc = left + 8;
-        const cBase = left + 430;
-        const cDiscount = left + 530;
-        const cPenalty = left + 620;
-        const cTax = left + 700;
-        const cNet = left + 780;
+        const colBaseW = 80;
+        const colDiscountW = 80;
+        const colPenaltyW = 70;
+        const colTaxW = 70;
+        const colNetW = 70;
+        const colGap = 12;
+        const cNet = right - colNetW;
+        const cTax = cNet - colGap - colTaxW;
+        const cPenalty = cTax - colGap - colPenaltyW;
+        const cDiscount = cPenalty - colGap - colDiscountW;
+        const cBase = cDiscount - colGap - colBaseW;
+        const descW = Math.max(220, cBase - cDesc - colGap);
 
         doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Itemized Charges', left, y);
         y += 14;
@@ -604,12 +766,12 @@ router.get(
         doc.rect(left, y, contentWidth, 22).fill('#f3f4f6');
         doc.restore();
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#111827');
-        doc.text('Description', cDesc, y + 7, { width: 380 });
-        doc.text('Base', cBase, y + 7, { width: 80, align: 'right' });
-        doc.text('Discount', cDiscount, y + 7, { width: 80, align: 'right' });
-        doc.text('Penalty', cPenalty, y + 7, { width: 70, align: 'right' });
-        doc.text('Tax', cTax, y + 7, { width: 70, align: 'right' });
-        doc.text('Net', cNet, y + 7, { width: 70, align: 'right' });
+        doc.text('Description', cDesc, y + 7, { width: descW });
+        doc.text('Base', cBase, y + 7, { width: colBaseW, align: 'right' });
+        doc.text('Discount', cDiscount, y + 7, { width: colDiscountW, align: 'right' });
+        doc.text('Penalty', cPenalty, y + 7, { width: colPenaltyW, align: 'right' });
+        doc.text('Tax', cTax, y + 7, { width: colTaxW, align: 'right' });
+        doc.text('Net', cNet, y + 7, { width: colNetW, align: 'right' });
         y += 24;
 
         if (items.length === 0) {
@@ -636,12 +798,12 @@ router.get(
               doc.restore();
             }
             doc.font('Helvetica').fontSize(8).fillColor('#111827');
-            doc.text(item.description || '-', cDesc, y + 5, { width: 380, ellipsis: true });
-            doc.text(currency(amt), cBase, y + 5, { width: 80, align: 'right' });
-            doc.text(currency(discount), cDiscount, y + 5, { width: 80, align: 'right' });
-            doc.text(currency(penalty), cPenalty, y + 5, { width: 70, align: 'right' });
-            doc.text(currency(tax), cTax, y + 5, { width: 70, align: 'right' });
-            doc.text(currency(netAmount), cNet, y + 5, { width: 70, align: 'right' });
+            doc.text(item.description || '-', cDesc, y + 5, { width: descW, ellipsis: true });
+            doc.text(currency(amt), cBase, y + 5, { width: colBaseW, align: 'right' });
+            doc.text(currency(discount), cDiscount, y + 5, { width: colDiscountW, align: 'right' });
+            doc.text(currency(penalty), cPenalty, y + 5, { width: colPenaltyW, align: 'right' });
+            doc.text(currency(tax), cTax, y + 5, { width: colTaxW, align: 'right' });
+            doc.text(currency(netAmount), cNet, y + 5, { width: colNetW, align: 'right' });
             y += 18;
           });
         }
@@ -658,9 +820,10 @@ router.get(
           paymentsResult.rows.forEach((payment) => {
             const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '-';
             const method = payment.payment_method || 'Payment';
+            const paymentType = payment.payment_type || 'Payment';
             const ref = payment.reference_number ? ` • Ref: ${payment.reference_number}` : '';
             doc.font('Helvetica').fontSize(8.5).fillColor('#374151')
-              .text(`${paymentDate} • ${method}${ref}`, left + 8, y, { width: 620 });
+              .text(`${paymentDate} • ${paymentType} via ${method}${ref}`, left + 8, y, { width: cNet - left - 16 });
             doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
               .text(currency(payment.payable_amount), cNet, y, { width: 70, align: 'right' });
             y += 12;
@@ -822,13 +985,14 @@ router.get(
       if (paymentsResult.rows.length > 0) {
         paymentsResult.rows.forEach((payment) => {
           const paymentMethod = payment.payment_method || 'Cash';
+          const paymentType = payment.payment_type || 'Payment';
           const refNum = payment.reference_number || '';
           const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '';
           const paymentAmount = Number(payment.payable_amount) || 0;
           
-          // "Fully Settled Via" label on the left
+          // Payment summary label on the left
           doc.fontSize(9).fillColor('#333333').font('Helvetica');
-          const paymentMethodText = `Fully Settled Via ${paymentMethod}${refNum ? ` ${refNum}` : ''}`;
+          const paymentMethodText = `${paymentType} via ${paymentMethod}${refNum ? ` ${refNum}` : ''}`;
           doc.text(paymentMethodText, 50, currentY, { width: 300 });
           
           // Payment amount on the right (same line)

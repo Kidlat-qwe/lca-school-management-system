@@ -6,7 +6,7 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appPrompt, appConfirm } from '../../utils/appAlert';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -1080,7 +1080,14 @@ const initializePackageMerchSelections = useCallback(
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this class?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete class',
+        message: 'Are you sure you want to delete this class?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
@@ -1347,17 +1354,19 @@ const initializePackageMerchSelections = useCallback(
     const studentName = student.full_name || `Student ID: ${student.user_id}`;
     const isPending = student.student_type === 'pending';
 
-    const reason = window.prompt(
-      `Are you sure you want to ${isPending ? 'remove' : 'unenroll'} ${studentName} from this class?\n\n` +
-      `Please provide a reason (e.g., "Client informed student will not continue"):`
-    );
+    const reason = await appPrompt({
+      title: isPending ? 'Remove student' : 'Unenroll student',
+      message:
+        `Are you sure you want to ${isPending ? 'remove' : 'unenroll'} ${studentName} from this class?\n\n` +
+        `Please provide a reason (e.g., "Client informed student will not continue").`,
+      placeholder: 'Reason (required)',
+      confirmLabel: isPending ? 'Remove' : 'Unenroll',
+      cancelLabel: 'Cancel',
+      required: true,
+      destructive: true,
+    });
 
-    if (!reason || reason.trim() === '') {
-      appAlert(isPending ? 'Removal cancelled. Reason is required.' : 'Unenrollment cancelled. Reason is required.');
-      return;
-    }
-
-    if (!window.confirm(`Confirm ${isPending ? 'removal' : 'unenrollment'} of ${studentName}?\n\nReason: ${reason.trim()}`)) {
+    if (reason === null) {
       return;
     }
 
@@ -2059,11 +2068,17 @@ const initializePackageMerchSelections = useCallback(
       ...selectedMergeTargetClasses.map(c => `${c.program_name} - ${c.class_name || c.level_tag}`)
     ].join('\n');
 
-    if (!window.confirm(
-      `Are you sure you want to merge these ${selectedMergeTargetClasses.length + 1} classes?\n\n` +
-      `Classes to merge:\n${allClassNames}\n\n` +
-      `This action cannot be undone. All original classes will be deleted and all students will be moved to a new merged class with the configured schedule.`
-    )) {
+    if (
+      !(await appConfirm({
+        title: 'Merge classes',
+        message:
+          `Are you sure you want to merge these ${selectedMergeTargetClasses.length + 1} classes?\n\n` +
+          `Classes to merge:\n${allClassNames}\n\n` +
+          `This action cannot be undone. All original classes will be deleted and all students will be moved to a new merged class with the configured schedule.`,
+        destructive: true,
+        confirmLabel: 'Merge',
+      }))
+    ) {
       return;
     }
 
@@ -2181,7 +2196,14 @@ const initializePackageMerchSelections = useCallback(
         : '') +
       `This action cannot be undone.`;
 
-    if (!window.confirm(confirmMessage)) {
+    if (
+      !(await appConfirm({
+        title: 'Undo merge',
+        message: confirmMessage,
+        destructive: true,
+        confirmLabel: 'Undo merge',
+      }))
+    ) {
       return;
     }
 
@@ -3032,87 +3054,6 @@ const initializePackageMerchSelections = useCallback(
     const currentlySelected = selectedStudents.length;
     return selectedClassForEnrollment.max_students - currentEnrolled - currentReserved - currentlySelected;
   };
-
-  // Calculate total amount for per-phase enrollment
-  const calculatePerPhaseTotal = () => {
-    if (selectedEnrollmentOption !== 'per-phase') return 0;
-    
-    let total = 0;
-    
-    // Add per-phase amount
-    if (perPhaseAmount && parseFloat(perPhaseAmount) > 0) {
-      total += parseFloat(perPhaseAmount);
-    }
-    
-    // Add selected pricing lists
-    selectedPricingLists.forEach(pricingId => {
-      const pricing = pricingLists.find(p => p.pricinglist_id === pricingId);
-      if (pricing && pricing.price) {
-        total += parseFloat(pricing.price) || 0;
-      }
-    });
-    
-    // Add selected merchandise
-    // Strategy: Count per-student selections first, then count any remaining items from global selections
-    const countedMerchandiseNames = new Set(); // Track which merchandise names we've already counted
-    
-    // First, count per-student merchandise selections (for uniforms with sizes and other items)
-    if (selectedStudents.length > 0 && Object.keys(studentMerchandiseSelections).length > 0) {
-      selectedStudents.forEach(student => {
-        const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
-        studentMerchSelections.forEach(merchSelection => {
-          if (merchSelection.merchandise_id) {
-            const merchItem = merchandise.find(m => m.merchandise_id === merchSelection.merchandise_id);
-            if (merchItem && merchItem.price) {
-              total += parseFloat(merchItem.price) || 0;
-            }
-          }
-        });
-        // Mark all merchandise in this student's selections as counted
-        studentMerchSelections.forEach(merchSelection => {
-          if (merchSelection.merchandise_name) {
-            countedMerchandiseNames.add(merchSelection.merchandise_name);
-          }
-        });
-      });
-    }
-    
-    // Then, count any merchandise from global selections that wasn't counted yet
-    // This handles cases where merchandise was selected but not yet initialized to students
-    selectedMerchandise.forEach(merch => {
-      // Skip if this merchandise was already counted in per-student selections
-      if (countedMerchandiseNames.has(merch.merchandise_name)) {
-        return;
-      }
-      
-      // Find the actual merchandise item to get the price
-      let merchItem = null;
-      const itemsForType = getMerchandiseItemsByType(merch.merchandise_name);
-      const hasSizes = itemsForType.some(item => item.size);
-      
-      if (merch.merchandise_name === 'LCA Uniform' && merch.size) {
-        // For uniforms with size in global selection (shouldn't happen, but handle it)
-        merchItem = merchandise.find(
-          item => item.merchandise_name === merch.merchandise_name && item.size === merch.size
-        );
-      } else {
-        // For other merchandise, find the first item with this name
-        merchItem = merchandise.find(
-          item => item.merchandise_name === merch.merchandise_name
-        );
-      }
-      
-      if (merchItem && merchItem.price) {
-        // For merchandise without sizes or uniforms, multiply by number of students
-        // For uniforms, they should be in per-student selections, but if not, count once per student
-        const studentCount = selectedStudents.length > 0 ? selectedStudents.length : 1;
-        total += parseFloat(merchItem.price) * studentCount;
-      }
-    });
-    
-    return total;
-  };
-
 
   const groupPackageDetails = (details = []) => {
     const pricingDetails = [];
@@ -5280,13 +5221,17 @@ setFormData({
       'add-last-phase': 'Makeup sessions will be auto-generated and added to the last phase; the class end date will be extended.',
       'manual': 'Makeup sessions will be created at your specified dates and times.',
     };
-    const confirmed = window.confirm(
-      `Are you sure you want to suspend ${selectedSessionsToSuspend.length} session(s) using ${
-        makeupStrategy === 'add-last-phase' ? 'Add New Sessions to Last Phase' : 'Manual Scheduling'
-      } strategy?\n\n` +
-      `${strategyDescriptions[makeupStrategy]}\n\n` +
-      `Suspended sessions will be cancelled and marked with reason: ${suspensionFormData.reason}`
-    );
+    const confirmed = await appConfirm({
+      title: 'Create suspension',
+      message:
+        `Are you sure you want to suspend ${selectedSessionsToSuspend.length} session(s) using ${
+          makeupStrategy === 'add-last-phase' ? 'Add New Sessions to Last Phase' : 'Manual Scheduling'
+        } strategy?\n\n` +
+        `${strategyDescriptions[makeupStrategy]}\n\n` +
+        `Suspended sessions will be cancelled and marked with reason: ${suspensionFormData.reason}`,
+      destructive: true,
+      confirmLabel: 'Continue',
+    });
     if (!confirmed) return;
     setCreatingSuspension(true);
     try {
@@ -10855,53 +10800,23 @@ setFormData({
                     
                     return (
                     <div className="space-y-3">
-                      {/* Installment Settings Toggle */}
+                      {/* Installment Settings */}
                       <div className="p-4 bg-white border border-gray-200 rounded-lg">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-medium text-gray-900">Installment Payment</h4>
-                              <p className="text-xs text-gray-600 mt-0.5">Enable to set up installment invoice settings</p>
-                            </div>
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
                           </div>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const newState = !showInstallmentSettings;
-                              setShowInstallmentSettings(newState);
-                              if (newState) {
-                                const branchId = selectedClassForEnrollment?.branch_id ?? selectedClassForEnrollment?.branchId ?? null;
-                                const systemSettings = await fetchInstallmentScheduleSettings(branchId);
-                                setInstallmentSettings(systemSettings);
-                              } else {
-                                updateInstallmentSettings({
-                                  invoice_issue_date: '',
-                                  billing_month: '',
-                                  invoice_due_date: '',
-                                  invoice_generation_date: '',
-                                });
-                              }
-                            }}
-                            className={`relative inline-flex h-5 w-10 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-1 shadow-inner ${
-                              showInstallmentSettings ? 'bg-[#F7C844]' : 'bg-gray-300'
-                            }`}
-                          >
-                            <span
-                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                                showInstallmentSettings ? 'translate-x-5' : 'translate-x-0'
-                              }`}
-                            />
-                          </button>
+                          <div>
+                            <h4 className="text-sm font-medium text-gray-900">Installment Payment</h4>
+                            <p className="text-xs text-gray-600 mt-0.5">Installment invoice settings are applied automatically for this package.</p>
+                          </div>
                         </div>
                       </div>
 
                       {/* Installment Settings ? loaded from system Settings > Invoice Schedule */}
-                      {showInstallmentSettings && (
+                      {selectedPackage && (
                         <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                           <div className="mb-2">
                             <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>
@@ -11653,18 +11568,6 @@ setFormData({
                           </div>
                         );
                       })()}
-                      
-                      {/* Total Amount for Per-Phase Enrollment (hidden when using Phase packages) */}
-                      {selectedEnrollmentOption === 'per-phase' && !selectedPackage && (
-                        <div className="mt-4 pt-4 border-t-2 border-gray-300">
-                          <div className="flex justify-between items-center">
-                            <p className="text-base font-bold text-gray-900">Total Amount:</p>
-                            <p className="text-lg font-bold text-blue-700">
-                              ${calculatePerPhaseTotal().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </p>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -11745,19 +11648,6 @@ setFormData({
                 enrollStep !== 'package-selection' &&
                 enrollStep !== 'ack-receipt-selection' &&
                 !(enrollStep === 'review' && generatedInvoices.length > 0) && (
-                <div className="flex items-center gap-3">
-                  {/* Total Amount Display - Hidden for per-phase enrollment (pay per phase, no single total) */}
-                  {(enrollStep === 'student-selection' || enrollStep === 'review') &&
-                    selectedEnrollmentOption !== 'per-phase' &&
-                    (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation' || selectedEnrollmentOption === 'ack-receipt') &&
-                    selectedPackage && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
-                      <span className="text-xs font-medium text-blue-900">Total Amount:</span>
-                      <span className="text-sm font-bold text-blue-700">
-                        ₱{(Number(selectedPackage.package_price) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  )}
                 <button
                   type="button"
                   onClick={() => {
@@ -11788,7 +11678,6 @@ setFormData({
                 >
                   Back
                 </button>
-                </div>
               )}
               {enrollStep === 'student-selection' && (
                 <button
@@ -14293,54 +14182,23 @@ setFormData({
                     
                     return (
                       <div className="space-y-3">
-                        {/* Installment Settings Toggle */}
+                        {/* Installment Settings */}
                         <div className="p-4 bg-white border border-gray-200 rounded-lg">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-3">
-                              <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                              </div>
-                              <div>
-                                <h4 className="text-sm font-medium text-gray-900">Installment Payment</h4>
-                                <p className="text-xs text-gray-600 mt-0.5">Enable to set up installment invoice settings</p>
-                              </div>
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
                             </div>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const newState = !upgradeShowInstallmentSettings;
-                                setUpgradeShowInstallmentSettings(newState);
-                                if (newState) {
-                                  const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
-                                  const systemSettings = await fetchInstallmentScheduleSettings(branchId);
-                                  setUpgradeInstallmentSettings(systemSettings);
-                                } else {
-                                  setUpgradeInstallmentSettings({
-                                    invoice_issue_date: '',
-                                    billing_month: '',
-                                    invoice_due_date: '',
-                                    invoice_generation_date: '',
-                                    frequency_months: 1,
-                                  });
-                                }
-                              }}
-                              className={`relative inline-flex h-5 w-10 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-1 shadow-inner ${
-                                upgradeShowInstallmentSettings ? 'bg-[#F7C844]' : 'bg-gray-300'
-                              }`}
-                            >
-                              <span
-                                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                                  upgradeShowInstallmentSettings ? 'translate-x-5' : 'translate-x-0'
-                                }`}
-                              />
-                            </button>
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900">Installment Payment</h4>
+                              <p className="text-xs text-gray-600 mt-0.5">Installment invoice settings are applied automatically for this package.</p>
+                            </div>
                           </div>
                         </div>
 
                         {/* Installment Settings ? loaded from system Settings > Invoice Schedule */}
-                        {upgradeShowInstallmentSettings && (
+                        {isInstallmentCapablePackage && (
                           <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
                             <div className="mb-2">
                               <h3 className="text-xs font-bold text-blue-900">Installment Invoice Settings</h3>

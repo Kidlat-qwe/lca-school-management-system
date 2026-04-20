@@ -13,6 +13,15 @@ import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule, getPhaseDueDateYmd } from '../utils/phaseInstallmentUtils.js';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
+import {
+  computeOriginalInvoiceAmount,
+  computeOriginalAfterDeletingPayment,
+  computeInvoiceOriginalForRecalc,
+  createBalanceInvoiceFromPartial,
+  getCanonicalInstallmentPhaseCounts,
+  getChainRootInvoiceId,
+  removeUnusedBalanceInvoice,
+} from '../utils/balanceInvoice.js';
 
 const router = express.Router();
 
@@ -104,16 +113,11 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
     return;
   }
 
-  const paidInstallmentCountResult = await client.query(
-    `SELECT COUNT(*) AS paid_count
-     FROM invoicestbl i
-     WHERE i.installmentinvoiceprofiles_id = $1
-       AND i.status = 'Paid'
-       AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)`,
-    [profileId, profile.downpayment_invoice_id || null]
+  const { paidPhaseCount: paidInstallmentCount } = await getCanonicalInstallmentPhaseCounts(
+    client,
+    profileId,
+    profile.downpayment_invoice_id || null
   );
-
-  const paidInstallmentCount = parseInt(paidInstallmentCountResult.rows[0]?.paid_count || 0, 10);
   if (paidInstallmentCount <= 0) {
     return;
   }
@@ -1096,6 +1100,28 @@ router.post(
         });
       }
 
+      if (invoice.balance_invoice_id) {
+        await client.query('ROLLBACK');
+        const tip = await client.query(
+          `SELECT invoice_description FROM invoicestbl WHERE invoice_id = $1`,
+          [invoice.balance_invoice_id]
+        );
+        const lab = tip.rows[0]?.invoice_description || `INV-${invoice.balance_invoice_id}`;
+        return res.status(400).json({
+          success: false,
+          message: `This invoice is closed for new payments. Record payments on ${lab} (balance invoice).`,
+        });
+      }
+
+      if (invoice.status === 'Balance Invoiced') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'This invoice was superseded after a partial payment. Use the new balance invoice to record payments.',
+        });
+      }
+
       // Verify student exists
       const studentCheck = await client.query('SELECT * FROM userstbl WHERE user_id = $1', [student_id]);
       if (studentCheck.rows.length === 0) {
@@ -1187,108 +1213,100 @@ router.post(
 
       const newPayment = paymentResult.rows[0];
 
-      // Calculate original invoice amount from invoice items
-      const invoiceItemsResult = await client.query(
-        `SELECT 
-          COALESCE(SUM(amount), 0) as item_amount,
-          COALESCE(SUM(discount_amount), 0) as total_discount,
-          COALESCE(SUM(penalty_amount), 0) as total_penalty,
-          COALESCE(SUM(amount * COALESCE(tax_percentage, 0) / 100), 0) as total_tax
-         FROM invoiceitemstbl 
-         WHERE invoice_id = $1`,
-        [invoice_id]
-      );
-      
-      const itemAmount = parseFloat(invoiceItemsResult.rows[0].item_amount) || 0;
-      const totalDiscount = parseFloat(invoiceItemsResult.rows[0].total_discount) || 0;
-      const totalPenalty = parseFloat(invoiceItemsResult.rows[0].total_penalty) || 0;
-      const totalTax = parseFloat(invoiceItemsResult.rows[0].total_tax) || 0;
-      
-      // Original invoice amount = items - discounts + penalties + tax
-      const originalInvoiceAmount = itemAmount - totalDiscount + totalPenalty + totalTax;
-      
-      // Calculate total payments for this invoice
       const totalPaymentsResult = await client.query(
         'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
         [invoice_id, 'Completed']
       );
       const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
-      
-      // Calculate remaining balance (original amount - total paid)
-      const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
-      
-      // Update invoice amount to reflect remaining balance
-      await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
-        remainingBalance,
-        invoice_id,
-      ]);
 
-      // Update invoice status based on payment
+      const { originalInvoiceAmount } = await computeOriginalInvoiceAmount(
+        client,
+        invoice_id,
+        invoice,
+        totalPaid,
+        payable_amount
+      );
+
+      const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
+
       let newInvoiceStatus = invoice.status;
-      if (totalPaid >= originalInvoiceAmount) {
-        newInvoiceStatus = 'Paid';
-      } else if (totalPaid > 0) {
-        newInvoiceStatus = 'Partially Paid';
+      let createdBalanceInvoiceId = null;
+
+      const isPartialPaymentType = String(payment_type || '').trim() === 'Partial Payment';
+
+      if (isPartialPaymentType && remainingBalance > 0.01) {
+        const { balance_invoice_id } = await createBalanceInvoiceFromPartial({
+          client,
+          parentInvoice: invoice,
+          remainingBalance,
+          createdBy,
+          issueDateYmd: formatYmdLocal(new Date(issue_date)),
+        });
+        createdBalanceInvoiceId = balance_invoice_id;
+        newInvoiceStatus = 'Balance Invoiced';
       } else {
-        // If payment is removed and invoice becomes unpaid, check if it's a package price invoice
-        // If yes, remove student enrollment
-        if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
-          newInvoiceStatus = 'Unpaid';
-          
-          // Check if this is a package price invoice (not an installment invoice, not a reservation fee)
-          // Package price invoices don't have installmentinvoiceprofiles_id
-          if (!invoice.installmentinvoiceprofiles_id && 
-              invoice.invoice_description && 
-              !invoice.invoice_description.includes('Reservation Fee')) {
-            try {
-              // Get student from invoice
-              const invoiceStudentResult = await client.query(
-                `SELECT ist.student_id 
-                 FROM invoicestudentstbl ist
-                 WHERE ist.invoice_id = $1
-                 LIMIT 1`,
-                [invoice_id]
-              );
-              
-              if (invoiceStudentResult.rows.length > 0) {
-                const invoiceStudentId = invoiceStudentResult.rows[0].student_id;
-                
-                // Find enrollments for this student that were created around the same time as the invoice
-                // This helps identify enrollments linked to this package price invoice
-                // We'll check enrollments created within 24 hours of invoice issue date
-                const enrollmentResult = await client.query(
-                  `SELECT cs.classstudent_id, cs.class_id, cs.phase_number, cs.student_id, cs.enrolled_at
-                   FROM classstudentstbl cs
-                   WHERE cs.student_id = $1
-                     AND cs.enrolled_at >= $2::date - INTERVAL '24 hours'
-                     AND cs.enrolled_at <= $2::date + INTERVAL '24 hours'
-                   ORDER BY cs.enrolled_at DESC`,
-                  [invoiceStudentId, invoice.issue_date]
+        await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
+          remainingBalance,
+          invoice_id,
+        ]);
+
+        if (totalPaid >= originalInvoiceAmount) {
+          newInvoiceStatus = 'Paid';
+        } else if (totalPaid > 0) {
+          newInvoiceStatus = 'Partially Paid';
+        } else {
+          if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
+            newInvoiceStatus = 'Unpaid';
+
+            if (
+              !invoice.installmentinvoiceprofiles_id &&
+              invoice.invoice_description &&
+              !invoice.invoice_description.includes('Reservation Fee')
+            ) {
+              try {
+                const invoiceStudentResult = await client.query(
+                  `SELECT ist.student_id
+                   FROM invoicestudentstbl ist
+                   WHERE ist.invoice_id = $1
+                   LIMIT 1`,
+                  [invoice_id]
                 );
-                
-                // Remove all enrollments that were created around the same time as the invoice
-                // This handles cases where student was enrolled in multiple phases (fullpayment)
-                for (const enrollment of enrollmentResult.rows) {
-                  await client.query(
-                    `DELETE FROM classstudentstbl WHERE classstudent_id = $1`,
-                    [enrollment.classstudent_id]
+
+                if (invoiceStudentResult.rows.length > 0) {
+                  const invoiceStudentId = invoiceStudentResult.rows[0].student_id;
+
+                  const enrollmentResult = await client.query(
+                    `SELECT cs.classstudent_id, cs.class_id, cs.phase_number, cs.student_id, cs.enrolled_at
+                     FROM classstudentstbl cs
+                     WHERE cs.student_id = $1
+                       AND cs.enrolled_at >= $2::date - INTERVAL '24 hours'
+                       AND cs.enrolled_at <= $2::date + INTERVAL '24 hours'
+                     ORDER BY cs.enrolled_at DESC`,
+                    [invoiceStudentId, invoice.issue_date]
                   );
-                  console.log(`⚠️ Student ${enrollment.student_id} removed from class ${enrollment.class_id}, phase ${enrollment.phase_number} due to unpaid package price invoice`);
+
+                  for (const enrollment of enrollmentResult.rows) {
+                    await client.query(`DELETE FROM classstudentstbl WHERE classstudent_id = $1`, [
+                      enrollment.classstudent_id,
+                    ]);
+                    console.log(
+                      `⚠️ Student ${enrollment.student_id} removed from class ${enrollment.class_id}, phase ${enrollment.phase_number} due to unpaid package price invoice`
+                    );
+                  }
                 }
+              } catch (removalError) {
+                console.error('Error removing student enrollment due to unpaid invoice:', removalError);
               }
-            } catch (removalError) {
-              console.error('Error removing student enrollment due to unpaid invoice:', removalError);
-              // Don't fail the payment update if removal fails
             }
           }
         }
-      }
 
-      if (newInvoiceStatus !== invoice.status) {
-        await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
-          newInvoiceStatus,
-          invoice_id,
-        ]);
+        if (newInvoiceStatus !== invoice.status) {
+          await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
+            newInvoiceStatus,
+            invoice_id,
+          ]);
+        }
       }
 
       // ── Merchandise AR: deduct stock when invoice is fully paid ───────────
@@ -1325,11 +1343,12 @@ router.post(
       // If yes, and invoice is now fully paid, update reservation status to "Fee Paid"
       // Note: Student is NOT auto-enrolled here. Enrollment only happens when reservation is upgraded.
       if (newInvoiceStatus === 'Paid') {
+        const reservationChainRootId = await getChainRootInvoiceId(client, invoice_id);
         const reservationCheck = await client.query(
           `SELECT r.reserved_id, r.status, r.student_id, r.class_id, r.phase_number, r.branch_id
            FROM reservedstudentstbl r
-           WHERE r.invoice_id = $1`,
-          [invoice_id]
+           WHERE r.invoice_id = $1 OR r.invoice_id = $2`,
+          [invoice_id, reservationChainRootId]
         );
         
         if (reservationCheck.rows.length > 0) {
@@ -1592,7 +1611,7 @@ router.post(
       const paymentData = paymentWithDetails.rows[0];
 
       // Send invoice email to student (non-blocking - don't fail payment if email fails)
-      if (paymentData.student_email) {
+      if (paymentData.student_email && !createdBalanceInvoiceId) {
         // Send email asynchronously without blocking the response
         (async () => {
           try {
@@ -1621,8 +1640,13 @@ router.post(
 
       res.status(201).json({
         success: true,
-        message: 'Payment created successfully',
-        data: paymentData,
+        message: createdBalanceInvoiceId
+          ? 'Payment recorded. Remaining balance was moved to a new invoice.'
+          : 'Payment created successfully',
+        data: {
+          ...paymentData,
+          ...(createdBalanceInvoiceId ? { balance_invoice_id: createdBalanceInvoiceId } : {}),
+        },
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1731,33 +1755,19 @@ router.put(
         );
         if (invoiceResult.rows.length > 0) {
           const invoice = invoiceResult.rows[0];
-          
-          // Calculate original invoice amount from invoice items
-          const invoiceItemsResult = await client.query(
-            `SELECT 
-              COALESCE(SUM(amount), 0) as item_amount,
-              COALESCE(SUM(discount_amount), 0) as total_discount,
-              COALESCE(SUM(penalty_amount), 0) as total_penalty,
-              COALESCE(SUM(amount * COALESCE(tax_percentage, 0) / 100), 0) as total_tax
-             FROM invoiceitemstbl 
-             WHERE invoice_id = $1`,
-            [payment.invoice_id]
-          );
-          
-          const itemAmount = parseFloat(invoiceItemsResult.rows[0].item_amount) || 0;
-          const totalDiscount = parseFloat(invoiceItemsResult.rows[0].total_discount) || 0;
-          const totalPenalty = parseFloat(invoiceItemsResult.rows[0].total_penalty) || 0;
-          const totalTax = parseFloat(invoiceItemsResult.rows[0].total_tax) || 0;
-          
-          // Original invoice amount = items - discounts + penalties + tax
-          const originalInvoiceAmount = itemAmount - totalDiscount + totalPenalty + totalTax;
-          
+
           const totalPaymentsResult = await client.query(
             'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
             [payment.invoice_id, 'Completed']
           );
           const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
-          
+
+          const { originalInvoiceAmount } = await computeInvoiceOriginalForRecalc(
+            client,
+            payment.invoice_id,
+            invoice
+          );
+
           // Calculate remaining balance (original amount - total paid)
           const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
           
@@ -1786,16 +1796,16 @@ router.put(
           // Check if this invoice is linked to a reservation
           // If yes, and invoice is now fully paid, update reservation status to "Fee Paid" and auto-enroll student
           if (newInvoiceStatus === 'Paid') {
+            const reservationChainRootId = await getChainRootInvoiceId(client, payment.invoice_id);
             const reservationCheck = await client.query(
               `SELECT r.reserved_id, r.status, r.student_id, r.class_id, r.phase_number, r.branch_id
                FROM reservedstudentstbl r
-               WHERE r.invoice_id = $1`,
-              [payment.invoice_id]
+               WHERE r.invoice_id = $1 OR r.invoice_id = $2`,
+              [payment.invoice_id, reservationChainRootId]
             );
-            
+
             if (reservationCheck.rows.length > 0) {
               const reservation = reservationCheck.rows[0];
-              // Only update if reservation is still in "Reserved" status
               if (reservation.status === 'Reserved') {
                 await client.query(
                   `UPDATE reservedstudentstbl 
@@ -1804,11 +1814,10 @@ router.put(
                   [reservation.reserved_id]
                 );
                 console.log(`✅ Reservation ${reservation.reserved_id} status updated to "Fee Paid" after payment update`);
-                // Note: Student is NOT auto-enrolled here. Enrollment only happens when reservation is upgraded.
               }
             }
           }
-          
+
           // Check if invoice becomes unpaid and is a package price invoice
           // If yes, remove student enrollment
           if (newInvoiceStatus === 'Unpaid' && 
@@ -2150,43 +2159,57 @@ router.delete(
         });
       }
 
+      const invoiceForDeleteCheck = await client.query(
+        `SELECT balance_invoice_id, status FROM invoicestbl WHERE invoice_id = $1`,
+        [payment.invoice_id]
+      );
+      const invDel = invoiceForDeleteCheck.rows[0];
+      if (invDel?.balance_invoice_id) {
+        const childPaid = await client.query(
+          `SELECT COALESCE(SUM(payable_amount), 0) AS t FROM paymenttbl WHERE invoice_id = $1 AND status = 'Completed'`,
+          [invDel.balance_invoice_id]
+        );
+        if (parseFloat(childPaid.rows[0]?.t || 0) > 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'Cannot delete this payment because a balance invoice exists and already has payments. Reverse balance payments first.',
+          });
+        }
+        await removeUnusedBalanceInvoice(client, invDel.balance_invoice_id);
+      }
+
+      const invoiceBeforeRow = await client.query(`SELECT * FROM invoicestbl WHERE invoice_id = $1`, [
+        payment.invoice_id,
+      ]);
+      const invoiceSnap = invoiceBeforeRow.rows[0];
+
       // Delete payment
       await client.query('DELETE FROM paymenttbl WHERE payment_id = $1', [id]);
 
       // Recalculate invoice amount and status (include installmentinvoiceprofiles_id for phase tracking)
       const invoiceResult = await client.query(
-        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1', 
+        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1',
         [payment.invoice_id]
       );
       if (invoiceResult.rows.length > 0) {
         const invoice = invoiceResult.rows[0];
-        
-        // Calculate original invoice amount from invoice items
-        const invoiceItemsResult = await client.query(
-          `SELECT 
-            COALESCE(SUM(amount), 0) as item_amount,
-            COALESCE(SUM(discount_amount), 0) as total_discount,
-            COALESCE(SUM(penalty_amount), 0) as total_penalty,
-            COALESCE(SUM(amount * COALESCE(tax_percentage, 0) / 100), 0) as total_tax
-           FROM invoiceitemstbl 
-           WHERE invoice_id = $1`,
-          [payment.invoice_id]
-        );
-        
-        const itemAmount = parseFloat(invoiceItemsResult.rows[0].item_amount) || 0;
-        const totalDiscount = parseFloat(invoiceItemsResult.rows[0].total_discount) || 0;
-        const totalPenalty = parseFloat(invoiceItemsResult.rows[0].total_penalty) || 0;
-        const totalTax = parseFloat(invoiceItemsResult.rows[0].total_tax) || 0;
-        
-        // Original invoice amount = items - discounts + penalties + tax
-        const originalInvoiceAmount = itemAmount - totalDiscount + totalPenalty + totalTax;
-        
+
         const totalPaymentsResult = await client.query(
           'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
           [payment.invoice_id, 'Completed']
         );
         const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
-        
+
+        const { originalInvoiceAmount } = await computeOriginalAfterDeletingPayment(
+          client,
+          payment.invoice_id,
+          invoiceSnap,
+          totalPaid,
+          payment.status === 'Completed' ? payment.payable_amount : 0
+        );
+
         // Calculate remaining balance (original amount - total paid)
         const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
         

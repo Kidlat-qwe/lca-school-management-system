@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
 const AdminInstallmentInvoice = () => {
+  const [searchParams] = useSearchParams();
+  const highlightedProfileId = parseInt(searchParams.get('profile_id') || '', 10) || null;
+  const highlightedStudentName = searchParams.get('student_name') || '';
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -90,6 +94,12 @@ const AdminInstallmentInvoice = () => {
     fetchInvoices();
   }, []);
 
+  useEffect(() => {
+    if (highlightedStudentName) {
+      setNameSearchTerm(highlightedStudentName);
+    }
+  }, [highlightedStudentName]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -163,6 +173,16 @@ const AdminInstallmentInvoice = () => {
   useEffect(() => {
     setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
   }, [totalPages]);
+
+  useEffect(() => {
+    if (!highlightedProfileId) return;
+    const targetIndex = filteredInvoices.findIndex(
+      (invoice) => Number(invoice.installmentinvoiceprofiles_id) === highlightedProfileId
+    );
+    if (targetIndex >= 0) {
+      setCurrentPage(Math.floor(targetIndex / ITEMS_PER_PAGE) + 1);
+    }
+  }, [filteredInvoices, highlightedProfileId]);
 
   const handleViewEdit = (invoice) => {
     console.log('View/Edit invoice:', invoice);
@@ -295,7 +315,14 @@ const AdminInstallmentInvoice = () => {
   };
 
   const handleDelete = async (invoice) => {
-    if (!window.confirm(`Are you sure you want to delete invoice for ${invoice.student_name}?`)) {
+    if (
+      !(await appConfirm({
+        title: 'Delete installment invoice',
+        message: `Are you sure you want to delete invoice for ${invoice.student_name}?`,
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       setOpenActionMenu(null);
       setActionMenuPosition(null);
       return;
@@ -466,7 +493,14 @@ const AdminInstallmentInvoice = () => {
                 </tr>
               ) : (
                 paginatedInvoices.map((invoice) => (
-                  <tr key={invoice.installmentinvoicedtl_id}>
+                  <tr
+                    key={invoice.installmentinvoicedtl_id}
+                    className={
+                      Number(invoice.installmentinvoiceprofiles_id) === highlightedProfileId
+                        ? 'bg-amber-50'
+                        : ''
+                    }
+                  >
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.student_name || '-'}

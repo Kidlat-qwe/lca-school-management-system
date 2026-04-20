@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -134,7 +134,14 @@ const Program = () => {
 
   const handleDelete = async (programId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this program?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete program',
+        message: 'Are you sure you want to delete this program?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

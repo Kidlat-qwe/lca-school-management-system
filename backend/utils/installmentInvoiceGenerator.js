@@ -1,6 +1,7 @@
 import { query, getClient } from '../config/database.js';
 import { insertInvoiceWithArNumber } from './invoiceArNumber.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import { getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
 import {
   buildPhaseInstallmentSchedule,
   getPhaseDueDateYmd,
@@ -323,24 +324,14 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     const currentCount = profileData.generated_count || 0;
     const maxInvoices = totalPhases !== null ? totalPhases : null; // Max invoices = total_phases (downpayment doesn't count)
     
-    // Calculate how many phases are actually paid (downpayment is NOT counted as a phase)
-    // Only count paid installment invoices, excluding downpayment invoice
-    // Get detailed list for debugging
-    const paidInvoicesDetailResult = await client.query(
-      `SELECT i.invoice_id, i.invoice_description, i.status, i.installmentinvoiceprofiles_id
-       FROM invoicestbl i 
-       WHERE i.installmentinvoiceprofiles_id = $1 
-         AND i.status = 'Paid'
-         AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
-       ORDER BY i.invoice_id`,
-      [profileData.installmentinvoiceprofiles_id, profileData.downpayment_invoice_id || null]
+    const { paidPhaseCount: paidPhases } = await getCanonicalInstallmentPhaseCounts(
+      client,
+      profileData.installmentinvoiceprofiles_id,
+      profileData.downpayment_invoice_id || null
     );
-    
-    const paidPhases = paidInvoicesDetailResult.rows.length;
     
     // Debug logging
     console.log('[Generator] Paid invoices count:', paidPhases);
-    console.log('[Generator] Paid invoices detail:', JSON.stringify(paidInvoicesDetailResult.rows, null, 2));
     console.log('[Generator] Total phases:', totalPhases);
     console.log('[Generator] Downpayment invoice ID:', profileData.downpayment_invoice_id);
     

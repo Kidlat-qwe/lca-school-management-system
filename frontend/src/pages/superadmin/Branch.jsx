@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Branch = () => {
   const [branches, setBranches] = useState([]);
@@ -113,7 +113,14 @@ const Branch = () => {
 
   const handleDelete = async (branchId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this branch?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete branch',
+        message: 'Are you sure you want to delete this branch?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

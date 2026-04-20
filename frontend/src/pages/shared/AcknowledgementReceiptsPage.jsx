@@ -19,6 +19,7 @@ const AcknowledgementReceiptsPage = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const searchHydratedRef = useRef(false);
+  const statusHydratedRef = useRef(false);
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 50,
@@ -148,11 +149,6 @@ const AcknowledgementReceiptsPage = () => {
     }
   };
 
-  const handleSearchSubmit = (e) => {
-    e.preventDefault();
-    fetchReceipts(1);
-  };
-
   useEffect(() => {
     if (!searchHydratedRef.current) {
       searchHydratedRef.current = true;
@@ -164,6 +160,15 @@ const AcknowledgementReceiptsPage = () => {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTerm]);
+
+  useEffect(() => {
+    if (!statusHydratedRef.current) {
+      statusHydratedRef.current = true;
+      return;
+    }
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
   const resetCreateForm = () => {
     setArType('Package');
@@ -607,7 +612,7 @@ const AcknowledgementReceiptsPage = () => {
       </div>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-5 space-y-4">
-        <form onSubmit={handleSearchSubmit} className="flex flex-col md:flex-row gap-3 md:items-end">
+        <div className="flex flex-col md:flex-row gap-3 md:items-end">
           <div className="flex-1">
             <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
             <input
@@ -622,10 +627,7 @@ const AcknowledgementReceiptsPage = () => {
             <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
             <select
               value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setTimeout(() => fetchReceipts(1), 0);
-              }}
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="input-field text-sm"
             >
               <option value="">All</option>
@@ -636,26 +638,7 @@ const AcknowledgementReceiptsPage = () => {
               ))}
             </select>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-            >
-              Apply
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSearchTerm('');
-                setStatusFilter('');
-                fetchReceipts(1);
-              }}
-              className="px-4 py-2 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-            >
-              Reset
-            </button>
-          </div>
-        </form>
+        </div>
 
         <div className="mt-2">
           {loading ? (

@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Merchandise = () => {
   const location = useLocation();
@@ -121,7 +121,14 @@ const Merchandise = () => {
   };
 
   const handleDelete = async (merchandiseId) => {
-    if (!window.confirm('Are you sure you want to delete this merchandise?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete merchandise',
+        message: 'Are you sure you want to delete this merchandise?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
@@ -138,7 +145,14 @@ const Merchandise = () => {
   };
 
   const handleDeleteMerchandiseType = async (merchandiseName) => {
-    if (!window.confirm(`Are you sure you want to delete all items of "${merchandiseName}"? This action cannot be undone.`)) {
+    if (
+      !(await appConfirm({
+        title: 'Delete all items',
+        message: `Are you sure you want to delete all items of "${merchandiseName}"? This action cannot be undone.`,
+        destructive: true,
+        confirmLabel: 'Delete all',
+      }))
+    ) {
       return;
     }
 

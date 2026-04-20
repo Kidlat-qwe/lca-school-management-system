@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const AdminStudent = () => {
   const { signup, userInfo } = useAuth();
@@ -56,13 +56,11 @@ const AdminStudent = () => {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedNameSearchTerm(nameSearchTerm.trim());
+      const trimmed = nameSearchTerm.trim();
+      setDebouncedNameSearchTerm(trimmed);
+      setCurrentPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [nameSearchTerm]);
-
-  useEffect(() => {
-    setCurrentPage(1);
   }, [nameSearchTerm]);
 
   // Auto-set branch_id when adminBranchId is available
@@ -174,7 +172,14 @@ const AdminStudent = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this student?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete student',
+        message: 'Are you sure you want to delete this student?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

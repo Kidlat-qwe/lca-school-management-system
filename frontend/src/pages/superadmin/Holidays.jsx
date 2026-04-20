@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import { appConfirm } from '../../utils/appAlert';
 import { useAuth } from '../../contexts/AuthContext';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -327,7 +328,15 @@ const Holidays = () => {
 
   const handleDelete = async () => {
     if (!editingHoliday || editingHoliday.source !== 'custom') return;
-    if (!window.confirm(`Delete "${editingHoliday.name}"?`)) return;
+    if (
+      !(await appConfirm({
+        title: 'Delete holiday',
+        message: `Delete "${editingHoliday.name}"?`,
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     setSubmitting(true);
     try {
       await apiRequest(`/holidays/custom/${editingHoliday.holiday_id}`, { method: 'DELETE' });

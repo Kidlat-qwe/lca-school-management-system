@@ -648,16 +648,22 @@ router.get(
                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
                ip.downpayment_invoice_id,
                c.start_date::text as class_start_date,
-               (SELECT COUNT(*) 
+               (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
                 FROM invoicestbl i 
                 WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id 
                   AND i.status = 'Paid'
-                  AND (ip.downpayment_invoice_id IS NULL OR i.invoice_id != ip.downpayment_invoice_id::INTEGER)
+                  AND (
+                    ip.downpayment_invoice_id IS NULL OR
+                    COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                  )
                ) as paid_phases,
-               (SELECT COUNT(*) 
+               (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
                 FROM invoicestbl i 
                 WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id 
-                  AND (ip.downpayment_invoice_id IS NULL OR i.invoice_id != ip.downpayment_invoice_id::INTEGER)
+                  AND (
+                    ip.downpayment_invoice_id IS NULL OR
+                    COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                  )
                ) as generated_phases,
                p.program_name, u.full_name as student_name
         FROM installmentinvoicestbl ii
@@ -982,25 +988,23 @@ router.post(
       const totalPhases = installmentInvoice.total_phases;
       const maxInvoices = totalPhases !== null ? totalPhases : null; // Max invoices = total_phases (downpayment doesn't count)
       
-      // Calculate how many phases are actually paid (downpayment is NOT counted as a phase)
-      // Only count paid installment invoices, excluding downpayment invoice
-      // Get detailed list for debugging
-      const paidInvoicesDetailResult = await client.query(
-        `SELECT i.invoice_id, i.invoice_description, i.status, i.installmentinvoiceprofiles_id
-         FROM invoicestbl i 
-         WHERE i.installmentinvoiceprofiles_id = $1 
+      const canonicalCountsResult = await client.query(
+        `SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id)) AS paid_phase_count
+         FROM invoicestbl i
+         WHERE i.installmentinvoiceprofiles_id = $1
            AND i.status = 'Paid'
-           AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
-         ORDER BY i.invoice_id`,
+           AND (
+             $2::INTEGER IS NULL OR
+             COALESCE(i.invoice_chain_root_id, i.invoice_id) != $2::INTEGER
+           )`,
         [installmentInvoice.installmentinvoiceprofiles_id, installmentInvoice.downpayment_invoice_id || null]
       );
       
-      const paidPhases = paidInvoicesDetailResult.rows.length;
+      const paidPhases = parseInt(canonicalCountsResult.rows[0]?.paid_phase_count || 0, 10);
       const currentCount = installmentInvoice.generated_count || 0;
       
       // Debug logging
       console.log('Paid invoices count:', paidPhases);
-      console.log('Paid invoices detail:', JSON.stringify(paidInvoicesDetailResult.rows, null, 2));
       console.log('Total phases:', totalPhases);
       console.log('Downpayment invoice ID:', installmentInvoice.downpayment_invoice_id);
       

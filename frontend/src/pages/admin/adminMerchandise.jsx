@@ -5,7 +5,7 @@ import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const AdminMerchandise = () => {
   const location = useLocation();
@@ -145,7 +145,14 @@ const AdminMerchandise = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this merchandise?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete merchandise',
+        message: 'Are you sure you want to delete this merchandise?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
@@ -162,7 +169,14 @@ const AdminMerchandise = () => {
   };
 
   const handleDeleteMerchandiseType = async (merchandiseName) => {
-    if (!window.confirm(`Are you sure you want to delete all items of "${merchandiseName}"? This action cannot be undone.`)) {
+    if (
+      !(await appConfirm({
+        title: 'Delete all items',
+        message: `Are you sure you want to delete all items of "${merchandiseName}"? This action cannot be undone.`,
+        destructive: true,
+        confirmLabel: 'Delete all',
+      }))
+    ) {
       return;
     }
 
@@ -610,7 +624,14 @@ const AdminMerchandise = () => {
   };
 
   const handleCancelRequest = async (requestId) => {
-    if (!window.confirm('Are you sure you want to cancel this request?')) {
+    if (
+      !(await appConfirm({
+        title: 'Cancel request',
+        message: 'Are you sure you want to cancel this request?',
+        destructive: true,
+        confirmLabel: 'Cancel request',
+      }))
+    ) {
       return;
     }
 

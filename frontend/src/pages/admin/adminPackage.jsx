@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -203,7 +203,15 @@ const AdminPackage = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this package? This will also delete all package details.')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete package',
+        message:
+          'Are you sure you want to delete this package? This will also delete all package details.',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
@@ -678,7 +686,14 @@ const AdminPackage = () => {
   };
 
   const removePackageDetail = async (detailId) => {
-    if (!window.confirm('Are you sure you want to remove this detail from the package?')) {
+    if (
+      !(await appConfirm({
+        title: 'Remove detail',
+        message: 'Are you sure you want to remove this detail from the package?',
+        destructive: true,
+        confirmLabel: 'Remove',
+      }))
+    ) {
       return;
     }
 

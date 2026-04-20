@@ -4,7 +4,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -242,7 +242,15 @@ const AdminPromo = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this promo? This will also delete all promo merchandise and usage records.')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete promo',
+        message:
+          'Are you sure you want to delete this promo? This will also delete all promo merchandise and usage records.',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

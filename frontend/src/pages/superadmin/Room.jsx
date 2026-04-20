@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -220,7 +220,14 @@ const Room = () => {
 
   const handleDelete = async (roomId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this room?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete room',
+        message: 'Are you sure you want to delete this room?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

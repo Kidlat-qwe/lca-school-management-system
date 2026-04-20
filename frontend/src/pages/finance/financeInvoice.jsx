@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
 const FinanceInvoice = () => {
+  const navigate = useNavigate();
   const { userInfo } = useAuth();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -256,7 +258,15 @@ const FinanceInvoice = () => {
 
   const handleDelete = async (invoiceId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this invoice? This will also delete all invoice items and student associations.')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete invoice',
+        message:
+          'Are you sure you want to delete this invoice? This will also delete all invoice items and student associations.',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
@@ -579,13 +589,44 @@ const FinanceInvoice = () => {
     appAlert('Receipt deletion is not yet implemented.');
   };
 
+  const handleViewInstallmentInvoice = (invoice) => {
+    setOpenMenuId(null);
+    setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
+
+    if (!invoice?.installmentinvoiceprofiles_id) {
+      appAlert('This invoice is not linked to an installment invoice profile.');
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set('profile_id', String(invoice.installmentinvoiceprofiles_id));
+    const studentName = invoice.students?.[0]?.full_name || '';
+    if (studentName) {
+      params.set('student_name', studentName);
+    }
+
+    navigate(`/finance/installment-invoice?${params.toString()}`);
+  };
+
   const handleOpenPaymentModal = async (invoice) => {
     setOpenMenuId(null);
     try {
       // Fetch the latest invoice data with details
       const response = await apiRequest(`/invoices/${invoice.invoice_id}`);
       const invoiceData = response.data;
-      
+
+      if (
+        invoiceData.can_record_payment === false ||
+        invoiceData.balance_invoice_id
+      ) {
+        const tip = invoiceData.continued_to_invoice;
+        const label = tip?.display_description || tip?.invoice_description || (tip?.invoice_id ? `INV-${tip.invoice_id}` : 'the balance invoice');
+        appAlert(
+          `This invoice is not payable after a partial payment. Record payments on ${label} instead.`
+        );
+        return;
+      }
+
       setSelectedInvoiceForPayment(invoiceData);
       
       // Pre-select first student if available
@@ -626,7 +667,13 @@ const FinanceInvoice = () => {
   const handleSendOverdueEmail = async (invoice) => {
     setOpenMenuId(null);
     
-    if (!window.confirm(`Send overdue payment reminder email to student(s) for invoice ${invoice.invoice_description || `INV-${invoice.invoice_id}`}?`)) {
+    if (
+      !(await appConfirm({
+        title: 'Send overdue reminder',
+        message: `Send overdue payment reminder email to student(s) for invoice ${invoice.invoice_description || `INV-${invoice.invoice_id}`}?`,
+        confirmLabel: 'Send',
+      }))
+    ) {
       return;
     }
 
@@ -664,6 +711,31 @@ const FinanceInvoice = () => {
       attachment_url: '',
     });
     setPaymentFormErrors({});
+  };
+
+  const getInvoiceBreakdown = (invoice) => {
+    const items = Array.isArray(invoice?.items) ? invoice.items : [];
+    const subtotal = items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    const discount = items.reduce((sum, item) => sum + (parseFloat(item.discount_amount) || 0), 0);
+    const penalty = items.reduce((sum, item) => sum + (parseFloat(item.penalty_amount) || 0), 0);
+    const tax = items.reduce((sum, item) => {
+      const amount = parseFloat(item.amount) || 0;
+      const taxPercentage = parseFloat(item.tax_percentage) || 0;
+      return sum + (amount * taxPercentage) / 100;
+    }, 0);
+    const totalDue = subtotal - discount + penalty + tax;
+    const remaining = parseFloat(invoice?.amount || 0);
+    const paidAmount = Math.max(0, totalDue - remaining);
+
+    return {
+      subtotal,
+      discount,
+      penalty,
+      tax,
+      totalDue,
+      paidAmount,
+      remaining,
+    };
   };
 
   const handlePaymentAttachmentChange = async (e) => {
@@ -708,8 +780,35 @@ const FinanceInvoice = () => {
 
   const handlePaymentInputChange = (e) => {
     const { name, value } = e.target;
-    setPaymentFormData(prev => {
-      return { ...prev, [name]: value };
+    const invoiceOutstandingAmount = parseFloat(selectedInvoiceForPayment?.amount || 0);
+    setPaymentFormData((prev) => {
+      let nextValue = value;
+
+      if (
+        name === 'payable_amount' &&
+        prev.payment_type === 'Partial Payment' &&
+        invoiceOutstandingAmount > 0 &&
+        Number(value) >= invoiceOutstandingAmount
+      ) {
+        nextValue = prev.payable_amount;
+      }
+
+      if (name === 'payment_type' && value === 'Partial Payment') {
+        const currentAmount = parseFloat(prev.payable_amount || 0);
+        if (invoiceOutstandingAmount > 0 && currentAmount >= invoiceOutstandingAmount) {
+          return { ...prev, [name]: value, payable_amount: '' };
+        }
+      }
+      if (name === 'payment_type' && value === 'Full Payment') {
+        return {
+          ...prev,
+          [name]: value,
+          payable_amount:
+            invoiceOutstandingAmount > 0 ? invoiceOutstandingAmount.toFixed(2) : prev.payable_amount,
+        };
+      }
+
+      return { ...prev, [name]: nextValue };
     });
     // Clear error for this field
     if (paymentFormErrors[name]) {
@@ -733,6 +832,15 @@ const FinanceInvoice = () => {
     }
     if (!paymentFormData.payable_amount || parseFloat(paymentFormData.payable_amount) <= 0) {
       errors.payable_amount = 'Payable amount must be greater than 0';
+    }
+    const invoiceOutstandingAmount = parseFloat(selectedInvoiceForPayment?.amount || 0);
+    const payableAmount = parseFloat(paymentFormData.payable_amount || 0);
+    if (
+      paymentFormData.payment_type === 'Partial Payment' &&
+      invoiceOutstandingAmount > 0 &&
+      payableAmount >= invoiceOutstandingAmount
+    ) {
+      errors.payable_amount = 'For partial payment, amount must be less than the remaining invoice amount.';
     }
     if (!paymentFormData.issue_date) {
       errors.issue_date = 'Issue date is required';
@@ -898,7 +1006,14 @@ const FinanceInvoice = () => {
   };
 
   const removeInvoiceItem = async (itemId) => {
-    if (!window.confirm('Are you sure you want to remove this item?')) {
+    if (
+      !(await appConfirm({
+        title: 'Remove item',
+        message: 'Are you sure you want to remove this item?',
+        destructive: true,
+        confirmLabel: 'Remove',
+      }))
+    ) {
       return;
     }
 
@@ -948,7 +1063,14 @@ const FinanceInvoice = () => {
   };
 
   const removeInvoiceStudent = async (studentId) => {
-    if (!window.confirm('Are you sure you want to remove this student from the invoice?')) {
+    if (
+      !(await appConfirm({
+        title: 'Remove student',
+        message: 'Are you sure you want to remove this student from the invoice?',
+        destructive: true,
+        confirmLabel: 'Remove',
+      }))
+    ) {
       return;
     }
 
@@ -1015,7 +1137,7 @@ const FinanceInvoice = () => {
     const matchesSearch = !nameSearchTerm ||
       invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_id?.toString().includes(nameSearchTerm) ||
-      invoice.invoice_description?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      (invoice.display_description || invoice.invoice_description || '').toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.invoice_ar_number?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       getBranchName(invoice.branch_id)?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       studentNames.includes(nameSearchTerm.toLowerCase());
@@ -1232,9 +1354,9 @@ const FinanceInvoice = () => {
                           </span>
                         )}
                       </div>
-                      {invoice.invoice_description && (
+                      {(invoice.display_description || invoice.invoice_description) && (
                         <div className="text-xs text-gray-500 mt-1">
-                          {invoice.invoice_description.replace(/\s*-\s*AR\s+[A-Za-z0-9-]+/i, '')}
+                          {(invoice.display_description || invoice.invoice_description).replace(/\s*-\s*AR\s+[A-Za-z0-9-]+/i, '')}
                         </div>
                       )}
                       {invoice.reservation && (
@@ -1321,11 +1443,28 @@ const FinanceInvoice = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {invoice.amount !== null && invoice.amount !== undefined
-                            ? `₱${parseFloat(invoice.amount).toFixed(2)}`
-                            : '-'}
-                        </div>
+                        {invoice.status === 'Balance Invoiced' ? (
+                          <div className="text-xs text-gray-900 space-y-0.5">
+                            <div>
+                              <span className="text-gray-500">Balance invoice:</span>{' '}
+                              <span className="font-medium">
+                                ₱{Number(invoice.balance_invoice_amount ?? invoice.amount ?? 0).toFixed(2)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Paid amount:</span>{' '}
+                              <span className="font-medium">
+                                ₱{Number(invoice.paid_amount ?? 0).toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-900">
+                            {invoice.amount !== null && invoice.amount !== undefined
+                              ? `₱${parseFloat(invoice.amount).toFixed(2)}`
+                              : '-'}
+                          </div>
+                        )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
@@ -1436,18 +1575,45 @@ const FinanceInvoice = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     </button>
+                    {selectedInvoice.installmentinvoiceprofiles_id && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewInstallmentInvoice(selectedInvoice);
+                        }}
+                        className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      >
+                        <span>View Installment Invoice</span>
+                        <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0A9 9 0 113 12a9 9 0 0118 0z" />
+                        </svg>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (selectedInvoice.status === 'Paid') return;
+                        if (
+                          selectedInvoice.balance_invoice_id ||
+                          selectedInvoice.can_record_payment === false
+                        ) {
+                          return;
+                        }
                         setOpenMenuId(null);
                         setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
                         handleOpenPaymentModal(selectedInvoice);
                       }}
-                      disabled={selectedInvoice.status === 'Paid'}
+                      disabled={
+                        selectedInvoice.status === 'Paid' ||
+                        !!selectedInvoice.balance_invoice_id ||
+                        selectedInvoice.can_record_payment === false
+                      }
                       className={`flex items-center justify-between w-full text-left px-4 py-2 text-sm transition-colors ${
-                        selectedInvoice.status === 'Paid'
+                        selectedInvoice.status === 'Paid' ||
+                        !!selectedInvoice.balance_invoice_id ||
+                        selectedInvoice.can_record_payment === false
                           ? 'text-gray-400 cursor-not-allowed opacity-60'
                           : 'text-green-600 hover:bg-green-50'
                       }`}
@@ -2009,6 +2175,32 @@ const FinanceInvoice = () => {
               </button>
             </div>
 
+            {(selectedInvoiceForDetails.balance_invoice_id ||
+              selectedInvoiceForDetails.can_record_payment === false) && (
+              <div className="px-6 pb-2">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                  <p className="font-medium">Partial payment applied</p>
+                  <p className="mt-1">
+                    Further payments cannot be recorded on this invoice.
+                    {selectedInvoiceForDetails.continued_to_invoice ? (
+                      <>
+                        {' '}
+                        Record the remaining balance on{' '}
+                        <span className="font-semibold">
+                          {selectedInvoiceForDetails.continued_to_invoice.display_description ||
+                            selectedInvoiceForDetails.continued_to_invoice.invoice_description ||
+                            `INV-${selectedInvoiceForDetails.continued_to_invoice.invoice_id}`}
+                        </span>
+                        .
+                      </>
+                    ) : (
+                      <span> Use the newest balance invoice in this chain from the list.</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto flex-1">
               {/* Invoice Details Section */}
@@ -2372,29 +2564,6 @@ const FinanceInvoice = () => {
             </div>
 
             <form onSubmit={handleSubmitPayment} className="p-6 space-y-6">
-              {/* Invoice Information */}
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">Invoice Information</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-gray-600">Invoice ID</label>
-                    <p className="text-sm font-medium text-gray-900">{selectedInvoiceForPayment.invoice_description || `INV-${selectedInvoiceForPayment.invoice_id}`}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-600">Invoice Amount</label>
-                    <p className="text-sm font-medium text-gray-900">₱{parseFloat(selectedInvoiceForPayment.amount || 0).toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-600">Issue Date</label>
-                    <p className="text-sm font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.issue_date)}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-600">Due Date</label>
-                    <p className="text-sm font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.due_date)}</p>
-                  </div>
-                </div>
-              </div>
-
               {/* Payment Form */}
               <div className="space-y-4">
                 <div>
@@ -2473,15 +2642,31 @@ const FinanceInvoice = () => {
                       type="number"
                       step="0.01"
                       min="0.01"
+                      max={
+                        paymentFormData.payment_type === 'Partial Payment'
+                          ? Math.max(0, (parseFloat(selectedInvoiceForPayment.amount || 0) || 0) - 0.01).toFixed(2)
+                          : undefined
+                      }
                       name="payable_amount"
                       value={paymentFormData.payable_amount}
                       onChange={handlePaymentInputChange}
-                      className={`input-field text-sm ${paymentFormErrors.payable_amount ? 'border-red-500' : ''}`}
+                      disabled={paymentFormData.payment_type === 'Full Payment'}
+                      className={`input-field text-sm ${
+                        paymentFormData.payment_type === 'Full Payment'
+                          ? 'bg-gray-100 text-gray-600 cursor-not-allowed'
+                          : ''
+                      } ${paymentFormErrors.payable_amount ? 'border-red-500' : ''}`}
                       placeholder="0.00"
                       required
                     />
                     {paymentFormErrors.payable_amount && (
                       <p className="text-xs text-red-500 mt-1">{paymentFormErrors.payable_amount}</p>
+                    )}
+                    {paymentFormData.payment_type === 'Partial Payment' && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Partial payment must be lower than remaining amount
+                        ({` ₱${parseFloat(selectedInvoiceForPayment.amount || 0).toFixed(2)}`}).
+                      </p>
                     )}
                   </div>
 
@@ -2573,6 +2758,79 @@ const FinanceInvoice = () => {
                     placeholder="Optional remarks or notes"
                   />
                 </div>
+
+                {(() => {
+                  const breakdown = getInvoiceBreakdown(selectedInvoiceForPayment);
+                  const enteredAmount = parseFloat(paymentFormData.payable_amount || 0) || 0;
+                  const payableToApply = Math.max(0, Math.min(enteredAmount, breakdown.remaining));
+                  const projectedRemaining = Math.max(0, breakdown.remaining - payableToApply);
+                  const projectedTotalPaid = breakdown.paidAmount + payableToApply;
+                  return (
+                    <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                      <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-600">Invoice ID</p>
+                          <p className="font-medium text-gray-900">
+                            {selectedInvoiceForPayment.display_description ||
+                              selectedInvoiceForPayment.invoice_description ||
+                              `INV-${selectedInvoiceForPayment.invoice_id}`}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-600">Issue Date</p>
+                          <p className="font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.issue_date)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-600">Due Date</p>
+                          <p className="font-medium text-gray-900">{formatDateManila(selectedInvoiceForPayment.due_date)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-600">Remaining Balance</p>
+                          <p className="font-semibold text-blue-700">₱{breakdown.remaining.toFixed(2)}</p>
+                        </div>
+                      </div>
+                      <div className="border-t border-gray-200 pt-3 space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Subtotal</span>
+                          <span className="text-gray-900">₱{breakdown.subtotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Discount</span>
+                          <span className="text-gray-900">- ₱{breakdown.discount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Penalty</span>
+                          <span className="text-gray-900">₱{breakdown.penalty.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Tax</span>
+                          <span className="text-gray-900">₱{breakdown.tax.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between font-semibold border-t border-gray-200 pt-2 mt-2">
+                          <span className="text-gray-800">Total Invoice Amount</span>
+                          <span className="text-gray-900">₱{breakdown.totalDue.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Total Paid</span>
+                          <span className="text-emerald-700">₱{breakdown.paidAmount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Payment to Record</span>
+                          <span className="text-gray-900">₱{payableToApply.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Projected Total Paid</span>
+                          <span className="text-emerald-700">₱{projectedTotalPaid.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between font-semibold">
+                          <span className="text-gray-800">Projected Remaining After Payment</span>
+                          <span className="text-blue-700">₱{projectedRemaining.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Action Buttons */}

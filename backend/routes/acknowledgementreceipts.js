@@ -756,6 +756,14 @@ router.post(
         });
       }
 
+      if (invoice.balance_invoice_id || invoice.status === 'Balance Invoiced') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'This invoice is closed for payments. Use the current balance invoice instead.',
+        });
+      }
+
       // Determine branch_id for payment from invoice or user
       const branch_id = invoice.branch_id || req.user.branchId || ack.branch_id || null;
 

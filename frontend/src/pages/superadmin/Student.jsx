@@ -6,7 +6,7 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Student = () => {
   const { signup } = useAuth();
@@ -76,13 +76,12 @@ const Student = () => {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedNameSearchTerm(nameSearchTerm.trim());
+      const trimmed = nameSearchTerm.trim();
+      setDebouncedNameSearchTerm(trimmed);
+      // Reset page when the applied search changes so we never request page N of a new result set
+      setCurrentPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [nameSearchTerm]);
-
-  useEffect(() => {
-    setCurrentPage(1);
   }, [nameSearchTerm]);
 
   // Close menu when clicking outside
@@ -189,7 +188,14 @@ const Student = () => {
 
   const handleDelete = async (userId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this student?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete student',
+        message: 'Are you sure you want to delete this student?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

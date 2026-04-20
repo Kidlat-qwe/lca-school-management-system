@@ -5,7 +5,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const RECIPIENT_GROUPS = [
   { value: 'All', label: 'All' },
@@ -270,7 +270,14 @@ const TeacherAnnouncements = () => {
 
   const handleDelete = async (announcementId) => {
     setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to delete this announcement?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete announcement',
+        message: 'Are you sure you want to delete this announcement?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 

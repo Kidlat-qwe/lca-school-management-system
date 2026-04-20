@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -167,7 +167,14 @@ const AdminPricingList = () => {
       return;
     }
     
-    if (!window.confirm('Are you sure you want to delete this pricing list?')) {
+    if (
+      !(await appConfirm({
+        title: 'Delete pricing list',
+        message: 'Are you sure you want to delete this pricing list?',
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
 
