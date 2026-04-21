@@ -26,6 +26,7 @@ const formatCurrency = (amount) =>
   })}`;
 
 const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
+const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
 const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
   <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
@@ -67,6 +68,7 @@ const DailyOperationalDashboardView = ({
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [selectedDate, setSelectedDate] = useState(getTodayManila());
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -76,6 +78,9 @@ const DailyOperationalDashboardView = ({
       if (branchId) {
         params.set('branch_id', branchId);
       }
+      if (selectedDate) {
+        params.set('summary_date', selectedDate);
+      }
       const queryString = params.toString();
       const response = await apiRequest(`/dashboard/daily-operational${queryString ? `?${queryString}` : ''}`);
       setData(response.data);
@@ -84,7 +89,7 @@ const DailyOperationalDashboardView = ({
     } finally {
       setLoading(false);
     }
-  }, [branchId]);
+  }, [branchId, selectedDate]);
 
   useEffect(() => {
     fetchDashboard();
@@ -166,6 +171,16 @@ const DailyOperationalDashboardView = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Date</span>
+              <input
+                type="date"
+                value={selectedDate}
+                max={getTodayManila()}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              />
+            </label>
             <div className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 shadow-sm">
               <span className="font-semibold text-gray-900">Summary date:</span>{' '}
               {data?.summary_date || 'Today'}
@@ -198,21 +213,21 @@ const DailyOperationalDashboardView = ({
 
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           <StatsCard
-            title="New Enrollees Today"
+            title="New Enrollees"
             value={formatNumber(totals.new_enrollees)}
             iconName="users"
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
             subtitle={`${visibleBranchCount || totals.active_branches || 0} branch(es) with activity`}
           />
           <StatsCard
-            title="Dropped / Unenrolled Today"
+            title="Dropped / Unenrolled"
             value={formatNumber(totals.dropped_unenrolled_count)}
             iconName="userMinus"
             accent="bg-gradient-to-br from-rose-500 to-red-600"
             subtitle="Students removed from a class today (after prior enrollment)"
           />
           <StatsCard
-            title="Daily Sales Today"
+            title="Daily Sales"
             value={formatCurrency(totals.daily_sales_amount)}
             iconName="currency"
             accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
@@ -226,7 +241,7 @@ const DailyOperationalDashboardView = ({
             subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s)`}
           />
           <StatsCard
-            title="Re-enrollment Today"
+            title="Re-enrollment"
             value={formatNumber(totals.re_enrollment_count)}
             iconName="academicCap"
             accent="bg-gradient-to-br from-teal-400 to-cyan-500"
@@ -239,7 +254,7 @@ const DailyOperationalDashboardView = ({
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Today&apos;s operational performance grouped by branch.
+                Selected day&apos;s operational performance grouped by branch.
               </p>
             </div>
             <p className="text-xs text-gray-500">
@@ -357,7 +372,7 @@ const DailyOperationalDashboardView = ({
 
           <ChartCard
             title="Activity Mix"
-            subtitle="Share of today&apos;s non-cash operational activity."
+            subtitle="Share of selected day&apos;s non-cash operational activity."
           >
             {activityMix.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">

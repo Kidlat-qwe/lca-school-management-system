@@ -475,6 +475,10 @@ const AcknowledgementReceiptsPage = () => {
     }
 
     if (isMerch) {
+      const paymentDate = (createFormData.issue_date || '').trim();
+      if (!paymentDate) {
+        errors.issue_date = 'Payment date is required';
+      }
       const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
       if (merchandiseSelections.length === 0 || configuredCount === 0) {
         errors.merchandise = 'Select at least one merchandise item and configure size';
@@ -535,7 +539,7 @@ const AcknowledgementReceiptsPage = () => {
             })),
           reference_number: (createFormData.reference_number || '').trim() || undefined,
           payment_attachment_url: createFormData.payment_attachment_url || undefined,
-          issue_date: todayManilaYMD(),
+          issue_date: createFormData.issue_date,
           branch_id: branchId,
         };
         if (!payload.reference_number) delete payload.reference_number;
@@ -1198,6 +1202,21 @@ const AcknowledgementReceiptsPage = () => {
                       </select>
                       {createFormErrors.level_tag && (
                         <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Payment Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        name="issue_date"
+                        value={createFormData.issue_date}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                      />
+                      {createFormErrors.issue_date && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.issue_date}</p>
                       )}
                     </div>
                     <div>

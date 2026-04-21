@@ -29,8 +29,9 @@ const buildMonthSequence = (monthsBack = 6) => {
 
 const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
-const buildRecentDaySequence = (daysBack = 7) => {
-  const today = new Date();
+const buildRecentDaySequence = (daysBack = 7, endDateIso = getTodayManila()) => {
+  const baseDate = endDateIso ? new Date(`${endDateIso}T12:00:00+08:00`) : new Date();
+  const anchorDate = Number.isNaN(baseDate.getTime()) ? new Date() : baseDate;
   const formatter = new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
@@ -39,8 +40,8 @@ const buildRecentDaySequence = (daysBack = 7) => {
 
   const sequence = [];
   for (let i = daysBack - 1; i >= 0; i -= 1) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - i);
+    const date = new Date(anchorDate);
+    date.setDate(anchorDate.getDate() - i);
     const iso = date.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
     sequence.push({
       key: iso,
@@ -406,6 +407,7 @@ router.get(
   '/daily-operational',
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('summary_date').optional().isISO8601({ strict: true }).withMessage('summary_date must be YYYY-MM-DD'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -416,7 +418,8 @@ router.get(
         ? (req.user.branchId || null)
         : (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null);
       const todayManila = getTodayManila();
-      const recentDaySequence = buildRecentDaySequence(7);
+      const summaryDate = req.query.summary_date || todayManila;
+      const recentDaySequence = buildRecentDaySequence(7, summaryDate);
       const branchParams = branchFilter ? [branchFilter] : [];
       const branchWhereClause = branchFilter ? 'WHERE b.branch_id = $1' : '';
 
@@ -534,7 +537,7 @@ router.get(
               COALESCE(ne.new_enrollees, 0) DESC,
               bs.branch_name ASC
           `,
-          [...branchParams, todayManila]
+          [...branchParams, summaryDate]
         ),
         query(
           `
@@ -549,7 +552,7 @@ router.get(
             GROUP BY p.issue_date
             ORDER BY p.issue_date ASC
           `,
-          [...branchParams, todayManila]
+          [...branchParams, summaryDate]
         ),
       ]);
 
@@ -612,7 +615,7 @@ router.get(
       res.json({
         success: true,
         data: {
-          summary_date: todayManila,
+          summary_date: summaryDate,
           totals,
           branch_breakdown: branchBreakdown,
           charts: {

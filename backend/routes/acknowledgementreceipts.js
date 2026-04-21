@@ -466,7 +466,6 @@ router.post(
           }
         }
 
-        const today = new Date().toISOString().split('T')[0];
         const invoiceDesc = 'Merchandise (acknowledgement receipt)';
 
         const invoiceResult = await client.query(
@@ -478,8 +477,8 @@ router.post(
             branchId,
             totalPaymentAmount,
             `Merchandise purchase (acknowledgement receipt) — ${prospect_student_name}`,
-            today,
-            today,
+            issue_date,
+            issue_date,
             createdBy,
             ackReceipt.ack_receipt_id,
             ackNumber,
