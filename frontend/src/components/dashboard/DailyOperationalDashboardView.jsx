@@ -1,0 +1,392 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { apiRequest } from '../../config/api';
+import { DashboardStatIcon } from './DashboardStatIcons';
+
+const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
+
+const formatCurrency = (amount) =>
+  `Php ${(Number(amount) || 0).toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
+
+const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
+  <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-gray-600">{title}</p>
+        <p className="mt-3 text-3xl font-bold tracking-tight text-gray-900">{value}</p>
+        {subtitle ? <p className="mt-2 text-xs font-medium text-gray-500">{subtitle}</p> : null}
+      </div>
+      <div className={`flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
+        <DashboardStatIcon name={iconName} className="h-7 w-7 text-white drop-shadow-sm" />
+      </div>
+    </div>
+    <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
+  </div>
+);
+
+const ChartCard = ({ title, subtitle, children, className = '' }) => (
+  <div className={`rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 ${className}`}>
+    <div className="mb-4">
+      <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+      {subtitle ? <p className="mt-1 text-sm text-gray-500">{subtitle}</p> : null}
+    </div>
+    <div className="h-80">{children}</div>
+  </div>
+);
+
+const EmptyChartState = ({ message }) => (
+  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 text-center text-sm text-gray-500">
+    {message}
+  </div>
+);
+
+const DailyOperationalDashboardView = ({
+  branchId = '',
+  branchName = '',
+  canFilterAcrossBranches = false,
+}) => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const fetchDashboard = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const params = new URLSearchParams();
+      if (branchId) {
+        params.set('branch_id', branchId);
+      }
+      const queryString = params.toString();
+      const response = await apiRequest(`/dashboard/daily-operational${queryString ? `?${queryString}` : ''}`);
+      setData(response.data);
+    } catch (err) {
+      setError(err?.message || 'Failed to load the daily operational dashboard.');
+    } finally {
+      setLoading(false);
+    }
+  }, [branchId]);
+
+  useEffect(() => {
+    fetchDashboard();
+  }, [fetchDashboard]);
+
+  const branchBreakdown = useMemo(() => data?.branch_breakdown || [], [data]);
+  const branchMetrics = useMemo(() => data?.charts?.branch_metrics || [], [data]);
+  const salesLast7Days = useMemo(() => data?.charts?.sales_last_7_days || [], [data]);
+  const activityMix = useMemo(
+    () => (data?.charts?.activity_mix || []).filter((item) => Number(item.value) > 0),
+    [data]
+  );
+  const activeBranchMetrics = useMemo(
+    () =>
+      branchMetrics.filter(
+        (row) =>
+          row.new_enrollees > 0 ||
+          row.daily_sales_amount > 0 ||
+          row.merchandise_released_quantity > 0 ||
+          row.re_enrollment_count > 0 ||
+          (row.dropped_unenrolled_count || 0) > 0
+      ),
+    [branchMetrics]
+  );
+  const totals = data?.totals || {
+    new_enrollees: 0,
+    daily_sales_amount: 0,
+    merchandise_released_count: 0,
+    merchandise_released_quantity: 0,
+    re_enrollment_count: 0,
+    dropped_unenrolled_count: 0,
+    active_branches: 0,
+  };
+
+  const selectedBranchName = useMemo(() => {
+    if (branchName) return branchName;
+    if (!branchId) return 'All Branches';
+    return (
+      data?.branches?.find((branch) => String(branch.branch_id) === String(branchId))?.branch_name ||
+      'Selected Branch'
+    );
+  }, [branchId, branchName, data]);
+
+  const visibleBranchCount = branchBreakdown.filter(
+    (row) =>
+      row.new_enrollees > 0 ||
+      row.daily_sales_amount > 0 ||
+      row.merchandise_released_count > 0 ||
+      row.re_enrollment_count > 0 ||
+      (row.dropped_unenrolled_count || 0) > 0
+  ).length;
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-2 border-[#F7C844] border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+        <p className="text-sm font-medium text-red-800">{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
+      <div className="mx-auto max-w-7xl space-y-8 p-6 lg:p-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
+              Daily Operational Dashboard
+            </h1>
+            <p className="text-sm text-gray-500">
+              Monitor today&apos;s enrollment activity, drops, collections, merchandise releases, and installment re-enrollment.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 shadow-sm">
+              <span className="font-semibold text-gray-900">Summary date:</span>{' '}
+              {data?.summary_date || 'Today'}
+            </div>
+            <button
+              type="button"
+              onClick={fetchDashboard}
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 transition-all hover:bg-gray-50 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 014 9m0 0h5m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16" />
+              </svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 shadow-sm ring-1 ring-blue-100">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-semibold text-blue-900">
+              Viewing: <span className="font-bold text-blue-700">{selectedBranchName}</span>
+            </p>
+            <p className="text-xs text-blue-700">
+              {canFilterAcrossBranches
+                ? 'Use the global branch selector to drill down into a specific branch.'
+                : 'Branch-admin view is automatically scoped to your assigned branch.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+          <StatsCard
+            title="New Enrollees Today"
+            value={formatNumber(totals.new_enrollees)}
+            iconName="users"
+            accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
+            subtitle={`${visibleBranchCount || totals.active_branches || 0} branch(es) with activity`}
+          />
+          <StatsCard
+            title="Dropped / Unenrolled Today"
+            value={formatNumber(totals.dropped_unenrolled_count)}
+            iconName="userMinus"
+            accent="bg-gradient-to-br from-rose-500 to-red-600"
+            subtitle="Students removed from a class today (after prior enrollment)"
+          />
+          <StatsCard
+            title="Daily Sales Today"
+            value={formatCurrency(totals.daily_sales_amount)}
+            iconName="currency"
+            accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
+            subtitle="Completed payments only"
+          />
+          <StatsCard
+            title="Merchandise Released"
+            value={formatNumber(totals.merchandise_released_quantity)}
+            iconName="sparkles"
+            accent="bg-gradient-to-br from-amber-400 to-orange-500"
+            subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s)`}
+          />
+          <StatsCard
+            title="Re-enrollment Today"
+            value={formatNumber(totals.re_enrollment_count)}
+            iconName="academicCap"
+            accent="bg-gradient-to-br from-teal-400 to-cyan-500"
+            subtitle="Installment monthly payments completed today"
+          />
+        </div>
+
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Today&apos;s operational performance grouped by branch.
+              </p>
+            </div>
+            <p className="text-xs text-gray-500">
+              Updated: {data?.updated_at ? new Date(data.updated_at).toLocaleString() : 'Just now'}
+            </p>
+          </div>
+
+          <div
+            className="overflow-x-auto rounded-lg"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e0 #f7fafc',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
+            <table style={{ width: '100%', minWidth: '1120px' }} className="border-collapse text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Daily Sales</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Qty</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Txns</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Re-enrollment</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {branchBreakdown.map((row) => (
+                  <tr key={row.branch_id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.branch_name}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.new_enrollees)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.dropped_unenrolled_count || 0)}</td>
+                    <td className="px-4 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_quantity)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_count)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.re_enrollment_count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <ChartCard
+            title="Branch Activity Comparison"
+            subtitle="Daily counts for new enrollees, drops, merchandise released, and re-enrollment."
+          >
+            {activeBranchMetrics.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activeBranchMetrics} margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                  <XAxis dataKey="branch_name" tick={{ fontSize: 12 }} angle={activeBranchMetrics.length > 4 ? -18 : 0} textAnchor={activeBranchMetrics.length > 4 ? 'end' : 'middle'} height={activeBranchMetrics.length > 4 ? 64 : 36} interval={0} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="new_enrollees" name="New enrollees" fill="#22C55E" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="dropped_unenrolled_count" name="Dropped / Unenrolled" fill="#DC2626" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="merchandise_released_quantity" name="Merchandise released" fill="#F7C844" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="re_enrollment_count" name="Re-enrollment" fill="#14B8A6" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChartState message="No branch activity found for today." />
+            )}
+          </ChartCard>
+
+          <ChartCard
+            title="Daily Sales by Branch"
+            subtitle="Completed payment amounts recorded today."
+          >
+            {activeBranchMetrics.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activeBranchMetrics} margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                  <XAxis dataKey="branch_name" tick={{ fontSize: 12 }} angle={activeBranchMetrics.length > 4 ? -18 : 0} textAnchor={activeBranchMetrics.length > 4 ? 'end' : 'middle'} height={activeBranchMetrics.length > 4 ? 64 : 36} interval={0} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `Php ${Number(value || 0).toLocaleString('en-PH')}`} />
+                  <Tooltip formatter={(value) => [formatCurrency(value), 'Daily sales']} />
+                  <Bar dataKey="daily_sales_amount" name="Daily sales" fill="#4F46E5" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChartState message="No completed payments found for today." />
+            )}
+          </ChartCard>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <ChartCard
+            title="Sales Trend"
+            subtitle="Completed payment totals for the last 7 days."
+            className="xl:col-span-2"
+          >
+            {salesLast7Days.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={salesLast7Days} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                  <defs>
+                    <linearGradient id="dailySalesTrendFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#4F46E5" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `Php ${Number(value || 0).toLocaleString('en-PH')}`} />
+                  <Tooltip formatter={(value) => [formatCurrency(value), 'Daily sales']} />
+                  <Area type="monotone" dataKey="total_amount" stroke="#4F46E5" fill="url(#dailySalesTrendFill)" strokeWidth={2.5} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChartState message="No sales trend data available yet." />
+            )}
+          </ChartCard>
+
+          <ChartCard
+            title="Activity Mix"
+            subtitle="Share of today&apos;s non-cash operational activity."
+          >
+            {activityMix.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={activityMix}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={62}
+                    outerRadius={98}
+                    paddingAngle={2}
+                    label={({ name, value }) => `${name}: ${formatNumber(value)}`}
+                  >
+                    {activityMix.map((entry, index) => (
+                      <Cell key={`${entry.name}-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => [formatNumber(value), '']} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChartState message="No activity mix data available for today." />
+            )}
+          </ChartCard>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DailyOperationalDashboardView;

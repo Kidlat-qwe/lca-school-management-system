@@ -27,6 +27,29 @@ const buildMonthSequence = (monthsBack = 6) => {
   return sequence;
 };
 
+const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+const buildRecentDaySequence = (daysBack = 7) => {
+  const today = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'Asia/Manila',
+  });
+
+  const sequence = [];
+  for (let i = daysBack - 1; i >= 0; i -= 1) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - i);
+    const iso = date.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    sequence.push({
+      key: iso,
+      label: formatter.format(date),
+    });
+  }
+  return sequence;
+};
+
 router.get(
   '/',
   [
@@ -374,6 +397,250 @@ router.get(
         },
       });
     } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/daily-operational',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const isAdmin = req.user.userType === 'Admin';
+      const branchFilter = isAdmin
+        ? (req.user.branchId || null)
+        : (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null);
+      const todayManila = getTodayManila();
+      const recentDaySequence = buildRecentDaySequence(7);
+      const branchParams = branchFilter ? [branchFilter] : [];
+      const branchWhereClause = branchFilter ? 'WHERE b.branch_id = $1' : '';
+
+      const [branchesResult, branchMetricsResult, salesTrendResult] = await Promise.all([
+        query(
+          `
+            SELECT
+              b.branch_id,
+              COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+            FROM branchestbl b
+            ORDER BY COALESCE(b.branch_nickname, b.branch_name)
+          `
+        ),
+        query(
+          `
+            WITH branch_scope AS (
+              SELECT
+                b.branch_id,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+              FROM branchestbl b
+              ${branchWhereClause}
+            ),
+            new_enrollees AS (
+              SELECT
+                c.branch_id,
+                COUNT(DISTINCT cs.student_id) AS new_enrollees
+              FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
+              GROUP BY c.branch_id
+            ),
+            daily_sales AS (
+              SELECT
+                p.branch_id,
+                COALESCE(SUM(p.payable_amount), 0) AS daily_sales_amount
+              FROM paymenttbl p
+              WHERE p.status = 'Completed'
+                AND p.issue_date = $${branchParams.length + 1}::date
+              GROUP BY p.branch_id
+            ),
+            merchandise_release AS (
+              SELECT
+                p.branch_id,
+                COUNT(DISTINCT p.payment_id) AS merchandise_released_count,
+                COALESCE(SUM(COALESCE(NULLIF(item.quantity, '')::numeric, 0)), 0) AS merchandise_released_quantity
+              FROM paymenttbl p
+              INNER JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+              INNER JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
+              LEFT JOIN LATERAL jsonb_to_recordset(
+                CASE
+                  WHEN ar.merchandise_items_snapshot IS NULL THEN '[]'::jsonb
+                  ELSE ar.merchandise_items_snapshot::jsonb
+                END
+              ) AS item(merchandise_id INTEGER, quantity TEXT) ON TRUE
+              WHERE p.status = 'Completed'
+                AND p.issue_date = $${branchParams.length + 1}::date
+                AND ar.ar_type = 'Merchandise'
+              GROUP BY p.branch_id
+            ),
+            re_enrollment AS (
+              SELECT
+                p.branch_id,
+                COUNT(DISTINCT p.student_id) AS re_enrollment_count
+              FROM paymenttbl p
+              INNER JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+              INNER JOIN installmentinvoiceprofilestbl ip
+                ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+              WHERE p.status = 'Completed'
+                AND p.issue_date = $${branchParams.length + 1}::date
+                AND i.installmentinvoiceprofiles_id IS NOT NULL
+                AND (
+                  ip.downpayment_invoice_id IS NULL OR
+                  COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                )
+              GROUP BY p.branch_id
+            ),
+            dropped_unenrolled AS (
+              SELECT
+                c.branch_id,
+                COUNT(DISTINCT cs.student_id) AS dropped_unenrolled_count
+              FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE cs.enrollment_status = 'Removed'
+                AND cs.removed_at IS NOT NULL
+                AND cs.enrolled_at IS NOT NULL
+                AND cs.enrolled_at < cs.removed_at
+                AND TIMEZONE('Asia/Manila', cs.removed_at)::date = $${branchParams.length + 1}::date
+                AND (
+                  c.start_date IS NULL
+                  OR TIMEZONE('Asia/Manila', cs.removed_at)::date >= c.start_date
+                )
+                AND (
+                  c.end_date IS NULL
+                  OR TIMEZONE('Asia/Manila', cs.removed_at)::date <= c.end_date
+                )
+              GROUP BY c.branch_id
+            )
+            SELECT
+              bs.branch_id,
+              bs.branch_name,
+              COALESCE(ne.new_enrollees, 0)::bigint AS new_enrollees,
+              COALESCE(ds.daily_sales_amount, 0) AS daily_sales_amount,
+              COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
+              COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
+              COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
+              COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count
+            FROM branch_scope bs
+            LEFT JOIN new_enrollees ne ON ne.branch_id = bs.branch_id
+            LEFT JOIN daily_sales ds ON ds.branch_id = bs.branch_id
+            LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
+            LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
+            LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
+            ORDER BY
+              COALESCE(ds.daily_sales_amount, 0) DESC,
+              COALESCE(ne.new_enrollees, 0) DESC,
+              bs.branch_name ASC
+          `,
+          [...branchParams, todayManila]
+        ),
+        query(
+          `
+            SELECT
+              p.issue_date::text AS issue_date,
+              COALESCE(SUM(p.payable_amount), 0) AS total_amount
+            FROM paymenttbl p
+            WHERE p.status = 'Completed'
+              AND p.issue_date >= $${branchParams.length + 1}::date - INTERVAL '6 days'
+              AND p.issue_date <= $${branchParams.length + 1}::date
+              ${branchFilter ? 'AND p.branch_id = $1' : ''}
+            GROUP BY p.issue_date
+            ORDER BY p.issue_date ASC
+          `,
+          [...branchParams, todayManila]
+        ),
+      ]);
+
+      const branches = branchesResult.rows.map((row) => ({
+        branch_id: row.branch_id,
+        branch_name: row.branch_name,
+      }));
+
+      const branchBreakdown = branchMetricsResult.rows.map((row) => ({
+        branch_id: row.branch_id,
+        branch_name: row.branch_name,
+        new_enrollees: parseInt(row.new_enrollees, 10) || 0,
+        daily_sales_amount: parseFloat(row.daily_sales_amount) || 0,
+        merchandise_released_count: parseInt(row.merchandise_released_count, 10) || 0,
+        merchandise_released_quantity: parseFloat(row.merchandise_released_quantity) || 0,
+        re_enrollment_count: parseInt(row.re_enrollment_count, 10) || 0,
+        dropped_unenrolled_count: parseInt(row.dropped_unenrolled_count, 10) || 0,
+      }));
+
+      const totals = branchBreakdown.reduce(
+        (acc, row) => ({
+          new_enrollees: acc.new_enrollees + row.new_enrollees,
+          daily_sales_amount: acc.daily_sales_amount + row.daily_sales_amount,
+          merchandise_released_count: acc.merchandise_released_count + row.merchandise_released_count,
+          merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
+          re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
+          dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
+          active_branches:
+            acc.active_branches +
+            (row.new_enrollees > 0 ||
+            row.daily_sales_amount > 0 ||
+            row.merchandise_released_count > 0 ||
+            row.re_enrollment_count > 0 ||
+            row.dropped_unenrolled_count > 0
+              ? 1
+              : 0),
+        }),
+        {
+          new_enrollees: 0,
+          daily_sales_amount: 0,
+          merchandise_released_count: 0,
+          merchandise_released_quantity: 0,
+          re_enrollment_count: 0,
+          dropped_unenrolled_count: 0,
+          active_branches: 0,
+        }
+      );
+
+      const salesTrendMap = salesTrendResult.rows.reduce((acc, row) => {
+        acc[String(row.issue_date).slice(0, 10)] = parseFloat(row.total_amount) || 0;
+        return acc;
+      }, {});
+
+      const salesLast7Days = recentDaySequence.map((day) => ({
+        date: day.key,
+        label: day.label,
+        total_amount: salesTrendMap[day.key] || 0,
+      }));
+
+      res.json({
+        success: true,
+        data: {
+          summary_date: todayManila,
+          totals,
+          branch_breakdown: branchBreakdown,
+          charts: {
+            branch_metrics: branchBreakdown.map((row) => ({
+              branch_id: row.branch_id,
+              branch_name: row.branch_name,
+              new_enrollees: row.new_enrollees,
+              daily_sales_amount: row.daily_sales_amount,
+              merchandise_released_count: row.merchandise_released_count,
+              merchandise_released_quantity: row.merchandise_released_quantity,
+              re_enrollment_count: row.re_enrollment_count,
+              dropped_unenrolled_count: row.dropped_unenrolled_count,
+            })),
+            activity_mix: [
+              { name: 'New Enrollees', value: totals.new_enrollees },
+              { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
+              { name: 'Re-enrollment', value: totals.re_enrollment_count },
+              { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
+            ],
+            sales_last_7_days: salesLast7Days,
+          },
+          branches,
+          selected_branch_id: branchFilter,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.error('Error fetching daily operational dashboard:', error);
       next(error);
     }
   }

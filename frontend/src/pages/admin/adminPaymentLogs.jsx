@@ -39,6 +39,7 @@ const AdminPaymentLogs = () => {
   const [returnFixRef, setReturnFixRef] = useState('');
   const [returnFixAttachment, setReturnFixAttachment] = useState('');
   const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('Cash');
+  const [returnFixIssueDate, setReturnFixIssueDate] = useState('');
   const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
   const [returnFixLoading, setReturnFixLoading] = useState(false);
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
@@ -431,6 +432,7 @@ const AdminPaymentLogs = () => {
     setReturnFixRef((payment.reference_number || '').trim());
     setReturnFixAttachment(payment.payment_attachment_url || '');
     setReturnFixPaymentMethod((payment.payment_method || 'Cash').trim() || 'Cash');
+    setReturnFixIssueDate((payment.issue_date || '').slice(0, 10));
   };
 
   const closeReturnFixModal = () => {
@@ -438,6 +440,7 @@ const AdminPaymentLogs = () => {
     setReturnFixRef('');
     setReturnFixAttachment('');
     setReturnFixPaymentMethod('Cash');
+    setReturnFixIssueDate('');
     setReturnFixAttachmentUploading(false);
   };
 
@@ -477,12 +480,18 @@ const AdminPaymentLogs = () => {
     try {
       const refTrim = returnFixRef.trim();
       const attTrim = returnFixAttachment.trim();
+      const issueDateTrim = String(returnFixIssueDate || '').trim();
+      if (!issueDateTrim) {
+        appAlert('Please select the correct payment date before resubmitting.');
+        return;
+      }
       await apiRequest(`/payments/${returnFixPayment.payment_id}`, {
         method: 'PUT',
         body: JSON.stringify({
           reference_number: refTrim || undefined,
           attachment_url: attTrim === '' ? null : attTrim,
           payment_method: returnFixPaymentMethod.trim() || undefined,
+          issue_date: issueDateTrim,
         }),
       });
       await apiRequest(`/payments/${returnFixPayment.payment_id}/resubmit-for-verification`, {
@@ -1573,6 +1582,23 @@ const AdminPaymentLogs = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="mb-4">
+                  <label htmlFor="admin_return_fix_issue_date" className="block text-sm font-medium text-gray-700 mb-2">
+                    Payment date
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Update the payment date to match the actual receipt date before resubmitting.
+                  </p>
+                  <input
+                    id="admin_return_fix_issue_date"
+                    type="date"
+                    value={returnFixIssueDate}
+                    onChange={(e) => setReturnFixIssueDate(e.target.value)}
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    required
+                  />
                 </div>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Reference number</label>

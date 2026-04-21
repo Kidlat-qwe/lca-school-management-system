@@ -141,6 +141,11 @@ const FinanceInstallmentInvoice = () => {
   const handleGenerateInvoice = (invoice) => {
     setOpenActionMenu(null);
     setActionMenuPosition(null);
+
+    if (invoice.profile_is_active === false) {
+      appAlert('This student is already unenrolled. Existing installment invoices stay visible for history, but no new installment invoices can be generated.');
+      return;
+    }
     
     // Check phase limit
     // Note: Phase 1 is already paid via initial package, so we can only generate (total_phases - 1) invoices
@@ -480,22 +485,21 @@ const FinanceInstallmentInvoice = () => {
                       {invoice.total_phases !== null && invoice.total_phases !== undefined ? (
                         <div className="flex flex-col">
                           <div className="text-sm text-gray-900 font-medium">
-                            {/* Use paid_phases (actual paid invoices) instead of generated_count */}
-                            {(invoice.paid_phases || 0)} / {invoice.total_phases}
+                            {(invoice.display_phase_progress || 0)} / {invoice.total_phases}
                           </div>
                           <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
                             <div 
                               className={`h-2 rounded-full ${
-                                (invoice.paid_phases || 0) >= invoice.total_phases 
+                                (invoice.display_phase_progress || 0) >= invoice.total_phases 
                                   ? 'bg-green-500' 
                                   : 'bg-blue-500'
                               }`}
                               style={{ 
-                                width: `${Math.min(((invoice.paid_phases || 0) / invoice.total_phases) * 100, 100)}%` 
+                                width: `${Math.min(((invoice.display_phase_progress || 0) / invoice.total_phases) * 100, 100)}%` 
                               }}
                             ></div>
                           </div>
-                          {(invoice.paid_phases || 0) >= invoice.total_phases && (
+                          {(invoice.display_phase_progress || 0) >= invoice.total_phases && (
                             <span className="text-xs text-green-600 font-medium mt-1">Completed</span>
                           )}
                         </div>
@@ -617,15 +621,29 @@ const FinanceInstallmentInvoice = () => {
                         e.stopPropagation();
                         handleGenerateInvoice(invoice);
                       }}
-                      disabled={invoice.total_phases !== null && invoice.total_phases !== undefined && (invoice.generated_count || 0) >= invoice.total_phases}
+                      disabled={
+                        invoice.profile_is_active === false ||
+                        (invoice.total_phases !== null &&
+                          invoice.total_phases !== undefined &&
+                          (invoice.generated_count || 0) >= invoice.total_phases)
+                      }
                       className={`block w-full text-left px-4 py-2 text-sm transition-colors ${
-                        invoice.total_phases !== null && invoice.total_phases !== undefined && (invoice.generated_count || 0) >= invoice.total_phases
+                        invoice.profile_is_active === false ||
+                        (invoice.total_phases !== null &&
+                          invoice.total_phases !== undefined &&
+                          (invoice.generated_count || 0) >= invoice.total_phases)
                           ? 'text-gray-400 cursor-not-allowed'
                           : 'text-gray-700 hover:bg-gray-100'
                       }`}
                     >
                       Generate Invoice
-                      {invoice.total_phases !== null && invoice.total_phases !== undefined && (invoice.generated_count || 0) >= invoice.total_phases && (
+                      {invoice.profile_is_active === false && (
+                        <span className="ml-2 text-xs">(Stopped)</span>
+                      )}
+                      {invoice.profile_is_active !== false &&
+                        invoice.total_phases !== null &&
+                        invoice.total_phases !== undefined &&
+                        (invoice.generated_count || 0) >= invoice.total_phases && (
                         <span className="ml-2 text-xs">(Limit Reached)</span>
                       )}
                     </button>

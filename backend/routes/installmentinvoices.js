@@ -25,8 +25,26 @@ const enrichInstallmentInvoiceRow = async (row) => {
     phase_start: row.phase_start,
   };
 
+  const totalPhases = row.total_phases != null ? parseInt(row.total_phases, 10) : null;
+  const phaseStart = row.phase_start != null ? parseInt(row.phase_start, 10) : 1;
+  const paidPhases = parseInt(row.paid_phases || 0, 10) || 0;
+  const generatedPhases = parseInt(row.generated_phases || row.generated_count || 0, 10) || 0;
+  const lastEnrolledPhaseNumber = row.last_enrolled_phase_number != null
+    ? parseInt(row.last_enrolled_phase_number, 10)
+    : null;
+  const historicalPhaseProgress = lastEnrolledPhaseNumber != null
+    ? Math.max(lastEnrolledPhaseNumber - phaseStart + 1, 0)
+    : 0;
+  const displayPhaseProgress = totalPhases != null
+    ? Math.min(Math.max(paidPhases, generatedPhases, historicalPhaseProgress), totalPhases)
+    : Math.max(paidPhases, generatedPhases, historicalPhaseProgress);
+
   if (!isPhaseInstallmentProfile(profile)) {
-    return row;
+    return {
+      ...row,
+      display_phase_progress: displayPhaseProgress,
+      last_enrolled_phase_number: lastEnrolledPhaseNumber,
+    };
   }
 
   try {
@@ -39,6 +57,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
 
     return {
       ...row,
+      display_phase_progress: displayPhaseProgress,
+      last_enrolled_phase_number: lastEnrolledPhaseNumber,
       current_phase_number: schedule.current_phase_number,
       current_phase_start_date: schedule.current_phase_start_date,
       current_issue_date: schedule.current_issue_date,
@@ -56,6 +76,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
   } catch (error) {
     return {
       ...row,
+      display_phase_progress: displayPhaseProgress,
+      last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_schedule_error: error.message,
     };
   }
@@ -646,6 +668,7 @@ router.get(
       let sql = `
         SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
+               ip.is_active as profile_is_active,
                ip.downpayment_invoice_id,
                c.start_date::text as class_start_date,
                (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
@@ -665,6 +688,11 @@ router.get(
                     COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
                   )
                ) as generated_phases,
+               (SELECT MAX(cs.phase_number)
+                FROM classstudentstbl cs
+                WHERE cs.student_id = ip.student_id
+                  AND cs.class_id = ip.class_id
+               ) as last_enrolled_phase_number,
                p.program_name, u.full_name as student_name
         FROM installmentinvoicestbl ii
         JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
@@ -672,7 +700,6 @@ router.get(
         LEFT JOIN programstbl p ON c.program_id = p.program_id
         LEFT JOIN userstbl u ON ip.student_id = u.user_id
         WHERE 1=1
-          AND ip.is_active = true
       `;
       const params = [];
       let paramCount = 0;
@@ -873,6 +900,7 @@ router.post(
       const installmentResult = await client.query(
         `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
                 ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
+                ip.is_active as profile_is_active,
                 ip.downpayment_invoice_id,
                 p.program_name, u.full_name as student_name
          FROM installmentinvoicestbl ii
@@ -893,6 +921,14 @@ router.post(
       }
 
       const installmentInvoice = installmentResult.rows[0];
+      if (installmentInvoice.profile_is_active === false) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'This student has already been unenrolled. Existing installment invoices and payment logs are preserved, but new installment invoices can no longer be generated.',
+        });
+      }
+
       const profile = {
         student_id: installmentInvoice.student_id,
         branch_id: installmentInvoice.branch_id,

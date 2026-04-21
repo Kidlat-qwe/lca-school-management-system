@@ -406,14 +406,17 @@ router.delete(
   ],
   requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
+    const client = await getClient();
     try {
       const { enrollmentId } = req.params;
+      await client.query('BEGIN');
 
-      const existingEnrollment = await query(
+      const existingEnrollment = await client.query(
         'SELECT * FROM classstudentstbl WHERE classstudent_id = $1',
         [enrollmentId]
       );
       if (existingEnrollment.rows.length === 0) {
+        await client.query('ROLLBACK');
         return res.status(404).json({
           success: false,
           message: 'Enrollment not found',
@@ -422,22 +425,34 @@ router.delete(
 
       const { student_id, class_id } = existingEnrollment.rows[0];
 
-      await query('DELETE FROM classstudentstbl WHERE classstudent_id = $1', [enrollmentId]);
+      await client.query(
+        `UPDATE classstudentstbl
+         SET enrollment_status = 'Removed',
+             removed_at = CURRENT_TIMESTAMP,
+             removed_reason = $1,
+             removed_by = $2
+         WHERE classstudent_id = $3`,
+        ['Student unenrolled from class', req.user.userId || null, enrollmentId]
+      );
 
-      // So the student is fully removed from the class list: deactivate any installment
-      // profile for this student+class so they do not reappear as "Pending Enrollment (Downpayment Paid)"
-      await query(
+      // Stop future installment generation, but preserve existing invoice and payment history.
+      await client.query(
         `UPDATE installmentinvoiceprofilestbl SET is_active = false
          WHERE student_id = $1 AND class_id = $2 AND is_active = true`,
         [student_id, class_id]
       );
+
+      await client.query('COMMIT');
 
       res.json({
         success: true,
         message: 'Student unenrolled successfully',
       });
     } catch (error) {
+      await client.query('ROLLBACK');
       next(error);
+    } finally {
+      client.release();
     }
   }
 );
@@ -540,7 +555,9 @@ router.get(
            ORDER BY ip.installmentinvoiceprofiles_id DESC
            LIMIT 1
          ) active_profile ON true
-         WHERE cs.class_id = $1`,
+         WHERE cs.class_id = $1
+           AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+           AND cs.removed_at IS NULL`,
         [classId]
       );
 
@@ -574,7 +591,11 @@ router.get(
          FROM installmentinvoiceprofilestbl ip
          INNER JOIN userstbl u ON ip.student_id = u.user_id
          LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
-         LEFT JOIN classstudentstbl cs ON ip.student_id = cs.student_id AND cs.class_id = $1
+         LEFT JOIN classstudentstbl cs
+           ON ip.student_id = cs.student_id
+          AND cs.class_id = $1
+          AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+          AND cs.removed_at IS NULL
          WHERE ip.class_id = $1
            AND cs.classstudent_id IS NULL -- Not enrolled yet (Phase 1 not paid)
            AND ip.is_active = true

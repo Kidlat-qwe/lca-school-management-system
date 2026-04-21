@@ -618,6 +618,31 @@ const AdminInvoice = () => {
     }
   };
 
+  const handleDownloadAR = async (invoice) => {
+    setOpenMenuId(null);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${invoice.invoice_id}/pdf?doc_type=ar`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    }
+  };
+
   const handleViewEditReceipt = async (invoice) => {
     setOpenMenuId(null);
     appAlert('Receipt management is not yet implemented.');
@@ -1527,6 +1552,21 @@ const AdminInvoice = () => {
                       <span>Download / Print SOA</span>
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 9V4h12v5m0 4h2v7H4v-7h2m2 0h8m-8 0v4h8v-4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(null);
+                        setMenuPosition({ top: 0, right: 0 });
+                        handleDownloadAR(selectedInvoice);
+                      }}
+                      className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      <span>Download AR</span>
+                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
                     </button>
                     <button

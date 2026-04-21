@@ -545,24 +545,25 @@ router.get(
 
 /**
  * GET /api/sms/invoices/:id/pdf
- * Download invoice or SOA as PDF
+ * Download invoice, SOA, or AR as PDF
  */
 router.get(
   '/:id/pdf',
   [
     param('id').isInt().withMessage('Invoice ID must be an integer'),
-    queryValidator('doc_type').optional().isIn(['invoice', 'soa']).withMessage('doc_type must be invoice or soa'),
+    queryValidator('doc_type').optional().isIn(['invoice', 'soa', 'ar']).withMessage('doc_type must be invoice, soa, or ar'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const docType = req.query?.doc_type === 'soa' ? 'soa' : 'invoice';
+      const docType = ['invoice', 'soa', 'ar'].includes(req.query?.doc_type) ? req.query.doc_type : 'invoice';
       const isSoa = docType === 'soa';
+      const isAr = docType === 'ar';
 
       // Fetch invoice
       const invoiceResult = await query(
-        `SELECT invoice_id, invoice_description, branch_id, amount, status, remarks,
+        `SELECT invoice_id, invoice_ar_number, invoice_description, branch_id, amount, status, remarks,
                 TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
                 TO_CHAR(due_date, 'YYYY-MM-DD') as due_date
          FROM invoicestbl
@@ -583,7 +584,13 @@ router.get(
       let branchInfo = null;
       if (invoice.branch_id) {
         const branchResult = await query(
-          'SELECT COALESCE(branch_nickname, branch_name) AS branch_name, branch_address FROM branchestbl WHERE branch_id = $1',
+          `SELECT
+             COALESCE(branch_nickname, branch_name) AS branch_name,
+             branch_address,
+             branch_phone_number,
+             branch_email
+           FROM branchestbl
+           WHERE branch_id = $1`,
           [invoice.branch_id]
         );
         if (branchResult.rows.length > 0) {
@@ -605,6 +612,41 @@ router.get(
          WHERE inv_student.invoice_id = $1`,
         [id]
       );
+
+      // Fetch class label(s) for AR: program_code + level_tag of linked student(s)
+      let arClassLabel = '-';
+      const invoiceStudentIds = (studentsResult.rows || [])
+        .map((s) => Number(s.student_id))
+        .filter((idVal) => Number.isInteger(idVal) && idVal > 0);
+
+      if (invoiceStudentIds.length > 0) {
+        const classLabelResult = await query(
+          `SELECT DISTINCT ON (cs.student_id)
+              cs.student_id,
+              NULLIF(TRIM(p.program_code), '') AS program_code,
+              NULLIF(TRIM(c.level_tag), '') AS level_tag
+           FROM classstudentstbl cs
+           INNER JOIN classestbl c ON cs.class_id = c.class_id
+           LEFT JOIN programstbl p ON c.program_id = p.program_id
+           WHERE cs.student_id = ANY($1::int[])
+             AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+             AND cs.removed_at IS NULL
+           ORDER BY cs.student_id, cs.classstudent_id DESC`,
+          [invoiceStudentIds]
+        );
+
+        const labels = classLabelResult.rows
+          .map((row) => {
+            const code = row.program_code || '-';
+            const levelTag = row.level_tag || '-';
+            return `${code} - ${levelTag}`;
+          })
+          .filter(Boolean);
+
+        if (labels.length > 0) {
+          arClassLabel = Array.from(new Set(labels)).join(', ');
+        }
+      }
 
       // Fetch payments for this invoice
       const paymentsResult = await query(
@@ -659,9 +701,9 @@ router.get(
       const totalPayments = paymentsResult.rows.reduce((sum, p) => sum + (Number(p.payable_amount) || 0), 0);
       const amountDue = grandTotal - totalPayments;
 
-      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isSoa ? 'landscape' : 'portrait' });
+      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isSoa || isAr ? 'landscape' : 'portrait' });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename=${isSoa ? 'soa' : 'invoice'}-${id}.pdf`);
+      res.setHeader('Content-Disposition', `inline; filename=${isAr ? 'acknowledgement-receipt' : isSoa ? 'soa' : 'invoice'}-${id}.pdf`);
 
       doc.pipe(res);
 
@@ -676,6 +718,133 @@ router.get(
         if (levelMatch) return levelMatch[1];
         return '';
       };
+
+      if (isAr) {
+        const pageWidth = doc.page.width;
+        const left = 40;
+        const right = pageWidth - 40;
+        const contentWidth = right - left;
+        let y = 42;
+
+        const studentName = studentsResult.rows.length > 0
+          ? studentsResult.rows.map((s) => s.full_name || 'Student').join(', ')
+          : 'No student linked';
+        const classLabel = arClassLabel;
+        const arNumber = invoice.invoice_ar_number || `AR-${invoice.invoice_id}`;
+        const arDate = formatDate(invoice.issue_date) || '-';
+        const amountPaid = Math.max(0, totalPayments || 0);
+        const monthLabel = (() => {
+          if (!invoice.due_date) return '';
+          try {
+            const d = new Date(invoice.due_date);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+          } catch {
+            return '';
+          }
+        })();
+
+        // Header
+        doc.font('Helvetica-Bold').fontSize(19).fillColor('#111827')
+          .text('ACKNOWLEDGEMENT RECEIPT', left, y, { width: contentWidth, align: 'right' });
+        y += 6;
+
+        if (hasLogo) {
+          doc.image(logoPath, left, y + 4, { width: 42, height: 42 });
+        }
+        doc.font('Helvetica-Bold').fontSize(13).fillColor('#111827')
+          .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 6, { width: 360 });
+        doc.font('Helvetica').fontSize(9).fillColor('#374151')
+          .text(branchInfo?.branch_address || '-', hasLogo ? left + 52 : left, y + 24, { width: 360 });
+        doc.font('Helvetica').fontSize(9).fillColor('#374151')
+          .text(`Contact: ${branchInfo?.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 36, { width: 360 });
+        doc.font('Helvetica').fontSize(9).fillColor('#374151')
+          .text(`Email: ${branchInfo?.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 48, { width: 360 });
+
+        doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
+          .text(`No. ${arNumber}`, right - 180, y + 34, { width: 180, align: 'right' });
+        y += 74;
+
+        // Receipt meta
+        const metaStartY = y;
+        doc.font('Helvetica').fontSize(10).fillColor('#111827');
+        doc.text(`DATE: ${arDate}`, right - 230, metaStartY, { width: 230, align: 'right' });
+        doc.text(`STUDENT NAME: ${studentName}`, left, metaStartY, { width: contentWidth - 20 });
+        y += 20;
+        doc.text(`CLASS: ${classLabel}`, left, y, { width: 320 });
+        y += 24;
+
+        // Table
+        const tLeft = left;
+        const tWidth = contentWidth;
+        const rowH = 24;
+        const headerH = 24;
+        const detailRows = 5;
+        const footerRows = 1;
+        const totalRows = detailRows + footerRows;
+        const descW = tWidth * 0.48;
+        const monthW = tWidth * 0.18;
+        const rateW = tWidth * 0.17;
+        const amountW = tWidth - descW - monthW - rateW;
+        const xDesc = tLeft + 8;
+        const xMonth = tLeft + descW + 8;
+        const xRate = tLeft + descW + monthW + 8;
+        const xAmount = tLeft + descW + monthW + rateW + 8;
+
+        doc.save();
+        doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
+        doc.restore();
+        doc.rect(tLeft, y, tWidth, headerH + rowH * totalRows).lineWidth(1).strokeColor('#111827').stroke();
+        doc.moveTo(tLeft + descW, y).lineTo(tLeft + descW, y + headerH + rowH * totalRows).stroke();
+        doc.moveTo(tLeft + descW + monthW, y).lineTo(tLeft + descW + monthW, y + headerH + rowH * totalRows).stroke();
+        doc.moveTo(tLeft + descW + monthW + rateW, y).lineTo(tLeft + descW + monthW + rateW, y + headerH + rowH * totalRows).stroke();
+
+        for (let i = 1; i <= totalRows; i += 1) {
+          const yLine = y + headerH + rowH * i;
+          doc.moveTo(tLeft, yLine).lineTo(tLeft + tWidth, yLine).stroke();
+        }
+
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
+        doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
+        doc.text('MONTH', xMonth, y + 8, { width: monthW - 16, align: 'center' });
+        doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
+        doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
+
+        const itemDescriptions = items
+          .map((item) => (item?.description || '').trim())
+          .filter(Boolean);
+        const mergedItemDescription = itemDescriptions.length > 0
+          ? itemDescriptions.join(' | ')
+          : '';
+        const invoiceDescription = (invoice.invoice_description || '').trim();
+        const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
+        const firstLineDescription = mergedItemDescription
+          || (!looksLikeInvoiceCodeOnly ? invoiceDescription : '')
+          || `Invoice INV-${invoice.invoice_id}`;
+        doc.font('Helvetica').fontSize(9).fillColor('#111827');
+        doc.text(firstLineDescription, xDesc, y + headerH + 8, { width: descW - 16 });
+        doc.text(monthLabel || '-', xMonth, y + headerH + 8, { width: monthW - 16, align: 'center' });
+        doc.text(formatCurrency(amountPaid), xRate, y + headerH + 8, { width: rateW - 16, align: 'right' });
+        doc.text(formatCurrency(amountPaid), xAmount, y + headerH + 8, { width: amountW - 16, align: 'right' });
+
+        // Footer rows inside the main table container
+        const footerRowY = y + headerH + rowH * detailRows + 8;
+
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827')
+          .text(`TOTAL  ${formatCurrency(amountPaid)}`, xRate, footerRowY, { width: rateW + amountW - 16, align: 'right' });
+        doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
+          .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, { width: descW - 16, align: 'center' });
+
+        y += headerH + rowH * totalRows + 24;
+        doc.font('Helvetica').fontSize(9).fillColor('#111827');
+        doc.text('Prepared by:', left, y);
+        doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
+        doc.text('Received by:', right - 200, y);
+        doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
+
+        doc.end();
+        return;
+      }
 
       if (isSoa) {
         const pageWidth = doc.page.width;

@@ -49,12 +49,18 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Finance'], // Dropdown for Superadmin, Admin, Finance/Superfinance
       children: [
         {
+          name: 'Daily Operational Dashboard',
+          path: `${basePath}/daily-operational-dashboard`,
+          roles: ['Superadmin', 'Admin'],
+        },
+        {
           name: 'Financial Dashboard',
-          path: basePath, // Current dashboard (financial metrics)
+          path: `${basePath}/financial-dashboard`,
         },
         {
           name: 'Operational Dashboard',
           path: `${basePath}/operational-dashboard`,
+          roles: ['Superadmin', 'Admin'],
         },
         {
           name: 'Enrollment Dashboard',
@@ -416,6 +422,9 @@ const Sidebar = ({ isOpen, onClose }) => {
           ?.map(child => {
             if (child.name === 'Financial Dashboard') {
               return { ...child, path: `${basePath}/financial-dashboard` };
+            }
+            if (child.name === 'Daily Operational Dashboard') {
+              return { ...child, path: `${basePath}/daily-operational-dashboard` };
             }
             return child;
           });
