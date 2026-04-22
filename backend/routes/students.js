@@ -542,7 +542,11 @@ router.get(
           u.level_tag,
           u.profile_picture_url,
           'enrolled' as student_type,
-          CASE WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' THEN true ELSE false END as shouldCount
+          CASE
+            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN true
+            WHEN active_profile.package_id IS NOT NULL THEN true
+            ELSE false
+          END as shouldCount
          FROM classstudentstbl cs
          INNER JOIN userstbl u ON cs.student_id = u.user_id
          LEFT JOIN LATERAL (
@@ -556,8 +560,10 @@ router.get(
            LIMIT 1
          ) active_profile ON true
          WHERE cs.class_id = $1
-           AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
-           AND cs.removed_at IS NULL`,
+           AND (
+             (COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL)
+             OR active_profile.package_id IS NOT NULL
+           )`,
         [classId]
       );
 
@@ -603,10 +609,16 @@ router.get(
         [classId]
       );
 
+      // Avoid duplicates: students returned in enrolledResult should not reappear as pending
+      const enrolledStudentIds = new Set(enrolledResult.rows.map((row) => row.user_id));
+      const dedupedPendingRows = pendingResult.rows.filter(
+        (row) => !enrolledStudentIds.has(row.user_id)
+      );
+
       // Combine enrolled and pending students
       const allStudents = [
         ...enrolledResult.rows,
-        ...pendingResult.rows
+        ...dedupedPendingRows
       ];
 
       // Compute payment verification for each student (all Completed payments must be Approved)
