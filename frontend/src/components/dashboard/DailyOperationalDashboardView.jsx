@@ -181,10 +181,6 @@ const DailyOperationalDashboardView = ({
                 className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
               />
             </label>
-            <div className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 shadow-sm">
-              <span className="font-semibold text-gray-900">Summary date:</span>{' '}
-              {data?.summary_date || 'Today'}
-            </div>
             <button
               type="button"
               onClick={fetchDashboard}
