@@ -37,7 +37,7 @@ const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
           <DashboardStatIcon name={iconName} className="h-5 w-5 text-white drop-shadow-sm" />
         </div>
       </div>
-      <p className="mt-3 text-[2rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
+      <p className="mt-3 text-[1.65rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
       {subtitle ? <p className="mt-2 text-[11px] leading-4 font-medium text-gray-500">{subtitle}</p> : null}
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
