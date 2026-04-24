@@ -4,15 +4,14 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import {
-  sendInvoiceEmail,
   sendSystemNotificationEmail,
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
-import { generateInvoicePDFBuffer } from '../utils/pdfGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule, getPhaseDueDateYmd } from '../utils/phaseInstallmentUtils.js';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
+import { sendInvoicePaymentConfirmationByInvoiceId } from '../utils/paymentConfirmationEmailService.js';
 import {
   computeOriginalInvoiceAmount,
   computeOriginalAfterDeletingPayment,
@@ -133,7 +132,11 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
   const existingPhaseEnrollment = await client.query(
     `SELECT classstudent_id
      FROM classstudentstbl
-     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
+     WHERE student_id = $1
+       AND class_id = $2
+       AND phase_number = $3
+       AND COALESCE(enrollment_status, 'Active') = 'Active'
+       AND removed_at IS NULL`,
     [studentId, profile.class_id, targetPhase]
   );
 
@@ -531,7 +534,7 @@ router.get(
         : 'NULL::integer AS action_owner_user_id';
 
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                        p.payment_method, p.payment_type, p.payable_amount, 
+                        p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
@@ -542,8 +545,14 @@ router.get(
                         TO_CHAR(p.returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at,
                         p.returned_by,
                         returner.full_name as returned_by_name,
-                        u.full_name as student_name, u.email as student_email,
+                        u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                         i.invoice_description, i.amount as invoice_amount,
+                        COALESCE(i.amount, 0) + COALESCE((
+                          SELECT SUM(COALESCE(px.tip_amount, 0))
+                          FROM paymenttbl px
+                          WHERE px.invoice_id = p.invoice_id
+                            AND px.status = 'Completed'
+                        ), 0) AS invoice_total_amount,
                         i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
@@ -835,6 +844,273 @@ router.get(
 );
 
 /**
+ * GET /api/sms/payments/finance-unified
+ * Unified finance/superfinance logs:
+ * - regular payment rows
+ * - unapplied verified package AR rows (no payment_id/invoice_id yet)
+ */
+router.get(
+  '/finance-unified',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('issue_date').optional().isISO8601().withMessage('issue_date must be YYYY-MM-DD'),
+    queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
+    queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('pending_only').optional().isString().withMessage('pending_only must be a string'),
+    queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    handleValidationErrors,
+  ],
+  requireRole('Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const {
+        branch_id,
+        issue_date,
+        issue_date_from: issueDateFrom,
+        issue_date_to: issueDateTo,
+        pending_only: pendingOnlyRaw,
+        page = 1,
+        limit = 20,
+      } = req.query;
+
+      const pageNum = parseInt(page, 10) || 1;
+      const limitNum = parseInt(limit, 10) || 20;
+      const offset = (pageNum - 1) * limitNum;
+      const pendingOnly =
+        pendingOnlyRaw === '1' || String(pendingOnlyRaw || '').toLowerCase() === 'true';
+
+      const fromTrim = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
+      const toTrim = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
+      const useIssueRange = Boolean(fromTrim || toTrim);
+      if (useIssueRange && fromTrim && toTrim && fromTrim > toTrim) {
+        return res.status(400).json({
+          success: false,
+          message: 'issue_date_from must be on or before issue_date_to',
+        });
+      }
+
+      // ---------- 1) Normal payment rows ----------
+      let paySql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
+                           p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
+                           TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
+                           p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
+                           TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
+                           p.approval_status, p.approved_by,
+                           TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
+                           p.return_reason,
+                           TO_CHAR(p.returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at,
+                           p.returned_by,
+                           returner.full_name as returned_by_name,
+                           u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
+                           i.invoice_description, i.amount as invoice_amount,
+                           COALESCE(i.amount, 0) + COALESCE((
+                             SELECT SUM(COALESCE(px.tip_amount, 0))
+                             FROM paymenttbl px
+                             WHERE px.invoice_id = p.invoice_id
+                               AND px.status = 'Completed'
+                           ), 0) AS invoice_total_amount,
+                           i.invoice_ar_number AS invoice_ar_number,
+                           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                           approver.full_name as approved_by_name,
+                           payment_creator.full_name as payment_created_by_name,
+                           payment_creator.email as payment_created_by_email,
+                           invoice_issuer.full_name as invoice_issued_by_name,
+                           invoice_issuer.email as invoice_issued_by_email,
+                           ar.prospect_student_name as ar_prospect_student_name
+                    FROM paymenttbl p
+                    LEFT JOIN userstbl u ON p.student_id = u.user_id
+                    LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                    LEFT JOIN userstbl payment_creator ON p.created_by = payment_creator.user_id
+                    LEFT JOIN userstbl invoice_issuer ON i.created_by = invoice_issuer.user_id
+                    LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
+                    LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
+                    LEFT JOIN userstbl returner ON p.returned_by = returner.user_id
+                    LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
+                    WHERE 1=1`;
+      const payParams = [];
+      let payPc = 0;
+
+      if (req.user.userType !== 'Superfinance' && req.user.branchId) {
+        payPc++;
+        paySql += ` AND p.branch_id = $${payPc}`;
+        payParams.push(req.user.branchId);
+      } else if (branch_id) {
+        payPc++;
+        paySql += ` AND p.branch_id = $${payPc}`;
+        payParams.push(branch_id);
+      }
+
+      if (useIssueRange) {
+        if (fromTrim) {
+          payPc++;
+          paySql += ` AND p.issue_date >= $${payPc}::date`;
+          payParams.push(fromTrim);
+        }
+        if (toTrim) {
+          payPc++;
+          paySql += ` AND p.issue_date <= $${payPc}::date`;
+          payParams.push(toTrim);
+        }
+      } else if (issue_date) {
+        payPc++;
+        paySql += ` AND p.issue_date = $${payPc}::date`;
+        payParams.push(issue_date);
+      }
+
+      if (pendingOnly) {
+        paySql += ` AND p.status = 'Completed'
+                    AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned'))`;
+      } else {
+        paySql += ` AND (p.approval_status IS NULL OR p.approval_status <> 'Returned')`;
+      }
+
+      paySql += ` ORDER BY p.issue_date DESC, p.payment_id DESC`;
+
+      const payRes = await query(paySql, payParams);
+      const paymentRows = (payRes.rows || []).map((row) => {
+        let studentName = row.student_name;
+        let studentEmail = row.student_email;
+        const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        if (isWalkIn && row.ar_prospect_student_name) {
+          studentName = row.ar_prospect_student_name;
+          studentEmail = null;
+        }
+        return {
+          ...row,
+          student_name: studentName,
+          student_email: studentEmail,
+          source_type: 'PAYMENT',
+          source_id: `PAY-${row.payment_id}`,
+          sort_id: Number(row.payment_id) || 0,
+        };
+      });
+
+      // ---------- 2) Unapplied verified AR rows ----------
+      let arSql = `SELECT ar.ack_receipt_id,
+                          ar.branch_id,
+                          ar.prospect_student_name,
+                          ar.prospect_student_email,
+                          ar.package_name_snapshot,
+                          ar.payment_amount,
+                          ar.tip_amount,
+                          ar.reference_number,
+                          ar.payment_attachment_url,
+                          ar.level_tag,
+                          ar.status,
+                          TO_CHAR(ar.issue_date, 'YYYY-MM-DD') as issue_date,
+                          ar.ack_receipt_number,
+                          ar.created_by,
+                          creator.full_name AS created_by_name,
+                          creator.email AS created_by_email,
+                          COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+                   FROM acknowledgement_receiptstbl ar
+                   LEFT JOIN userstbl creator ON ar.created_by = creator.user_id
+                   LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
+                   WHERE ar.ar_type = 'Package'
+                     AND ar.status = 'Verified'
+                     AND ar.payment_id IS NULL
+                     AND ar.invoice_id IS NULL`;
+      const arParams = [];
+      let arPc = 0;
+
+      if (req.user.userType !== 'Superfinance' && req.user.branchId) {
+        arPc++;
+        arSql += ` AND ar.branch_id = $${arPc}`;
+        arParams.push(req.user.branchId);
+      } else if (branch_id) {
+        arPc++;
+        arSql += ` AND ar.branch_id = $${arPc}`;
+        arParams.push(branch_id);
+      }
+
+      if (useIssueRange) {
+        if (fromTrim) {
+          arPc++;
+          arSql += ` AND ar.issue_date >= $${arPc}::date`;
+          arParams.push(fromTrim);
+        }
+        if (toTrim) {
+          arPc++;
+          arSql += ` AND ar.issue_date <= $${arPc}::date`;
+          arParams.push(toTrim);
+        }
+      } else if (issue_date) {
+        arPc++;
+        arSql += ` AND ar.issue_date = $${arPc}::date`;
+        arParams.push(issue_date);
+      }
+
+      arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
+      const arRes = await query(arSql, arParams);
+      const arRows = (arRes.rows || []).map((row) => ({
+        payment_id: `AR-${row.ack_receipt_id}`,
+        invoice_id: null,
+        student_id: null,
+        branch_id: row.branch_id,
+        payment_method: 'Acknowledgement Receipt',
+        payment_type: 'Unapplied AR',
+        payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
+        issue_date: row.issue_date,
+        status: 'Verified',
+        reference_number: row.reference_number,
+        remarks: 'Awaiting enrollment attachment',
+        payment_attachment_url: row.payment_attachment_url,
+        created_by: row.created_by,
+        created_at: null,
+        approval_status: 'Pending',
+        approved_by: null,
+        approved_at: null,
+        return_reason: null,
+        returned_at: null,
+        returned_by: null,
+        returned_by_name: null,
+        student_name: row.prospect_student_name || 'Walk-in / AR',
+        student_email: row.prospect_student_email || null,
+        student_level_tag: row.level_tag || null,
+        invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
+        invoice_amount: null,
+        invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
+        branch_name: row.branch_name,
+        approved_by_name: null,
+        payment_created_by_name: row.created_by_name || null,
+        payment_created_by_email: row.created_by_email || null,
+        invoice_issued_by_name: null,
+        invoice_issued_by_email: null,
+        ar_prospect_student_name: row.prospect_student_name || null,
+        source_type: 'UNAPPLIED_AR',
+        source_id: `AR-${row.ack_receipt_id}`,
+        sort_id: Number(row.ack_receipt_id) || 0,
+      }));
+
+      // ---------- 3) Merge, sort, paginate ----------
+      const merged = [...paymentRows, ...arRows].sort((a, b) => {
+        const dateA = String(a.issue_date || '');
+        const dateB = String(b.issue_date || '');
+        if (dateA !== dateB) return dateA < dateB ? 1 : -1;
+        return (b.sort_id || 0) - (a.sort_id || 0);
+      });
+
+      const total = merged.length;
+      const pageData = merged.slice(offset, offset + limitNum).map(({ sort_id, ...rest }) => rest);
+
+      return res.json({
+        success: true,
+        data: pageData,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum) || 1,
+        },
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
  * GET /api/sms/payments/cash-deposit-summary
  * All Cash-method payments in an issue_date range (inclusive), for bank deposit reconciliation.
  * Non-superadmin users are limited to their branch. Totals use Completed payments only for "deposit" amount.
@@ -867,6 +1143,12 @@ router.get(
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
+                        COALESCE(i.amount, 0) + COALESCE((
+                          SELECT SUM(COALESCE(px.tip_amount, 0))
+                          FROM paymenttbl px
+                          WHERE px.invoice_id = p.invoice_id
+                            AND px.status = 'Completed'
+                        ), 0) AS invoice_total_amount,
                         i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
@@ -877,7 +1159,7 @@ router.get(
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
-                 WHERE p.payment_method = 'Cash'
+                 WHERE LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
                    AND p.issue_date >= $1::date AND p.issue_date <= $2::date`;
       const params = [start, end];
       let paramCount = 2;
@@ -962,6 +1244,12 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                COALESCE(i.amount, 0) + COALESCE((
+                  SELECT SUM(COALESCE(px.tip_amount, 0))
+                  FROM paymenttbl px
+                  WHERE px.invoice_id = p.invoice_id
+                    AND px.status = 'Completed'
+                ), 0) AS invoice_total_amount,
                 i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
@@ -1052,6 +1340,7 @@ router.post(
     body('payment_method').notEmpty().isString().withMessage('Payment method is required'),
     body('payment_type').notEmpty().isString().withMessage('Payment type is required'),
     body('payable_amount').isFloat({ min: 0.01 }).withMessage('Payable amount is required and must be greater than 0'),
+    body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('status').optional().isString().withMessage('Status must be a string'),
     body('reference_number').notEmpty().trim().isString().withMessage('Reference number is required'),
@@ -1070,6 +1359,7 @@ router.post(
         payment_method,
         payment_type,
         payable_amount,
+        tip_amount,
         issue_date,
         status = 'Completed',
         reference_number,
@@ -1171,8 +1461,8 @@ router.post(
       const paymentResult = hasActionOwnerCol
         ? await client.query(
             `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
-                                 payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                 payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING *`,
             [
               invoice_id,
@@ -1181,6 +1471,7 @@ router.post(
               payment_method,
               payment_type,
               payable_amount,
+              tip_amount || 0,
               issue_date,
               status,
               reference_number || null,
@@ -1192,8 +1483,8 @@ router.post(
           )
         : await client.query(
             `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
-                                 payable_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                 payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING *`,
             [
               invoice_id,
@@ -1202,6 +1493,7 @@ router.post(
               payment_method,
               payment_type,
               payable_amount,
+              tip_amount || 0,
               issue_date,
               status,
               reference_number || null,
@@ -1309,27 +1601,36 @@ router.post(
         }
       }
 
-      // ── Merchandise AR: deduct stock when invoice is fully paid ───────────
+      // ── AR-linked invoice: finalize AR status when invoice is fully paid ──
       if (newInvoiceStatus === 'Paid' && invoice.ack_receipt_id) {
         try {
           const ackResult = await client.query(
             `SELECT ar_type, merchandise_items_snapshot FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
             [invoice.ack_receipt_id]
           );
-          if (ackResult.rows.length > 0 && ackResult.rows[0].ar_type === 'Merchandise') {
-            const items = ackResult.rows[0].merchandise_items_snapshot;
-            if (items && Array.isArray(items)) {
-              for (const item of items) {
-                const merchId = item.merchandise_id;
-                const qty = parseInt(item.quantity, 10) || 1;
-                await client.query(
-                  `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
-                  [qty, merchId]
-                );
-                console.log(`✅ Merchandise AR payment: deducted ${qty} from merchandise_id ${merchId}`);
+          if (ackResult.rows.length > 0) {
+            const ackRow = ackResult.rows[0];
+            if (ackRow.ar_type === 'Merchandise') {
+              const items = ackRow.merchandise_items_snapshot;
+              if (items && Array.isArray(items)) {
+                for (const item of items) {
+                  const merchId = item.merchandise_id;
+                  const qty = parseInt(item.quantity, 10) || 1;
+                  await client.query(
+                    `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
+                    [qty, merchId]
+                  );
+                  console.log(`✅ Merchandise AR payment: deducted ${qty} from merchandise_id ${merchId}`);
+                }
               }
               await client.query(
                 `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
+                [newPayment.payment_id, invoice.ack_receipt_id]
+              );
+            } else {
+              // Package ARs become Applied once converted into an actual invoice payment.
+              await client.query(
+                `UPDATE acknowledgement_receiptstbl SET status = 'Applied', payment_id = $1 WHERE ack_receipt_id = $2`,
                 [newPayment.payment_id, invoice.ack_receipt_id]
               );
             }
@@ -1535,7 +1836,10 @@ router.post(
               const existingEnrollmentCheck = await client.query(
                 `SELECT classstudent_id, phase_number 
                  FROM classstudentstbl 
-                 WHERE student_id = $1 AND class_id = $2
+                 WHERE student_id = $1
+                   AND class_id = $2
+                   AND COALESCE(enrollment_status, 'Active') = 'Active'
+                   AND removed_at IS NULL
                  ORDER BY phase_number DESC`,
                 [student_id, classId]
               );
@@ -1593,11 +1897,18 @@ router.post(
       const paymentWithDetails = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                 p.payment_method, p.payment_type, p.payable_amount, 
+                COALESCE(p.tip_amount, 0) AS tip_amount,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                COALESCE(i.amount, 0) + COALESCE((
+                  SELECT SUM(COALESCE(px.tip_amount, 0))
+                  FROM paymenttbl px
+                  WHERE px.invoice_id = p.invoice_id
+                    AND px.status = 'Completed'
+                ), 0) AS invoice_total_amount,
                 i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
@@ -1610,32 +1921,22 @@ router.post(
 
       const paymentData = paymentWithDetails.rows[0];
 
-      // Send invoice email to student (non-blocking - don't fail payment if email fails)
-      if (paymentData.student_email && !createdBalanceInvoiceId) {
-        // Send email asynchronously without blocking the response
+      if (newInvoiceStatus === 'Paid' && !createdBalanceInvoiceId) {
         (async () => {
           try {
-            // Generate PDF buffer
-            const pdfBuffer = await generateInvoicePDFBuffer(invoice_id);
-            
-            // Send email with PDF attachment
-            await sendInvoiceEmail({
-              to: paymentData.student_email,
-              studentName: paymentData.student_name || 'Student',
-              invoiceId: invoice_id,
-              invoiceNumber: `INV-${invoice_id}`,
-              pdfBuffer: pdfBuffer,
-            });
-            
-            console.log(`✅ Invoice email sent successfully to ${paymentData.student_email} for invoice ${invoice_id}`);
+            const emailClient = await getClient();
+            try {
+              const summary = await sendInvoicePaymentConfirmationByInvoiceId(emailClient, invoice_id);
+              console.log(
+                `✅ Invoice payment confirmation email done for invoice ${invoice_id}: ${summary.sent}/${summary.attempted} sent`
+              );
+            } finally {
+              emailClient.release();
+            }
           } catch (emailError) {
-            // Log error but don't fail the payment
-            console.error(`❌ Error sending invoice email to ${paymentData.student_email}:`, emailError.message);
-            // Payment still succeeds even if email fails
+            console.error(`❌ Error sending invoice payment confirmation for invoice ${invoice_id}:`, emailError);
           }
         })();
-      } else {
-        console.warn(`⚠️ No email address found for student ${student_id}, skipping email notification`);
       }
 
       res.status(201).json({
@@ -1669,6 +1970,7 @@ router.put(
     body('payment_method').optional().isString().withMessage('Payment method must be a string'),
     body('payment_type').optional().isString().withMessage('Payment type must be a string'),
     body('payable_amount').optional().isFloat({ min: 0.01 }).withMessage('Payable amount must be greater than 0'),
+    body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('issue_date').optional().isISO8601().withMessage('Issue date must be a valid date'),
     body('status').optional().isString().withMessage('Status must be a string'),
     body('reference_number').optional().isString().withMessage('Reference number must be a string'),
@@ -1682,7 +1984,7 @@ router.put(
       await client.query('BEGIN');
 
       const { id } = req.params;
-      const { payment_method, payment_type, payable_amount, issue_date, status, reference_number, remarks, attachment_url } = req.body;
+      const { payment_method, payment_type, payable_amount, tip_amount, issue_date, status, reference_number, remarks, attachment_url } = req.body;
 
       // Check if payment exists
       const existingPayment = await client.query('SELECT * FROM paymenttbl WHERE payment_id = $1', [id]);
@@ -1719,7 +2021,7 @@ router.put(
       const params = [];
       let paramCount = 0;
 
-      const fields = { payment_method, payment_type, payable_amount, issue_date, status, reference_number, remarks };
+      const fields = { payment_method, payment_type, payable_amount, tip_amount, issue_date, status, reference_number, remarks };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {
           paramCount++;
@@ -1921,7 +2223,10 @@ router.put(
                   const existingEnrollmentCheck = await client.query(
                     `SELECT classstudent_id, phase_number 
                      FROM classstudentstbl 
-                     WHERE student_id = $1 AND class_id = $2
+                     WHERE student_id = $1
+                       AND class_id = $2
+                       AND COALESCE(enrollment_status, 'Active') = 'Active'
+                       AND removed_at IS NULL
                      ORDER BY phase_number DESC`,
                     [payment.student_id, classId]
                   );
@@ -2095,6 +2400,12 @@ router.put(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                COALESCE(i.amount, 0) + COALESCE((
+                  SELECT SUM(COALESCE(px.tip_amount, 0))
+                  FROM paymenttbl px
+                  WHERE px.invoice_id = p.invoice_id
+                    AND px.status = 'Completed'
+                ), 0) AS invoice_total_amount,
                 i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
@@ -2429,6 +2740,12 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                COALESCE(i.amount, 0) + COALESCE((
+                  SELECT SUM(COALESCE(px.tip_amount, 0))
+                  FROM paymenttbl px
+                  WHERE px.invoice_id = p.invoice_id
+                    AND px.status = 'Completed'
+                ), 0) AS invoice_total_amount,
                 i.invoice_ar_number AS invoice_ar_number,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
@@ -2461,19 +2778,28 @@ router.put(
   [
     param('id').isInt().withMessage('Payment ID must be an integer'),
     body('approve').isBoolean().withMessage('approve must be a boolean'),
+    body('finance_verified_reference_number')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('finance_verified_reference_number must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { id } = req.params;
       const { approve } = req.body;
+      const financeVerifiedReferenceNumber = String(
+        req.body?.finance_verified_reference_number || ''
+      ).trim();
       const userId = req.user.userId;
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
       // Get payment details including branch
       const paymentCheck = await query(
-        'SELECT payment_id, branch_id, approval_status FROM paymenttbl WHERE payment_id = $1',
+        `SELECT payment_id, invoice_id, branch_id, approval_status, reference_number
+         FROM paymenttbl
+         WHERE payment_id = $1`,
         [id]
       );
 
@@ -2502,6 +2828,31 @@ router.put(
         });
       }
 
+      if (approve && !financeVerifiedReferenceNumber) {
+        return res.status(400).json({
+          success: false,
+          message: 'Finance/Superfinance reference number is required when approving payment',
+        });
+      }
+
+      if (approve) {
+        const issuedReferenceNumber = String(payment.reference_number || '').trim();
+        if (!issuedReferenceNumber) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'This payment has no issued reference number yet. Please return it to branch and request correction before approval.',
+          });
+        }
+        if (financeVerifiedReferenceNumber !== issuedReferenceNumber) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Reference number mismatch. Approval is blocked. Please return this payment to branch for correction.',
+          });
+        }
+      }
+
       // Permission check: branch-bound Finance can only approve payments from their own branch
       // Superfinance is represented as Finance with no branch_id and should NOT be restricted here
       if (
@@ -2523,20 +2874,23 @@ router.put(
         ? `UPDATE paymenttbl 
            SET approval_status = 'Approved',
                approved_by = $1,
-               approved_at = CURRENT_TIMESTAMP
-           WHERE payment_id = $2
+               approved_at = CURRENT_TIMESTAMP,
+               finance_verified_reference_number = $2
+           WHERE payment_id = $3
            RETURNING payment_id, approval_status, approved_by, 
-                     TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at`
+                     TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
+                     finance_verified_reference_number`
         : `UPDATE paymenttbl 
            SET approval_status = 'Pending',
                approved_by = NULL,
-               approved_at = NULL
+               approved_at = NULL,
+               finance_verified_reference_number = NULL
            WHERE payment_id = $1
-           RETURNING payment_id, approval_status, approved_by, approved_at`;
+           RETURNING payment_id, approval_status, approved_by, approved_at, finance_verified_reference_number`;
 
       const result = await query(
         updateSql,
-        approve ? [userId, id] : [id]
+        approve ? [userId, financeVerifiedReferenceNumber, id] : [id]
       );
 
       res.json({

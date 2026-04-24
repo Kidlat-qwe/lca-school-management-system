@@ -74,6 +74,7 @@ router.get(
     queryValidator('action').optional().isString().withMessage('action must be a string'),
     queryValidator('entity_type').optional().isString().withMessage('entity_type must be a string'),
     queryValidator('user_id').optional().isInt().withMessage('user_id must be an integer'),
+    queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('from')
       .optional()
       .matches(/^\d{4}-\d{2}-\d{2}$/)
@@ -93,6 +94,7 @@ router.get(
         action,
         entity_type,
         user_id,
+        branch_id,
         from: fromDate,
         to: toDate,
         search,
@@ -158,6 +160,10 @@ router.get(
         n++;
         whereSql += ` AND sl.branch_id = $${n}`;
         params.push(bid);
+      } else if (branch_id) {
+        n++;
+        whereSql += ` AND sl.branch_id = $${n}`;
+        params.push(parseInt(branch_id, 10));
       }
 
       const countSql = `SELECT COUNT(*)::int AS total ${baseFrom} ${whereSql}`;

@@ -145,6 +145,10 @@ const StudentPaymentLogs = () => {
 
     return matchesSearch && matchesStatus && matchesPaymentMethod && matchesIssueRange;
   });
+  const filteredTotalAmount = filteredPayments.reduce(
+    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
+    0
+  );
 
   const itemsPerPage = 10;
   const totalPages = Math.max(Math.ceil(filteredPayments.length / itemsPerPage), 1);
@@ -433,6 +437,11 @@ const StudentPaymentLogs = () => {
 
       {/* Payment Logs List */}
       <div className="bg-white rounded-lg shadow">
+        <div className="px-6 pt-4">
+          <p className="text-sm font-semibold text-gray-700">
+            Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </p>
+        </div>
         <div
             className="overflow-x-auto rounded-lg"
             style={{

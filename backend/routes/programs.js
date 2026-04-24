@@ -122,7 +122,7 @@ router.post(
   [
     body('program_name').notEmpty().withMessage('Program name is required'),
     body('program_code').optional().isString().withMessage('Program code must be a string'),
-    body('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    body('curriculum_id').notEmpty().withMessage('Curriculum is required').isInt().withMessage('Curriculum ID must be an integer'),
     body('session_duration_hours').optional().isFloat({ min: 0.5, max: 8 }).withMessage('Session duration must be between 0.5 and 8 hours'),
     handleValidationErrors,
   ],
@@ -130,16 +130,25 @@ router.post(
   async (req, res, next) => {
     try {
       const { program_name, program_code, curriculum_id, session_duration_hours } = req.body;
+      const normalizedProgramName = String(program_name || '').trim();
+      const isCustomProgramName =
+        normalizedProgramName.toLowerCase() === 'others' ||
+        !['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'].includes(normalizedProgramName);
 
       // Verify curriculum exists if provided
-      if (curriculum_id) {
-        const curriculumCheck = await query('SELECT curriculum_id FROM curriculumstbl WHERE curriculum_id = $1', [curriculum_id]);
-        if (curriculumCheck.rows.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'Curriculum not found',
-          });
-        }
+      const curriculumCheck = await query('SELECT curriculum_id FROM curriculumstbl WHERE curriculum_id = $1', [curriculum_id]);
+      if (curriculumCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Curriculum not found',
+        });
+      }
+
+      if (isCustomProgramName && !String(program_code || '').trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Program code is required when using Others/custom program name',
+        });
       }
 
       // Validate session_duration_hours if provided
@@ -155,7 +164,7 @@ router.post(
 
       // Convert empty strings to null for optional fields
       const codeValue = program_code === '' ? null : (program_code || null);
-      const curriculumValue = curriculum_id === '' ? null : (curriculum_id || null);
+      const curriculumValue = curriculum_id;
       const durationValue = session_duration_hours !== undefined && session_duration_hours !== null && session_duration_hours !== ''
         ? parseFloat(session_duration_hours)
         : null;
@@ -196,7 +205,7 @@ router.put(
     param('id').isInt().withMessage('Program ID must be an integer'),
     body('program_name').optional().notEmpty().withMessage('Program name cannot be empty'),
     body('program_code').optional().isString().withMessage('Program code must be a string'),
-    body('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    body('curriculum_id').notEmpty().withMessage('Curriculum is required').isInt().withMessage('Curriculum ID must be an integer'),
     body('session_duration_hours').optional().isFloat({ min: 0.5, max: 8 }).withMessage('Session duration must be between 0.5 and 8 hours'),
     handleValidationErrors,
   ],
@@ -205,6 +214,10 @@ router.put(
     try {
       const { id } = req.params;
       const { program_name, program_code, curriculum_id, session_duration_hours } = req.body;
+      const normalizedProgramName = String(program_name || '').trim();
+      const isCustomProgramName =
+        normalizedProgramName.toLowerCase() === 'others' ||
+        !['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'].includes(normalizedProgramName);
 
       const existingProgram = await query('SELECT * FROM programstbl WHERE program_id = $1', [id]);
       if (existingProgram.rows.length === 0) {
@@ -214,15 +227,19 @@ router.put(
         });
       }
 
-      // Verify curriculum exists if provided
-      if (curriculum_id && curriculum_id !== '') {
-        const curriculumCheck = await query('SELECT curriculum_id FROM curriculumstbl WHERE curriculum_id = $1', [curriculum_id]);
-        if (curriculumCheck.rows.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'Curriculum not found',
-          });
-        }
+      const curriculumCheck = await query('SELECT curriculum_id FROM curriculumstbl WHERE curriculum_id = $1', [curriculum_id]);
+      if (curriculumCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Curriculum not found',
+        });
+      }
+
+      if (isCustomProgramName && !String(program_code || '').trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Program code is required when using Others/custom program name',
+        });
       }
 
       // Validate session_duration_hours if provided
@@ -244,7 +261,7 @@ router.put(
       const fields = {
         program_name,
         program_code: program_code === '' ? null : program_code,
-        curriculum_id: curriculum_id === '' ? null : (curriculum_id ? parseInt(curriculum_id) : undefined),
+        curriculum_id: parseInt(curriculum_id),
         session_duration_hours: session_duration_hours !== undefined && session_duration_hours !== null && session_duration_hours !== ''
           ? parseFloat(session_duration_hours)
           : (session_duration_hours === null ? null : undefined),
@@ -274,7 +291,7 @@ router.put(
       res.json({
         success: true,
         message: 'Program updated successfully',
-        data: programData,
+        data: result.rows[0],
       });
     } catch (error) {
       // Check for unique constraint violation (duplicate program_code)

@@ -91,7 +91,7 @@ const AdminClasses = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [agendaDraft, setAgendaDraft] = useState('');
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'student-selection', 'review'
+  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'review'
   const [selectedClassForEnrollment, setSelectedClassForEnrollment] = useState(null);
   const [selectedEnrollmentOption, setSelectedEnrollmentOption] = useState(null); // 'package', 'per-phase', 'reservation', 'ack-receipt'
   const [ackReceipts, setAckReceipts] = useState([]);
@@ -188,6 +188,11 @@ const AdminClasses = () => {
   const [loadingChangePackagePreview, setLoadingChangePackagePreview] = useState(false);
   const [changePackageSubmitting, setChangePackageSubmitting] = useState(false);
   const [showInstallmentSettings, setShowInstallmentSettings] = useState(false);
+  const [installmentScopeSettings, setInstallmentScopeSettings] = useState({
+    phase_start: '',
+    phase_end: '',
+    include_downpayment: true,
+  });
   const [showPackageDetails, setShowPackageDetails] = useState(true); // Default to open/expanded
   const [installmentSettings, setInstallmentSettings] = useState({
     invoice_issue_date: '',
@@ -467,14 +472,16 @@ const initializePackageMerchSelections = useCallback(
       setAckReceiptsLoading(true);
       setAckReceiptsError('');
       const params = new URLSearchParams();
-      params.set('status', 'Pending,Paid');
+      params.set('status', 'Submitted,Pending,Paid,Verified,Applied');
       if (branchId) params.set('branch_id', String(branchId));
       if (search && search.trim()) params.set('search', search.trim());
       params.set('limit', '50');
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       const all = response.data || [];
-      setAckReceipts(all.filter((ar) => ar.ar_type === 'Package'));
+      setAckReceipts(
+        all.filter((ar) => ar.ar_type === 'Package' && !ar.invoice_id && !ar.payment_id)
+      );
     } catch (err) {
       console.error('Error fetching acknowledgement receipts for enrollment:', err);
       setAckReceiptsError('Failed to load acknowledgement receipts. Please try again.');
@@ -2682,7 +2689,7 @@ const initializePackageMerchSelections = useCallback(
   const openEnrollModal = (classItem) => {
     setOpenMenuId(null);
     setSelectedClassForEnrollment(classItem);
-    setEnrollStep('view'); // Start with view mode
+    setEnrollStep('enrollment-option');
     setSelectedPackage(null);
     setSelectedStudents([]);
     setSelectedPricingLists([]);
@@ -2697,6 +2704,30 @@ const initializePackageMerchSelections = useCallback(
     fetchEnrollReservedStudents(classItem.class_id);
     
     // Fetch packages, students, pricing lists, and merchandise for this branch
+    if (classItem.branch_id) {
+      fetchPackages(classItem.branch_id);
+      fetchStudents(classItem.branch_id);
+      fetchPricingLists(classItem.branch_id);
+      fetchMerchandise(classItem.branch_id);
+    }
+  };
+
+  const openManageEnrolledStudentsModal = (classItem) => {
+    setOpenMenuId(null);
+    setSelectedClassForEnrollment(classItem);
+    setEnrollStep('view');
+    setSelectedPackage(null);
+    setSelectedStudents([]);
+    setSelectedPricingLists([]);
+    setSelectedMerchandise([]);
+    setGeneratedInvoices([]);
+    setShowPackageDetails(false);
+    setSelectedEnrollmentOption(null);
+    setIsEnrollModalOpen(true);
+
+    fetchEnrolledStudents(classItem.class_id);
+    fetchEnrollReservedStudents(classItem.class_id);
+
     if (classItem.branch_id) {
       fetchPackages(classItem.branch_id);
       fetchStudents(classItem.branch_id);
@@ -2777,12 +2808,46 @@ const initializePackageMerchSelections = useCallback(
     setAckSearchTerm('');
     setDebouncedAckSearch('');
     setSelectedAckReceipt(null);
+    setInstallmentScopeSettings({
+      phase_start: '',
+      phase_end: '',
+      include_downpayment: true,
+    });
     updateInstallmentSettings({
       invoice_issue_date: '',
       billing_month: '',
       invoice_due_date: '',
       invoice_generation_date: '',
     });
+  };
+
+  const isInstallmentPackageSelection = (packageItem) =>
+    !!packageItem &&
+    (packageItem.package_type === 'Installment' ||
+      (packageItem.package_type === 'Phase' && packageItem.payment_option === 'Installment'));
+
+  const getInstallmentPhaseBounds = (packageItem) => {
+    const classMaxPhase = Number(selectedClassForEnrollment?.number_of_phase) || null;
+    let minPhase = 1;
+    let maxPhase = classMaxPhase || 1;
+
+    if (packageItem?.package_type === 'Phase' && packageItem?.payment_option === 'Installment') {
+      const pkgStart = Number(packageItem.phase_start) || 1;
+      const pkgEnd = Number(packageItem.phase_end) || pkgStart;
+      minPhase = pkgStart;
+      maxPhase = pkgEnd;
+    }
+
+    if (classMaxPhase) {
+      minPhase = Math.min(minPhase, classMaxPhase);
+      maxPhase = Math.min(maxPhase, classMaxPhase);
+    }
+
+    if (maxPhase < minPhase) {
+      maxPhase = minPhase;
+    }
+
+    return { minPhase, maxPhase };
   };
 
   const handlePackageSelect = (packageItem) => {
@@ -2808,7 +2873,20 @@ const initializePackageMerchSelections = useCallback(
     setSelectedPromo(null); // Clear selected promo when package changes
     setAvailablePromos([]); // Clear available promos
     setShowPackageDetails(true); // Show package details by default when package is selected
-    setEnrollStep('student-selection');
+    const shouldShowInstallmentSetup =
+      selectedEnrollmentOption === 'package' && isInstallmentPackageSelection(packageItem);
+    if (shouldShowInstallmentSetup) {
+      const { minPhase, maxPhase } = getInstallmentPhaseBounds(packageItem);
+      const hasConfiguredDownpayment = parseFloat(packageItem?.downpayment_amount || 0) > 0;
+      setInstallmentScopeSettings({
+        phase_start: String(minPhase),
+        phase_end: String(maxPhase),
+        include_downpayment: hasConfiguredDownpayment,
+      });
+      setEnrollStep('installment-setup');
+    } else {
+      setEnrollStep('student-selection');
+    }
     setStudentSearchTerm('');
     setShowStudentDropdown(false);
     setSelectedStudents([]);
@@ -3826,6 +3904,19 @@ const initializePackageMerchSelections = useCallback(
                 frequency_months: installmentSettings.frequency_months,
               }
             } : {}),
+            ...(selectedEnrollmentOption === 'package' &&
+            selectedPackage &&
+            isInstallmentPackageSelection(selectedPackage) &&
+            installmentScopeSettings.phase_start &&
+            installmentScopeSettings.phase_end
+              ? {
+                  installment_scope: {
+                    phase_start: parseInt(installmentScopeSettings.phase_start, 10),
+                    phase_end: parseInt(installmentScopeSettings.phase_end, 10),
+                    include_downpayment: Boolean(installmentScopeSettings.include_downpayment),
+                  },
+                }
+              : {}),
           };
 
           const response = await apiRequest(`/classes/${selectedClassForEnrollment.class_id}/enroll`, {
@@ -7741,6 +7832,21 @@ setFormData({
                   if (selectedClass) {
                     setOpenMenuId(null);
                     setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
+                    openManageEnrolledStudentsModal(selectedClass);
+                  }
+                }}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                Manage Enrolled Student
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const selectedClass = filteredClasses.find(c => c.class_id === openMenuId);
+                  if (selectedClass) {
+                    setOpenMenuId(null);
+                    setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
                     handleViewClass(selectedClass);
                   }
                 }}
@@ -8939,6 +9045,7 @@ setFormData({
                   {enrollStep === 'enrollment-option' && 'Select Enrollment Option'}
                   {enrollStep === 'ack-receipt-selection' && 'Select Acknowledgement Receipt'}
                   {enrollStep === 'package-selection' && 'Select Package'}
+                  {enrollStep === 'installment-setup' && 'Installment Enrollment Setup'}
                   {enrollStep === 'student-selection' && 'Select Student'}
                   {enrollStep === 'review' && 'Review & Enroll'}
                 </h2>
@@ -9314,7 +9421,7 @@ setFormData({
                   <div className="text-center mb-4">
                     <h3 className="text-xl font-bold text-gray-900 mb-1">Select Acknowledgement Receipt</h3>
                     <p className="text-sm text-gray-500">
-                      Choose a pending or paid acknowledgement receipt (not yet attached to an invoice). The package from the receipt will be applied automatically.
+                      Select an acknowledgement receipt (not yet attached to an invoice). You can only use Verified receipts, except Cash receipts which can be used immediately.
                     </p>
                   </div>
                   <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
@@ -9337,7 +9444,7 @@ setFormData({
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
                         <p className="text-sm text-gray-600">
-                          No attachable acknowledgement receipts found (pending or paid). Create one first from the Manage Invoice section.
+                          No acknowledgement receipts found for this branch/search yet.
                         </p>
                       ) : (
                         <div
@@ -9363,7 +9470,14 @@ setFormData({
                               </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                              {ackReceipts.map((ar) => (
+                              {ackReceipts.map((ar) => {
+                                const isCashMethod = String(ar.payment_method || '').trim().toLowerCase() === 'cash';
+                                const isVerified = ['Verified', 'Applied'].includes(String(ar.status || '').trim());
+                                const canUseReceipt = isVerified || isCashMethod;
+                                const disabledReason = isCashMethod
+                                  ? ''
+                                  : 'This receipt is not verified yet. Finance/Superfinance must verify it first.';
+                                return (
                                 <tr key={ar.ack_receipt_id}>
                                   <td className="px-4 py-3">
                                     <div className="text-gray-900">{ar.prospect_student_name}</div>
@@ -9399,7 +9513,10 @@ setFormData({
                                   <td className="px-4 py-3">
                                     <button
                                       type="button"
+                                      disabled={!canUseReceipt}
+                                      title={!canUseReceipt ? disabledReason : 'Use this acknowledgement receipt'}
                                       onClick={() => {
+                                        if (!canUseReceipt) return;
                                         setSelectedAckReceipt(ar);
                                         const pkg = packages.find(
                                           (p) => p.package_id === ar.package_id
@@ -9413,13 +9530,17 @@ setFormData({
                                         handlePackageSelect(pkg);
                                         setEnrollStep('student-selection');
                                       }}
-                                      className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                        canUseReceipt
+                                          ? 'text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E]'
+                                          : 'text-gray-400 bg-gray-100 cursor-not-allowed border border-gray-200'
+                                      }`}
                                     >
                                       Use This Receipt
                                     </button>
                                   </td>
                                 </tr>
-                              ))}
+                              )})}
                             </tbody>
                           </table>
                         </div>
@@ -9609,6 +9730,118 @@ setFormData({
                           </p>
                       </div>
                     </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {enrollStep === 'installment-setup' && selectedPackage && (
+                <div className="space-y-4 w-full">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                    <h4 className="text-sm font-semibold text-amber-900">Selected installment package</h4>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                        {selectedPackage.package_name}
+                      </span>
+                      {selectedPackage.package_price && (
+                        <span className="inline-flex items-center rounded-md bg-white/80 px-2.5 py-1 text-xs font-medium text-amber-900 border border-amber-200">
+                          Monthly: ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-amber-700 mt-2">
+                      Configure phase coverage and whether downpayment is included.
+                    </p>
+                  </div>
+
+                  {(() => {
+                    const { minPhase, maxPhase } = getInstallmentPhaseBounds(selectedPackage);
+                    const phaseOptions = Array.from(
+                      { length: maxPhase - minPhase + 1 },
+                      (_, idx) => minPhase + idx
+                    );
+                    const hasDownpayment = parseFloat(selectedPackage.downpayment_amount || 0) > 0;
+
+                    return (
+                      <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end">
+                          <div>
+                            <label className="label-field text-xs">
+                              Start Phase <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={installmentScopeSettings.phase_start}
+                              onChange={(e) => {
+                                const startVal = parseInt(e.target.value, 10);
+                                const currentEnd = parseInt(installmentScopeSettings.phase_end, 10);
+                                setInstallmentScopeSettings((prev) => ({
+                                  ...prev,
+                                  phase_start: e.target.value,
+                                  phase_end: Number.isFinite(currentEnd) && currentEnd >= startVal
+                                    ? prev.phase_end
+                                    : e.target.value,
+                                }));
+                              }}
+                              className="input-field text-sm"
+                            >
+                              {phaseOptions.map((phase) => (
+                                <option key={`installment-start-${phase}`} value={phase}>
+                                  Phase {phase}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="label-field text-xs">
+                              End Phase <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={installmentScopeSettings.phase_end}
+                              onChange={(e) =>
+                                setInstallmentScopeSettings((prev) => ({
+                                  ...prev,
+                                  phase_end: e.target.value,
+                                }))
+                              }
+                              className="input-field text-sm"
+                            >
+                              {phaseOptions
+                                .filter((phase) => phase >= parseInt(installmentScopeSettings.phase_start || String(minPhase), 10))
+                                .map((phase) => (
+                                  <option key={`installment-end-${phase}`} value={phase}>
+                                    Phase {phase}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                          <div className="rounded-md border border-gray-200 p-3 bg-gray-50">
+                            <label className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(installmentScopeSettings.include_downpayment)}
+                                disabled={!hasDownpayment}
+                                onChange={(e) =>
+                                  setInstallmentScopeSettings((prev) => ({
+                                    ...prev,
+                                    include_downpayment: e.target.checked,
+                                  }))
+                                }
+                                className="mt-1 h-4 w-4 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
+                              />
+                              <span>
+                                <span className="block text-sm font-medium text-gray-900">
+                                  Include downpayment invoice
+                                </span>
+                                <span className="block text-xs text-gray-600 mt-1">
+                                  {hasDownpayment
+                                    ? `Downpayment amount: ₱${Number(selectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    : 'This package has no configured downpayment amount.'}
+                                </span>
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
                     );
                   })()}
                 </div>
@@ -11206,6 +11439,16 @@ setFormData({
                                   <strong>Monthly:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
                                 </p>
                               )}
+                              {selectedEnrollmentOption === 'package' && installmentScopeSettings.phase_start && installmentScopeSettings.phase_end && (
+                                <>
+                                  <p className="text-sm text-gray-700">
+                                    <strong>Phase Scope:</strong> Phase {installmentScopeSettings.phase_start} to Phase {installmentScopeSettings.phase_end}
+                                  </p>
+                                  <p className="text-sm text-gray-700">
+                                    <strong>Downpayment:</strong> {installmentScopeSettings.include_downpayment ? 'Included' : 'Excluded'}
+                                  </p>
+                                </>
+                              )}
                             </>
                           ) : (
                             selectedPackage.package_price && (
@@ -11635,8 +11878,23 @@ setFormData({
                       invoice_due_date: '',
                       invoice_generation_date: '',
                     });
+                    setInstallmentScopeSettings({
+                      phase_start: '',
+                      phase_end: '',
+                      include_downpayment: true,
+                    });
                     setEnrollStep('enrollment-option');
                   }}
+                  className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  disabled={enrollSubmitting}
+                >
+                  Back
+                </button>
+              )}
+              {enrollStep === 'installment-setup' && (
+                <button
+                  type="button"
+                  onClick={() => setEnrollStep('package-selection')}
                   className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                   disabled={enrollSubmitting}
                 >
@@ -11647,14 +11905,23 @@ setFormData({
                 enrollStep !== 'enrollment-option' &&
                 enrollStep !== 'package-selection' &&
                 enrollStep !== 'ack-receipt-selection' &&
+                enrollStep !== 'installment-setup' &&
                 !(enrollStep === 'review' && generatedInvoices.length > 0) && (
                 <button
                   type="button"
                   onClick={() => {
                     if (enrollStep === 'student-selection') {
                       if (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation') {
-                        // Don't clear package when going back to package-selection
-                        setEnrollStep('package-selection');
+                        // For installment package flow, go back to setup step first.
+                        if (
+                          selectedEnrollmentOption === 'package' &&
+                          selectedPackage &&
+                          isInstallmentPackageSelection(selectedPackage)
+                        ) {
+                          setEnrollStep('installment-setup');
+                        } else {
+                          setEnrollStep('package-selection');
+                        }
                       } else {
                         // Clear package-related state when going back to enrollment-option from student-selection
                         setSelectedPackage(null);
@@ -11763,6 +12030,28 @@ setFormData({
                   disabled={selectedStudents.length === 0}
                 >
                   Continue {selectedStudents.length > 0 ? `(1 selected)` : '(0 selected)'}
+                </button>
+              )}
+              {enrollStep === 'installment-setup' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const startPhase = parseInt(installmentScopeSettings.phase_start, 10);
+                    const endPhase = parseInt(installmentScopeSettings.phase_end, 10);
+                    if (!Number.isInteger(startPhase) || !Number.isInteger(endPhase)) {
+                      appAlert('Please select both start and end phase.');
+                      return;
+                    }
+                    if (endPhase < startPhase) {
+                      appAlert('End phase must be greater than or equal to start phase.');
+                      return;
+                    }
+                    setEnrollStep('student-selection');
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                  disabled={enrollSubmitting}
+                >
+                  Continue
                 </button>
               )}
               {enrollStep !== 'view' && (

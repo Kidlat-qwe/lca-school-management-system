@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Area,
   AreaChart,
@@ -20,8 +21,12 @@ import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
-const StatsCard = ({ title, value, iconName, accent, trend, trendClassName = 'text-emerald-600' }) => (
-  <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
+const StatsCard = ({ title, value, iconName, accent, trend, trendClassName = 'text-emerald-600', onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`group relative w-full overflow-hidden rounded-2xl bg-white p-6 text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${onClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2' : 'cursor-default'}`}
+  >
     <div className="flex items-start justify-between">
       <div className="flex-1">
         <p className="text-sm font-medium text-gray-600">{title}</p>
@@ -37,7 +42,7 @@ const StatsCard = ({ title, value, iconName, accent, trend, trendClassName = 'te
       </div>
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
-  </div>
+  </button>
 );
 
 const ChartCard = ({ title, subtitle, children, className = '' }) => (
@@ -51,6 +56,7 @@ const ChartCard = ({ title, subtitle, children, className = '' }) => (
 );
 
 const FinancialDashboard = () => {
+  const navigate = useNavigate();
   const { selectedBranchId } = useGlobalBranchFilter();
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +111,16 @@ const FinancialDashboard = () => {
       },
     [metrics]
   );
+  const arVerification = useMemo(
+    () =>
+      metrics?.ar_verification || {
+        verified_count: 0,
+        verified_amount: 0,
+        unverified_count: 0,
+        unverified_amount: 0,
+      },
+    [metrics]
+  );
 
   const formatPeso = (n) =>
     `₱${(Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -121,6 +137,23 @@ const FinancialDashboard = () => {
     const branch = metrics?.branches?.find(b => b.branch_id === parseInt(selectedBranchId, 10));
     return branch?.branch_name || 'All Branches';
   }, [selectedBranchId, metrics]);
+
+  const openPaymentLogsByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('notificationTab', 'main');
+    params.set('financeApproval', type === 'verified' ? 'approved' : 'pending');
+    navigate(`/superadmin/payment-logs?${params.toString()}`);
+  };
+  const openArByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('page', '1');
+    if (type === 'verified') {
+      params.set('status', 'Verified,Applied');
+    } else {
+      params.set('status', 'Submitted,Pending,Paid');
+    }
+    navigate(`/superadmin/acknowledgement-receipts?${params.toString()}`);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
@@ -216,6 +249,7 @@ const FinancialDashboard = () => {
               trend={`${formatPeso(paymentVerification.verified_amount)} total amount`}
               accent="bg-gradient-to-br from-teal-400 to-teal-600"
               iconName="shieldCheck"
+              onClick={() => openPaymentLogsByVerification('verified')}
             />
             <StatsCard
               title="Unverified payments"
@@ -224,6 +258,37 @@ const FinancialDashboard = () => {
               trendClassName="text-amber-800"
               accent="bg-gradient-to-br from-amber-400 to-amber-600"
               iconName="clock"
+              onClick={() => openPaymentLogsByVerification('unverified')}
+            />
+          </div>
+        </div>
+
+        {/* Package AR verification lifecycle */}
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package AR)</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              <span className="font-medium text-gray-700">Verified AR</span> includes statuses Verified and Applied.{' '}
+              <span className="font-medium text-gray-700">Unverified AR</span> includes Submitted/Pending AR records awaiting verification.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <StatsCard
+              title="Verified AR"
+              value={arVerification.verified_count}
+              trend={`${formatPeso(arVerification.verified_amount)} total amount`}
+              accent="bg-gradient-to-br from-emerald-400 to-emerald-600"
+              iconName="shieldCheck"
+              onClick={() => openArByVerification('verified')}
+            />
+            <StatsCard
+              title="Unverified AR"
+              value={arVerification.unverified_count}
+              trend={`${formatPeso(arVerification.unverified_amount)} total amount`}
+              trendClassName="text-amber-800"
+              accent="bg-gradient-to-br from-amber-400 to-amber-600"
+              iconName="clock"
+              onClick={() => openArByVerification('unverified')}
             />
           </div>
         </div>

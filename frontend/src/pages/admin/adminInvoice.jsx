@@ -3,11 +3,20 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import * as XLSX from 'xlsx';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
+
+const getInvoiceDisplayAmount = (invoice) => {
+  if (!invoice) return 0;
+  const remainingAmount = Number(invoice.amount ?? 0);
+  const paidAmount = Number(invoice.paid_amount ?? 0);
+  const billedAmount = remainingAmount + paidAmount;
+  return billedAmount > 0 ? billedAmount : remainingAmount;
+};
 
 const AdminInvoice = () => {
   const navigate = useNavigate();
@@ -22,6 +31,8 @@ const AdminInvoice = () => {
   const [studentNameSearch, setStudentNameSearch] = useState('');
   // Removed filterBranch - admin only sees their branch
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   // Removed openBranchDropdown - admin only sees their branch
@@ -65,6 +76,7 @@ const AdminInvoice = () => {
     payment_method: 'Cash',
     payment_type: '',
     payable_amount: '',
+    tip_amount: '',
     issue_date: todayManilaYMD(),
     reference_number: '',
     remarks: '',
@@ -74,6 +86,10 @@ const AdminInvoice = () => {
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [paymentAttachmentUploading, setPaymentAttachmentUploading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportDateFrom, setExportDateFrom] = useState('');
+  const [exportDateTo, setExportDateTo] = useState('');
+  const [exportLoading, setExportLoading] = useState(false);
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -703,6 +719,7 @@ const AdminInvoice = () => {
         payment_method: 'Cash',
         payment_type: '',
         payable_amount: invoiceData.amount || '',
+        tip_amount: '',
         issue_date: todayManilaYMD(),
         reference_number: '',
         remarks: '',
@@ -769,6 +786,7 @@ const AdminInvoice = () => {
       payment_method: 'Cash',
       payment_type: '',
       payable_amount: '',
+      tip_amount: '',
       issue_date: todayManilaYMD(),
       reference_number: '',
       remarks: '',
@@ -899,6 +917,7 @@ const AdminInvoice = () => {
     }
     const invoiceOutstandingAmount = parseFloat(selectedInvoiceForPayment?.amount || 0);
     const payableAmount = parseFloat(paymentFormData.payable_amount || 0);
+    const tipAmount = parseFloat(paymentFormData.tip_amount || 0);
     if (
       paymentFormData.payment_type === 'Partial Payment' &&
       invoiceOutstandingAmount > 0 &&
@@ -908,6 +927,9 @@ const AdminInvoice = () => {
     }
     if (!paymentFormData.issue_date) {
       errors.issue_date = 'Issue date is required';
+    }
+    if (paymentFormData.tip_amount !== '' && (Number.isNaN(tipAmount) || tipAmount < 0)) {
+      errors.tip_amount = 'Tip amount must be 0 or greater';
     }
     const refNum = (paymentFormData.reference_number || '').trim();
     if (!refNum) {
@@ -938,6 +960,7 @@ const AdminInvoice = () => {
         payment_method: paymentFormData.payment_method,
         payment_type: paymentFormData.payment_type,
         payable_amount: parseFloat(paymentFormData.payable_amount),
+        tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
         issue_date: paymentFormData.issue_date,
         reference_number: (paymentFormData.reference_number || '').trim(),
       };
@@ -1161,6 +1184,7 @@ const AdminInvoice = () => {
   };
 
   const getUniqueStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
+  const normalizeYmd = (value) => (value ? String(value).slice(0, 10) : '');
 
   const filteredInvoices = invoices.filter((invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
@@ -1177,7 +1201,10 @@ const AdminInvoice = () => {
     const matchesStatus = filterStatus
       ? invoice.status === filterStatus
       : true;
-    return matchesSearch && matchesStudentName && matchesStatus;
+    const issueYmd = normalizeYmd(invoice.issue_date);
+    const matchesIssueDateFrom = !filterIssueDateFrom || (issueYmd && issueYmd >= filterIssueDateFrom);
+    const matchesIssueDateTo = !filterIssueDateTo || (issueYmd && issueYmd <= filterIssueDateTo);
+    return matchesSearch && matchesStudentName && matchesStatus && matchesIssueDateFrom && matchesIssueDateTo;
   });
   const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
   const paginatedInvoices = filteredInvoices.slice(
@@ -1187,7 +1214,7 @@ const AdminInvoice = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [nameSearchTerm, studentNameSearch, filterStatus]);
+  }, [nameSearchTerm, studentNameSearch, filterStatus, filterIssueDateFrom, filterIssueDateTo]);
 
   useEffect(() => {
     setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
@@ -1203,6 +1230,52 @@ const AdminInvoice = () => {
     return subtotal + tax;
   };
 
+  const handleExportToExcel = async () => {
+    if (exportDateFrom && exportDateTo && exportDateFrom > exportDateTo) {
+      appAlert('Export "From" date must be on or before "To" date.');
+      return;
+    }
+    try {
+      setExportLoading(true);
+      const exportRows = filteredInvoices
+        .filter((invoice) => {
+          const issueYmd = normalizeYmd(invoice.issue_date);
+          if (!issueYmd) return false;
+          if (exportDateFrom && issueYmd < exportDateFrom) return false;
+          if (exportDateTo && issueYmd > exportDateTo) return false;
+          return true;
+        })
+        .map((invoice) => ({
+          'Invoice ID': `INV-${invoice.invoice_id}`,
+          'AR #': invoice.invoice_ar_number || '-',
+          'Student Name(s)': (invoice.students || []).map((s) => s?.full_name).filter(Boolean).join(', ') || '-',
+          Branch: selectedBranchName || 'Your Branch',
+          Status: invoice.status || '-',
+          'Amount (PHP)': Number(getInvoiceDisplayAmount(invoice) || 0).toFixed(2),
+          'Issue Date': invoice.issue_date ? formatDateManila(invoice.issue_date) : '-',
+          'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
+        }));
+
+      if (exportRows.length === 0) {
+        appAlert('No invoice records found for the selected date range.');
+        return;
+      }
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(exportRows);
+      ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 34 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+      XLSX.writeFile(wb, `Admin_Invoice_Export_${exportDateFrom || 'all'}_to_${exportDateTo || 'all'}.xlsx`);
+      setShowExportModal(false);
+      appAlert('Invoice export completed successfully.');
+    } catch (err) {
+      console.error('Error exporting invoices:', err);
+      appAlert('Failed to export invoices. Please try again.');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -1216,6 +1289,38 @@ const AdminInvoice = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Invoices</h1>
+        <button
+          type="button"
+          onClick={() => setShowExportModal(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16" />
+          </svg>
+          Export to Excel
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Issue Date From</label>
+          <input
+            type="date"
+            value={filterIssueDateFrom}
+            onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Issue Date To</label>
+          <input
+            type="date"
+            value={filterIssueDateTo}
+            min={filterIssueDateFrom || undefined}
+            onChange={(e) => setFilterIssueDateTo(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+          />
+        </div>
       </div>
 
       {/* Error Message */}
@@ -1229,20 +1334,22 @@ const AdminInvoice = () => {
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1240px', tableLayout: 'fixed' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1250px', tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '200px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '200px' }} />
-                <col style={{ width: '160px' }} />
+                <col style={{ width: '170px' }} />
                 <col style={{ width: '120px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '140px' }} />
+                <col style={{ width: '170px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '100px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '90px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
                     <div className="flex flex-col space-y-2">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
@@ -1272,10 +1379,10 @@ const AdminInvoice = () => {
                       </div>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     AR#
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
                     <div className="flex flex-col space-y-2">
                       <div className="flex items-center space-x-1 min-h-[6px]">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${studentNameSearch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
@@ -1327,13 +1434,19 @@ const AdminInvoice = () => {
                       </button>
                     </div>
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '110px', minWidth: '110px' }}>
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '140px', minWidth: '140px' }}>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                    Total Amount
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                    Issue Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Due Date
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
                     Actions
                   </th>
                 </tr>
@@ -1341,7 +1454,7 @@ const AdminInvoice = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
+                    <td colSpan={10} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || studentNameSearch || filterStatus
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -1455,10 +1568,22 @@ const AdminInvoice = () => {
                         ) : (
                           <div className="text-sm text-gray-900">
                             {invoice.amount !== null && invoice.amount !== undefined
-                              ? `₱${parseFloat(invoice.amount).toFixed(2)}`
+                              ? `₱${getInvoiceDisplayAmount(invoice).toFixed(2)}`
                               : '-'}
                           </div>
                         )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
+                        ₱{Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        {invoice.issue_date
+                          ? formatDateManila(invoice.issue_date)
+                          : '-'}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
@@ -1707,6 +1832,34 @@ const AdminInvoice = () => {
               {status}
             </button>
           ))}
+        </div>,
+        document.body
+      )}
+
+      {showExportModal && createPortal(
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+            <div className="border-b border-gray-100 px-6 py-4">
+              <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
+              <p className="mt-1 text-sm text-gray-500">Filter by issue date range (optional).</p>
+            </div>
+            <div className="space-y-4 px-6 py-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date From</label>
+                <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date To</label>
+                <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
+              <button type="button" onClick={() => !exportLoading && setShowExportModal(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button type="button" onClick={handleExportToExcel} disabled={exportLoading} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60">
+                {exportLoading ? 'Exporting...' : 'Export to Excel'}
+              </button>
+            </div>
+          </div>
         </div>,
         document.body
       )}
@@ -2214,7 +2367,7 @@ const AdminInvoice = () => {
                               : selectedInvoiceForDetails.status === 'Pending'
                               ? 'bg-yellow-100 text-yellow-800'
                               : selectedInvoiceForDetails.status === 'Unpaid'
-                              ? 'bg-orange-100 text-orange-800'
+                              ? 'bg-red-100 text-red-800'
                               : selectedInvoiceForDetails.status === 'Overdue'
                               ? 'bg-red-100 text-red-800'
                               : 'bg-gray-100 text-gray-800'
@@ -2236,7 +2389,7 @@ const AdminInvoice = () => {
                     <span className="text-xs text-gray-500">Total Amount:</span>
                     <p className="text-sm font-medium text-gray-900 mt-1">
                       {selectedInvoiceForDetails.amount !== null && selectedInvoiceForDetails.amount !== undefined
-                        ? `₱${parseFloat(selectedInvoiceForDetails.amount).toFixed(2)}`
+                        ? `₱${getInvoiceDisplayAmount(selectedInvoiceForDetails).toFixed(2)}`
                         : '-'}
                     </p>
                   </div>
@@ -2630,6 +2783,23 @@ const AdminInvoice = () => {
                         Partial payment must be lower than remaining amount
                         ({` ₱${parseFloat(selectedInvoiceForPayment.amount || 0).toFixed(2)}`}).
                       </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="tip_amount"
+                      value={paymentFormData.tip_amount}
+                      onChange={handlePaymentInputChange}
+                      className={`input-field text-sm ${paymentFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                      placeholder="0.00"
+                    />
+                    {paymentFormErrors.tip_amount && (
+                      <p className="text-xs text-red-500 mt-1">{paymentFormErrors.tip_amount}</p>
                     )}
                   </div>
 

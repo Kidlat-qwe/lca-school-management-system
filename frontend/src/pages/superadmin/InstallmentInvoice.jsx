@@ -160,35 +160,24 @@ const InstallmentInvoice = () => {
     setSelectedInvoiceForGeneration(invoice);
     
     const months = getFrequencyMonths(invoice.frequency);
-    const issueDate = new Date();
-    issueDate.setHours(0, 0, 0, 0);
-
-    const baseInvoiceMonth = invoice.next_invoice_month
-      ? parseYmdLocalNoon(String(invoice.next_invoice_month).slice(0, 10))
-      : null;
-    const baseGenerationDate = invoice.next_generation_date
+    const storedGenerationDate = invoice.next_generation_date
       ? parseYmdLocalNoon(String(invoice.next_generation_date).slice(0, 10))
       : null;
+    const generationDate = storedGenerationDate || new Date();
+    generationDate.setHours(0, 0, 0, 0);
+    generationDate.setDate(25);
 
-    const invoiceMonth = baseInvoiceMonth
-      ? addMonths(new Date(baseInvoiceMonth.getFullYear(), baseInvoiceMonth.getMonth(), 1), months)
-      : new Date(issueDate.getFullYear(), issueDate.getMonth() + 1, 1);
+    const issueDate = new Date(generationDate);
+    const invoiceMonth = new Date(issueDate.getFullYear(), issueDate.getMonth() + 1, 1);
     const dueDate = new Date(invoiceMonth);
     dueDate.setDate(5);
-    const generationDate = baseGenerationDate
-      ? addMonths(new Date(baseGenerationDate.getFullYear(), baseGenerationDate.getMonth(), 25), months)
-      : (() => {
-          const date = new Date(invoiceMonth);
-          date.setDate(25);
-          return date;
-        })();
 
-    // Next Invoice Detail = current invoice month + frequency
+    const nextGenerationDate = addMonths(new Date(generationDate), months);
+    nextGenerationDate.setDate(25);
     const nextInvoiceMonth = new Date(invoiceMonth);
     nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
     nextInvoiceMonth.setDate(1);
-    const nextIssueDate = new Date(nextInvoiceMonth);
-    nextIssueDate.setDate(25);
+    const nextIssueDate = new Date(nextGenerationDate);
     const nextDueDate = new Date(nextInvoiceMonth);
     nextDueDate.setDate(5);
 
@@ -200,7 +189,7 @@ const InstallmentInvoice = () => {
       next_issue_date: formatYmd(nextIssueDate),
       next_due_date: formatYmd(nextDueDate),
       next_invoice_month: formatYmd(nextInvoiceMonth),
-      next_generation_date: formatYmd(nextIssueDate),
+      next_generation_date: formatYmd(nextGenerationDate),
     });
     
     setIsGenerateModalOpen(true);
@@ -280,15 +269,14 @@ const InstallmentInvoice = () => {
     }
 
     try {
-      // TODO: Implement delete API call
-      // await apiRequest(`/installment-invoices/invoices/${invoice.installmentinvoicedtl_id}`, {
-      //   method: 'DELETE'
-      // });
-      console.log('Delete invoice:', invoice);
+      await apiRequest(`/installment-invoices/invoices/${invoice.installmentinvoicedtl_id}`, {
+        method: 'DELETE',
+      });
       setOpenActionMenu(null);
       setActionMenuPosition(null);
       // Refresh the list
-      fetchInvoices();
+      await fetchInvoices();
+      appAlert('Installment invoice deleted successfully!');
     } catch (err) {
       setError(err.message || 'Failed to delete invoice');
       console.error('Error deleting invoice:', err);
@@ -698,47 +686,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.issue_date}
-                        onChange={(e) => {
-                          const nextIssueYmd = e.target.value;
-                          const issue = parseYmdLocalNoon(nextIssueYmd);
-                          if (!issue) {
-                            setGenerateFormData({ ...generateFormData, issue_date: nextIssueYmd });
-                            return;
-                          }
-
-                          const invoiceMonth = new Date(generateFormData.invoice_month || nextIssueYmd);
-                          if (Number.isNaN(invoiceMonth.getTime())) {
-                            invoiceMonth.setTime(issue.getTime());
-                          }
-                          invoiceMonth.setDate(1);
-
-                          const due = new Date(invoiceMonth);
-                          due.setDate(5);
-
-                          const months = getFrequencyMonths(selectedInvoiceForGeneration?.frequency);
-                          const nextInvoiceMonth = new Date(invoiceMonth);
-                          nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
-                          nextInvoiceMonth.setDate(1);
-
-                          // Next generation on 25th of next invoice month
-                          const nextIssue = new Date(nextInvoiceMonth);
-                          nextIssue.setDate(25);
-
-                          const nextDue = new Date(nextInvoiceMonth);
-                          nextDue.setDate(5);
-
-                          setGenerateFormData({
-                            ...generateFormData,
-                            issue_date: nextIssueYmd,
-                            due_date: formatYmd(due),
-                            invoice_month: formatYmd(invoiceMonth),
-                            generation_date: generateFormData.generation_date || formatYmd(new Date(invoiceMonth.getFullYear(), invoiceMonth.getMonth(), 25)),
-                            next_issue_date: formatYmd(nextIssue),
-                            next_due_date: formatYmd(nextDue),
-                            next_invoice_month: formatYmd(nextInvoiceMonth),
-                            next_generation_date: formatYmd(nextIssue),
-                          });
-                        }}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.issue_date ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -756,7 +704,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.due_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, due_date: e.target.value })}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.due_date ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -774,7 +722,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.invoice_month}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, invoice_month: e.target.value })}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.invoice_month ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -792,7 +740,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.generation_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, generation_date: e.target.value })}
+                        readOnly
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
                       />
                     </div>
@@ -809,7 +757,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.next_issue_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, next_issue_date: e.target.value })}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.next_issue_date ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -827,7 +775,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.next_due_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, next_due_date: e.target.value })}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.next_due_date ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -845,26 +793,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.next_invoice_month}
-                        onChange={(e) => {
-                          const picked = parseYmdLocalNoon(e.target.value);
-                          if (!picked) {
-                            setGenerateFormData({ ...generateFormData, next_invoice_month: e.target.value });
-                            return;
-                          }
-
-                          const monthFirst = new Date(picked);
-                          monthFirst.setDate(1);
-                          const due = new Date(monthFirst);
-                          due.setDate(5);
-
-                          setGenerateFormData({
-                            ...generateFormData,
-                            next_invoice_month: formatYmd(monthFirst),
-                            next_issue_date: formatYmd(new Date(monthFirst.getFullYear(), monthFirst.getMonth(), 25)),
-                            next_due_date: formatYmd(due),
-                            next_generation_date: formatYmd(new Date(monthFirst.getFullYear(), monthFirst.getMonth(), 25)),
-                          });
-                        }}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.next_invoice_month ? 'border-red-500' : 'border-gray-300'
                         }`}
@@ -882,7 +811,7 @@ const InstallmentInvoice = () => {
                       <input
                         type="date"
                         value={generateFormData.next_generation_date}
-                        onChange={(e) => setGenerateFormData({ ...generateFormData, next_generation_date: e.target.value })}
+                        readOnly
                         className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
                           generateFormErrors.next_generation_date ? 'border-red-500' : 'border-gray-300'
                         }`}

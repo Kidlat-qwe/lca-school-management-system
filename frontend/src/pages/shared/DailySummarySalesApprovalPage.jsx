@@ -1,17 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
+const PIE_COLORS = ['#16A34A', '#2563EB', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#6366F1', '#EC4899'];
 
 const DailySummarySalesApprovalPage = () => {
   const location = useLocation();
+  const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [activeTab, setActiveTab] = useState(TAB_END_OF_SHIFT);
   const [records, setRecords] = useState([]);
@@ -28,10 +32,15 @@ const DailySummarySalesApprovalPage = () => {
   const [verifyModal, setVerifyModal] = useState({ open: false, record: null });
   const [verifyData, setVerifyData] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
+  const openedNotificationDetailRef = useRef(null);
+  const openedNotificationFallbackRef = useRef('');
 
   const isCashDepositTab = activeTab === TAB_CASH_DEPOSIT;
+  const currentUserType = userInfo?.user_type || userInfo?.userType || '';
+  const canVerifySummary = currentUserType === 'Finance' || currentUserType === 'Superfinance';
   const recordIdField = isCashDepositTab ? 'cash_deposit_summary_id' : 'daily_summary_id';
   const itemLabel = isCashDepositTab ? 'cash deposit summaries' : 'summaries';
   const effectiveBranchFilter = globalBranchId || '';
@@ -103,12 +112,82 @@ const DailySummarySalesApprovalPage = () => {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const notificationTab = params.get('notificationTab');
+    const fromNotification = params.get('fromNotification') === '1';
+
+    if (fromNotification) {
+      setFilterStatus('');
+      setFilterDate('');
+      setOpenMenuId(null);
+    }
+
     if (notificationTab === TAB_CASH_DEPOSIT) {
       setActiveTab(TAB_CASH_DEPOSIT);
     } else if (notificationTab === TAB_END_OF_SHIFT) {
       setActiveTab(TAB_END_OF_SHIFT);
     }
   }, [location.search]);
+
+  useEffect(() => {
+    if (activeTab !== TAB_CASH_DEPOSIT || loading || records.length === 0) return;
+
+    const params = new URLSearchParams(location.search);
+    const targetIdRaw = params.get('cashDepositSummaryId');
+    if (!targetIdRaw) return;
+
+    const targetId = Number(targetIdRaw);
+    if (!Number.isFinite(targetId)) return;
+    if (openedNotificationDetailRef.current === targetId) return;
+
+    const targetRecord = records.find((record) => Number(record.cash_deposit_summary_id) === targetId);
+    if (!targetRecord) return;
+
+    setDetailModal({ open: true, record: targetRecord });
+    openedNotificationDetailRef.current = targetId;
+  }, [activeTab, loading, records, location.search]);
+
+  useEffect(() => {
+    if (activeTab !== TAB_END_OF_SHIFT || loading || records.length === 0) return;
+
+    const params = new URLSearchParams(location.search);
+    const targetIdRaw = params.get('dailySummaryId');
+    if (!targetIdRaw) return;
+
+    const targetId = Number(targetIdRaw);
+    if (!Number.isFinite(targetId)) return;
+    if (openedNotificationDetailRef.current === targetId) return;
+
+    const targetRecord = records.find((record) => Number(record.daily_summary_id) === targetId);
+    if (!targetRecord) return;
+
+    setDetailModal({ open: true, record: targetRecord });
+    openedNotificationDetailRef.current = targetId;
+  }, [activeTab, loading, records, location.search]);
+
+  useEffect(() => {
+    if (loading || records.length === 0) return;
+
+    const params = new URLSearchParams(location.search);
+    const fromNotification = params.get('fromNotification') === '1';
+    if (!fromNotification) return;
+
+    const notificationTab = params.get('notificationTab');
+    const targetDailySummaryId = params.get('dailySummaryId');
+    const targetCashDepositId = params.get('cashDepositSummaryId');
+
+    // If an explicit target ID exists, the dedicated effects above handle opening.
+    if (targetDailySummaryId || targetCashDepositId) return;
+
+    const shouldOpenEod = notificationTab === TAB_END_OF_SHIFT && activeTab === TAB_END_OF_SHIFT;
+    const shouldOpenCash = notificationTab === TAB_CASH_DEPOSIT && activeTab === TAB_CASH_DEPOSIT;
+    if (!shouldOpenEod && !shouldOpenCash) return;
+
+    const notificationTs = params.get('notificationTs') || '';
+    const dedupeKey = `${notificationTab}:${notificationTs}`;
+    if (openedNotificationFallbackRef.current === dedupeKey) return;
+
+    setDetailModal({ open: true, record: records[0] });
+    openedNotificationFallbackRef.current = dedupeKey;
+  }, [activeTab, loading, records, location.search]);
 
   useEffect(() => {
     if (!detailModal.open || !detailModal.record?.[recordIdField]) {
@@ -187,7 +266,7 @@ const DailySummarySalesApprovalPage = () => {
       setRejectModal({ open: false, id: null, remarks: '' });
       await fetchRecords(pagination.page);
     } catch (err) {
-      appAlert(err.response?.data?.message || err.message || 'Failed to flag');
+      appAlert(err.response?.data?.message || err.message || 'Failed to reject');
     } finally {
       setApprovingId(null);
     }
@@ -219,6 +298,25 @@ const DailySummarySalesApprovalPage = () => {
   const selectedRecord = records.find((record) => record[recordIdField] === openMenuId) || null;
   const detailPayments = detailData?.payments || [];
   const verifyPayments = verifyData?.payments || [];
+  const detailMethodPieData = useMemo(() => {
+    if (isCashDepositTab || detailPayments.length === 0) return [];
+    const totals = detailPayments.reduce((acc, payment) => {
+      const key = (payment.payment_method || 'Unknown').trim() || 'Unknown';
+      acc[key] = (acc[key] || 0) + (Number(payment.payable_amount) || 0);
+      return acc;
+    }, {});
+    return Object.entries(totals).map(([name, value]) => ({ name, value }));
+  }, [detailPayments, isCashDepositTab]);
+
+  const detailLevelPieData = useMemo(() => {
+    if (isCashDepositTab || detailPayments.length === 0) return [];
+    const totals = detailPayments.reduce((acc, payment) => {
+      const key = (payment.program_level_tag || 'Unassigned').trim() || 'Unassigned';
+      acc[key] = (acc[key] || 0) + (Number(payment.payable_amount) || 0);
+      return acc;
+    }, {});
+    return Object.entries(totals).map(([name, value]) => ({ name, value }));
+  }, [detailPayments, isCashDepositTab]);
   const detailMetrics = isCashDepositTab
     ? [
         { label: 'Period', value: formatPeriod(detailModal.record) },
@@ -238,7 +336,7 @@ const DailySummarySalesApprovalPage = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-sm text-gray-600">
-          End-of-shift submissions are auto-verified after branch admin submit. Cash deposit summaries can still be reviewed and verified here.
+          Branch admin submissions appear here as Submitted. Finance/Superfinance can review and either verify or reject.
         </p>
       </div>
 
@@ -411,7 +509,7 @@ const DailySummarySalesApprovalPage = () => {
               >
                 View details
               </button>
-              {isCashDepositTab && selectedRecord?.status === 'Submitted' ? (
+              {canVerifySummary && selectedRecord?.status === 'Submitted' ? (
                 <>
                   <button
                     type="button"
@@ -433,7 +531,7 @@ const DailySummarySalesApprovalPage = () => {
                     disabled={!!approvingId}
                     className="block w-full px-3 py-2 text-sm text-amber-600 hover:bg-amber-50 text-left disabled:opacity-50"
                   >
-                    Flag for review
+                    Reject
                   </button>
                 </>
               ) : null}
@@ -448,9 +546,9 @@ const DailySummarySalesApprovalPage = () => {
           onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
         >
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-gray-900">Flag for review</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
             <p className="mt-2 text-sm text-gray-600">
-              Optional: Add a reason so the branch admin understands what needs to be rechecked.
+              Optional: Add a reason so the branch admin understands why this submission was rejected.
             </p>
             <textarea
               value={rejectModal.remarks}
@@ -469,7 +567,7 @@ const DailySummarySalesApprovalPage = () => {
                 onClick={handleFlag}
                 className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700"
               >
-                Flag for review
+                Reject
               </button>
             </div>
           </div>
@@ -614,11 +712,11 @@ const DailySummarySalesApprovalPage = () => {
           onClick={() => setDetailModal({ open: false, record: null })}
         >
           <div
-            className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col p-6"
+            className="bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4 shrink-0">
-              <div>
+            <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 shrink-0">
+              <div className="min-w-0">
                 <h3 className="text-lg font-semibold text-gray-900">
                   {isCashDepositTab ? 'Cash Deposit Summary Details' : 'Daily Summary Details'}
                 </h3>
@@ -644,44 +742,135 @@ const DailySummarySalesApprovalPage = () => {
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
-              <div>
-                <p className="text-xs font-medium text-gray-500">Branch</p>
-                <p className="mt-0.5 text-gray-900">{detailModal.record.branch_name || '-'}</p>
-              </div>
-              {detailMetrics.map((metric) => (
-                <div key={metric.label}>
-                  <p className="text-xs font-medium text-gray-500">{metric.label}</p>
-                  <p className="mt-0.5 text-gray-900 font-semibold">{metric.value}</p>
+            <div className="px-5 py-4 overflow-y-auto min-h-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 text-sm">
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Branch</p>
+                  <p className="mt-1 text-gray-900 font-medium truncate">{detailModal.record.branch_name || '-'}</p>
                 </div>
-              ))}
-              <div>
-                <p className="text-xs font-medium text-gray-500">Status</p>
-                <div className="mt-1">{statusBadge(detailModal.record.status)}</div>
+                {detailMetrics.map((metric) => (
+                  <div key={metric.label} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">{metric.label}</p>
+                    <p className="mt-1 text-gray-900 font-semibold">{metric.value}</p>
+                  </div>
+                ))}
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Status</p>
+                  <div className="mt-1">{statusBadge(detailModal.record.status)}</div>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Submitted By</p>
+                  <p className="mt-1 text-gray-900 font-medium truncate">{detailModal.record.submitted_by_name || '-'}</p>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Submitted At</p>
+                  <p className="mt-1 text-gray-900 font-medium">
+                    {detailModal.record.submitted_at ? formatDateManila(detailModal.record.submitted_at) : '-'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Verified By</p>
+                  <p className="mt-1 text-gray-900 font-medium truncate">{detailModal.record.approved_by_name || '-'}</p>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Verified At</p>
+                  <p className="mt-1 text-gray-900 font-medium">
+                    {detailModal.record.approved_at ? formatDateManila(detailModal.record.approved_at) : '-'}
+                  </p>
+                </div>
+                {isCashDepositTab ? (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Reference Number</p>
+                    <p className="mt-1 text-gray-900 font-medium break-all">{detailModal.record.reference_number || '-'}</p>
+                  </div>
+                ) : null}
+                {isCashDepositTab ? (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Deposit Proof</p>
+                    {detailModal.record.deposit_attachment_url ? (
+                      <button
+                        type="button"
+                        onClick={() => setAttachmentPreviewUrl(detailModal.record.deposit_attachment_url)}
+                        className="mt-1 inline-block text-sm text-primary-700 hover:text-primary-800 underline break-all text-left"
+                      >
+                        View attachment
+                      </button>
+                    ) : (
+                      <p className="mt-1 text-gray-900 font-medium">-</p>
+                    )}
+                  </div>
+                ) : null}
               </div>
-              <div>
-                <p className="text-xs font-medium text-gray-500">Submitted By</p>
-                <p className="mt-0.5 text-gray-900">{detailModal.record.submitted_by_name || '-'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-gray-500">Submitted At</p>
-                <p className="mt-0.5 text-gray-900">
-                  {detailModal.record.submitted_at ? formatDateManila(detailModal.record.submitted_at) : '-'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-gray-500">Verified By</p>
-                <p className="mt-0.5 text-gray-900">{detailModal.record.approved_by_name || '-'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-gray-500">Verified At</p>
-                <p className="mt-0.5 text-gray-900">
-                  {detailModal.record.approved_at ? formatDateManila(detailModal.record.approved_at) : '-'}
-                </p>
-              </div>
-            </div>
 
-            <div className="mt-4 shrink-0">
+              <div className="mt-4">
+              {!isCashDepositTab && (
+                <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="rounded-lg border border-gray-200 p-3">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Sales by Payment Method</p>
+                    {detailMethodPieData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No data available.</p>
+                    ) : (
+                      <>
+                        <div className="h-36">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={detailMethodPieData} dataKey="value" nameKey="name" outerRadius={64} innerRadius={32}>
+                                {detailMethodPieData.map((entry, idx) => (
+                                  <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip formatter={(value) => formatCurrency(value)} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          {detailMethodPieData.map((entry, idx) => (
+                            <div key={entry.name} className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                                <span className="truncate text-gray-700">{entry.name}</span>
+                              </div>
+                              <span className="font-medium text-gray-900">{formatCurrency(entry.value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-gray-200 p-3">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Sales by Program/Level Tag</p>
+                    {detailLevelPieData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No data available.</p>
+                    ) : (
+                      <>
+                        <div className="h-36">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={detailLevelPieData} dataKey="value" nameKey="name" outerRadius={64} innerRadius={32}>
+                                {detailLevelPieData.map((entry, idx) => (
+                                  <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip formatter={(value) => formatCurrency(value)} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          {detailLevelPieData.map((entry, idx) => (
+                            <div key={entry.name} className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                                <span className="truncate text-gray-700">{entry.name}</span>
+                              </div>
+                              <span className="font-medium text-gray-900">{formatCurrency(entry.value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                 {isCashDepositTab ? 'Cash payment records (from payment logs)' : 'Payment records (from payment logs)'}
               </p>
@@ -689,7 +878,7 @@ const DailySummarySalesApprovalPage = () => {
                 <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
               ) : (
                 <div
-                  className="overflow-x-auto rounded-lg border border-gray-200 max-h-48"
+                  className="overflow-x-auto rounded-lg border border-gray-200 max-h-56"
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
                   <table className="text-sm" style={{ width: '100%', minWidth: isCashDepositTab ? '760px' : '520px' }}>
@@ -697,6 +886,7 @@ const DailySummarySalesApprovalPage = () => {
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Program/Level Tag</th>
                         {!isCashDepositTab ? (
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
                         ) : (
@@ -715,7 +905,7 @@ const DailySummarySalesApprovalPage = () => {
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {detailPayments.length === 0 ? (
                         <tr>
-                          <td colSpan={isCashDepositTab ? 7 : 5} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={isCashDepositTab ? 8 : 6} className="px-3 py-4 text-center text-gray-500">
                             No payment records found for this submission.
                           </td>
                         </tr>
@@ -728,6 +918,11 @@ const DailySummarySalesApprovalPage = () => {
                             <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[160px]">
                               <span className="truncate block" title={payment.student_name || '-'}>
                                 {payment.student_name || '-'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[150px]">
+                              <span className="truncate block" title={payment.program_level_tag || '-'}>
+                                {payment.program_level_tag || '-'}
                               </span>
                             </td>
                             {!isCashDepositTab ? (
@@ -756,20 +951,21 @@ const DailySummarySalesApprovalPage = () => {
                   </table>
                 </div>
               )}
+              </div>
+
+              <div className="mt-4">
+                <p className="text-xs font-medium text-gray-500">
+                  {detailModal.record.status === 'Rejected' ? 'Flag reason' : 'Remarks'}
+                </p>
+                <p className="mt-1 text-sm text-gray-800 whitespace-pre-line">
+                  {detailModal.record.remarks && detailModal.record.remarks.trim()
+                    ? detailModal.record.remarks
+                    : 'No remarks.'}
+                </p>
+              </div>
             </div>
 
-            <div className="mt-4 shrink-0">
-              <p className="text-xs font-medium text-gray-500">
-                {detailModal.record.status === 'Rejected' ? 'Flag reason' : 'Remarks'}
-              </p>
-              <p className="mt-1 text-sm text-gray-800 whitespace-pre-line">
-                {detailModal.record.remarks && detailModal.record.remarks.trim()
-                  ? detailModal.record.remarks
-                  : 'No remarks.'}
-              </p>
-            </div>
-
-            <div className="mt-5 flex justify-end shrink-0">
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end shrink-0 bg-white">
               <button
                 type="button"
                 onClick={() => setDetailModal({ open: false, record: null })}
@@ -777,6 +973,39 @@ const DailySummarySalesApprovalPage = () => {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {attachmentPreviewUrl && (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/60 p-4"
+          onClick={() => setAttachmentPreviewUrl('')}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
+              <h4 className="text-sm font-semibold text-gray-900">Deposit Attachment Preview</h4>
+              <button
+                type="button"
+                onClick={() => setAttachmentPreviewUrl('')}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-md"
+                aria-label="Close attachment preview"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto bg-gray-50 flex items-center justify-center p-3">
+              <img
+                src={attachmentPreviewUrl}
+                alt="Deposit attachment"
+                className="max-w-full max-h-[75vh] object-contain rounded border border-gray-200 bg-white"
+              />
             </div>
           </div>
         </div>

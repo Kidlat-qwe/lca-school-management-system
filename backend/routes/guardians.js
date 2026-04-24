@@ -188,6 +188,7 @@ router.post(
     }),
     body('relationship').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Relationship must be a string'),
     body('guardian_phone_number').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
+    body('tin_number').optional({ nullable: true, checkFalsy: true }).isString().withMessage('TIN number must be a string'),
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     handleValidationErrors,
   ],
@@ -200,6 +201,7 @@ router.post(
         email,
         relationship,
         guardian_phone_number,
+        tin_number,
         gender,
         address,
         city,
@@ -219,8 +221,8 @@ router.post(
 
       const result = await query(
         `INSERT INTO guardianstbl 
-         (student_id, guardian_name, email, relationship, guardian_phone_number, gender, address, city, postal_code, country, state_province_region)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (student_id, guardian_name, email, relationship, guardian_phone_number, tin_number, gender, address, city, postal_code, country, state_province_region)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
         [
           student_id,
@@ -228,6 +230,7 @@ router.post(
           email || null,
           relationship || null,
           guardian_phone_number || null,
+          tin_number || null,
           gender || null,
           address || null,
           city || null,
@@ -272,6 +275,7 @@ router.put(
     }),
     body('relationship').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Relationship must be a string'),
     body('guardian_phone_number').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
+    body('tin_number').optional({ nullable: true, checkFalsy: true }).isString().withMessage('TIN number must be a string'),
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     handleValidationErrors,
   ],
@@ -284,6 +288,7 @@ router.put(
         email,
         relationship,
         guardian_phone_number,
+        tin_number,
         gender,
         address,
         city,
@@ -311,6 +316,7 @@ router.put(
         email,
         relationship,
         guardian_phone_number,
+        tin_number,
         gender,
         address,
         city,

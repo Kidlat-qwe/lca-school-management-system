@@ -24,7 +24,9 @@ const StatsCard = ({ title, value, iconName, accent, description }) => (
     <div className="flex items-start justify-between">
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-gray-600">{title}</p>
-        <p className="mt-2 text-3xl font-bold tracking-tight text-gray-900">{value.toLocaleString()}</p>
+        <p className="mt-2 text-3xl font-bold tracking-tight text-gray-900">
+          {typeof value === 'number' ? value.toLocaleString() : value}
+        </p>
         {description && (
           <p className="mt-2 text-xs text-gray-500 leading-snug">{description}</p>
         )}
@@ -115,6 +117,10 @@ const EnrollmentDashboard = () => {
   const activeStudents = data?.active_students ?? 0;
   const inactiveStudents = data?.inactive_students ?? 0;
   const reservedOnly = data?.reserved_only_count ?? 0;
+  const enrollmentRate = Number(
+    data?.enrollment_rate ?? (totalStudents > 0 ? ((activeStudents / totalStudents) * 100) : 0)
+  );
+  const enrollmentRateLabel = `${enrollmentRate.toFixed(2)}%`;
 
   return (
     <div className="space-y-6">
@@ -145,7 +151,7 @@ const EnrollmentDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatsCard
           title="Total Students"
           value={totalStudents}
@@ -166,6 +172,13 @@ const EnrollmentDashboard = () => {
           iconName="userMinus"
           accent="bg-gradient-to-br from-amber-400 to-amber-500"
           description="Not enrolled in any class (e.g. new, dropped, or reserved only)."
+        />
+        <StatsCard
+          title="Enrollment Rate"
+          value={enrollmentRateLabel}
+          iconName="chartBar"
+          accent="bg-gradient-to-br from-blue-400 to-blue-500"
+          description="Active students divided by total students."
         />
         <StatsCard
           title="Reserved Only"

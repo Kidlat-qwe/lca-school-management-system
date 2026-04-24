@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -30,6 +31,7 @@ const MERCHANDISE_TYPES = [
 ];
 
 const Promo = () => {
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [promos, setPromos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -82,11 +84,11 @@ const Promo = () => {
   const [combinedDiscountType, setCombinedDiscountType] = useState('percentage'); // 'percentage' or 'fixed' for combined promos
 
   useEffect(() => {
-    fetchPromos();
+    fetchPromos(globalBranchId || '');
     fetchBranches();
     fetchPackages();
     fetchMerchandise();
-  }, []);
+  }, [globalBranchId]);
 
   // Filter packages based on selected branch
   useEffect(() => {
@@ -194,10 +196,15 @@ const Promo = () => {
     }
   };
 
-  const fetchPromos = async () => {
+  const fetchPromos = async (branchId = '') => {
     try {
       setLoading(true);
-      const response = await apiRequest('/promos?limit=100');
+      const params = new URLSearchParams();
+      params.set('limit', '100');
+      if (branchId) {
+        params.set('branch_id', String(branchId));
+      }
+      const response = await apiRequest(`/promos?${params.toString()}`);
       setPromos(response.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch promos');
@@ -727,14 +734,16 @@ const Promo = () => {
   const getUniquePackages = [...new Set(promos.map(p => p.package_id).filter(Boolean))];
   const getUniqueStatuses = ['Active', 'Inactive', 'Expired'];
 
+  const effectiveBranchFilter = globalBranchId || filterBranch;
+
   const filteredPromos = promos.filter((promo) => {
     const matchesSearch = !nameSearchTerm || 
       promo.promo_name?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       getPackageName(promo.package_id)?.toLowerCase().includes(nameSearchTerm.toLowerCase());
     
-    const matchesBranch = !filterBranch || 
-      (filterBranch === 'all' && !promo.branch_id) ||
-      promo.branch_id?.toString() === filterBranch;
+    const matchesBranch = !effectiveBranchFilter ||
+      (effectiveBranchFilter === 'all' && !promo.branch_id) ||
+      promo.branch_id?.toString() === effectiveBranchFilter;
     
     const matchesPackage = !filterPackage || promo.package_id?.toString() === filterPackage;
     
@@ -852,7 +861,7 @@ const Promo = () => {
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Branch</span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
+                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${effectiveBranchFilter ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
@@ -925,7 +934,7 @@ const Promo = () => {
                   <tr>
                     <td colSpan={7} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
-                        {nameSearchTerm || filterBranch || filterPackage || filterStatus
+                        {nameSearchTerm || effectiveBranchFilter || filterPackage || filterStatus
                           ? 'No matching promos. Try adjusting your search or filters.'
                           : 'No promos yet. Add your first promo to get started.'}
                       </p>

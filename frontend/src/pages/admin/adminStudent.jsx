@@ -39,6 +39,7 @@ const AdminStudent = () => {
     guardian_email: '',
     guardian_relationship: '',
     guardian_phone_number: '',
+    guardian_tin_number: '',
     guardian_gender: '',
     guardian_address: '',
     guardian_city: '',
@@ -210,6 +211,7 @@ const AdminStudent = () => {
       guardian_email: '',
       guardian_relationship: '',
       guardian_phone_number: '',
+      guardian_tin_number: '',
       guardian_gender: '',
       guardian_address: '',
       guardian_city: '',
@@ -247,6 +249,7 @@ const AdminStudent = () => {
       guardian_email: '',
       guardian_relationship: '',
       guardian_phone_number: '',
+      guardian_tin_number: '',
       guardian_gender: '',
       guardian_address: '',
       guardian_city: '',
@@ -269,6 +272,7 @@ const AdminStudent = () => {
           guardian_email: guardian.email || '',
           guardian_relationship: guardian.relationship || '',
           guardian_phone_number: guardian.guardian_phone_number || '',
+          guardian_tin_number: guardian.tin_number || '',
           guardian_gender: guardian.gender || '',
           guardian_address: guardian.address || '',
           guardian_city: guardian.city || '',
@@ -363,6 +367,7 @@ const AdminStudent = () => {
               email: formData.guardian_email.trim(),
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
+              tin_number: formData.guardian_tin_number.trim() || null,
               gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
@@ -380,6 +385,7 @@ const AdminStudent = () => {
               email: formData.guardian_email.trim(),
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
+              tin_number: formData.guardian_tin_number.trim() || null,
               gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
@@ -413,6 +419,7 @@ const AdminStudent = () => {
               email: formData.guardian_email.trim(),
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
+              tin_number: formData.guardian_tin_number.trim() || null,
               gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
@@ -1026,6 +1033,21 @@ const AdminStudent = () => {
                         {formErrors.guardian_phone_number && (
                           <p className="mt-1 text-sm text-red-600">{formErrors.guardian_phone_number}</p>
                         )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="guardian_tin_number" className="label-field">
+                          Guardian TIN Number
+                        </label>
+                        <input
+                          type="text"
+                          id="guardian_tin_number"
+                          name="guardian_tin_number"
+                          value={formData.guardian_tin_number}
+                          onChange={handleInputChange}
+                          className="input-field"
+                          placeholder="Optional"
+                        />
                       </div>
 
                       <div>

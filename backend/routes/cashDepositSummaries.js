@@ -60,7 +60,7 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
      LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
      LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
      WHERE p.branch_id = $1
-       AND p.payment_method = 'Cash'
+       AND LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
        AND p.issue_date >= $2::date
        AND p.issue_date <= $3::date
      ORDER BY p.issue_date ASC, p.payment_id ASC`,
@@ -109,6 +109,7 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
 };
 
 const createCashDepositSubmissionNotification = async ({
+  cashDepositSummaryId,
   branchId,
   startDate,
   endDate,
@@ -148,8 +149,45 @@ const createCashDepositSubmissionNotification = async ({
   await query(
     `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
      VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
-    ['Cash Deposit Summary Submitted', body, ['Admin', 'Finance'], branchId, createdBy, 'daily-summary-sales', 'notificationTab=cashDeposit']
+    [
+      'Cash Deposit Summary Submitted',
+      body,
+      ['Finance'],
+      branchId,
+      createdBy,
+      'daily-summary-sales',
+      `notificationTab=cashDeposit&cashDepositSummaryId=${cashDepositSummaryId}`,
+    ]
   );
+
+  // Explicitly notify all Superadmin users as targeted bell notifications.
+  const superadminRes = await query(
+    `SELECT user_id FROM userstbl WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+  );
+  const superadminIds = (superadminRes.rows || [])
+    .map((row) => row.user_id)
+    .filter((id) => id != null && Number(id) !== Number(createdBy));
+
+  if (superadminIds.length > 0) {
+    await Promise.all(
+      superadminIds.map((targetUserId) =>
+        query(
+          `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+           VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+          [
+            'Cash Deposit Summary Submitted',
+            body,
+            ['All'],
+            branchId,
+            createdBy,
+            targetUserId,
+            'daily-summary-sales',
+            `notificationTab=cashDeposit&cashDepositSummaryId=${cashDepositSummaryId}`,
+          ]
+        )
+      )
+    );
+  }
 };
 
 router.get(
@@ -177,6 +215,7 @@ router.get(
                TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
+               c.reference_number, c.deposit_attachment_url,
                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                sub.full_name AS submitted_by_name,
                app.full_name AS approved_by_name
@@ -266,6 +305,16 @@ router.post(
   [
     body('start_date').isISO8601().withMessage('start_date must be YYYY-MM-DD'),
     body('end_date').isISO8601().withMessage('end_date must be YYYY-MM-DD'),
+    body('reference_number')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('reference_number is required'),
+    body('deposit_attachment_url')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('deposit_attachment_url is required'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -274,6 +323,8 @@ router.post(
       const userId = req.user.userId;
       const startDate = String(req.body?.start_date || '').slice(0, 10);
       const endDate = String(req.body?.end_date || '').slice(0, 10);
+      const referenceNumber = String(req.body?.reference_number || '').trim();
+      const depositAttachmentUrl = String(req.body?.deposit_attachment_url || '').trim();
 
       if (!userBranchId) {
         return res.status(403).json({
@@ -312,14 +363,14 @@ router.post(
       const insertRes = await query(
         `INSERT INTO cash_deposit_summarytbl (
            branch_id, start_date, end_date, total_deposit_amount, total_cash_amount,
-           payment_count, completed_cash_count, status, submitted_by
+           payment_count, completed_cash_count, status, submitted_by, reference_number, deposit_attachment_url, cash_payment_snapshot
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Submitted', $8)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Submitted', $8, $9, $10, $11::jsonb)
          RETURNING cash_deposit_summary_id, branch_id,
                    TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                    TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
                    total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
-                   status, submitted_at`,
+                   status, submitted_at, reference_number, deposit_attachment_url`,
         [
           userBranchId,
           startDate,
@@ -329,10 +380,14 @@ router.post(
           snapshot.payment_count,
           snapshot.completed_cash_count,
           userId,
+          referenceNumber,
+          depositAttachmentUrl,
+          JSON.stringify(snapshot.payments || []),
         ]
       );
 
       await createCashDepositSubmissionNotification({
+        cashDepositSummaryId: insertRes.rows[0]?.cash_deposit_summary_id,
         branchId: userBranchId,
         startDate,
         endDate,
@@ -355,7 +410,7 @@ router.post(
 
 router.put(
   '/:id/approve',
-  requireRole('Superadmin', 'Finance'),
+  requireRole('Finance'),
   [
     param('id').isInt().withMessage('id must be an integer'),
     body('approve').optional().isBoolean().withMessage('approve must be boolean'),
@@ -369,10 +424,22 @@ router.put(
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      if (userType === 'Finance' && (userBranchId !== null && userBranchId !== undefined)) {
+      if (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined) {
+        const branchCheck = await query(
+          'SELECT branch_id FROM cash_deposit_summarytbl WHERE cash_deposit_summary_id = $1',
+          [id]
+        );
+        const targetBranchId = branchCheck.rows[0]?.branch_id;
+        if (targetBranchId && Number(targetBranchId) !== Number(userBranchId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only verify cash deposit summaries for your assigned branch',
+          });
+        }
+      } else if (userType !== 'Finance' && userType !== 'Superfinance') {
         return res.status(403).json({
           success: false,
-          message: 'Only Superadmin and Superfinance can verify cash deposit summaries',
+          message: 'Only Finance and Superfinance can verify cash deposit summaries',
         });
       }
 
@@ -412,6 +479,7 @@ router.put(
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                 c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                 c.status, c.approved_by, c.approved_at, c.remarks,
+                c.reference_number, c.deposit_attachment_url,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 app.full_name AS approved_by_name
          FROM cash_deposit_summarytbl c
@@ -423,7 +491,7 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Cash deposit summary verified' : 'Cash deposit summary flagged for review',
+        message: isApproved ? 'Cash deposit summary verified' : 'Cash deposit summary rejected',
         data: updated.rows[0],
       });
     } catch (error) {
@@ -445,7 +513,8 @@ router.get(
       const summaryRes = await query(
         `SELECT cash_deposit_summary_id, branch_id,
                 TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
-                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date
+                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
+                cash_payment_snapshot
          FROM cash_deposit_summarytbl
          WHERE cash_deposit_summary_id = $1`,
         [id]
@@ -474,15 +543,21 @@ router.get(
         });
       }
 
-      const snapshot = await getCashDepositSnapshot({
-        branchId: summary.branch_id,
-        startDate: summary.start_date,
-        endDate: summary.end_date,
-      });
+      let payments = Array.isArray(summary.cash_payment_snapshot) ? summary.cash_payment_snapshot : [];
+      if (payments.length === 0) {
+        const snapshot = await getCashDepositSnapshot({
+          branchId: summary.branch_id,
+          startDate: summary.start_date,
+          endDate: summary.end_date,
+        });
+        payments = snapshot.payments || [];
+      }
 
       res.json({
         success: true,
-        data: snapshot,
+        data: {
+          payments,
+        },
       });
     } catch (error) {
       next(error);

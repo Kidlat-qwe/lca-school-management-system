@@ -30,6 +30,7 @@ const Header = ({ onMenuClick }) => {
   const [branchNickname, setBranchNickname] = useState(null);
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const userBranchId = userInfo?.branch_id || userInfo?.branchId;
+  const isBranchAdmin = userType === 'Admin' && userBranchId !== null && userBranchId !== undefined;
   const isBranchScopedUser =
     userType === 'Admin' ||
     (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined);
@@ -247,6 +248,18 @@ const Header = ({ onMenuClick }) => {
 
         {/* Notifications and User Profile */}
         <div className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
+          {isBranchAdmin && (
+            <div className="hidden xl:flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => navigate('/admin/payment-logs?quickAction=endOfShift')}
+                className="px-3 py-1.5 text-xs font-semibold text-gray-900 bg-transparent border border-black rounded-lg hover:bg-black/5 transition-colors"
+                title="Open End of Shift"
+              >
+                End of Shift
+              </button>
+            </div>
+          )}
           {/* Notification Bell */}
           <NotificationDropdown />
 

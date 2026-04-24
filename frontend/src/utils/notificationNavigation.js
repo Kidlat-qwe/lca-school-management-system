@@ -34,6 +34,17 @@ function getNotificationBasePath(navigationKey, userInfo) {
       }
       return getAnnouncementsPathForUser(userInfo);
 
+    case 'acknowledgement-receipts':
+      if (userType === 'Superadmin') return '/superadmin/acknowledgement-receipts';
+      if (userType === 'Admin') return '/admin/acknowledgement-receipts';
+      if (userType === 'Superfinance') return '/superfinance/acknowledgement-receipts';
+      if (userType === 'Finance') {
+        return branchId === null || branchId === undefined
+          ? '/superfinance/acknowledgement-receipts'
+          : '/finance/acknowledgement-receipts';
+      }
+      return getAnnouncementsPathForUser(userInfo);
+
     case 'announcements':
     default:
       return getAnnouncementsPathForUser(userInfo);
@@ -57,6 +68,9 @@ function inferNotificationNavigation(notification) {
   }
   if (title.includes('end of shift')) {
     return { navigationKey: 'daily-summary-sales', navigationQuery: 'notificationTab=endOfShift' };
+  }
+  if (title.includes('acknowledgement receipt')) {
+    return { navigationKey: 'acknowledgement-receipts', navigationQuery: 'page=1' };
   }
 
   return { navigationKey: 'announcements', navigationQuery: '' };

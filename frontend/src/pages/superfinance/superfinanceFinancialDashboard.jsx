@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FinancialDashboardDateFilter from '../../components/dashboard/FinancialDashboardDateFilter';
@@ -7,6 +8,7 @@ import { firstDayOfMonthManilaYMD, formatDateManila, todayManilaYMD } from '../.
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 
 const SuperfinanceFinancialDashboard = () => {
+  const navigate = useNavigate();
   const { selectedBranchId, branches, selectedBranchName } = useGlobalBranchFilter();
   const [metrics, setMetrics] = useState({
     totalRevenue: 0,
@@ -15,6 +17,16 @@ const SuperfinanceFinancialDashboard = () => {
     unpaidInvoices: 0,
     totalBranches: 0,
     revenueByBranch: [],
+    verifiedPaymentsCount: 0,
+    verifiedPaymentsAmount: 0,
+    unverifiedPaymentsCount: 0,
+    unverifiedPaymentsAmount: 0,
+    arSalesCount: 0,
+    arSalesAmount: 0,
+    arVerifiedCount: 0,
+    arVerifiedAmount: 0,
+    arUnverifiedCount: 0,
+    arUnverifiedAmount: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -71,19 +83,48 @@ const SuperfinanceFinancialDashboard = () => {
 
         return allPayments;
       };
+      const fetchAllAcknowledgementReceipts = async () => {
+        const limit = 100;
+        let page = 1;
+        let allReceipts = [];
+        let totalPages = 1;
+        do {
+          const pageParams = new URLSearchParams();
+          if (selectedBranchId) {
+            pageParams.append('branch_id', selectedBranchId);
+          }
+          pageParams.append('limit', String(limit));
+          pageParams.append('page', String(page));
+          const response = await apiRequest(`/acknowledgement-receipts?${pageParams.toString()}`);
+          const pageData = response.data || [];
+          allReceipts = allReceipts.concat(pageData);
+          totalPages = response.pagination?.totalPages || 1;
+          page += 1;
+        } while (page <= totalPages);
+        return allReceipts;
+      };
 
       const invoiceQs = baseParams.toString();
-      const [invoicesResponse, payments] = await Promise.all([
+      const [invoicesResponse, payments, acknowledgementReceipts] = await Promise.all([
         apiRequest(invoiceQs ? `/invoices?${invoiceQs}` : '/invoices'),
         fetchAllPayments(),
+        fetchAllAcknowledgementReceipts(),
       ]);
 
       const invoices = invoicesResponse.data || [];
 
+      const paymentTotalAmount = (payment) => (parseFloat(payment?.payable_amount) || 0) + (parseFloat(payment?.tip_amount) || 0);
       const completedPayments = payments.filter((p) => p.status === 'Completed');
-      const totalRevenue = completedPayments.reduce((sum, p) => sum + (parseFloat(p.payable_amount) || 0), 0);
+      const totalRevenue = completedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0);
+      const verifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') === 'Approved');
+      const unverifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') !== 'Approved');
       const pendingInvoices = invoices.filter((i) => i.status === 'Unpaid' || i.status === 'Partial').length;
       const unpaidInvoices = invoices.filter((i) => i.status === 'Unpaid').length;
+      const packageAr = (acknowledgementReceipts || []).filter((ar) => ar.ar_type === 'Package');
+      const arIncludedSales = packageAr.filter((ar) => !['Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
+      const arVerified = packageAr.filter((ar) => ['Verified', 'Applied'].includes(ar.status));
+      const arUnverified = packageAr.filter((ar) => !['Verified', 'Applied', 'Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
+      const arAmount = (ar) => (parseFloat(ar.payment_amount) || 0) + (parseFloat(ar.tip_amount) || 0);
 
       const revenueByBranchMap = new Map();
       completedPayments.forEach((payment) => {
@@ -96,7 +137,7 @@ const SuperfinanceFinancialDashboard = () => {
         if (!branchName && branchId) {
           branchName = `Branch ${branchId}`;
         }
-        const amount = parseFloat(payment.payable_amount) || 0;
+        const amount = paymentTotalAmount(payment);
 
         if (revenueByBranchMap.has(branchId)) {
           revenueByBranchMap.set(branchId, {
@@ -123,6 +164,16 @@ const SuperfinanceFinancialDashboard = () => {
         unpaidInvoices,
         totalBranches: branchesData.length,
         revenueByBranch,
+        verifiedPaymentsCount: verifiedPayments.length,
+        verifiedPaymentsAmount: verifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
+        unverifiedPaymentsCount: unverifiedPayments.length,
+        unverifiedPaymentsAmount: unverifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
+        arSalesCount: arIncludedSales.length,
+        arSalesAmount: arIncludedSales.reduce((sum, ar) => sum + arAmount(ar), 0),
+        arVerifiedCount: arVerified.length,
+        arVerifiedAmount: arVerified.reduce((sum, ar) => sum + arAmount(ar), 0),
+        arUnverifiedCount: arUnverified.length,
+        arUnverifiedAmount: arUnverified.reduce((sum, ar) => sum + arAmount(ar), 0),
       });
 
       const recentInvoicesList = invoices
@@ -214,6 +265,22 @@ const SuperfinanceFinancialDashboard = () => {
       location: '',
     };
   };
+  const openArByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('page', '1');
+    if (type === 'verified') {
+      params.set('status', 'Verified,Applied');
+    } else {
+      params.set('status', 'Submitted,Pending,Paid');
+    }
+    navigate(`/superfinance/acknowledgement-receipts?${params.toString()}`);
+  };
+  const openPaymentLogsByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('notificationTab', 'main');
+    params.set('financeApproval', type === 'verified' ? 'approved' : 'pending');
+    navigate(`/superfinance/payment-logs?${params.toString()}`);
+  };
 
   if (loading) {
     return (
@@ -277,7 +344,7 @@ const SuperfinanceFinancialDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -289,6 +356,19 @@ const SuperfinanceFinancialDashboard = () => {
             </div>
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
               <DashboardStatIcon name="currency" className="h-6 w-6 text-green-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Acknowledgement Receipt Sales</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{formatCurrency(metrics.arSalesAmount)}</p>
+              <p className="mt-1 text-xs text-gray-500">{metrics.arSalesCount} receipt(s) in selected range</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-violet-100 flex items-center justify-center">
+              <DashboardStatIcon name="clipboardList" className="h-6 w-6 text-violet-600" />
             </div>
           </div>
         </div>
@@ -348,6 +428,80 @@ const SuperfinanceFinancialDashboard = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <button
+          type="button"
+          onClick={() => openPaymentLogsByVerification('verified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Verified Payments</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.verifiedPaymentsCount}</p>
+              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.verifiedPaymentsAmount)} total amount</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-teal-100 flex items-center justify-center">
+              <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-teal-600" />
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => openPaymentLogsByVerification('unverified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Unverified Payments</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.unverifiedPaymentsCount}</p>
+              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.unverifiedPaymentsAmount)} total amount</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+              <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
+            </div>
+          </div>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <button
+          type="button"
+          onClick={() => openArByVerification('verified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Verified AR</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {metrics.arVerifiedCount}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.arVerifiedAmount)} total amount</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+              <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-emerald-600" />
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => openArByVerification('unverified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Unverified AR</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {metrics.arUnverifiedCount}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.arUnverifiedAmount)} total amount</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+              <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
+            </div>
+          </div>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -469,7 +623,7 @@ const SuperfinanceFinancialDashboard = () => {
                       <p className="text-xs text-gray-400 mt-1">{formatDate(payment.issue_date)}</p>
                     </div>
                     <div className="ml-4 text-right">
-                      <p className="text-sm font-semibold text-green-600">{formatCurrency(payment.payable_amount)}</p>
+                      <p className="text-sm font-semibold text-green-600">{formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}</p>
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium mt-1 bg-green-100 text-green-800">
                         {payment.status || 'Completed'}
                       </span>

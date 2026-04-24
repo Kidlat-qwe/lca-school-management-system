@@ -3500,6 +3500,10 @@ router.post(
     body('installment_settings.invoice_due_date').optional().isISO8601().withMessage('Invoice due date must be a valid date'),
     body('installment_settings.invoice_generation_date').optional().isISO8601().withMessage('Invoice generation date must be a valid date'),
     body('installment_settings.frequency_months').optional().isInt({ min: 1 }).withMessage('Frequency months must be a positive integer'),
+    body('installment_scope').optional().isObject().withMessage('Installment scope must be an object'),
+    body('installment_scope.phase_start').optional().isInt({ min: 1 }).withMessage('Installment scope phase_start must be a positive integer'),
+    body('installment_scope.phase_end').optional().isInt({ min: 1 }).withMessage('Installment scope phase_end must be a positive integer'),
+    body('installment_scope.include_downpayment').optional().isBoolean().withMessage('Installment scope include_downpayment must be boolean'),
     body('phase_number')
       .optional({ nullable: true, checkFalsy: true })
       .custom((value) => {
@@ -3518,7 +3522,7 @@ router.post(
       await client.query('BEGIN');
 
       const { id: class_id } = req.params;
-      const { student_id, package_id, selected_pricing_lists = [], selected_merchandise = [], installment_settings, phase_number, per_phase_amount, reservation_invoice_settings, promo_id, promo_code } = req.body;
+      const { student_id, package_id, selected_pricing_lists = [], selected_merchandise = [], installment_settings, installment_scope, phase_number, per_phase_amount, reservation_invoice_settings, promo_id, promo_code } = req.body;
 
       // Verify class exists and get branch_id, phase, start date, and level_tag
       const classCheck = await client.query(
@@ -3579,7 +3583,12 @@ router.post(
 
       // Check if student is already enrolled
       const existingEnrollment = await client.query(
-        'SELECT classstudent_id FROM classstudentstbl WHERE student_id = $1 AND class_id = $2',
+        `SELECT classstudent_id
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND removed_at IS NULL`,
         [student_id, class_id]
       );
       if (existingEnrollment.rows.length > 0) {
@@ -3682,6 +3691,9 @@ router.post(
       // Optional phase range for Phase packages (used later in invoice remarks)
       let phaseStartForRemarks = null;
       let phaseEndForRemarks = null;
+      let installmentPhaseStart = null;
+      let installmentPhaseEnd = null;
+      let installmentIncludeDownpayment = true;
       // Initialize packageData to null - will be set if package_id is provided
       let packageData = null;
 
@@ -3981,8 +3993,64 @@ router.post(
           });
         }
         
-        // If this is a Phase package, capture its phase range for invoice remarks
-        if (packageData.package_type === 'Phase') {
+        const isInstallmentPackage =
+          packageData.package_type === 'Installment' ||
+          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment');
+
+        // For installment packages, allow enrollment scope override from UI.
+        if (isInstallmentPackage) {
+          const classMaxPhase = classData.number_of_phase ? parseInt(classData.number_of_phase, 10) : null;
+          const pkgMinPhase =
+            packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+              ? (parseInt(packageData.phase_start, 10) || 1)
+              : 1;
+          const pkgMaxPhase =
+            packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+              ? (parseInt(packageData.phase_end, 10) || pkgMinPhase)
+              : (classMaxPhase || pkgMinPhase);
+
+          const requestedStart = installment_scope?.phase_start != null
+            ? parseInt(installment_scope.phase_start, 10)
+            : pkgMinPhase;
+          const requestedEnd = installment_scope?.phase_end != null
+            ? parseInt(installment_scope.phase_end, 10)
+            : pkgMaxPhase;
+
+          if (!Number.isInteger(requestedStart) || !Number.isInteger(requestedEnd) || requestedEnd < requestedStart) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Invalid installment phase scope. Ensure phase_end is greater than or equal to phase_start.',
+            });
+          }
+
+          if (requestedStart < pkgMinPhase || requestedEnd > pkgMaxPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Installment phase scope must be within allowed package range: Phase ${pkgMinPhase} to Phase ${pkgMaxPhase}.`,
+            });
+          }
+
+          if (classMaxPhase && requestedEnd > classMaxPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Installment phase scope exceeds class phase limit (max phase ${classMaxPhase}).`,
+            });
+          }
+
+          installmentPhaseStart = requestedStart;
+          installmentPhaseEnd = requestedEnd;
+          phaseStartForRemarks = requestedStart;
+          phaseEndForRemarks = requestedEnd;
+
+          const hasConfiguredDownpayment = parseFloat(packageData.downpayment_amount || 0) > 0;
+          installmentIncludeDownpayment = hasConfiguredDownpayment
+            ? installment_scope?.include_downpayment !== false
+            : false;
+        } else if (packageData.package_type === 'Phase') {
+          // Non-installment phase package: keep package range on remarks.
           const pkgPhaseStart = packageData.phase_start || 1;
           const pkgPhaseEnd = packageData.phase_end || pkgPhaseStart;
           phaseStartForRemarks = pkgPhaseStart;
@@ -4551,16 +4619,19 @@ router.post(
       // package_price is the monthly installment amount, not a total.
       if (package_id && packageData && (packageData.package_type === 'Installment' || isPhaseInstallmentPackage)) {
         if (packageData.package_type === 'Installment' && !packageData.downpayment_amount) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'Downpayment amount is required for Installment packages',
-          });
+          // Allow installment-without-downpayment flow only when explicitly disabled from installment scope.
+          if (installmentIncludeDownpayment) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Downpayment amount is required for Installment packages',
+            });
+          }
         }
         
         downpaymentAmount = parseFloat(packageData.downpayment_amount) || 0;
         
-        if (downpaymentAmount > 0) {
+        if (downpaymentAmount > 0 && installmentIncludeDownpayment) {
           const downpaymentDueDate = isPhaseInstallmentPackage
             ? (() => {
                 const enrolledDate = parseYmdToLocalNoon(issueDateStr) || new Date();
@@ -4615,6 +4686,9 @@ router.post(
       // They either create an optional downpayment invoice or generate the first
       // phase-based monthly invoice immediately after enrollment.
       if (isPhaseInstallmentPackage) {
+        skipMainInvoice = true;
+      }
+      if (package_id && packageData && packageData.package_type === 'Installment' && !installmentIncludeDownpayment) {
         skipMainInvoice = true;
       }
 
@@ -5180,11 +5254,19 @@ router.post(
       // For regular Installment: use curriculum total, no phase_start (defaults to 1)
       let totalPhases = classData.number_of_phase || null;
       let profilePhaseStart = null;
-      if (package_id && packageData && packageData.package_type === 'Phase' && packageData.payment_option === 'Installment') {
-        const pkgStart = packageData.phase_start || 1;
-        const pkgEnd = packageData.phase_end || pkgStart;
-        profilePhaseStart = pkgStart;
-        totalPhases = Math.max(1, pkgEnd - pkgStart + 1);
+      if (package_id && packageData && (packageData.package_type === 'Installment' || (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))) {
+        const scopedStart = installmentPhaseStart != null
+          ? installmentPhaseStart
+          : ((packageData.package_type === 'Phase' && packageData.payment_option === 'Installment')
+            ? (packageData.phase_start || 1)
+            : 1);
+        const scopedEnd = installmentPhaseEnd != null
+          ? installmentPhaseEnd
+          : ((packageData.package_type === 'Phase' && packageData.payment_option === 'Installment')
+            ? (packageData.phase_end || scopedStart)
+            : (classData.number_of_phase || scopedStart));
+        profilePhaseStart = scopedStart;
+        totalPhases = Math.max(1, scopedEnd - scopedStart + 1);
       }
       
       let installmentProfileAmount;
@@ -5209,39 +5291,29 @@ router.post(
           installment_settings.invoice_generation_date &&
           installment_settings.frequency_months) {
         try {
-          // Parse billing month (format: YYYY-MM)
-          if (!installment_settings.billing_month.includes('-')) {
-            throw new Error('Invalid billing month format. Expected YYYY-MM');
-          }
-          
-          const billingMonthParts = installment_settings.billing_month.split('-');
-          if (billingMonthParts.length !== 2) {
-            throw new Error('Invalid billing month format. Expected YYYY-MM');
-          }
-          
-          const firstBillingMonth = new Date(parseInt(billingMonthParts[0]), parseInt(billingMonthParts[1]) - 1, 1);
-          
-          // Validate dates
-          if (isNaN(firstBillingMonth.getTime())) {
-            throw new Error('Invalid billing month date');
-          }
-          
-          // Calculate day of month from invoice_due_date
-          const dueDate = new Date(installment_settings.invoice_due_date);
-          if (isNaN(dueDate.getTime())) {
-            throw new Error('Invalid invoice due date');
-          }
-          const dayOfMonth = dueDate.getDate();
+          const frequencyMonths = parseInt(installment_settings.frequency_months, 10) || 1;
 
-          // Calculate next invoice due date (first billing month + frequency)
-          const nextInvoiceDueDate = new Date(firstBillingMonth);
-          nextInvoiceDueDate.setMonth(nextInvoiceDueDate.getMonth() + (installment_settings.frequency_months || 1));
+          // Fixed cadence:
+          // - Generate on 25th of current cycle month
+          // - Due on 5th of next month
+          const cycleGenerationDate = new Date(installment_settings.invoice_issue_date || new Date());
+          cycleGenerationDate.setDate(25);
 
-          // Validate generation date
-          const generationDate = new Date(installment_settings.invoice_generation_date);
-          if (isNaN(generationDate.getTime())) {
-            throw new Error('Invalid invoice generation date');
-          }
+          const firstBillingMonth = new Date(cycleGenerationDate);
+          firstBillingMonth.setDate(1);
+          firstBillingMonth.setMonth(firstBillingMonth.getMonth() + 1);
+
+          const firstDueDate = new Date(firstBillingMonth);
+          firstDueDate.setDate(5);
+
+          const nextInvoiceDueDate = new Date(firstDueDate);
+          nextInvoiceDueDate.setMonth(nextInvoiceDueDate.getMonth() + frequencyMonths);
+
+          const generationDate = new Date(cycleGenerationDate);
+          const nextGenerationDate = new Date(cycleGenerationDate);
+          nextGenerationDate.setMonth(nextGenerationDate.getMonth() + frequencyMonths);
+          nextGenerationDate.setDate(25);
+          const dayOfMonth = 5;
 
           // Determine if downpayment is required
           const hasDownpayment = downpaymentInvoice !== null && downpaymentAmount > 0;
@@ -5329,10 +5401,10 @@ router.post(
                 ? parseInt(String(firstPhaseSchedule.current_due_date).slice(-2), 10)
                 : dayOfMonth,
               true,
-              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_due_date : installment_settings.invoice_due_date,
-              isPhaseInstallmentPackage ? firstPhaseSchedule?.next_due_date : nextInvoiceDueDate.toISOString().split('T')[0],
-              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_invoice_month : firstBillingMonth.toISOString().split('T')[0],
-              isPhaseInstallmentPackage ? firstPhaseSchedule?.current_generation_date : installment_settings.invoice_generation_date,
+              firstDueDate.toISOString().split('T')[0],
+              nextInvoiceDueDate.toISOString().split('T')[0],
+              firstBillingMonth.toISOString().split('T')[0],
+              generationDate.toISOString().split('T')[0],
               req.user.fullName || req.user.email || null,
               class_id, // Store class_id for phase tracking
               totalPhases, // For Phase package: count in range. Else: curriculum total
@@ -5375,15 +5447,9 @@ router.post(
             // Create the first installment invoice record.
             const studentName = studentCheck.rows[0].full_name;
             const frequency = `${installment_settings.frequency_months} month(s)`;
-            const scheduledDate = isPhaseInstallmentPackage
-              ? firstPhaseSchedule.current_due_date
-              : (installment_settings.invoice_due_date || installment_settings.invoice_generation_date);
-            const nextInvoiceMonth = isPhaseInstallmentPackage
-              ? firstPhaseSchedule.current_invoice_month
-              : nextInvoiceDueDate.toISOString().split('T')[0];
-            const nextGenerationDate = isPhaseInstallmentPackage
-              ? firstPhaseSchedule.current_generation_date
-              : generationDate.toISOString().split('T')[0];
+            const scheduledDate = firstDueDate.toISOString().split('T')[0];
+            const nextInvoiceMonth = firstBillingMonth.toISOString().split('T')[0];
+            const nextGenerationDateYmd = generationDate.toISOString().split('T')[0];
             
             const firstInstallmentRecordResult = await client.query(
               `INSERT INTO installmentinvoicestbl 
@@ -5400,28 +5466,26 @@ router.post(
                 installmentProfileAmount, // Use calculated amount for installment invoice display
                 installmentProfileAmount, // Assuming no tax for now, or can be calculated separately
                 frequency,
-                nextGenerationDate,
+                nextGenerationDateYmd,
                 nextInvoiceMonth,
               ]
             );
 
-            if (isPhaseInstallmentPackage) {
-              pendingInstallmentGeneration = {
-                installmentRecord: firstInstallmentRecordResult.rows[0],
-                profile: {
-                  student_id,
-                  branch_id,
-                  package_id: package_id || null,
-                  amount: installmentProfileAmount,
-                  frequency,
-                  description: `Installment plan for ${studentCheck.rows[0].full_name} - ${classData.program_name}`,
-                  generated_count: 0,
-                  class_id,
-                  total_phases: totalPhases,
-                  phase_start: profilePhaseStart,
-                },
-              };
-            }
+            pendingInstallmentGeneration = {
+              installmentRecord: firstInstallmentRecordResult.rows[0],
+              profile: {
+                student_id,
+                branch_id,
+                package_id: package_id || null,
+                amount: installmentProfileAmount,
+                frequency,
+                description: `Installment plan for ${studentCheck.rows[0].full_name} - ${classData.program_name}`,
+                generated_count: 0,
+                class_id,
+                total_phases: totalPhases,
+                phase_start: profilePhaseStart,
+              },
+            };
           }
           // If hasDownpayment is true, the first installment invoice record will be created
           // automatically when the downpayment is paid (handled in payments.js)
@@ -5479,7 +5543,11 @@ router.post(
       if (skipMainInvoice && downpaymentInvoice) {
         message = 'Downpayment invoice generated. Monthly installment invoices will start after downpayment is paid.';
       } else if (generatedPhaseInvoice?.invoice_id) {
-        message = `Phase ${generatedPhaseInvoice.current_phase_number || profilePhaseStart || 1} invoice generated. Student will be enrolled in that phase after payment is made.`;
+        if (isPhaseInstallmentPackage) {
+          message = `Phase ${generatedPhaseInvoice.current_phase_number || profilePhaseStart || 1} invoice generated. Student will be enrolled in that phase after payment is made.`;
+        } else {
+          message = 'First installment invoice generated. Student will be enrolled after payment is made.';
+        }
       } else if (isFullpaymentEnrollment) {
         message = 'Invoice generated. Student will be enrolled in all phases after payment is made.';
       } else if (installmentProfile) {

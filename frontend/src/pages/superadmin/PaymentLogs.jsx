@@ -84,8 +84,14 @@ const PaymentLogs = () => {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const notificationTab = params.get('notificationTab');
+    const financeApproval = params.get('financeApproval');
     if (notificationTab === 'main' || notificationTab === 'return') {
       setBranchLogTab(notificationTab);
+    }
+    if (financeApproval === 'approved' || financeApproval === 'pending') {
+      setFilterFinanceApproval(financeApproval);
+    } else if (financeApproval === 'all' || financeApproval === '') {
+      setFilterFinanceApproval('');
     }
   }, [location.search]);
 
@@ -403,7 +409,9 @@ const PaymentLogs = () => {
     const recorderEmail = (payment.payment_created_by_email || '').trim();
     if (recorderName) return recorderName;
     if (recorderEmail) return recorderEmail;
-    return '—';
+    if (payment?.created_by) return `User #${payment.created_by}`;
+    if (!payment?.student_id) return 'Walk-in / AR';
+    return 'System';
   };
 
   const getStatusBadge = (status) => {
@@ -469,6 +477,10 @@ const PaymentLogs = () => {
     
     return matchesSearch && matchesBranch && matchesFinanceApproval && matchesPaymentMethod;
   });
+  const filteredTotalAmount = filteredPayments.reduce(
+    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
+    0
+  );
 
   const handleExportClick = () => {
     setSelectedExportBranches([]);
@@ -563,7 +575,8 @@ const PaymentLogs = () => {
           row['Returned by'] = payment.returned_by_name || '-';
         }
         row['Payment Method'] = payment.payment_method || '-';
-        row['Payment Type'] = payment.payment_type || '-';
+        row['Package/Item'] = payment.invoice_description || '-';
+        row['Level Tag'] = payment.student_level_tag || '-';
         row['Amount (₱)'] = payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00';
         row['Status'] = payment.status || 'N/A';
         row['Branch'] = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
@@ -690,9 +703,13 @@ const PaymentLogs = () => {
             Inclusive range on payment date. Leave both empty for all dates.
           </p>
         </div>
-          {/* Table fits viewport - no horizontal scroll; compact responsive layout */}
-          <div className="rounded-lg overflow-hidden">
-            <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
+          <div className="mb-2 px-1">
+            <p className="text-sm font-semibold text-gray-700">
+              Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </p>
+          </div>
+          <div className="rounded-lg overflow-x-auto">
+            <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1360px' }}>
               {branchLogTab === 'return' ? (
                 <colgroup>
                   <col style={{ width: '8%' }} />
@@ -702,11 +719,13 @@ const PaymentLogs = () => {
                   <col style={{ width: '6%' }} />
                   <col style={{ width: '6%' }} />
                   <col style={{ width: '10%' }} />
-                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
                   <col style={{ width: '8%' }} />
                   <col style={{ width: '6%' }} />
                   <col style={{ width: '5%' }} />
-                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '8%' }} />
                 </colgroup>
               ) : (
                 <colgroup>
@@ -717,10 +736,12 @@ const PaymentLogs = () => {
                   <col style={{ width: '7%' }} />
                   <col style={{ width: '7%' }} />
                   <col style={{ width: '12%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
                   <col style={{ width: '6%' }} />
-                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '8%' }} />
                 </colgroup>
               )}
               <thead className="bg-gray-50 table-header-stable">
@@ -755,11 +776,20 @@ const PaymentLogs = () => {
                       </div>
                     </div>
                   </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
+                    Branch
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
+                    Date
+                  </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
-                    STUDENT
+                    Student Name
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Issued by
+                    <span className="leading-tight">package/<br />item</span>
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Level Tag
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
@@ -785,10 +815,10 @@ const PaymentLogs = () => {
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    TYPE
+                    AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    AMOUNT
+                    TOTAL AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
@@ -810,7 +840,7 @@ const PaymentLogs = () => {
                           className="flex items-center space-x-1 hover:text-gray-700"
                         >
                           <span title="Finance approval — same as Financial Dashboard verified / unverified">
-                            Approval
+                            Status
                           </span>
                           {filterFinanceApproval ? (
                             <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full" aria-hidden />
@@ -828,23 +858,20 @@ const PaymentLogs = () => {
                     </th>
                   ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    <span>Branch</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    DATE
+                    REFERENCE
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
                     AR#
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    REFERENCE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Issued By
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={branchLogTab === 'return' ? 12 : 11} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab === 'return' ? 14 : 13} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -858,6 +885,27 @@ const PaymentLogs = () => {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
+                      {(() => {
+                        const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
+                        if (!branchName || branchName === 'N/A') {
+                          return <span className="text-gray-400">-</span>;
+                        }
+                        const formatted = formatBranchName(branchName);
+                        const fullText = formatted.location ? `${formatted.company} - ${formatted.location}` : formatted.company;
+                        return (
+                          <div className="flex flex-col leading-tight min-w-0">
+                            <span className="font-medium truncate" title={fullText}>{formatted.company}</span>
+                            {formatted.location && (
+                              <span className="text-xs text-gray-500 truncate" title={formatted.location}>{formatted.location}</span>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                      {formatDate(payment.issue_date)}
+                    </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
                         <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
@@ -867,18 +915,23 @@ const PaymentLogs = () => {
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
-                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
-                        {formatInvoiceIssuedBy(payment)}
+                      <span className="truncate block" title={payment.invoice_description || '-'}>
+                        {payment.invoice_description || '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
+                      <span className="truncate block" title={payment.student_level_tag || '-'}>
+                        {payment.student_level_tag || '-'}
                       </span>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
-                      {payment.payment_type || '-'}
-                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
                       {formatCurrency(payment.payable_amount)}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-emerald-700 min-w-0">
+                      {formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
@@ -946,34 +999,18 @@ const PaymentLogs = () => {
                         </span>
                       </td>
                     ) : null}
-                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
-                      {(() => {
-                        const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
-                        if (!branchName || branchName === 'N/A') {
-                          return <span className="text-gray-400">-</span>;
-                        }
-                        const formatted = formatBranchName(branchName);
-                        const fullText = formatted.location ? `${formatted.company} - ${formatted.location}` : formatted.company;
-                        return (
-                          <div className="flex flex-col leading-tight min-w-0">
-                            <span className="font-medium truncate" title={fullText}>{formatted.company}</span>
-                            {formatted.location && (
-                              <span className="text-xs text-gray-500 truncate" title={formatted.location}>{formatted.location}</span>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
+                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-600 min-w-0">
                       <span className="truncate block" title={payment.invoice_ar_number || ''}>
                         {payment.invoice_ar_number || '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
-                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
+                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
+                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
+                        {formatInvoiceIssuedBy(payment)}
+                      </span>
                     </td>
                   </tr>
                 ))

@@ -5,8 +5,10 @@ import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const Merchandise = () => {
+  const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
   const location = useLocation();
   const [branches, setBranches] = useState([]);
   const [merchandise, setMerchandise] = useState([]);
@@ -56,6 +58,22 @@ const Merchandise = () => {
       fetchMerchandiseByBranch(selectedBranchId);
     }
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    if (globalBranchId) {
+      const parsedBranchId = parseInt(globalBranchId, 10);
+      if (!Number.isNaN(parsedBranchId)) {
+        setSelectedBranchId(parsedBranchId);
+        setSelectedBranchName(globalBranchName || null);
+        setViewingStocksFor(null);
+      }
+      return;
+    }
+    setSelectedBranchId(null);
+    setSelectedBranchName(null);
+    setViewingStocksFor(null);
+    setMerchandise([]);
+  }, [globalBranchId, globalBranchName]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);

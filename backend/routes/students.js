@@ -321,7 +321,11 @@ router.post(
       // Check if class is full
       if (classData.max_students) {
         const enrollmentCount = await client.query(
-          'SELECT COUNT(*) FROM classstudentstbl WHERE class_id = $1',
+          `SELECT COUNT(DISTINCT student_id) AS count
+           FROM classstudentstbl
+           WHERE class_id = $1
+             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND removed_at IS NULL`,
           [class_id]
         );
         const currentCount = parseInt(enrollmentCount.rows[0].count);
@@ -336,7 +340,12 @@ router.post(
 
       // Check if student is already enrolled
       const existingEnrollment = await client.query(
-        'SELECT classstudent_id FROM classstudentstbl WHERE student_id = $1 AND class_id = $2',
+        `SELECT classstudent_id
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND removed_at IS NULL`,
         [student_id, class_id]
       );
       if (existingEnrollment.rows.length > 0) {
@@ -544,7 +553,9 @@ router.get(
           'enrolled' as student_type,
           CASE
             WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN true
-            WHEN active_profile.package_id IS NOT NULL THEN true
+            WHEN active_profile.package_id IS NOT NULL
+              AND COALESCE(cs.enrollment_status, 'Active') <> 'Removed'
+              AND cs.removed_at IS NULL THEN true
             ELSE false
           END as shouldCount
          FROM classstudentstbl cs
@@ -562,7 +573,11 @@ router.get(
          WHERE cs.class_id = $1
            AND (
              (COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL)
-             OR active_profile.package_id IS NOT NULL
+             OR (
+               active_profile.package_id IS NOT NULL
+               AND COALESCE(cs.enrollment_status, 'Active') <> 'Removed'
+               AND cs.removed_at IS NULL
+             )
            )`,
         [classId]
       );

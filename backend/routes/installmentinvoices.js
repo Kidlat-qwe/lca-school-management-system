@@ -32,12 +32,12 @@ const enrichInstallmentInvoiceRow = async (row) => {
   const lastEnrolledPhaseNumber = row.last_enrolled_phase_number != null
     ? parseInt(row.last_enrolled_phase_number, 10)
     : null;
-  const historicalPhaseProgress = lastEnrolledPhaseNumber != null
-    ? Math.max(lastEnrolledPhaseNumber - phaseStart + 1, 0)
-    : 0;
+  // Billing progress for the Installment Invoice Logs should reflect billing records only,
+  // not historical class enrollment phase. This keeps it consistent with Invoice page data.
+  const billingPhaseProgress = Math.max(paidPhases, generatedPhases, 0);
   const displayPhaseProgress = totalPhases != null
-    ? Math.min(Math.max(paidPhases, generatedPhases, historicalPhaseProgress), totalPhases)
-    : Math.max(paidPhases, generatedPhases, historicalPhaseProgress);
+    ? Math.min(billingPhaseProgress, totalPhases)
+    : billingPhaseProgress;
 
   if (!isPhaseInstallmentProfile(profile)) {
     return {
@@ -828,6 +828,48 @@ router.put(
         success: true,
         message: 'Installment invoice updated successfully',
         data: invoiceResult.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/sms/installment-invoices/invoices/:id
+ * Delete an installment invoice log row
+ * Access: Superadmin, Admin, Finance
+ */
+router.delete(
+  '/invoices/:id',
+  [
+    param('id').isInt().withMessage('Invoice ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const existingInvoice = await query(
+        'SELECT * FROM installmentinvoicestbl WHERE installmentinvoicedtl_id = $1',
+        [id]
+      );
+      if (existingInvoice.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Installment invoice not found',
+        });
+      }
+
+      await query(
+        'DELETE FROM installmentinvoicestbl WHERE installmentinvoicedtl_id = $1',
+        [id]
+      );
+
+      res.json({
+        success: true,
+        message: 'Installment invoice deleted successfully',
       });
     } catch (error) {
       next(error);

@@ -26,6 +26,8 @@ const getReturnFixPaymentMethodOptions = (currentValue) => {
   return [c, ...RETURN_FIX_PAYMENT_METHOD_OPTIONS];
 };
 
+const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
+
 const AdminPaymentLogs = () => {
   const location = useLocation();
   const { userInfo } = useAuth();
@@ -83,8 +85,13 @@ const AdminPaymentLogs = () => {
   const [depositSubmitLoading, setDepositSubmitLoading] = useState(false);
   const [depositExistingRanges, setDepositExistingRanges] = useState([]);
   const [depositRangesLoading, setDepositRangesLoading] = useState(false);
+  const [depositReferenceNumber, setDepositReferenceNumber] = useState('');
+  const [depositAttachmentUrl, setDepositAttachmentUrl] = useState('');
+  const [depositAttachmentUploading, setDepositAttachmentUploading] = useState(false);
   const depositAlertRef = useRef('');
+  const depositThresholdAlertRef = useRef('');
   const latestFetchIdRef = useRef(0);
+  const quickActionHandledRef = useRef(false);
 
   // Today in Manila (YYYY-MM-DD) for end-of-shift
   const todayManila = () => {
@@ -93,14 +100,42 @@ const AdminPaymentLogs = () => {
     return manila.toISOString().split('T')[0];
   };
 
+  const addDaysToYmd = (ymd, daysToAdd) => {
+    const [y, m, d] = String(ymd || '').split('-').map(Number);
+    if (!y || !m || !d) return '';
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + daysToAdd);
+    return dt.toISOString().slice(0, 10);
+  };
+
   const openDepositCashModal = () => {
     setDepositError('');
     setDepositData(null);
     setDepositExistingRanges([]);
     setDepositStartDate('');
     setDepositEndDate('');
+    setDepositReferenceNumber('');
+    setDepositAttachmentUrl('');
+    setDepositAttachmentUploading(false);
     depositAlertRef.current = '';
+    depositThresholdAlertRef.current = '';
     setDepositModalOpen(true);
+  };
+
+  const uploadDepositAttachment = async (file) => {
+    if (!file) return;
+    setDepositAttachmentUploading(true);
+    try {
+      const imageUrl = await uploadInvoicePaymentImage(file);
+      if (!imageUrl) throw new Error('Upload returned empty URL');
+      setDepositAttachmentUrl(imageUrl);
+      appAlert('Deposit proof image uploaded.');
+    } catch (err) {
+      console.error('Deposit attachment upload:', err);
+      appAlert(err?.message || 'Failed to upload deposit proof image.');
+    } finally {
+      setDepositAttachmentUploading(false);
+    }
   };
 
   const showDepositAlert = (message) => {
@@ -114,10 +149,22 @@ const AdminPaymentLogs = () => {
     setDepositRangesLoading(true);
     try {
       const res = await apiRequest('/cash-deposit-summaries?limit=200');
-      setDepositExistingRanges(Array.isArray(res?.data) ? res.data : []);
+      const ranges = Array.isArray(res?.data) ? res.data : [];
+      setDepositExistingRanges(ranges);
+
+      const today = todayManila();
+      const latestRange = [...ranges].sort((a, b) => String(b.end_date).localeCompare(String(a.end_date)))[0] || null;
+      const computedStart = latestRange?.end_date ? addDaysToYmd(latestRange.end_date, 1) : today;
+      const finalStart = computedStart && computedStart <= today ? computedStart : today;
+
+      setDepositStartDate(finalStart);
+      setDepositEndDate(today);
     } catch (err) {
       console.error('Error fetching cash deposit ranges:', err);
       setDepositExistingRanges([]);
+      const today = todayManila();
+      setDepositStartDate(today);
+      setDepositEndDate(today);
     } finally {
       setDepositRangesLoading(false);
     }
@@ -196,9 +243,36 @@ const AdminPaymentLogs = () => {
     fetchDepositCashSummary(depositStartDate, depositEndDate);
   }, [depositModalOpen, depositStartDate, depositEndDate, depositExistingRanges]);
 
+  useEffect(() => {
+    if (!depositModalOpen || !depositData) return;
+    const totalDepositAmount = Number(depositData.total_cash_deposit_amount || 0);
+    if (totalDepositAmount < CASH_DEPOSIT_WARNING_THRESHOLD) return;
+
+    const rangeKey = `${depositData.start_date || ''}_${depositData.end_date || ''}_${totalDepositAmount}`;
+    if (depositThresholdAlertRef.current === rangeKey) return;
+    depositThresholdAlertRef.current = rangeKey;
+
+    appAlert(
+      `Alert: Your branch is now holding ${formatCurrency(totalDepositAmount)} in cash for deposit, which is at/above the ₱${CASH_DEPOSIT_WARNING_THRESHOLD.toLocaleString('en-US')} threshold. Please process bank deposit submission promptly.`
+    );
+  }, [depositModalOpen, depositData]);
+
   const submitDepositCashSummary = async () => {
     if (!depositData) {
       showDepositAlert('Please select a valid uncovered date range first.');
+      return;
+    }
+
+    const refTrim = depositReferenceNumber.trim();
+    const attTrim = depositAttachmentUrl.trim();
+
+    if (!refTrim) {
+      showDepositAlert('Reference number is required before submitting cash deposit.');
+      return;
+    }
+
+    if (!attTrim) {
+      showDepositAlert('Deposit proof image is required before submitting cash deposit.');
       return;
     }
 
@@ -212,6 +286,8 @@ const AdminPaymentLogs = () => {
         body: JSON.stringify({
           start_date: depositStartDate,
           end_date: depositEndDate,
+          reference_number: refTrim,
+          deposit_attachment_url: attTrim,
         }),
       });
 
@@ -220,6 +296,9 @@ const AdminPaymentLogs = () => {
       setDepositData(null);
       setDepositStartDate('');
       setDepositEndDate('');
+      setDepositReferenceNumber('');
+      setDepositAttachmentUrl('');
+      setDepositAttachmentUploading(false);
       setDepositError('');
       depositAlertRef.current = '';
     } catch (err) {
@@ -277,6 +356,25 @@ const AdminPaymentLogs = () => {
     }
   }, [adminBranchId]);
 
+  useEffect(() => {
+    if (!adminBranchId || quickActionHandledRef.current) return;
+
+    const params = new URLSearchParams(location.search);
+    const quickAction = (params.get('quickAction') || '').trim();
+    if (!quickAction) return;
+
+    if (quickAction === 'cashDeposit') {
+      openDepositCashModal();
+      quickActionHandledRef.current = true;
+      return;
+    }
+
+    if (quickAction === 'endOfShift') {
+      handleEndOfShiftClick();
+      quickActionHandledRef.current = true;
+    }
+  }, [adminBranchId, location.search, endOfShiftAlreadySubmitted]);
+
   const handleEndOfShiftClick = () => {
     if (endOfShiftAlreadySubmitted) {
       appAlert('End of day has already been submitted for today. Only one submission per branch per day is allowed.');
@@ -284,6 +382,29 @@ const AdminPaymentLogs = () => {
     }
     setEndOfShiftSuccess('');
     setEndOfShiftModalOpen(true);
+  };
+
+  const buildEodSummaryAlertMessage = (previewData) => {
+    const summaryDate = todayManila();
+    const totalAmount = Number(previewData?.total_amount || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    const paymentCount = Number(previewData?.completed_payment_count ?? previewData?.payment_count ?? 0);
+    const arCount = Number(previewData?.ar_sales_count || 0);
+
+    return [
+      'End of Shift submitted successfully.',
+      '',
+      'Summary Notes',
+      `Branch: ${selectedBranchName || 'Your Branch'}`,
+      `Date: ${formatDateManila(summaryDate)}`,
+      `Completed Payments: ${paymentCount}`,
+      `AR Sales Receipts: ${arCount}`,
+      `Total Sales: ₱${totalAmount}`,
+      '',
+      'Your EOD has been forwarded to Superadmin and Finance for monitoring.',
+    ].join('\n');
   };
 
   const handleEndOfShiftSubmit = async () => {
@@ -294,9 +415,10 @@ const AdminPaymentLogs = () => {
         method: 'POST',
         body: JSON.stringify({ summary_date: todayManila() }),
       });
-      setEndOfShiftSuccess('Daily summary submitted successfully and auto-verified.');
+      setEndOfShiftSuccess('Daily summary submitted successfully and is awaiting verification.');
       setEndOfShiftAlreadySubmitted(true);
       setEndOfShiftModalOpen(false);
+      appAlert(buildEodSummaryAlertMessage(endOfShiftPreview));
       await fetchEndOfShiftStatus();
     } catch (err) {
       setEndOfShiftSuccess('');
@@ -514,7 +636,6 @@ const AdminPaymentLogs = () => {
       const limit = 100;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (adminBranchId) params.set('branch_id', String(adminBranchId));
-      params.set('issued_by_me', 'true');
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
@@ -597,6 +718,20 @@ const AdminPaymentLogs = () => {
     );
   };
 
+  const formatInvoiceIssuedBy = (payment) => {
+    const invoiceName = (payment?.invoice_issued_by_name || '').trim();
+    const invoiceEmail = (payment?.invoice_issued_by_email || '').trim();
+    const paymentName = (payment?.payment_created_by_name || '').trim();
+    const paymentEmail = (payment?.payment_created_by_email || '').trim();
+    if (invoiceName) return invoiceName;
+    if (invoiceEmail) return invoiceEmail;
+    if (paymentName) return paymentName;
+    if (paymentEmail) return paymentEmail;
+    if (payment?.created_by) return `User #${payment.created_by}`;
+    if (!payment?.student_id) return 'Walk-in / AR';
+    return 'System';
+  };
+
   const getUniquePaymentMethods = () => {
     const methods = [...new Set(payments.map(p => p.payment_method).filter(Boolean))];
     return methods.sort();
@@ -622,6 +757,10 @@ const AdminPaymentLogs = () => {
     
     return matchesSearch && matchesFinanceApproval && matchesPaymentMethod;
   });
+  const filteredTotalAmount = filteredPayments.reduce(
+    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
+    0
+  );
 
   const handleExportToExcel = async () => {
     try {
@@ -635,7 +774,6 @@ const AdminPaymentLogs = () => {
       while (hasMore) {
         const params = new URLSearchParams({ limit: String(limit), page: String(page) });
         if (adminBranchId) params.set('branch_id', String(adminBranchId));
-        params.set('issued_by_me', 'true');
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
         if (branchLogTab === 'return') {
@@ -671,7 +809,8 @@ const AdminPaymentLogs = () => {
         'Student Name': payment.student_name || 'N/A',
         'Student Email': payment.student_email || '-',
         'Payment Method': payment.payment_method || '-',
-        'Payment Type': payment.payment_type || '-',
+        'Package/Item': payment.invoice_description || '-',
+        'Level Tag': payment.student_level_tag || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
         'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
@@ -871,24 +1010,9 @@ const AdminPaymentLogs = () => {
                   <input
                     type="date"
                     value={depositStartDate}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      if (nextValue && isDepositDateBlocked(nextValue)) {
-                        const blockedRange = depositExistingRanges.find(
-                          (range) => range.start_date <= nextValue && range.end_date >= nextValue
-                        );
-                        showDepositAlert(
-                          `This date already belongs to a deposited period (${getRangeLabel(blockedRange)}). Please choose another date.`
-                        );
-                        return;
-                      }
-                      setDepositError('');
-                      depositAlertRef.current = '';
-                      setDepositStartDate(nextValue);
-                      setDepositData(null);
-                    }}
+                    readOnly
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                    disabled
                   />
                 </div>
                 <div className="flex-1 min-w-[140px]">
@@ -896,25 +1020,70 @@ const AdminPaymentLogs = () => {
                   <input
                     type="date"
                     value={depositEndDate}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      if (nextValue && isDepositDateBlocked(nextValue)) {
-                        const blockedRange = depositExistingRanges.find(
-                          (range) => range.start_date <= nextValue && range.end_date >= nextValue
-                        );
-                        showDepositAlert(
-                          `This date already belongs to a deposited period (${getRangeLabel(blockedRange)}). Please choose another date.`
-                        );
-                        return;
-                      }
-                      setDepositError('');
-                      depositAlertRef.current = '';
-                      setDepositEndDate(nextValue);
-                      setDepositData(null);
-                    }}
+                    readOnly
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                    disabled
                   />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Reference Number <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={depositReferenceNumber}
+                    onChange={(e) => setDepositReferenceNumber(e.target.value)}
+                    placeholder="Enter deposit slip / transaction number"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    disabled={depositSubmitLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Deposit Proof Image <span className="text-red-500">*</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className={`px-3 py-2 text-xs sm:text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 cursor-pointer ${depositSubmitLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      {depositAttachmentUploading ? 'Uploading...' : (depositAttachmentUrl ? 'Replace Image' : 'Upload Image')}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={depositSubmitLoading || depositAttachmentUploading}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) await uploadDepositAttachment(file);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                    {depositAttachmentUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAttachmentViewerUrl(depositAttachmentUrl);
+                          setShowAttachmentViewer(true);
+                        }}
+                        className="px-3 py-2 text-xs sm:text-sm rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
+                      >
+                        View
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Upload the deposit slip / bank proof image before submission.
+                  </p>
+                  {depositAttachmentUrl && (
+                    <div className="mt-2">
+                      <img
+                        src={depositAttachmentUrl}
+                        alt="Deposit proof preview"
+                        className="h-24 w-24 object-cover rounded-lg border border-gray-200"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
               <p className="text-xs text-gray-500">
@@ -934,6 +1103,15 @@ const AdminPaymentLogs = () => {
             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
               {depositData && (
                 <>
+                  {Number(depositData.total_cash_deposit_amount || 0) >= CASH_DEPOSIT_WARNING_THRESHOLD && (
+                    <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-red-800">Cash Deposit Threshold Alert</p>
+                      <p className="text-xs text-red-700 mt-1">
+                        This branch is currently holding {formatCurrency(depositData.total_cash_deposit_amount)} in cash for deposit
+                        (threshold: ₱{CASH_DEPOSIT_WARNING_THRESHOLD.toLocaleString('en-US')}). Please submit the deposit promptly.
+                      </p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                     <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
                       <p className="text-xs font-medium text-sky-800 uppercase tracking-wide">Cash to deposit</p>
@@ -1026,7 +1204,7 @@ const AdminPaymentLogs = () => {
                 <button
                   type="button"
                   onClick={submitDepositCashSummary}
-                  disabled={depositLoading || depositSubmitLoading || !depositData}
+                  disabled={depositLoading || depositSubmitLoading || depositAttachmentUploading || !depositData}
                   className="px-4 py-2 text-sm font-medium text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50"
                 >
                   {depositSubmitLoading ? 'Submitting...' : 'Submit for Confirmation'}
@@ -1059,7 +1237,7 @@ const AdminPaymentLogs = () => {
           <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 shrink-0">End of Shift</h3>
             <p className="mt-2 text-sm text-gray-600 shrink-0">
-              Submit all today&apos;s sales for proper closure? This will auto-verify your branch EOD, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
+              Submit all today&apos;s sales for proper closure? This will submit your branch EOD for Finance/Superfinance verification, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
             </p>
             <p className="mt-1 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
               One submission per day: totals include all payments dated today for your branch. You cannot submit again until tomorrow.
@@ -1070,39 +1248,44 @@ const AdminPaymentLogs = () => {
             {endOfShiftPreview && (
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
-                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({endOfShiftPreview.payment_count ?? 0} payment(s))
+                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({(endOfShiftPreview.completed_payment_count ?? endOfShiftPreview.payment_count ?? 0)} completed payment(s), {(endOfShiftPreview.ar_sales_count ?? 0)} AR receipt(s))
                 </p>
                 {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
                   <div className="mt-4 shrink-0">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Records to be submitted</p>
-                    <div
-                      className="overflow-x-auto rounded-lg border border-gray-200"
-                      style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
-                    >
-                      <table className="text-sm" style={{ width: '100%', minWidth: '520px' }}>
+                    <div className="overflow-hidden rounded-lg border border-gray-200">
+                      <table className="w-full table-fixed text-xs sm:text-sm">
                         <thead className="bg-gray-50">
                           <tr>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
+                            <th className="w-[12%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Invoice</th>
+                            <th className="w-[13%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Invoice Date</th>
+                            <th className="w-[20%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Student</th>
+                            <th className="w-[16%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Level Tag</th>
+                            <th className="w-[11%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Method</th>
+                            <th className="w-[13%] px-2 py-2 text-right text-[11px] font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="w-[15%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Reference</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 bg-white">
                           {endOfShiftPreview.payments.map((p) => (
                             <tr key={p.payment_id} className="hover:bg-gray-50/80">
-                              <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                              <td className="px-2 py-2 font-medium text-gray-900 whitespace-nowrap">
                                 {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
                               </td>
-                              <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[140px]">
+                              <td className="px-2 py-2 text-gray-700 whitespace-nowrap">
+                                {p.invoice_date ? formatDate(p.invoice_date) : '-'}
+                              </td>
+                              <td className="px-2 py-2 text-gray-700 min-w-0">
                                 <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
                               </td>
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
-                              <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
+                              <td className="px-2 py-2 text-gray-700 min-w-0">
+                                <span className="truncate block" title={p.student_level_tag || '-'}>{p.student_level_tag || '-'}</span>
+                              </td>
+                              <td className="px-2 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
+                              <td className="px-2 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
                                 {formatCurrency(p.payable_amount)}
                               </td>
-                              <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[100px]">
+                              <td className="px-2 py-2 text-gray-500 min-w-0">
                                 <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
                               </td>
                             </tr>
@@ -1192,19 +1375,27 @@ const AdminPaymentLogs = () => {
             Inclusive range on payment date. Leave both empty for all dates.
           </p>
         </div>
-        <div className="rounded-lg overflow-hidden">
-          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
+        <div className="mb-2 px-1">
+          <p className="text-sm font-semibold text-gray-700">
+            Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </p>
+        </div>
+        <div className="rounded-lg overflow-x-auto">
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1320px' }}>
               <colgroup>
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '13%' }} />
                 <col style={{ width: '9%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '8%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
                 <col style={{ width: '11%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
               </colgroup>
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
@@ -1238,8 +1429,20 @@ const AdminPaymentLogs = () => {
                       </div>
                     </div>
                   </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
+                    Branch
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
+                    Date
+                  </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
-                    STUDENT
+                    Student Name
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                    <span className="leading-tight">package/<br />item</span>
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    LEVEL TAG
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
@@ -1263,10 +1466,10 @@ const AdminPaymentLogs = () => {
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    TYPE
+                    AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    AMOUNT
+                    TOTAL AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
@@ -1286,7 +1489,7 @@ const AdminPaymentLogs = () => {
                           className="flex items-center space-x-1 hover:text-gray-700"
                         >
                           <span title="Finance approval — same as Financial Dashboard verified / unverified">
-                            Approval
+                            Status
                           </span>
                           <span
                             className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterFinanceApproval ? 'bg-primary-600' : 'invisible'}`}
@@ -1305,10 +1508,7 @@ const AdminPaymentLogs = () => {
                     </th>
                   ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Branch
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    DATE
+                    Reference#
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
                     AR#
@@ -1316,12 +1516,15 @@ const AdminPaymentLogs = () => {
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     REFERENCE
                   </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    ISSUED BY
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={branchLogTab === 'return' ? 11 : 10} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab === 'return' ? 14 : 13} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -1335,6 +1538,12 @@ const AdminPaymentLogs = () => {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
+                      <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                      {formatDate(payment.issue_date)}
+                    </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
                         <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
@@ -1343,14 +1552,24 @@ const AdminPaymentLogs = () => {
                         )}
                       </div>
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
+                      <span className="truncate block" title={payment.student_level_tag || '-'}>
+                        {payment.student_level_tag || '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
+                      <span className="truncate block" title={payment.invoice_description || '-'}>
+                        {payment.invoice_description || '-'}
+                      </span>
+                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
-                      {payment.payment_type || '-'}
-                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
                       {formatCurrency(payment.payable_amount)}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-emerald-700 min-w-0">
+                      {formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
@@ -1416,19 +1635,18 @@ const AdminPaymentLogs = () => {
                         </span>
                       </td>
                     ) : null}
-                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
-                      <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
+                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-600 min-w-0">
                       <span className="truncate block" title={payment.invoice_ar_number || ''}>
                         {payment.invoice_ar_number || '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
-                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
+                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
+                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
+                        {formatInvoiceIssuedBy(payment)}
+                      </span>
                     </td>
                   </tr>
                 ))

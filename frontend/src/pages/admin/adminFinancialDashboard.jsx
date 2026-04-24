@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Area,
   AreaChart,
@@ -20,8 +21,12 @@ import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
-const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
-  <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
+const StatsCard = ({ title, value, iconName, accent, subtitle, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`group relative w-full overflow-hidden rounded-2xl bg-white p-6 text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${onClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2' : 'cursor-default'}`}
+  >
     <div className="flex items-start justify-between">
       <div className="flex-1">
         <p className="text-sm font-medium text-gray-600">{title}</p>
@@ -33,7 +38,7 @@ const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
       </div>
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
-  </div>
+  </button>
 );
 
 const ChartCard = ({ title, subtitle, children, className = '' }) => (
@@ -53,6 +58,7 @@ const formatCurrency = (amount) => {
 };
 
 const AdminFinancialDashboard = () => {
+  const navigate = useNavigate();
   const { userInfo } = useAuth();
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
 
@@ -98,6 +104,26 @@ const AdminFinancialDashboard = () => {
 
   const crossingProcedures = useMemo(
     () => metrics?.crossing_procedures || { total_violations: 0, violations: [] },
+    [metrics]
+  );
+  const openArByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('page', '1');
+    if (type === 'verified') {
+      params.set('status', 'Verified,Applied');
+    } else {
+      params.set('status', 'Submitted,Pending,Paid');
+    }
+    navigate(`/admin/acknowledgement-receipts?${params.toString()}`);
+  };
+  const arVerification = useMemo(
+    () =>
+      metrics?.ar_verification || {
+        verified_count: 0,
+        verified_amount: 0,
+        unverified_count: 0,
+        unverified_amount: 0,
+      },
     [metrics]
   );
 
@@ -161,6 +187,33 @@ const AdminFinancialDashboard = () => {
             accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
             iconName="creditCard"
           />
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package AR)</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Verified AR includes Verified/Applied statuses. Unverified AR includes Submitted/Pending statuses awaiting Finance/Superfinance action.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <StatsCard
+              title="Verified AR"
+              value={formatCurrency(arVerification.verified_amount)}
+              subtitle={`${(arVerification.verified_count || 0).toLocaleString()} receipt(s)`}
+              accent="bg-gradient-to-br from-emerald-400 to-emerald-600"
+              iconName="shieldCheck"
+              onClick={() => openArByVerification('verified')}
+            />
+            <StatsCard
+              title="Unverified AR"
+              value={formatCurrency(arVerification.unverified_amount)}
+              subtitle={`${(arVerification.unverified_count || 0).toLocaleString()} receipt(s)`}
+              accent="bg-gradient-to-br from-amber-400 to-amber-600"
+              iconName="clock"
+              onClick={() => openArByVerification('unverified')}
+            />
+          </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">

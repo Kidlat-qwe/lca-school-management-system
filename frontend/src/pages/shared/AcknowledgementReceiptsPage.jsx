@@ -1,28 +1,41 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { appAlert } from '../../utils/appAlert';
+import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
+const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
 const AcknowledgementReceiptsPage = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.user_type || userInfo?.userType;
   const isSuperadmin = userType === 'Superadmin';
   const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
+  const isFinanceOrSuperfinance = userType === 'Finance' || userType === 'Superfinance';
   const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialStatus = searchParams.get('status') || '';
+  const initialSearch = searchParams.get('search') || '';
+  const initialPageRaw = parseInt(searchParams.get('page') || '1', 10);
+  const initialPage = Number.isFinite(initialPageRaw) && initialPageRaw > 0 ? initialPageRaw : 1;
+  const initialLimitRaw = parseInt(searchParams.get('limit') || '10', 10);
+  const initialLimit = [10, 20, 50, 100].includes(initialLimitRaw) ? initialLimitRaw : 10;
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
   const searchHydratedRef = useRef(false);
   const statusHydratedRef = useRef(false);
   const [pagination, setPagination] = useState({
-    page: 1,
-    limit: 50,
+    page: initialPage,
+    limit: initialLimit,
     total: 0,
     totalPages: 1,
   });
@@ -50,9 +63,12 @@ const AcknowledgementReceiptsPage = () => {
   const [createFormData, setCreateFormData] = useState({
     prospect_student_name: '',
     prospect_student_contact: '',
+    prospect_student_email: '',
     prospect_student_notes: '',
     package_id: '',
     payment_amount: '',
+    tip_amount: '',
+    payment_method: 'Cash',
     level_tag: '',
     reference_number: '',
     payment_attachment_url: '',
@@ -62,9 +78,10 @@ const AcknowledgementReceiptsPage = () => {
   const [createFormErrors, setCreateFormErrors] = useState({});
   const [creating, setCreating] = useState(false);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [verifyLoadingId, setVerifyLoadingId] = useState(null);
 
   useEffect(() => {
-    fetchReceipts(1);
+    fetchReceipts(initialPage);
 
     if (isSuperadmin) {
       fetchBranches();
@@ -76,16 +93,39 @@ const AcknowledgementReceiptsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperadmin, userBranchId]);
 
-  const fetchReceipts = async (page = 1) => {
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    setSelectedBranchId(globalBranchId ? String(globalBranchId) : '');
+  }, [isSuperadmin, globalBranchId]);
+
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    if (selectedBranchId) {
+      const branchId = parseInt(selectedBranchId, 10);
+      if (!Number.isNaN(branchId)) {
+        fetchPackages(branchId);
+        if (arType === 'Merchandise') fetchMerchandise(branchId);
+      }
+    } else {
+      fetchPackages(null);
+      fetchMerchandise(null);
+    }
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperadmin, selectedBranchId]);
+
+  const fetchReceipts = async (page = 1, limitOverride) => {
     try {
       setLoading(true);
       setError('');
+      const effectiveLimit = Number.isFinite(limitOverride) ? limitOverride : pagination.limit;
 
       const params = new URLSearchParams();
       params.set('page', String(page));
-      params.set('limit', String(pagination.limit));
+      params.set('limit', String(effectiveLimit));
       if (statusFilter) params.set('status', statusFilter);
       if (searchTerm.trim()) params.set('search', searchTerm.trim());
+      if (isSuperadmin && selectedBranchId) params.set('branch_id', selectedBranchId);
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       setReceipts(response.data || []);
@@ -99,12 +139,26 @@ const AcknowledgementReceiptsPage = () => {
             Math.ceil((response.pagination.total || 0) / response.pagination.limit),
         });
       }
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (statusFilter) next.set('status', statusFilter);
+        else next.delete('status');
+        if (searchTerm.trim()) next.set('search', searchTerm.trim());
+        else next.delete('search');
+        next.set('page', String(page));
+        next.set('limit', String(effectiveLimit));
+        return next;
+      });
     } catch (err) {
       console.error('Error fetching acknowledgement receipts:', err);
       setError('Failed to load acknowledgement receipts. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+  const handleLimitChange = (nextLimit) => {
+    setPagination((prev) => ({ ...prev, limit: nextLimit, page: 1 }));
+    fetchReceipts(1, nextLimit);
   };
 
   const fetchPackages = async (branchId) => {
@@ -177,9 +231,12 @@ const AcknowledgementReceiptsPage = () => {
     setCreateFormData({
       prospect_student_name: '',
       prospect_student_contact: '',
+      prospect_student_email: '',
       prospect_student_notes: '',
       package_id: '',
       payment_amount: '',
+      tip_amount: '',
+      payment_method: 'Cash',
       level_tag: '',
       reference_number: '',
       payment_attachment_url: '',
@@ -466,6 +523,7 @@ const AcknowledgementReceiptsPage = () => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
     const isMerch = arType === 'Merchandise';
+    const arEmail = (createFormData.prospect_student_email || '').trim();
 
     if (!name) {
       errors.prospect_student_name = 'Student name is required';
@@ -507,6 +565,16 @@ const AcknowledgementReceiptsPage = () => {
       }
     }
 
+    if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    if (createFormData.tip_amount !== '' && Number(createFormData.tip_amount) < 0) {
+      errors.tip_amount = 'Tip amount cannot be negative';
+    }
+    if (!AR_PAYMENT_METHOD_OPTIONS.includes(createFormData.payment_method || '')) {
+      errors.payment_method = 'Payment method is required';
+    }
+
     setCreateFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -529,6 +597,7 @@ const AcknowledgementReceiptsPage = () => {
         payload = {
           ar_type: 'Merchandise',
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
           prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
           level_tag: (createFormData.level_tag || '').trim() || undefined,
           merchandise_items: merchandiseSelections
@@ -539,6 +608,9 @@ const AcknowledgementReceiptsPage = () => {
             })),
           reference_number: (createFormData.reference_number || '').trim() || undefined,
           payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          tip_amount:
+            createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          payment_method: createFormData.payment_method || 'Cash',
           issue_date: createFormData.issue_date,
           branch_id: branchId,
         };
@@ -555,9 +627,13 @@ const AcknowledgementReceiptsPage = () => {
           ar_type: 'Package',
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
           prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+          prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
           prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
           package_id: parseInt(createFormData.package_id, 10),
           payment_amount: parseFloat(createFormData.payment_amount),
+          tip_amount:
+            createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          payment_method: createFormData.payment_method || 'Cash',
           issue_date: todayManilaYMD(),
           installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
           level_tag: (createFormData.level_tag || '').trim() || undefined,
@@ -586,6 +662,24 @@ const AcknowledgementReceiptsPage = () => {
       appAlert(err.message || 'Failed to create acknowledgement receipt. Please try again.');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleVerifyReceipt = async (receipt, approve) => {
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify({ approve }),
+      });
+      appAlert(approve ? 'Acknowledgement receipt verified.' : 'Acknowledgement receipt rejected.');
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR verify/reject error:', err);
+      appAlert(err?.message || `Failed to ${approve ? 'verify' : 'reject'} acknowledgement receipt.`);
+    } finally {
+      setVerifyLoadingId(null);
     }
   };
 
@@ -635,6 +729,8 @@ const AcknowledgementReceiptsPage = () => {
               className="input-field text-sm"
             >
               <option value="">All</option>
+              <option value="Verified,Applied">Verified (Verified + Applied)</option>
+              <option value="Submitted,Pending,Paid">Unverified (Submitted + Pending + Paid)</option>
               {uniqueStatuses().map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -660,42 +756,35 @@ const AcknowledgementReceiptsPage = () => {
             >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1120px' }}
+                style={{ width: '100%', minWidth: '1220px' }}
               >
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Type</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Student Name</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Guardian Name</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Package / Items</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Level Tag</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Total Amount</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Branch</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Ref. No.</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Attachment</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
+                    {isFinanceOrSuperfinance && (
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance ? 11 : 10} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
                   ) : (
                     receipts.map((r) => (
                     <tr key={r.ack_receipt_id}>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            r.ar_type === 'Merchandise' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
-                          }`}
-                        >
-                          {r.ar_type || 'Package'}
-                        </span>
-                      </td>
                       <td className="px-4 py-3">
                         <div className="text-gray-900 font-medium">
                           {r.prospect_student_name || '-'}
@@ -740,9 +829,9 @@ const AcknowledgementReceiptsPage = () => {
                       <td className="px-4 py-3 text-gray-700">
                         {r.level_tag || <span className="text-gray-300">?</span>}
                       </td>
-                      <td className="px-4 py-3 text-gray-900">
+                      <td className="px-4 py-3 text-gray-900 font-medium">
                         ₱
-                        {Number(r.payment_amount || 0).toLocaleString('en-US', {
+                        {(Number(r.payment_amount || 0) + Number(r.tip_amount || 0)).toLocaleString('en-US', {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}
@@ -753,9 +842,9 @@ const AcknowledgementReceiptsPage = () => {
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            r.status === 'Enrolled'
+                            r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
                               ? 'bg-green-100 text-green-800'
-                              : r.status === 'Cancelled'
+                              : r.status === 'Rejected' || r.status === 'Cancelled'
                               ? 'bg-red-100 text-red-800'
                               : 'bg-yellow-100 text-yellow-800'
                           }`}
@@ -790,6 +879,32 @@ const AcknowledgementReceiptsPage = () => {
                       <td className="px-4 py-3 text-gray-900">
                         {r.issue_date ? formatDateManila(r.issue_date) : '-'}
                       </td>
+                      {isFinanceOrSuperfinance && (
+                        <td className="px-4 py-3">
+                          {r.ar_type === 'Package' && (r.status === 'Submitted' || r.status === 'Paid') ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleVerifyReceipt(r, true)}
+                                disabled={verifyLoadingId === r.ack_receipt_id}
+                                className="px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 hover:bg-green-200 disabled:opacity-50"
+                              >
+                                Verify
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleVerifyReceipt(r, false)}
+                                disabled={verifyLoadingId === r.ack_receipt_id}
+                                className="px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 hover:bg-red-200 disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">-</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))
                   )}
@@ -801,33 +916,16 @@ const AcknowledgementReceiptsPage = () => {
 
         {renderAttachmentViewer()}
 
-        {pagination.totalPages > 1 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-gray-200">
-            <p className="text-sm text-gray-600">
-              Showing {(pagination.page - 1) * pagination.limit + 1}?
-              {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} receipts
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => fetchReceipts(pagination.page - 1)}
-                disabled={pagination.page <= 1}
-                className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-gray-600">
-                Page {pagination.page} of {pagination.totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => fetchReceipts(pagination.page + 1)}
-                disabled={pagination.page >= pagination.totalPages}
-                className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
+        {pagination.total > 0 && (
+          <div className="pt-3 border-t border-gray-200 space-y-3">
+            <FixedTablePagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.total}
+              itemsPerPage={pagination.limit}
+              itemLabel="receipts"
+              onPageChange={fetchReceipts}
+            />
           </div>
         )}
       </div>
@@ -1047,6 +1145,20 @@ const AcknowledgementReceiptsPage = () => {
                       )}
                     </div>
                     <div>
+                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                      <input
+                        type="email"
+                        name="prospect_student_email"
+                        value={createFormData.prospect_student_email}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                        placeholder="client@example.com"
+                      />
+                      {createFormErrors.prospect_student_email && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                      )}
+                    </div>
+                    <div>
                       <label className="label-field text-xs">
                         Select Merchandise <span className="text-red-500">*</span>
                       </label>
@@ -1229,6 +1341,40 @@ const AcknowledgementReceiptsPage = () => {
                       />
                     </div>
                     <div>
+                      <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        name="tip_amount"
+                        value={createFormData.tip_amount}
+                        onChange={handleCreateInputChange}
+                        placeholder="0.00"
+                        className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                      />
+                      {createFormErrors.tip_amount && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Payment Method <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        name="payment_method"
+                        value={createFormData.payment_method}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
+                      >
+                        {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
+                          <option key={method} value={method}>{method}</option>
+                        ))}
+                      </select>
+                      {createFormErrors.payment_method && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
+                      )}
+                    </div>
+                    <div>
                       <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
                       <input
                         type="text"
@@ -1307,6 +1453,21 @@ const AcknowledgementReceiptsPage = () => {
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
                     )}
                   </div>
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                  <input
+                    type="email"
+                    name="prospect_student_email"
+                    value={createFormData.prospect_student_email}
+                    onChange={handleCreateInputChange}
+                    className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                    placeholder="client@example.com"
+                  />
+                  {createFormErrors.prospect_student_email && (
+                    <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                  )}
                 </div>
 
                 <div>
@@ -1400,6 +1561,22 @@ const AcknowledgementReceiptsPage = () => {
                     </p>
                     {createFormErrors.payment_amount && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_amount}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      name="tip_amount"
+                      value={createFormData.tip_amount}
+                      onChange={handleCreateInputChange}
+                      placeholder="0.00"
+                      className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                    />
+                    {createFormErrors.tip_amount && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
                     )}
                   </div>
                 </div>
@@ -1517,6 +1694,32 @@ const AcknowledgementReceiptsPage = () => {
                 </div>
 
                   </>
+                )}
+
+                {arType === 'Package' && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="payment_method"
+                      value={createFormData.payment_method}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
+                    >
+                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
+                        <option key={method} value={method}>{method}</option>
+                      ))}
+                    </select>
+                    {createFormErrors.payment_method && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
+                    )}
+                    {createFormData.payment_method === 'Cash' && isAdminOrSuperadmin && (
+                      <p className="text-xs text-emerald-600 mt-1">
+                        Cash AR by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">

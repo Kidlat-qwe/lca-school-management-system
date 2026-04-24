@@ -29,16 +29,16 @@ const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
 const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
 const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
-  <div className="group relative overflow-hidden rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
-    <div className="flex items-start justify-between gap-4">
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-gray-600">{title}</p>
-        <p className="mt-3 text-3xl font-bold tracking-tight text-gray-900">{value}</p>
-        {subtitle ? <p className="mt-2 text-xs font-medium text-gray-500">{subtitle}</p> : null}
+  <div className="group relative h-full overflow-hidden rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
+    <div className="flex h-full flex-col">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-semibold text-gray-700 leading-tight">{title}</p>
+        <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
+          <DashboardStatIcon name={iconName} className="h-5 w-5 text-white drop-shadow-sm" />
+        </div>
       </div>
-      <div className={`flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
-        <DashboardStatIcon name={iconName} className="h-7 w-7 text-white drop-shadow-sm" />
-      </div>
+      <p className="mt-3 text-[2rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
+      {subtitle ? <p className="mt-2 text-[11px] leading-4 font-medium text-gray-500">{subtitle}</p> : null}
     </div>
     <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
   </div>
@@ -108,6 +108,7 @@ const DailyOperationalDashboardView = ({
         (row) =>
           row.new_enrollees > 0 ||
           row.daily_sales_amount > 0 ||
+          row.ar_sales_amount > 0 ||
           row.merchandise_released_quantity > 0 ||
           row.re_enrollment_count > 0 ||
           (row.dropped_unenrolled_count || 0) > 0
@@ -117,6 +118,8 @@ const DailyOperationalDashboardView = ({
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
+    ar_sales_amount: 0,
+    ar_sales_count: 0,
     merchandise_released_count: 0,
     merchandise_released_quantity: 0,
     re_enrollment_count: 0,
@@ -132,11 +135,38 @@ const DailyOperationalDashboardView = ({
       'Selected Branch'
     );
   }, [branchId, branchName, data]);
+  const isHeadquartersView = canFilterAcrossBranches && !branchId;
+  const headquarterSummary = useMemo(() => {
+    if (!isHeadquartersView || branchBreakdown.length === 0) {
+      return {
+        topSalesBranch: null,
+        topEnrollmentBranch: null,
+        topReenrollmentBranch: null,
+      };
+    }
+
+    const sortedBySales = [...branchBreakdown].sort(
+      (a, b) => (Number(b.daily_sales_amount) || 0) - (Number(a.daily_sales_amount) || 0)
+    );
+    const sortedByEnrollment = [...branchBreakdown].sort(
+      (a, b) => (Number(b.new_enrollees) || 0) - (Number(a.new_enrollees) || 0)
+    );
+    const sortedByReenrollment = [...branchBreakdown].sort(
+      (a, b) => (Number(b.re_enrollment_count) || 0) - (Number(a.re_enrollment_count) || 0)
+    );
+
+    return {
+      topSalesBranch: sortedBySales[0] || null,
+      topEnrollmentBranch: sortedByEnrollment[0] || null,
+      topReenrollmentBranch: sortedByReenrollment[0] || null,
+    };
+  }, [isHeadquartersView, branchBreakdown]);
 
   const visibleBranchCount = branchBreakdown.filter(
     (row) =>
       row.new_enrollees > 0 ||
       row.daily_sales_amount > 0 ||
+      row.ar_sales_amount > 0 ||
       row.merchandise_released_count > 0 ||
       row.re_enrollment_count > 0 ||
       (row.dropped_unenrolled_count || 0) > 0
@@ -207,27 +237,34 @@ const DailyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <StatsCard
             title="New Enrollees"
             value={formatNumber(totals.new_enrollees)}
             iconName="users"
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            subtitle={`${visibleBranchCount || totals.active_branches || 0} branch(es) with activity`}
+            subtitle={`${visibleBranchCount || totals.active_branches || 0} branch(es) with activity today`}
           />
           <StatsCard
             title="Dropped / Unenrolled"
             value={formatNumber(totals.dropped_unenrolled_count)}
             iconName="userMinus"
             accent="bg-gradient-to-br from-rose-500 to-red-600"
-            subtitle="Students removed from a class today (after prior enrollment)"
+            subtitle="Removed from class today (after prior enrollment)"
           />
           <StatsCard
-            title="Daily Sales"
+            title="Daily Sales (Completed)"
             value={formatCurrency(totals.daily_sales_amount)}
             iconName="currency"
             accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
-            subtitle="Completed payments only"
+            subtitle="Recognized posted payments only"
+          />
+          <StatsCard
+            title="Acknowledgement Receipts"
+            value={formatCurrency(totals.ar_sales_amount)}
+            iconName="clipboardList"
+            accent="bg-gradient-to-br from-violet-500 to-purple-600"
+            subtitle={`${formatNumber(totals.ar_sales_count)} acknowledgement receipt(s)`}
           />
           <StatsCard
             title="Merchandise Released"
@@ -244,6 +281,59 @@ const DailyOperationalDashboardView = ({
             subtitle="Installment monthly payments completed today"
           />
         </div>
+
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+          <p className="text-xs font-medium text-indigo-800">
+            Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> is posted payment revenue.{' '}
+            <span className="font-semibold">Acknowledgement Receipts</span> is acknowledgement-receipt collection for the day.
+          </p>
+        </div>
+
+        {isHeadquartersView && (
+          <div className="rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50 via-indigo-50 to-blue-50 p-6 shadow-sm ring-1 ring-violet-100">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-indigo-900">Headquarters Summary</h2>
+                <p className="mt-1 text-sm text-indigo-700">
+                  Organization-wide snapshot across all branches for the selected date.
+                </p>
+              </div>
+              <p className="text-xs font-medium text-indigo-700">
+                Active branches: {formatNumber(totals.active_branches || visibleBranchCount || 0)}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Top Daily Sales Branch</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">
+                  {headquarterSummary.topSalesBranch?.branch_name || 'No activity'}
+                </p>
+                <p className="mt-1 text-xs text-gray-600">
+                  {formatCurrency(headquarterSummary.topSalesBranch?.daily_sales_amount || 0)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Top New Enrollees Branch</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">
+                  {headquarterSummary.topEnrollmentBranch?.branch_name || 'No activity'}
+                </p>
+                <p className="mt-1 text-xs text-gray-600">
+                  {formatNumber(headquarterSummary.topEnrollmentBranch?.new_enrollees || 0)} new enrollees
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Top Re-enrollment Branch</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">
+                  {headquarterSummary.topReenrollmentBranch?.branch_name || 'No activity'}
+                </p>
+                <p className="mt-1 text-xs text-gray-600">
+                  {formatNumber(headquarterSummary.topReenrollmentBranch?.re_enrollment_count || 0)} re-enrollments
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -266,13 +356,14 @@ const DailyOperationalDashboardView = ({
               WebkitOverflowScrolling: 'touch',
             }}
           >
-            <table style={{ width: '100%', minWidth: '1120px' }} className="border-collapse text-sm">
+            <table style={{ width: '100%', minWidth: '1240px' }} className="border-collapse text-sm">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Daily Sales</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">AR Sales</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Qty</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Txns</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Re-enrollment</th>
@@ -285,6 +376,10 @@ const DailyOperationalDashboardView = ({
                     <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.new_enrollees)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.dropped_unenrolled_count || 0)}</td>
                     <td className="px-4 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
+                    <td className="px-4 py-3 text-right font-medium text-violet-700">
+                      {formatCurrency(row.ar_sales_amount)}
+                      <span className="ml-1 text-xs text-gray-500">({formatNumber(row.ar_sales_count)})</span>
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_quantity)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_count)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.re_enrollment_count)}</td>
@@ -321,7 +416,7 @@ const DailyOperationalDashboardView = ({
 
           <ChartCard
             title="Daily Sales by Branch"
-            subtitle="Completed payment amounts recorded today."
+            subtitle="Completed payments and AR sales amounts recorded today."
           >
             {activeBranchMetrics.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -329,8 +424,10 @@ const DailyOperationalDashboardView = ({
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
                   <XAxis dataKey="branch_name" tick={{ fontSize: 12 }} angle={activeBranchMetrics.length > 4 ? -18 : 0} textAnchor={activeBranchMetrics.length > 4 ? 'end' : 'middle'} height={activeBranchMetrics.length > 4 ? 64 : 36} interval={0} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `Php ${Number(value || 0).toLocaleString('en-PH')}`} />
-                  <Tooltip formatter={(value) => [formatCurrency(value), 'Daily sales']} />
+                  <Tooltip formatter={(value) => [formatCurrency(value), 'Amount']} />
+                  <Legend />
                   <Bar dataKey="daily_sales_amount" name="Daily sales" fill="#4F46E5" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="ar_sales_amount" name="AR sales" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

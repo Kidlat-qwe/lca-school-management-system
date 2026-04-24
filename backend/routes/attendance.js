@@ -66,6 +66,8 @@ router.get(
          INNER JOIN userstbl u ON cs_enroll.student_id = u.user_id
          WHERE cs_enroll.class_id = $1
            AND cs_enroll.phase_number = $2
+           AND COALESCE(cs_enroll.enrollment_status, 'Active') = 'Active'
+           AND cs_enroll.removed_at IS NULL
          ORDER BY cs_enroll.enrolled_at DESC`,
         [session.class_id, session.phase_number]
       );
@@ -202,8 +204,14 @@ router.post(
       // Verify all students are enrolled in this class
       const studentIds = attendance.map(a => a.student_id);
       const enrolledCheck = await client.query(
-        `SELECT DISTINCT student_id FROM classstudentstbl WHERE class_id = $1 AND student_id = ANY($2::int[])`,
-        [session.class_id, studentIds]
+        `SELECT DISTINCT cs.student_id
+         FROM classstudentstbl cs
+         WHERE cs.class_id = $1
+           AND cs.phase_number = $2
+           AND cs.student_id = ANY($3::int[])
+           AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+           AND cs.removed_at IS NULL`,
+        [session.class_id, session.phase_number, studentIds]
       );
 
       const enrolledStudentIds = new Set(enrolledCheck.rows.map(r => r.student_id));

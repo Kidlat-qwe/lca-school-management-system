@@ -260,12 +260,14 @@ router.get(
               : null;
 
             const paymentsResult = await query(
-              `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid
+              `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid,
+                      COALESCE(SUM(COALESCE(tip_amount, 0)), 0) AS total_tip
                FROM paymenttbl
                WHERE invoice_id = $1 AND status = 'Completed'`,
               [invoice.invoice_id]
             );
             const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+            const totalTip = Number(paymentsResult.rows[0]?.total_tip || 0);
 
             // For itemized invoices, compute remaining from items - completed payments.
             // For non-itemized/manual invoices, invoicestbl.amount is already treated as remaining.
@@ -318,6 +320,11 @@ router.get(
                 effectiveStatus === 'Balance Invoiced'
                   ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
                   : totalPaid,
+              total_tip_amount: totalTip,
+              total_received_amount:
+                (effectiveStatus === 'Balance Invoiced'
+                  ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
+                  : totalPaid) + totalTip,
               balance_invoice_amount:
                 effectiveStatus === 'Balance Invoiced'
                   ? Number(chainSummary?.remaining_on_leaf ?? effectiveAmount)
@@ -453,12 +460,14 @@ router.get(
         : null;
 
       const paymentsResult = await query(
-        `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid
+        `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid,
+                COALESCE(SUM(COALESCE(tip_amount, 0)), 0) AS total_tip
          FROM paymenttbl
          WHERE invoice_id = $1 AND status = 'Completed'`,
         [id]
       );
       const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+      const totalTip = Number(paymentsResult.rows[0]?.total_tip || 0);
 
       const effectiveAmount =
         baseAmountFromItems !== null
@@ -520,6 +529,8 @@ router.get(
           ...invoiceRow,
           status: effectiveStatus,
           amount: effectiveAmount,
+          total_tip_amount: totalTip,
+          total_received_amount: totalPaid + totalTip,
           display_description: displayDescription,
           items,
           students: studentsWithDisplayName,

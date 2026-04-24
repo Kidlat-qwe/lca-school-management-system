@@ -119,6 +119,7 @@ const FinancePaymentLogs = () => {
       if (filterBranch) params.set('branch_id', filterBranch);
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      const useUnifiedEndpoint = financeLogTab !== 'return';
       if (financeLogTab === 'return') {
         params.set('approval_status', 'Returned');
       } else if (filterFinanceApproval === 'approved') {
@@ -126,12 +127,12 @@ const FinancePaymentLogs = () => {
         params.set('approval_status', 'Approved');
         params.set('exclude_approval_status', 'Returned');
       } else if (filterFinanceApproval === 'pending') {
-        params.set('status', 'Completed');
-        params.set('exclude_approval_status', 'Approved,Returned');
+        params.set('pending_only', '1');
       } else {
-        params.set('exclude_approval_status', 'Returned');
+        params.set('pending_only', '0');
       }
-      const response = await apiRequest(`/payments?${params.toString()}`);
+      const endpoint = useUnifiedEndpoint ? '/payments/finance-unified' : '/payments';
+      const response = await apiRequest(`${endpoint}?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
       if (response.pagination) {
@@ -176,7 +177,7 @@ const FinancePaymentLogs = () => {
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
-    setReferenceModalInput(payment.reference_number || ''); // Prefill for faster cross-checking
+    setReferenceModalInput('');
     setReturnReasonInput('');
     setShowReferenceModal(true);
   };
@@ -226,18 +227,20 @@ const FinancePaymentLogs = () => {
     if (!selectedPaymentForReference) return;
     const enteredRef = referenceModalInput.trim();
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
-
-    if (!originalRef) {
-      appAlert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
-      return;
-    }
     if (!enteredRef) {
-      appAlert('Please enter the reference number exactly as shown on the receipt image.');
+      appAlert('Please enter your Finance/Superfinance reference number before approval.');
       return;
     }
-
+    if (!originalRef) {
+      appAlert(
+        'This payment has no issued reference number. Please Return to branch and ask encoder to provide/fix it first.'
+      );
+      return;
+    }
     if (enteredRef !== originalRef) {
-      appAlert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
+      appAlert(
+        'Reference number does not match the issued reference number. You cannot approve this payment.\n\nPlease use Return to branch.'
+      );
       return;
     }
 
@@ -246,7 +249,10 @@ const FinancePaymentLogs = () => {
     try {
       await apiRequest(`/payments/${paymentId}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({ approve: true }),
+        body: JSON.stringify({
+          approve: true,
+          finance_verified_reference_number: enteredRef,
+        }),
       });
       setPayments((prev) =>
         prev.map((p) =>
@@ -263,6 +269,10 @@ const FinancePaymentLogs = () => {
   };
 
   const handleApprovePayment = async (paymentId, approve) => {
+    if (String(paymentId).startsWith('AR-')) {
+      appAlert('Unapplied AR entries cannot be directly approved in Payment Logs. Attach them during enrollment first.');
+      return;
+    }
     setApprovalLoadingId(paymentId);
     setOpenApprovalMenuId(null);
     try {
@@ -326,7 +336,9 @@ const FinancePaymentLogs = () => {
     const recorderEmail = (payment.payment_created_by_email || '').trim();
     if (recorderName) return recorderName;
     if (recorderEmail) return recorderEmail;
-    return '—';
+    if (payment?.created_by) return `User #${payment.created_by}`;
+    if (!payment?.student_id) return 'Walk-in / AR';
+    return 'System';
   };
 
   const getStatusBadge = (status) => {
@@ -345,6 +357,7 @@ const FinancePaymentLogs = () => {
   };
 
   const getPaymentMethodBadge = (method) => {
+    const methodLabel = method === 'Acknowledgement Receipt' ? 'AR' : method;
     const methodColors = {
       'Cash': 'bg-blue-100 text-blue-800',
       'Credit Card': 'bg-purple-100 text-purple-800',
@@ -352,12 +365,13 @@ const FinancePaymentLogs = () => {
       'Bank Transfer': 'bg-teal-100 text-teal-800',
       'Check': 'bg-orange-100 text-orange-800',
       'Online Payment': 'bg-pink-100 text-pink-800',
+      'Acknowledgement Receipt': 'bg-blue-100 text-blue-800',
       'Other': 'bg-gray-100 text-gray-800',
     };
     const colorClass = methodColors[method] || 'bg-gray-100 text-gray-800';
     return (
       <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
-        {method || 'N/A'}
+        {methodLabel || 'N/A'}
       </span>
     );
   };
@@ -391,6 +405,10 @@ const FinancePaymentLogs = () => {
     
     return matchesSearch && matchesBranch && matchesFinanceApproval && matchesPaymentMethod;
   });
+  const filteredTotalAmount = filteredPayments.reduce(
+    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
+    0
+  );
 
   const handleExportClick = () => {
     setSelectedExportBranches([]);
@@ -429,6 +447,7 @@ const FinancePaymentLogs = () => {
         });
         if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
         if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        const useUnifiedEndpoint = financeLogTab !== 'return';
         if (financeLogTab === 'return') {
           params.set('approval_status', 'Returned');
         } else if (filterFinanceApproval === 'approved') {
@@ -436,12 +455,12 @@ const FinancePaymentLogs = () => {
           params.set('approval_status', 'Approved');
           params.set('exclude_approval_status', 'Returned');
         } else if (filterFinanceApproval === 'pending') {
-          params.set('status', 'Completed');
-          params.set('exclude_approval_status', 'Approved,Returned');
+          params.set('pending_only', '1');
         } else {
-          params.set('exclude_approval_status', 'Returned');
+          params.set('pending_only', '0');
         }
-        return apiRequest(`/payments?${params.toString()}`);
+        const endpoint = useUnifiedEndpoint ? '/payments/finance-unified' : '/payments';
+        return apiRequest(`${endpoint}?${params.toString()}`);
       };
       const fetchAllForBranch = async (branchId) => {
         const result = [];
@@ -475,8 +494,9 @@ const FinancePaymentLogs = () => {
         'Student Name': payment.student_name || 'N/A',
         'Student Email': payment.student_email || '-',
         'Issued by': formatInvoiceIssuedBy(payment),
-        'Payment Method': payment.payment_method || '-',
-        'Payment Type': payment.payment_type || '-',
+        'Payment Method': payment.payment_method === 'Acknowledgement Receipt' ? 'AR' : (payment.payment_method || '-'),
+        'Package/Item': payment.invoice_description || '-',
+        'Level Tag': payment.student_level_tag || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
         'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
@@ -615,19 +635,27 @@ const FinancePaymentLogs = () => {
             Inclusive range on payment date. Leave both empty for all dates.
           </p>
         </div>
-        <div className="rounded-lg overflow-hidden">
-          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed' }}>
+        <div className="mb-2 px-1">
+          <p className="text-sm font-semibold text-gray-700">
+            Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </p>
+        </div>
+        <div className="rounded-lg overflow-x-auto">
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1360px' }}>
               <colgroup>
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '13%' }} />
                 <col style={{ width: '10%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '8%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
                 <col style={{ width: '11%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
               </colgroup>
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
@@ -661,11 +689,20 @@ const FinancePaymentLogs = () => {
                       </div>
                     </div>
                   </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
+                    Branch
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
+                    Date
+                  </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
-                    STUDENT
+                    Student Name
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                    <span className="leading-tight">package/<br />item</span>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Issued by
+                    LEVEL TAG
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <div className="relative payment-method-filter-dropdown">
@@ -691,10 +728,10 @@ const FinancePaymentLogs = () => {
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    TYPE
+                    AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    AMOUNT
+                    TOTAL AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
                     <div className="relative status-filter-dropdown">
@@ -716,7 +753,7 @@ const FinancePaymentLogs = () => {
                           className="flex items-center space-x-1 hover:text-gray-700"
                         >
                           <span title="Finance approval — same as Financial Dashboard verified / unverified">
-                            Approval
+                            Status
                           </span>
                           {filterFinanceApproval ? (
                             <span className="inline-flex items-center justify-center w-1.5 h-1.5 bg-primary-600 rounded-full" aria-hidden />
@@ -734,43 +771,20 @@ const FinancePaymentLogs = () => {
                     </th>
                   ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    <div className="relative branch-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setBranchDropdownRect(rect);
-                          setOpenBranchDropdown(!openBranchDropdown);
-                          setOpenPaymentMethodDropdown(false);
-                          setPaymentMethodDropdownRect(null);
-                          setOpenStatusDropdown(false);
-                          setStatusDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Branch</span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterBranch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    DATE
+                    Reference#
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
                     AR#
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    REFERENCE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Issued By
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={financeLogTab === 'return' ? 12 : 11} className="px-6 py-12 text-center">
+                    <td colSpan={financeLogTab === 'return' ? 14 : 13} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -786,6 +800,23 @@ const FinancePaymentLogs = () => {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
+                      {(() => {
+                        const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
+                        if (!branchName || branchName === 'N/A') return <span className="text-gray-400">-</span>;
+                        const formatted = formatBranchName(branchName);
+                        const fullText = formatted.location ? `${formatted.company} - ${formatted.location}` : formatted.company;
+                        return (
+                          <div className="flex flex-col leading-tight min-w-0">
+                            <span className="font-medium truncate" title={fullText}>{formatted.company}</span>
+                            {formatted.location && <span className="text-xs text-gray-500 truncate" title={formatted.location}>{formatted.location}</span>}
+                          </div>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                      {formatDate(payment.issue_date)}
+                    </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
                         <span className="font-medium truncate" title={payment.student_name || 'N/A'}>{payment.student_name || 'N/A'}</span>
@@ -794,19 +825,24 @@ const FinancePaymentLogs = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
-                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
-                        {formatInvoiceIssuedBy(payment)}
+                    <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
+                      <span className="truncate block" title={payment.student_level_tag || '-'}>
+                        {payment.student_level_tag || '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
+                      <span className="truncate block" title={payment.invoice_description || '-'}>
+                        {payment.invoice_description || '-'}
                       </span>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
-                      {payment.payment_type || '-'}
-                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
                       {formatCurrency(payment.payable_amount)}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-emerald-700 min-w-0">
+                      {formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
@@ -823,9 +859,17 @@ const FinancePaymentLogs = () => {
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
+                          const isUnappliedAr = payment.source_type === 'UNAPPLIED_AR';
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
+                          if (isUnappliedAr) {
+                            return (
+                              <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-800">
+                                Awaiting attachment
+                              </span>
+                            );
+                          }
                           return (
                             <div className="relative min-w-0 max-w-full">
                               <button
@@ -874,34 +918,18 @@ const FinancePaymentLogs = () => {
                         </span>
                       </td>
                     ) : null}
-                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
-                      {(() => {
-                        const branchName = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
-                        if (!branchName || branchName === 'N/A') {
-                          return <span className="text-gray-400">-</span>;
-                        }
-                        const formatted = formatBranchName(branchName);
-                        const fullText = formatted.location ? `${formatted.company} - ${formatted.location}` : formatted.company;
-                        return (
-                          <div className="flex flex-col leading-tight min-w-0">
-                            <span className="font-medium truncate" title={fullText}>{formatted.company}</span>
-                            {formatted.location && (
-                              <span className="text-xs text-gray-500 truncate" title={formatted.location}>{formatted.location}</span>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
+                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-600 min-w-0">
                       <span className="truncate block" title={payment.invoice_ar_number || ''}>
                         {payment.invoice_ar_number || '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0">
-                      <span className="truncate block" title={payment.reference_number || '-'}>{payment.reference_number || '-'}</span>
+                    <td className="px-3 py-2.5 text-sm text-gray-800 min-w-0">
+                      <span className="truncate block" title={formatInvoiceIssuedBy(payment)}>
+                        {formatInvoiceIssuedBy(payment)}
+                      </span>
                     </td>
                   </tr>
                 ))
@@ -961,7 +989,7 @@ const FinancePaymentLogs = () => {
                 filterPaymentMethod === method ? 'bg-gray-100 font-medium' : 'text-gray-700'
               }`}
             >
-              {method}
+              {method === 'Acknowledgement Receipt' ? 'AR' : method}
             </button>
           ))}
         </div>,
@@ -1073,13 +1101,15 @@ const FinancePaymentLogs = () => {
               )}
               <form onSubmit={handleUpdateReferenceNumber}>
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference Number</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Finance/Superfinance Reference Number
+                  </label>
                   <input
                     type="text"
                     value={referenceModalInput}
                     onChange={(e) => setReferenceModalInput(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                    placeholder="Enter verification reference number"
                     required
                   />
                 </div>

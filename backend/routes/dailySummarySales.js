@@ -179,6 +179,10 @@ router.get(
           summary_date: targetDate,
           total_amount: snapshot.total,
           payment_count: snapshot.paymentCount,
+          completed_payment_total: snapshot.completedPaymentTotal,
+          completed_payment_count: snapshot.completedPaymentCount,
+          ar_sales_total: snapshot.arSalesTotal,
+          ar_sales_count: snapshot.arSalesCount,
           payments: snapshot.payments,
           last_submitted_at: lastSubmittedAt,
         },
@@ -203,7 +207,9 @@ const getLastEodSubmittedAt = async ({ branchId, summaryDate }) => {
 };
 
 const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = null }) => {
-  const whereParts = ['p.branch_id = $1', 'p.issue_date = $2::date'];
+  // Keep this aligned with Daily Operational Dashboard:
+  // completed payment sales + AR sales for the selected date.
+  const whereParts = ['p.branch_id = $1', 'p.issue_date = $2::date', "p.status = 'Completed'"];
   const params = [branchId, summaryDate];
   let pc = 2;
 
@@ -216,11 +222,22 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
   const whereClause = whereParts.join(' AND ');
 
   const sumRes = await query(
-    `SELECT COALESCE(SUM(p.payable_amount), 0) AS total,
+    `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total,
             COUNT(*) AS payment_count
      FROM paymenttbl p
      WHERE ${whereClause}`,
     params
+  );
+
+  const arRes = await query(
+    `SELECT
+       COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_total,
+       COUNT(*) AS ar_count
+     FROM acknowledgement_receiptstbl ar
+     WHERE ar.branch_id = $1
+       AND ar.issue_date = $2::date
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled')`,
+    [branchId, summaryDate]
   );
 
   const paymentsRes = await query(
@@ -233,7 +250,9 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
             TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
             u.full_name AS student_name,
             u.email AS student_email,
+            u.level_tag AS student_level_tag,
             i.invoice_description,
+            TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
             i.ack_receipt_id
      FROM paymenttbl p
      LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -244,8 +263,12 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
   );
 
   const row = sumRes.rows[0];
-  const total = Math.round((parseFloat(row?.total || 0)) * 100) / 100;
-  const paymentCount = parseInt(row?.payment_count || 0, 10);
+  const paymentTotal = Math.round((parseFloat(row?.total || 0)) * 100) / 100;
+  const completedPaymentCount = parseInt(row?.payment_count || 0, 10);
+  const arTotal = Math.round((parseFloat(arRes.rows[0]?.ar_total || 0)) * 100) / 100;
+  const arCount = parseInt(arRes.rows[0]?.ar_count || 0, 10);
+  const total = Math.round((paymentTotal + arTotal) * 100) / 100;
+  const paymentCount = completedPaymentCount + arCount;
 
   // Replace Walk-in Customer with AR prospect name for merchandise AR payments
   const payments = [];
@@ -275,6 +298,10 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
   return {
     total,
     paymentCount,
+    completedPaymentTotal: paymentTotal,
+    completedPaymentCount,
+    arSalesTotal: arTotal,
+    arSalesCount: arCount,
     payments,
   };
 };
@@ -554,6 +581,7 @@ const sendEodEmailNotifications = async ({
 };
 
 const createDailySummarySubmissionNotification = async ({
+  dailySummaryId,
   branchId,
   summaryDate,
   totalAmount,
@@ -583,8 +611,45 @@ const createDailySummarySubmissionNotification = async ({
   await query(
     `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
      VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
-    ['End of Shift Submitted', body, ['Admin', 'Finance'], branchId, createdBy, 'daily-summary-sales', 'notificationTab=endOfShift']
+    [
+      'End of Shift Submitted',
+      body,
+      ['Finance'],
+      branchId,
+      createdBy,
+      'daily-summary-sales',
+      `notificationTab=endOfShift${dailySummaryId ? `&dailySummaryId=${dailySummaryId}` : ''}`,
+    ]
   );
+
+  // Explicitly notify all Superadmin users as targeted bell notifications.
+  const superadminRes = await query(
+    `SELECT user_id FROM userstbl WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+  );
+  const superadminIds = (superadminRes.rows || [])
+    .map((row) => row.user_id)
+    .filter((id) => id != null && Number(id) !== Number(createdBy));
+
+  if (superadminIds.length > 0) {
+    await Promise.all(
+      superadminIds.map((targetUserId) =>
+        query(
+          `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+           VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+          [
+            'End of Shift Submitted',
+            body,
+            ['All'],
+            branchId,
+            createdBy,
+            targetUserId,
+            'daily-summary-sales',
+            `notificationTab=endOfShift${dailySummaryId ? `&dailySummaryId=${dailySummaryId}` : ''}`,
+          ]
+        )
+      )
+    );
+  }
 };
 
 /**
@@ -643,7 +708,7 @@ router.post(
       try {
         insertRes = await query(
           `INSERT INTO daily_summary_salestbl (branch_id, summary_date, total_amount, payment_count, status, submitted_by, approved_by, approved_at)
-           VALUES ($1, $2, $3, $4, 'Approved', $5, $5, CURRENT_TIMESTAMP)
+           VALUES ($1, $2, $3, $4, 'Submitted', $5, NULL, NULL)
            RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
           [userBranchId, requestedDate, totalAmount, paymentCount, userId]
         );
@@ -659,6 +724,7 @@ router.post(
       }
 
       await createDailySummarySubmissionNotification({
+        dailySummaryId: insertRes.rows[0]?.daily_summary_id,
         branchId: userBranchId,
         summaryDate: requestedDate,
         totalAmount,
@@ -676,7 +742,7 @@ router.post(
 
       res.status(201).json({
         success: true,
-        message: 'Daily summary submitted and auto-verified successfully',
+        message: 'Daily summary submitted successfully and is awaiting verification',
         data: insertRes.rows[0],
       });
     } catch (error) {
@@ -687,11 +753,11 @@ router.post(
 
 /**
  * PUT /api/sms/daily-summary-sales/:id/approve
- * Verify (approve: true) or flag for review (approve: false) a daily summary. Superadmin and Superfinance only.
+ * Verify (approve: true) or reject (approve: false) a daily summary. Finance and Superfinance only.
  */
 router.put(
   '/:id/approve',
-  requireRole('Superadmin', 'Finance'),
+  requireRole('Finance'),
   [
     param('id').isInt().withMessage('id must be an integer'),
     body('approve').optional().isBoolean().withMessage('approve must be boolean'),
@@ -705,11 +771,23 @@ router.put(
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      // Only Superadmin and Superfinance (Finance with no branch) can verify
-      if (userType === 'Finance' && (userBranchId !== null && userBranchId !== undefined)) {
+      // Branch Finance can verify only their own branch summaries.
+      if (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined) {
+        const branchCheck = await query(
+          'SELECT branch_id FROM daily_summary_salestbl WHERE daily_summary_id = $1',
+          [id]
+        );
+        const targetBranchId = branchCheck.rows[0]?.branch_id;
+        if (targetBranchId && Number(targetBranchId) !== Number(userBranchId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only verify daily summaries for your assigned branch',
+          });
+        }
+      } else if (userType !== 'Finance' && userType !== 'Superfinance') {
         return res.status(403).json({
           success: false,
-          message: 'Only Superadmin and Superfinance can verify daily summaries',
+          message: 'Only Finance and Superfinance can verify daily summaries',
         });
       }
 
@@ -755,7 +833,7 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Daily summary verified' : 'Daily summary flagged for review',
+        message: isApproved ? 'Daily summary verified' : 'Daily summary rejected',
         data: updated.rows[0],
       });
     } catch (error) {
@@ -846,18 +924,37 @@ router.get(
                 p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
                 u.full_name AS student_name,
-                i.invoice_description
+                u.email AS student_email,
+                u.level_tag AS student_level_tag,
+                i.invoice_description,
+                i.ack_receipt_id,
+                ar.prospect_student_name,
+                ar.level_tag AS ar_level_tag
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         LEFT JOIN acknowledgement_receiptstbl ar ON ar.ack_receipt_id = i.ack_receipt_id
          WHERE p.branch_id = $1 AND p.issue_date = $2
          ORDER BY p.payment_id DESC`,
         [branchId, summaryDate]
       );
 
+      const payments = (paymentsRes.rows || []).map((row) => {
+        const isWalkIn = (row.student_email || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+        const resolvedStudentName = isWalkIn && row.prospect_student_name
+          ? row.prospect_student_name
+          : row.student_name;
+
+        return {
+          ...row,
+          student_name: resolvedStudentName,
+          program_level_tag: row.ar_level_tag || row.student_level_tag || null,
+        };
+      });
+
       res.json({
         success: true,
-        data: paymentsRes.rows || [],
+        data: payments,
       });
     } catch (error) {
       next(error);

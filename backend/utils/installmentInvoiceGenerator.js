@@ -34,10 +34,12 @@ export const parseFrequency = (frequency) => {
 export const calculateNextGenerationDate = (currentDate, frequency) => {
   const date = new Date(currentDate);
   const months = parseFrequency(frequency);
-  
+
+  // Enforce fixed monthly generation cadence: every 25th.
+  date.setDate(25);
   // Add months to the date
   date.setMonth(date.getMonth() + months);
-  
+
   return date;
 };
 
@@ -57,6 +59,42 @@ export const calculateNextInvoiceMonth = (currentInvoiceMonth, frequency) => {
   date.setMonth(date.getMonth() + months);
   
   return date;
+};
+
+/**
+ * Build fixed installment cycle dates from a generation anchor date.
+ * Rule:
+ * - Generation/issue date: 25th of the current cycle month
+ * - Invoice month: 1st of the next month
+ * - Due date: 5th of the next month
+ */
+const buildFixedInstallmentCycleDates = (generationAnchor, frequency) => {
+  const months = parseFrequency(frequency);
+  const issueDate = new Date(generationAnchor);
+  issueDate.setDate(25);
+
+  const invoiceMonth = new Date(issueDate);
+  invoiceMonth.setDate(1);
+  invoiceMonth.setMonth(invoiceMonth.getMonth() + 1);
+
+  const dueDate = new Date(invoiceMonth);
+  dueDate.setDate(5);
+
+  const nextGenerationDate = new Date(issueDate);
+  nextGenerationDate.setMonth(nextGenerationDate.getMonth() + months);
+  nextGenerationDate.setDate(25);
+
+  const nextInvoiceMonth = new Date(invoiceMonth);
+  nextInvoiceMonth.setDate(1);
+  nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
+
+  return {
+    issueDate,
+    dueDate,
+    invoiceMonth,
+    nextGenerationDate,
+    nextInvoiceMonth,
+  };
 };
 
 /**
@@ -161,40 +199,14 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         })
       : null;
 
-    // Calculate issue date (use next generation date as issue date).
-    const issueDate = phaseSchedule?.current_issue_date
-      ? parseYmdToLocalNoon(phaseSchedule.current_issue_date)
-      : (
-          typeof installmentInvoice.next_generation_date === 'string'
-            ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
-            : new Date(installmentInvoice.next_generation_date)
-        );
-    
-    // Calculate due date based on whether this is the first installment or subsequent ones.
-    let dueDate;
-    
-    if (phaseSchedule?.current_due_date) {
-      dueDate = parseYmdToLocalNoon(phaseSchedule.current_due_date);
-    } else {
-      // Check if this is the first installment invoice (generated_count = 0 before this generation)
-      const isFirstInvoice = (profile.generated_count || 0) === 0;
-      
-      if (isFirstInvoice && profile.class_id) {
-        // First installment for class-based profile: due before first session of Phase 1.
-        const firstPhaseDueYmd = await getPhaseDueDateYmd(client, profile.class_id, 1);
-        if (firstPhaseDueYmd) {
-          dueDate = parseYmdToLocalNoon(firstPhaseDueYmd);
-        } else {
-          dueDate = new Date(issueDate);
-          dueDate.setMonth(dueDate.getMonth() + 1);
-          dueDate.setDate(5);
-        }
-      } else {
-        dueDate = new Date(issueDate);
-        dueDate.setMonth(dueDate.getMonth() + 1);
-        dueDate.setDate(5);
-      }
-    }
+    // Fixed cadence for all auto-generated installment invoices.
+    const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
+    const generationAnchor = typeof installmentInvoice.next_generation_date === 'string'
+      ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
+      : new Date(installmentInvoice.next_generation_date || new Date());
+    const cycle = buildFixedInstallmentCycleDates(generationAnchor, frequency);
+    const issueDate = cycle.issueDate;
+    const dueDate = cycle.dueDate;
     
     // Calculate final invoice amount after promo discount
     const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
@@ -297,17 +309,9 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       [newInvoice.invoice_id, profile.student_id]
     );
     
-    // Calculate next generation date and next invoice month
-    const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
-    const nextGenDate = calculateNextGenerationDate(
-      installmentInvoice.next_generation_date,
-      frequency
-    );
-    
-    const nextInvoiceMonth = calculateNextInvoiceMonth(
-      installmentInvoice.next_invoice_month || installmentInvoice.next_generation_date,
-      frequency
-    );
+    // Calculate next generation date and next invoice month from fixed cadence.
+    const nextGenDate = cycle.nextGenerationDate;
+    const nextInvoiceMonth = cycle.nextInvoiceMonth;
     
     // Check phase limit before generating
     const profileCheck = await client.query(

@@ -245,6 +245,8 @@ router.get(
           a.announcement_id,
           a.title,
           a.body,
+          a.navigation_key,
+          a.navigation_query,
           a.recipient_groups,
           a.status,
           a.priority,

@@ -540,7 +540,10 @@ router.put(
       // Check if student is already enrolled
       const existingEnrollment = await client.query(
         `SELECT classstudent_id FROM classstudentstbl 
-         WHERE student_id = $1 AND class_id = $2`,
+         WHERE student_id = $1
+           AND class_id = $2
+           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND removed_at IS NULL`,
         [reservation.student_id, reservation.class_id]
       );
 
@@ -557,7 +560,11 @@ router.put(
       // the total count (enrolled + reserved) stays the same. But we should still verify capacity.
       if (classData.max_students) {
         const enrolledCount = await client.query(
-          'SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1',
+          `SELECT COUNT(DISTINCT student_id) as count
+           FROM classstudentstbl
+           WHERE class_id = $1
+             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND removed_at IS NULL`,
           [reservation.class_id]
         );
         const reservedCount = await client.query(

@@ -210,7 +210,7 @@ router.get(
               WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
             )::bigint AS verified_count,
             COALESCE(
-              SUM(p.payable_amount) FILTER (
+              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
               ),
               0
@@ -219,7 +219,7 @@ router.get(
               WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
             )::bigint AS unverified_count,
             COALESCE(
-              SUM(p.payable_amount) FILTER (
+              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
               ),
               0
@@ -233,7 +233,7 @@ router.get(
               WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
             )::bigint AS verified_count,
             COALESCE(
-              SUM(p.payable_amount) FILTER (
+              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
               ),
               0
@@ -242,7 +242,7 @@ router.get(
               WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
             )::bigint AS unverified_count,
             COALESCE(
-              SUM(p.payable_amount) FILTER (
+              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
               ),
               0
@@ -251,6 +251,57 @@ router.get(
         `;
       const paymentVerificationResult = await query(paymentVerificationQuery, branchParams);
       const pvRow = paymentVerificationResult.rows[0] || {};
+
+      // Package AR lifecycle split for verification monitoring.
+      // Verified includes already-applied ARs since those passed verification.
+      const arVerificationQuery = branchFilter
+        ? `
+          SELECT
+            COUNT(*) FILTER (
+              WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
+            )::bigint AS verified_count,
+            COALESCE(
+              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
+                WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
+              ),
+              0
+            ) AS verified_amount,
+            COUNT(*) FILTER (
+              WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
+            )::bigint AS unverified_count,
+            COALESCE(
+              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
+                WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
+              ),
+              0
+            ) AS unverified_amount
+          FROM acknowledgement_receiptstbl ar
+          WHERE ar.branch_id = $1
+        `
+        : `
+          SELECT
+            COUNT(*) FILTER (
+              WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
+            )::bigint AS verified_count,
+            COALESCE(
+              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
+                WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
+              ),
+              0
+            ) AS verified_amount,
+            COUNT(*) FILTER (
+              WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
+            )::bigint AS unverified_count,
+            COALESCE(
+              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
+                WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
+              ),
+              0
+            ) AS unverified_amount
+          FROM acknowledgement_receiptstbl ar
+        `;
+      const arVerificationResult = await query(arVerificationQuery, branchParams);
+      const arvRow = arVerificationResult.rows[0] || {};
 
       const reservationStatusQuery = branchFilter
         ? `
@@ -375,6 +426,12 @@ router.get(
             unverified_count: parseInt(pvRow.unverified_count, 10) || 0,
             unverified_amount: parseFloat(pvRow.unverified_amount) || 0,
           },
+          ar_verification: {
+            verified_count: parseInt(arvRow.verified_count, 10) || 0,
+            verified_amount: parseFloat(arvRow.verified_amount) || 0,
+            unverified_count: parseInt(arvRow.unverified_count, 10) || 0,
+            unverified_amount: parseFloat(arvRow.unverified_amount) || 0,
+          },
           crossing_procedures: {
             total_violations: crossingProceduresResult.rows.length,
             violations: crossingProceduresResult.rows.map((row) => ({
@@ -454,11 +511,21 @@ router.get(
             daily_sales AS (
               SELECT
                 p.branch_id,
-                COALESCE(SUM(p.payable_amount), 0) AS daily_sales_amount
+                COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS daily_sales_amount
               FROM paymenttbl p
               WHERE p.status = 'Completed'
                 AND p.issue_date = $${branchParams.length + 1}::date
               GROUP BY p.branch_id
+            ),
+            ar_sales AS (
+              SELECT
+                ar.branch_id,
+                COUNT(*)::bigint AS ar_sales_count,
+                COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_sales_amount
+              FROM acknowledgement_receiptstbl ar
+              WHERE ar.issue_date = $${branchParams.length + 1}::date
+                AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled')
+              GROUP BY ar.branch_id
             ),
             merchandise_release AS (
               SELECT
@@ -507,14 +574,6 @@ router.get(
                 AND cs.enrolled_at IS NOT NULL
                 AND cs.enrolled_at < cs.removed_at
                 AND TIMEZONE('Asia/Manila', cs.removed_at)::date = $${branchParams.length + 1}::date
-                AND (
-                  c.start_date IS NULL
-                  OR TIMEZONE('Asia/Manila', cs.removed_at)::date >= c.start_date
-                )
-                AND (
-                  c.end_date IS NULL
-                  OR TIMEZONE('Asia/Manila', cs.removed_at)::date <= c.end_date
-                )
               GROUP BY c.branch_id
             )
             SELECT
@@ -522,6 +581,8 @@ router.get(
               bs.branch_name,
               COALESCE(ne.new_enrollees, 0)::bigint AS new_enrollees,
               COALESCE(ds.daily_sales_amount, 0) AS daily_sales_amount,
+              COALESCE(ars.ar_sales_count, 0)::bigint AS ar_sales_count,
+              COALESCE(ars.ar_sales_amount, 0) AS ar_sales_amount,
               COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
               COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
               COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
@@ -529,6 +590,7 @@ router.get(
             FROM branch_scope bs
             LEFT JOIN new_enrollees ne ON ne.branch_id = bs.branch_id
             LEFT JOIN daily_sales ds ON ds.branch_id = bs.branch_id
+            LEFT JOIN ar_sales ars ON ars.branch_id = bs.branch_id
             LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
             LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
             LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
@@ -543,7 +605,7 @@ router.get(
           `
             SELECT
               p.issue_date::text AS issue_date,
-              COALESCE(SUM(p.payable_amount), 0) AS total_amount
+              COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total_amount
             FROM paymenttbl p
             WHERE p.status = 'Completed'
               AND p.issue_date >= $${branchParams.length + 1}::date - INTERVAL '6 days'
@@ -566,6 +628,8 @@ router.get(
         branch_name: row.branch_name,
         new_enrollees: parseInt(row.new_enrollees, 10) || 0,
         daily_sales_amount: parseFloat(row.daily_sales_amount) || 0,
+        ar_sales_count: parseInt(row.ar_sales_count, 10) || 0,
+        ar_sales_amount: parseFloat(row.ar_sales_amount) || 0,
         merchandise_released_count: parseInt(row.merchandise_released_count, 10) || 0,
         merchandise_released_quantity: parseFloat(row.merchandise_released_quantity) || 0,
         re_enrollment_count: parseInt(row.re_enrollment_count, 10) || 0,
@@ -576,6 +640,8 @@ router.get(
         (acc, row) => ({
           new_enrollees: acc.new_enrollees + row.new_enrollees,
           daily_sales_amount: acc.daily_sales_amount + row.daily_sales_amount,
+          ar_sales_count: acc.ar_sales_count + row.ar_sales_count,
+          ar_sales_amount: acc.ar_sales_amount + row.ar_sales_amount,
           merchandise_released_count: acc.merchandise_released_count + row.merchandise_released_count,
           merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
           re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
@@ -584,6 +650,7 @@ router.get(
             acc.active_branches +
             (row.new_enrollees > 0 ||
             row.daily_sales_amount > 0 ||
+            row.ar_sales_amount > 0 ||
             row.merchandise_released_count > 0 ||
             row.re_enrollment_count > 0 ||
             row.dropped_unenrolled_count > 0
@@ -593,6 +660,8 @@ router.get(
         {
           new_enrollees: 0,
           daily_sales_amount: 0,
+          ar_sales_count: 0,
+          ar_sales_amount: 0,
           merchandise_released_count: 0,
           merchandise_released_quantity: 0,
           re_enrollment_count: 0,
@@ -624,6 +693,8 @@ router.get(
               branch_name: row.branch_name,
               new_enrollees: row.new_enrollees,
               daily_sales_amount: row.daily_sales_amount,
+              ar_sales_count: row.ar_sales_count,
+              ar_sales_amount: row.ar_sales_amount,
               merchandise_released_count: row.merchandise_released_count,
               merchandise_released_quantity: row.merchandise_released_quantity,
               re_enrollment_count: row.re_enrollment_count,
@@ -631,6 +702,7 @@ router.get(
             })),
             activity_mix: [
               { name: 'New Enrollees', value: totals.new_enrollees },
+              { name: 'AR Sales', value: totals.ar_sales_count },
               { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
               { name: 'Re-enrollment', value: totals.re_enrollment_count },
               { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
@@ -706,6 +778,9 @@ router.get(
 
       // Inactive = total students - active (students with no active enrollment)
       const inactiveStudents = Math.max(0, totalStudents - activeStudents);
+      const enrollmentRate = totalStudents > 0
+        ? Number(((activeStudents / totalStudents) * 100).toFixed(2))
+        : 0;
 
       // Reserved-only: students who have at least one reservation and zero active enrollments
       const reservedOnlyQuery = branchFilter
@@ -801,6 +876,7 @@ router.get(
           total_students: totalStudents,
           active_students: activeStudents,
           inactive_students: inactiveStudents,
+          enrollment_rate: enrollmentRate,
           reserved_only_count: reservedOnlyCount,
           monthly_enrollments,
           active_inactive_by_branch,

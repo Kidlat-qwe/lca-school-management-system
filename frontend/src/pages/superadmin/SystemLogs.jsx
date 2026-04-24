@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { formatDateTimeManila } from '../../utils/dateUtils';
 
@@ -105,6 +106,7 @@ const getFriendlySummary = (row) => {
 
 const SystemLogs = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const isAdminOnly = (userInfo?.user_type || userInfo?.userType) === 'Admin';
 
   const [rows, setRows] = useState([]);
@@ -142,6 +144,7 @@ const SystemLogs = () => {
         if (entityType.trim()) params.set('entity_type', entityType.trim());
         if (from) params.set('from', from);
         if (to) params.set('to', to);
+        if (!isAdminOnly && globalBranchId) params.set('branch_id', String(globalBranchId));
 
         const res = await apiRequest(`/system-logs?${params.toString()}`);
         setRows(res.data || []);
@@ -161,7 +164,7 @@ const SystemLogs = () => {
         setLoading(false);
       }
     },
-    [debouncedSearch, action, entityType, from, to, pagination.limit]
+    [debouncedSearch, action, entityType, from, to, pagination.limit, isAdminOnly, globalBranchId]
   );
 
   useEffect(() => {

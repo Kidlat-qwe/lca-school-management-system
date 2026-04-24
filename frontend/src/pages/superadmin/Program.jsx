@@ -24,6 +24,7 @@ const Program = () => {
     program_code: '',
     curriculum_id: '',
     session_duration_hours: '',
+    custom_program_name: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -38,6 +39,13 @@ const Program = () => {
   };
 
   const programNames = ['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'];
+  const normalizedProgramName = formData.program_name.trim();
+  const isOtherProgramSelected = normalizedProgramName === 'Others';
+  const effectiveProgramName = isOtherProgramSelected
+    ? formData.custom_program_name.trim()
+    : normalizedProgramName;
+  const isCustomProgramName =
+    effectiveProgramName.length > 0 && !programNames.includes(effectiveProgramName);
 
   useEffect(() => {
     fetchPrograms();
@@ -163,6 +171,7 @@ const Program = () => {
       program_code: '',
       curriculum_id: '',
       session_duration_hours: '',
+      custom_program_name: '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -192,10 +201,11 @@ const Program = () => {
     const programCode = programNameToCode[programName] || program.program_code || '';
     
     setFormData({
-      program_name: programName,
+      program_name: programNames.includes(programName) ? programName : 'Others',
       program_code: programCode,
       curriculum_id: program.curriculum_id ? program.curriculum_id.toString() : '',
       session_duration_hours: durationHours,
+      custom_program_name: programNames.includes(programName) ? '' : programName,
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -216,7 +226,8 @@ const Program = () => {
       setFormData((prev) => ({
         ...prev,
         program_name: value,
-        program_code: programCode,
+        custom_program_name: value === 'Others' ? prev.custom_program_name : '',
+        program_code: value === 'Others' ? prev.program_code : (programCode || ''),
       }));
     } else {
       setFormData((prev) => ({
@@ -241,8 +252,17 @@ const Program = () => {
     
     if (!formData.program_name.trim()) {
       errors.program_name = 'Program name is required';
-    } else if (!programNames.includes(formData.program_name)) {
-      errors.program_name = 'Please select a valid program name';
+    }
+    if (isOtherProgramSelected && !formData.custom_program_name.trim()) {
+      errors.custom_program_name = 'Please type a custom program name';
+    }
+
+    if (!formData.curriculum_id) {
+      errors.curriculum_id = 'Curriculum is required';
+    }
+
+    if (isCustomProgramName && !formData.program_code.trim()) {
+      errors.program_code = 'Program code is required when using Others/custom program name';
     }
 
     // Validate session duration (0.5-8 hours)
@@ -267,12 +287,12 @@ const Program = () => {
     setSubmitting(true);
     try {
       // Ensure program code is set correctly based on program name
-      const programCode = programNameToCode[formData.program_name] || formData.program_code.trim() || null;
+      const programCode = programNameToCode[effectiveProgramName] || formData.program_code.trim() || null;
       
       const payload = {
-        program_name: formData.program_name.trim(),
-        program_code: programCode,
-        curriculum_id: formData.curriculum_id ? parseInt(formData.curriculum_id) : null,
+        program_name: effectiveProgramName,
+        program_code: isCustomProgramName ? formData.program_code.trim() : programCode,
+        curriculum_id: parseInt(formData.curriculum_id),
         session_duration_hours: formData.session_duration_hours && formData.session_duration_hours.trim() !== ''
           ? parseFloat(formData.session_duration_hours)
           : null,
@@ -670,46 +690,78 @@ const Program = () => {
                             {name}
                           </option>
                         ))}
+                        <option value="Others">Others</option>
                       </select>
                       {formErrors.program_name && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.program_name}</p>
                       )}
                     </div>
 
+                    {isOtherProgramSelected && (
+                      <div>
+                        <label htmlFor="custom_program_name" className="label-field">
+                          Custom Program Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          id="custom_program_name"
+                          name="custom_program_name"
+                          value={formData.custom_program_name}
+                          onChange={handleInputChange}
+                          className={`input-field ${formErrors.custom_program_name ? 'border-red-500' : ''}`}
+                          placeholder="Type custom program name"
+                          required
+                        />
+                        {formErrors.custom_program_name && (
+                          <p className="mt-1 text-sm text-red-600">{formErrors.custom_program_name}</p>
+                        )}
+                      </div>
+                    )}
+
                     <div>
                       <label htmlFor="program_code" className="label-field">
-                        Program Code
+                        Program Code {isCustomProgramName ? <span className="text-red-500">*</span> : null}
                       </label>
                       <input
                         type="text"
                         id="program_code"
                         name="program_code"
                         value={formData.program_code}
-                        readOnly
-                        className="input-field bg-gray-100 cursor-not-allowed"
-                        placeholder="Auto-generated from program name"
+                        onChange={handleInputChange}
+                        readOnly={!isCustomProgramName}
+                        className={`input-field ${isCustomProgramName ? '' : 'bg-gray-100 cursor-not-allowed'} ${formErrors.program_code ? 'border-red-500' : ''}`}
+                        placeholder={isCustomProgramName ? 'Type Program Code' : 'Auto-generated from program name'}
                       />
-                      <p className="mt-1 text-xs text-gray-500">Automatically generated based on program name</p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {isCustomProgramName ? 'Required for Others/custom program names' : 'Automatically generated based on program name'}
+                      </p>
+                      {formErrors.program_code && (
+                        <p className="mt-1 text-sm text-red-600">{formErrors.program_code}</p>
+                      )}
                     </div>
 
                     <div className="md:col-span-2">
                       <label htmlFor="curriculum_id" className="label-field">
-                        Curriculum
+                        Curriculum <span className="text-red-500">*</span>
                       </label>
                       <select
                         id="curriculum_id"
                         name="curriculum_id"
                         value={formData.curriculum_id}
                         onChange={handleInputChange}
-                        className="input-field"
+                        className={`input-field ${formErrors.curriculum_id ? 'border-red-500' : ''}`}
+                        required
                       >
-                        <option value="">Select Curriculum (Optional)</option>
+                        <option value="">Select Curriculum</option>
                         {curricula.map((curriculum) => (
                           <option key={curriculum.curriculum_id} value={curriculum.curriculum_id}>
                             {curriculum.curriculum_name}
                           </option>
                         ))}
                       </select>
+                      {formErrors.curriculum_id && (
+                        <p className="mt-1 text-sm text-red-600">{formErrors.curriculum_id}</p>
+                      )}
                     </div>
                   </div>
 
