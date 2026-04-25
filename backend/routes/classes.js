@@ -3584,6 +3584,7 @@ router.post(
       // Check if student is already enrolled
       const existingEnrollment = await client.query(
         `SELECT classstudent_id
+              , phase_number
          FROM classstudentstbl
          WHERE student_id = $1
            AND class_id = $2
@@ -3591,13 +3592,13 @@ router.post(
            AND removed_at IS NULL`,
         [student_id, class_id]
       );
-      if (existingEnrollment.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          success: false,
-          message: 'Student is already enrolled in this class',
-        });
-      }
+      const hasActiveEnrollmentInClass = existingEnrollment.rows.length > 0;
+      const highestActivePhaseInClass = hasActiveEnrollmentInClass
+        ? existingEnrollment.rows.reduce((max, row) => {
+            const phaseNum = parseInt(row.phase_number, 10);
+            return Number.isInteger(phaseNum) && phaseNum > max ? phaseNum : max;
+          }, 0)
+        : 0;
 
       // Update student's level_tag to match class's level_tag if they differ
       const classLevelTag = classData.level_tag;
@@ -6026,6 +6027,34 @@ router.post(
           return res.status(400).json({
             success: false,
             message: `Room with ID ${scheduleRoomId} belongs to a different branch`,
+          });
+        }
+      }
+
+      // Existing enrollment handling:
+      // - Default behavior stays the same (reject duplicate enrollment in same class).
+      // - Allow "continue per phase" only when the requested start phase is strictly after
+      //   the student's highest active phase in this class.
+      if (hasActiveEnrollmentInClass) {
+        const requestedContinuationStart = (() => {
+          if (Number.isInteger(installmentPhaseStart) && installmentPhaseStart > 0) return installmentPhaseStart;
+          if (Number.isInteger(phaseStartForRemarks) && phaseStartForRemarks > 0) return phaseStartForRemarks;
+          if (phase_number !== undefined && phase_number !== null) {
+            const parsed = parseInt(phase_number, 10);
+            if (Number.isInteger(parsed) && parsed > 0) return parsed;
+          }
+          return null;
+        })();
+
+        const canContinuePerPhase =
+          Number.isInteger(requestedContinuationStart) &&
+          requestedContinuationStart > highestActivePhaseInClass;
+
+        if (!canContinuePerPhase) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: 'Student is already enrolled in this class',
           });
         }
       }

@@ -229,6 +229,9 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
     params
   );
 
+  // AR bucket = receipt-only (not yet posted as a completed payment). When an AR is used on
+  // enrollment, a payment is created; exclude that AR from AR totals to avoid double-count
+  // with the Completed Payments total for the same economic event.
   const arRes = await query(
     `SELECT
        COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_total,
@@ -236,7 +239,9 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
      FROM acknowledgement_receiptstbl ar
      WHERE ar.branch_id = $1
        AND ar.issue_date = $2::date
-       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled')`,
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+       AND ar.payment_id IS NULL
+       AND ar.invoice_id IS NULL`,
     [branchId, summaryDate]
   );
 
@@ -608,19 +613,8 @@ const createDailySummarySubmissionNotification = async ({
 
   const body = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${Number(totalAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
 
-  await query(
-    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
-     VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
-    [
-      'End of Shift Submitted',
-      body,
-      ['Finance'],
-      branchId,
-      createdBy,
-      'daily-summary-sales',
-      `notificationTab=endOfShift${dailySummaryId ? `&dailySummaryId=${dailySummaryId}` : ''}`,
-    ]
-  );
+  // No Finance / Superfinance group bell notification for EOD (per product rules).
+  // Cash deposit submissions still use the Finance group in cashDepositSummaries.js.
 
   // Explicitly notify all Superadmin users as targeted bell notifications.
   const superadminRes = await query(
@@ -753,11 +747,12 @@ router.post(
 
 /**
  * PUT /api/sms/daily-summary-sales/:id/approve
- * Verify (approve: true) or reject (approve: false) a daily summary. Finance and Superfinance only.
+ * Verify (approve: true) or reject (approve: false) an End of Shift (daily) summary.
+ * Superadmin, Finance, and Superfinance. Branch-scoped Finance only for their branch; others all branches.
  */
 router.put(
   '/:id/approve',
-  requireRole('Finance'),
+  requireRole('Superadmin', 'Finance', 'Superfinance'),
   [
     param('id').isInt().withMessage('id must be an integer'),
     body('approve').optional().isBoolean().withMessage('approve must be boolean'),
@@ -771,7 +766,8 @@ router.put(
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      // Branch Finance can verify only their own branch summaries.
+      // Branch-scoped Finance can verify only their own branch summaries. Superadmin and
+      // Superfinance (no branch) can verify any branch. HQ Finance (no branch) can verify any.
       if (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined) {
         const branchCheck = await query(
           'SELECT branch_id FROM daily_summary_salestbl WHERE daily_summary_id = $1',
@@ -784,11 +780,6 @@ router.put(
             message: 'You can only verify daily summaries for your assigned branch',
           });
         }
-      } else if (userType !== 'Finance' && userType !== 'Superfinance') {
-        return res.status(403).json({
-          success: false,
-          message: 'Only Finance and Superfinance can verify daily summaries',
-        });
       }
 
       const checkRes = await query(

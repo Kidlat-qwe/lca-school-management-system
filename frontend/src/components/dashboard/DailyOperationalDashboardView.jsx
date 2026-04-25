@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Area,
   AreaChart,
@@ -15,6 +16,7 @@ import {
   YAxis,
 } from 'recharts';
 import { apiRequest } from '../../config/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { DashboardStatIcon } from './DashboardStatIcons';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
@@ -28,21 +30,33 @@ const formatCurrency = (amount) =>
 const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
 const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
-const StatsCard = ({ title, value, iconName, accent, subtitle }) => (
-  <div className="group relative h-full overflow-hidden rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200">
-    <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-semibold text-gray-700 leading-tight">{title}</p>
-        <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}>
-          <DashboardStatIcon name={iconName} className="h-5 w-5 text-white drop-shadow-sm" />
+const StatsCard = ({ title, value, iconName, accent, subtitle, onClick, ariaLabel }) => {
+  const Wrapper = onClick ? 'button' : 'div';
+  return (
+    <Wrapper
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      aria-label={ariaLabel || (onClick ? title : undefined)}
+      className={`group relative h-full w-full overflow-hidden rounded-2xl bg-white p-5 text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${onClick ? 'cursor-pointer' : ''}`}
+    >
+      <div className="flex h-full flex-col">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm font-semibold text-gray-700 leading-tight">{title}</p>
+          <div
+            className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}
+          >
+            <DashboardStatIcon name={iconName} className="h-5 w-5 text-white drop-shadow-sm" />
+          </div>
         </div>
+        <p className="mt-3 text-[1.65rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
+        {subtitle ? <p className="mt-2 text-[11px] leading-4 font-medium text-gray-500">{subtitle}</p> : null}
       </div>
-      <p className="mt-3 text-[1.65rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
-      {subtitle ? <p className="mt-2 text-[11px] leading-4 font-medium text-gray-500">{subtitle}</p> : null}
-    </div>
-    <div className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`} />
-  </div>
-);
+      <div
+        className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`}
+      />
+    </Wrapper>
+  );
+};
 
 const ChartCard = ({ title, subtitle, children, className = '' }) => (
   <div className={`rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 ${className}`}>
@@ -65,10 +79,15 @@ const DailyOperationalDashboardView = ({
   branchName = '',
   canFilterAcrossBranches = false,
 }) => {
+  const navigate = useNavigate();
+  const { userInfo } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedDate, setSelectedDate] = useState(getTodayManila());
+  const userType = userInfo?.user_type || userInfo?.userType || '';
+  const isAdmin = userType === 'Admin';
+  const basePath = isAdmin ? '/admin' : '/superadmin';
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -124,6 +143,14 @@ const DailyOperationalDashboardView = ({
     merchandise_released_quantity: 0,
     re_enrollment_count: 0,
     dropped_unenrolled_count: 0,
+    pay_verified_count: 0,
+    pay_verified_amount: 0,
+    pay_unverified_count: 0,
+    pay_unverified_amount: 0,
+    ar_verified_count: 0,
+    ar_verified_amount: 0,
+    ar_unverified_count: 0,
+    ar_unverified_amount: 0,
     active_branches: 0,
   };
 
@@ -135,6 +162,33 @@ const DailyOperationalDashboardView = ({
       'Selected Branch'
     );
   }, [branchId, branchName, data]);
+
+  const verificationAsOf = data?.verification_as_of || getTodayManila();
+
+  const goPaymentLogsByVerify = useCallback(
+    (kind) => {
+      const p = new URLSearchParams();
+      p.set('notificationTab', 'main');
+      p.set('issue_date_from', verificationAsOf);
+      p.set('issue_date_to', verificationAsOf);
+      p.set('financeApproval', kind === 'verified' ? 'approved' : 'pending');
+      navigate(`${basePath}/payment-logs?${p.toString()}`);
+    },
+    [basePath, navigate, verificationAsOf]
+  );
+
+  const goArByVerify = useCallback(
+    (kind) => {
+      const p = new URLSearchParams();
+      p.set('page', '1');
+      p.set('status', kind === 'verified' ? 'Verified,Applied' : 'Submitted,Pending,Paid');
+      if (branchId && canFilterAcrossBranches) {
+        p.set('branch_id', String(branchId));
+      }
+      navigate(`${basePath}/acknowledgement-receipts?${p.toString()}`);
+    },
+    [basePath, branchId, canFilterAcrossBranches, navigate]
+  );
   const isHeadquartersView = canFilterAcrossBranches && !branchId;
   const headquarterSummary = useMemo(() => {
     if (!isHeadquartersView || branchBreakdown.length === 0) {
@@ -260,7 +314,7 @@ const DailyOperationalDashboardView = ({
             subtitle="Recognized posted payments only"
           />
           <StatsCard
-            title="Acknowledgement Receipts"
+            title="AR Sales"
             value={formatCurrency(totals.ar_sales_amount)}
             iconName="clipboardList"
             accent="bg-gradient-to-br from-violet-500 to-purple-600"
@@ -282,10 +336,56 @@ const DailyOperationalDashboardView = ({
           />
         </div>
 
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-700">
+            Verification (today, Manila: <span className="font-semibold text-gray-900">{verificationAsOf}</span>)
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatsCard
+              title="Payments (approved)"
+              value={formatNumber(totals.pay_verified_count || 0)}
+              iconName="currency"
+              accent="bg-gradient-to-br from-cyan-500 to-teal-600"
+              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total · completed payments · today · approval=Approved`}
+              onClick={() => goPaymentLogsByVerify('verified')}
+              ariaLabel="Open payment logs for approved completed payments for today in Manila"
+            />
+            <StatsCard
+              title="Payments (not approved yet)"
+              value={formatNumber(totals.pay_unverified_count || 0)}
+              iconName="chartBar"
+              accent="bg-gradient-to-br from-slate-500 to-slate-600"
+              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total · completed · pending approval`}
+              onClick={() => goPaymentLogsByVerify('unverified')}
+              ariaLabel="Open payment logs for not-yet-approved completed payments for today in Manila"
+            />
+            <StatsCard
+              title="AR (verified or applied)"
+              value={formatNumber(totals.ar_verified_count || 0)}
+              iconName="clipboardList"
+              accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
+              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package AR · today issue date`}
+              onClick={() => goArByVerify('verified')}
+              ariaLabel="Open AR list filtered to verified and applied"
+            />
+            <StatsCard
+              title="AR (not verified yet)"
+              value={formatNumber(totals.ar_unverified_count || 0)}
+              iconName="academicCap"
+              accent="bg-gradient-to-br from-amber-500 to-orange-600"
+              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total · not verified yet · today issue date`}
+              onClick={() => goArByVerify('unverified')}
+              ariaLabel="Open AR list filtered to unverified statuses"
+            />
+          </div>
+        </div>
+
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
           <p className="text-xs font-medium text-indigo-800">
-            Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> is posted payment revenue.{' '}
-            <span className="font-semibold">Acknowledgement Receipts</span> is acknowledgement-receipt collection for the day.
+            Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> sums completed rows in payments.
+            <span className="font-semibold"> Acknowledgement Receipts</span> (top row) is unapplied AR float, not the same
+            as verification <span className="font-semibold">Package AR</span> (verified+), which is Package ARs in Verified or
+            Applied status.
           </p>
         </div>
 
@@ -340,7 +440,8 @@ const DailyOperationalDashboardView = ({
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Selected day&apos;s operational performance grouped by branch.
+                Most columns use the selected day; Pay. approved, Pay. pending, Pkg AR verified+, and Pkg AR unverified use
+                today in Manila ({verificationAsOf}).
               </p>
             </div>
             <p className="text-xs text-gray-500">
@@ -356,33 +457,61 @@ const DailyOperationalDashboardView = ({
               WebkitOverflowScrolling: 'touch',
             }}
           >
-            <table style={{ width: '100%', minWidth: '1240px' }} className="border-collapse text-sm">
+            <table style={{ width: '100%', minWidth: '1600px' }} className="border-collapse text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Daily Sales</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">AR Sales</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Qty</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merchandise Txns</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Re-enrollment</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Daily Sales</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">AR (float)</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
+                    <span className="block">Pay.</span>
+                    <span className="block">approved</span>
+                  </th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
+                    <span className="block">Pay.</span>
+                    <span className="block">pending</span>
+                  </th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
+                    <span className="block">Pkg AR</span>
+                    <span className="block">verified+</span>
+                  </th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
+                    <span className="block">Pkg AR</span>
+                    <span className="block">unverified</span>
+                  </th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merch. Qty</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merch. Txns</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Re-enrollment</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {branchBreakdown.map((row) => (
                   <tr key={row.branch_id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.branch_name}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.new_enrollees)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.dropped_unenrolled_count || 0)}</td>
-                    <td className="px-4 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
-                    <td className="px-4 py-3 text-right font-medium text-violet-700">
+                    <td className="px-3 py-3 font-medium text-gray-900">{row.branch_name}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.new_enrollees)}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.dropped_unenrolled_count || 0)}</td>
+                    <td className="px-3 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
+                    <td className="px-3 py-3 text-right font-medium text-violet-700">
                       {formatCurrency(row.ar_sales_amount)}
                       <span className="ml-1 text-xs text-gray-500">({formatNumber(row.ar_sales_count)})</span>
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_quantity)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_count)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{formatNumber(row.re_enrollment_count)}</td>
+                    <td className="px-3 py-3 text-right text-cyan-800 text-xs">
+                      {formatCurrency(row.pay_verified_amount || 0)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-slate-700 text-xs">
+                      {formatCurrency(row.pay_unverified_amount || 0)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-fuchsia-800 text-xs">
+                      {formatCurrency(row.ar_verified_amount || 0)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-amber-800 text-xs">
+                      {formatCurrency(row.ar_unverified_amount || 0)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_quantity)}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_count)}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.re_enrollment_count)}</td>
                   </tr>
                 ))}
               </tbody>

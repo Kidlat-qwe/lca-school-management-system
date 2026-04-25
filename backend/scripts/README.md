@@ -4,6 +4,31 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `deleteTodayAcknowledgementReceipts.js`
+
+Deletes acknowledgement receipts for a target date (default: today in Manila timezone).
+
+**Usage:**
+```bash
+# Dry run for today (Asia/Manila)
+node scripts/deleteTodayAcknowledgementReceipts.js
+
+# Execute deletion for today
+node scripts/deleteTodayAcknowledgementReceipts.js --apply
+
+# Execute deletion for a specific date
+node scripts/deleteTodayAcknowledgementReceipts.js --date=2026-04-25 --apply
+
+# Include applied/linked rows (invoice_id/payment_id/status=Applied)
+node scripts/deleteTodayAcknowledgementReceipts.js --include-applied --apply
+```
+
+**Options:**
+- `--date=YYYY-MM-DD`: Override target date. Default is today in `Asia/Manila`.
+- `--include-applied`: Include rows already linked/applied.
+- `--apply`: Actually delete rows. Without this, script is dry-run only.
+- `--help, -h`: Show usage help.
+
 ### `listFirebaseUsers.js`
 
 Lists all users registered in Firebase Authentication.

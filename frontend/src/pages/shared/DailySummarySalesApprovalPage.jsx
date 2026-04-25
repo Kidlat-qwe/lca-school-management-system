@@ -40,7 +40,9 @@ const DailySummarySalesApprovalPage = () => {
 
   const isCashDepositTab = activeTab === TAB_CASH_DEPOSIT;
   const currentUserType = userInfo?.user_type || userInfo?.userType || '';
-  const canVerifySummary = currentUserType === 'Finance' || currentUserType === 'Superfinance';
+  const canVerifyEndOfShift = ['Superadmin', 'Finance', 'Superfinance'].includes(currentUserType);
+  const canVerifyCashDeposit = currentUserType === 'Finance' || currentUserType === 'Superfinance';
+  const canVerifySummary = isCashDepositTab ? canVerifyCashDeposit : canVerifyEndOfShift;
   const recordIdField = isCashDepositTab ? 'cash_deposit_summary_id' : 'daily_summary_id';
   const itemLabel = isCashDepositTab ? 'cash deposit summaries' : 'summaries';
   const effectiveBranchFilter = globalBranchId || '';
@@ -336,7 +338,8 @@ const DailySummarySalesApprovalPage = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Branch admin submissions appear here as Submitted. Finance/Superfinance can review and either verify or reject.
+          Branch admin submissions appear here as Submitted. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
+          Cash deposit: Finance or Superfinance can verify or reject.
         </p>
       </div>
 
@@ -402,7 +405,7 @@ const DailySummarySalesApprovalPage = () => {
         className="overflow-x-auto rounded-lg"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
       >
-        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '980px' : '800px' }}>
+        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '980px' : '900px' }}>
           <thead className="bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Branch</th>
@@ -422,19 +425,22 @@ const DailySummarySalesApprovalPage = () => {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
               ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Submitted By</th>
+              {!isCashDepositTab ? (
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Approved By</th>
+              ) : null}
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 8 : 7} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
                   Loading...
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 8 : 7} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
                   {isCashDepositTab ? 'No cash deposit summaries found.' : 'No daily summaries found.'}
                 </td>
               </tr>
@@ -456,6 +462,9 @@ const DailySummarySalesApprovalPage = () => {
                     <td className="px-4 py-3">{statusBadge(record.status)}</td>
                   ) : null}
                   <td className="px-4 py-3 text-sm text-gray-600">{record.submitted_by_name || '-'}</td>
+                  {!isCashDepositTab ? (
+                    <td className="px-4 py-3 text-sm text-gray-600">{record.approved_by_name || '-'}</td>
+                  ) : null}
                   <td className="px-4 py-3 text-right whitespace-nowrap align-middle">
                     <div className="inline-flex items-center justify-end">
                       <button

@@ -524,7 +524,9 @@ router.get(
                 COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_sales_amount
               FROM acknowledgement_receiptstbl ar
               WHERE ar.issue_date = $${branchParams.length + 1}::date
-                AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled')
+                AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+                AND ar.payment_id IS NULL
+                AND ar.invoice_id IS NULL
               GROUP BY ar.branch_id
             ),
             merchandise_release AS (
@@ -575,6 +577,50 @@ router.get(
                 AND cs.enrolled_at < cs.removed_at
                 AND TIMEZONE('Asia/Manila', cs.removed_at)::date = $${branchParams.length + 1}::date
               GROUP BY c.branch_id
+            ),
+            pay_verified AS (
+              SELECT
+                p.branch_id,
+                COUNT(*)::bigint AS pay_verified_count,
+                COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS pay_verified_amount
+              FROM paymenttbl p
+              WHERE p.status = 'Completed'
+                AND p.issue_date = $${branchParams.length + 2}::date
+                AND p.approval_status = 'Approved'
+              GROUP BY p.branch_id
+            ),
+            pay_unverified AS (
+              SELECT
+                p.branch_id,
+                COUNT(*)::bigint AS pay_unverified_count,
+                COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS pay_unverified_amount
+              FROM paymenttbl p
+              WHERE p.status = 'Completed'
+                AND p.issue_date = $${branchParams.length + 2}::date
+                AND (p.approval_status IS NULL OR p.approval_status <> 'Approved')
+              GROUP BY p.branch_id
+            ),
+            ar_verified AS (
+              SELECT
+                ar.branch_id,
+                COUNT(*)::bigint AS ar_verified_count,
+                COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_verified_amount
+              FROM acknowledgement_receiptstbl ar
+              WHERE ar.ar_type = 'Package'
+                AND ar.issue_date = $${branchParams.length + 2}::date
+                AND ar.status IN ('Verified', 'Applied')
+              GROUP BY ar.branch_id
+            ),
+            ar_unverified AS (
+              SELECT
+                ar.branch_id,
+                COUNT(*)::bigint AS ar_unverified_count,
+                COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_unverified_amount
+              FROM acknowledgement_receiptstbl ar
+              WHERE ar.ar_type = 'Package'
+                AND ar.issue_date = $${branchParams.length + 2}::date
+                AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
+              GROUP BY ar.branch_id
             )
             SELECT
               bs.branch_id,
@@ -586,7 +632,15 @@ router.get(
               COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
               COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
               COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
-              COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count
+              COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count,
+              COALESCE(pv.pay_verified_count, 0)::bigint AS pay_verified_count,
+              COALESCE(pv.pay_verified_amount, 0) AS pay_verified_amount,
+              COALESCE(puv.pay_unverified_count, 0)::bigint AS pay_unverified_count,
+              COALESCE(puv.pay_unverified_amount, 0) AS pay_unverified_amount,
+              COALESCE(arv.ar_verified_count, 0)::bigint AS ar_verified_count,
+              COALESCE(arv.ar_verified_amount, 0) AS ar_verified_amount,
+              COALESCE(aruv.ar_unverified_count, 0)::bigint AS ar_unverified_count,
+              COALESCE(aruv.ar_unverified_amount, 0) AS ar_unverified_amount
             FROM branch_scope bs
             LEFT JOIN new_enrollees ne ON ne.branch_id = bs.branch_id
             LEFT JOIN daily_sales ds ON ds.branch_id = bs.branch_id
@@ -594,12 +648,16 @@ router.get(
             LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
             LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
             LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
+            LEFT JOIN pay_verified pv ON pv.branch_id = bs.branch_id
+            LEFT JOIN pay_unverified puv ON puv.branch_id = bs.branch_id
+            LEFT JOIN ar_verified arv ON arv.branch_id = bs.branch_id
+            LEFT JOIN ar_unverified aruv ON aruv.branch_id = bs.branch_id
             ORDER BY
               COALESCE(ds.daily_sales_amount, 0) DESC,
               COALESCE(ne.new_enrollees, 0) DESC,
               bs.branch_name ASC
           `,
-          [...branchParams, summaryDate]
+          [...branchParams, summaryDate, todayManila]
         ),
         query(
           `
@@ -634,6 +692,14 @@ router.get(
         merchandise_released_quantity: parseFloat(row.merchandise_released_quantity) || 0,
         re_enrollment_count: parseInt(row.re_enrollment_count, 10) || 0,
         dropped_unenrolled_count: parseInt(row.dropped_unenrolled_count, 10) || 0,
+        pay_verified_count: parseInt(row.pay_verified_count, 10) || 0,
+        pay_verified_amount: parseFloat(row.pay_verified_amount) || 0,
+        pay_unverified_count: parseInt(row.pay_unverified_count, 10) || 0,
+        pay_unverified_amount: parseFloat(row.pay_unverified_amount) || 0,
+        ar_verified_count: parseInt(row.ar_verified_count, 10) || 0,
+        ar_verified_amount: parseFloat(row.ar_verified_amount) || 0,
+        ar_unverified_count: parseInt(row.ar_unverified_count, 10) || 0,
+        ar_unverified_amount: parseFloat(row.ar_unverified_amount) || 0,
       }));
 
       const totals = branchBreakdown.reduce(
@@ -646,6 +712,14 @@ router.get(
           merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
           re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
           dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
+          pay_verified_count: acc.pay_verified_count + row.pay_verified_count,
+          pay_verified_amount: acc.pay_verified_amount + row.pay_verified_amount,
+          pay_unverified_count: acc.pay_unverified_count + row.pay_unverified_count,
+          pay_unverified_amount: acc.pay_unverified_amount + row.pay_unverified_amount,
+          ar_verified_count: acc.ar_verified_count + row.ar_verified_count,
+          ar_verified_amount: acc.ar_verified_amount + row.ar_verified_amount,
+          ar_unverified_count: acc.ar_unverified_count + row.ar_unverified_count,
+          ar_unverified_amount: acc.ar_unverified_amount + row.ar_unverified_amount,
           active_branches:
             acc.active_branches +
             (row.new_enrollees > 0 ||
@@ -666,6 +740,14 @@ router.get(
           merchandise_released_quantity: 0,
           re_enrollment_count: 0,
           dropped_unenrolled_count: 0,
+          pay_verified_count: 0,
+          pay_verified_amount: 0,
+          pay_unverified_count: 0,
+          pay_unverified_amount: 0,
+          ar_verified_count: 0,
+          ar_verified_amount: 0,
+          ar_unverified_count: 0,
+          ar_unverified_amount: 0,
           active_branches: 0,
         }
       );
@@ -685,6 +767,8 @@ router.get(
         success: true,
         data: {
           summary_date: summaryDate,
+          /** Manila calendar date (YYYY-MM-DD) used for payment/AR verification columns and totals — always "today", not the date picker. */
+          verification_as_of: todayManila,
           totals,
           branch_breakdown: branchBreakdown,
           charts: {
@@ -699,6 +783,14 @@ router.get(
               merchandise_released_quantity: row.merchandise_released_quantity,
               re_enrollment_count: row.re_enrollment_count,
               dropped_unenrolled_count: row.dropped_unenrolled_count,
+              pay_verified_count: row.pay_verified_count,
+              pay_verified_amount: row.pay_verified_amount,
+              pay_unverified_count: row.pay_unverified_count,
+              pay_unverified_amount: row.pay_unverified_amount,
+              ar_verified_count: row.ar_verified_count,
+              ar_verified_amount: row.ar_verified_amount,
+              ar_unverified_count: row.ar_unverified_count,
+              ar_unverified_amount: row.ar_unverified_amount,
             })),
             activity_mix: [
               { name: 'New Enrollees', value: totals.new_enrollees },

@@ -93,6 +93,14 @@ const PaymentLogs = () => {
     } else if (financeApproval === 'all' || financeApproval === '') {
       setFilterFinanceApproval('');
     }
+    const issueFrom = (params.get('issue_date_from') || '').trim().slice(0, 10);
+    const issueTo = (params.get('issue_date_to') || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(issueFrom)) {
+      setFilterIssueDateFrom(issueFrom);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(issueTo)) {
+      setFilterIssueDateTo(issueTo);
+    }
   }, [location.search]);
 
   useEffect(() => {

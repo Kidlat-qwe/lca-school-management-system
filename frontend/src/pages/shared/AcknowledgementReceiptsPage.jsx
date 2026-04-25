@@ -79,6 +79,24 @@ const AcknowledgementReceiptsPage = () => {
   const [creating, setCreating] = useState(false);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [verifyLoadingId, setVerifyLoadingId] = useState(null);
+  const [openActionMenuId, setOpenActionMenuId] = useState(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingReceiptId, setEditingReceiptId] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteLoadingId, setDeleteLoadingId] = useState(null);
+  const [editFormData, setEditFormData] = useState({
+    prospect_student_name: '',
+    prospect_student_contact: '',
+    prospect_student_email: '',
+    prospect_student_notes: '',
+    level_tag: '',
+    reference_number: '',
+    payment_method: 'Cash',
+    issue_date: todayManilaYMD(),
+    tip_amount: '',
+    payment_attachment_url: '',
+  });
+  const [editFormErrors, setEditFormErrors] = useState({});
 
   useEffect(() => {
     fetchReceipts(initialPage);
@@ -683,6 +701,129 @@ const AcknowledgementReceiptsPage = () => {
     }
   };
 
+  const closeEditModal = () => {
+    if (editSaving) return;
+    setEditModalOpen(false);
+    setEditingReceiptId(null);
+    setEditFormErrors({});
+  };
+
+  const openEditModalForReceipt = (receipt) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setEditingReceiptId(receipt.ack_receipt_id);
+    setEditFormData({
+      prospect_student_name: receipt.prospect_student_name || '',
+      prospect_student_contact: receipt.prospect_student_contact || '',
+      prospect_student_email: receipt.prospect_student_email || '',
+      prospect_student_notes: receipt.prospect_student_notes || '',
+      level_tag: receipt.level_tag || '',
+      reference_number: receipt.reference_number || '',
+      payment_method: receipt.payment_method || 'Cash',
+      issue_date: receipt.issue_date ? String(receipt.issue_date).slice(0, 10) : todayManilaYMD(),
+      tip_amount:
+        receipt.tip_amount == null || Number(receipt.tip_amount) === 0
+          ? ''
+          : String(Number(receipt.tip_amount)),
+      payment_attachment_url: receipt.payment_attachment_url || '',
+    });
+    setEditFormErrors({});
+    setEditModalOpen(true);
+  };
+
+  const handleEditInputChange = (e) => {
+    const { name, value } = e.target;
+    setEditFormData((prev) => ({ ...prev, [name]: value }));
+    if (editFormErrors[name]) {
+      setEditFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    }
+  };
+
+  const validateEditForm = () => {
+    const errors = {};
+    if (!(editFormData.prospect_student_name || '').trim()) {
+      errors.prospect_student_name = 'Student name is required';
+    }
+    const email = (editFormData.prospect_student_email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    if (!AR_PAYMENT_METHOD_OPTIONS.includes(editFormData.payment_method || '')) {
+      errors.payment_method = 'Payment method is required';
+    }
+    if (!(editFormData.issue_date || '').trim()) {
+      errors.issue_date = 'Issue date is required';
+    }
+    if (editFormData.tip_amount !== '' && Number(editFormData.tip_amount) < 0) {
+      errors.tip_amount = 'Tip amount cannot be negative';
+    }
+    setEditFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingReceiptId) return;
+    if (!validateEditForm()) return;
+
+    setEditSaving(true);
+    try {
+      const payload = {
+        prospect_student_name: (editFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (editFormData.prospect_student_contact || '').trim() || null,
+        prospect_student_email: (editFormData.prospect_student_email || '').trim() || null,
+        prospect_student_notes: (editFormData.prospect_student_notes || '').trim() || null,
+        level_tag: (editFormData.level_tag || '').trim() || null,
+        reference_number: (editFormData.reference_number || '').trim() || null,
+        payment_method: editFormData.payment_method || 'Cash',
+        issue_date: editFormData.issue_date,
+        tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
+        payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
+      };
+
+      await apiRequest(`/acknowledgement-receipts/${editingReceiptId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+      appAlert('Acknowledgement receipt updated successfully.');
+      closeEditModal();
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR update error:', err);
+      appAlert(err?.message || 'Failed to update acknowledgement receipt.');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleDeleteReceipt = async (receipt) => {
+    if (!receipt?.ack_receipt_id || deleteLoadingId) return;
+    const ok = window.confirm(
+      `Delete acknowledgement receipt #${receipt.ack_receipt_id}? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setOpenActionMenuId(null);
+    setDeleteLoadingId(receipt.ack_receipt_id);
+    try {
+      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`, {
+        method: 'DELETE',
+      });
+      appAlert('Acknowledgement receipt deleted successfully.');
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR delete error:', err);
+      appAlert(err?.message || 'Failed to delete acknowledgement receipt.');
+    } finally {
+      setDeleteLoadingId(null);
+    }
+  };
+
   const uniqueStatuses = () => {
     const set = new Set();
     receipts.forEach((r) => {
@@ -770,7 +911,7 @@ const AcknowledgementReceiptsPage = () => {
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Ref. No.</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Attachment</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
-                    {isFinanceOrSuperfinance && (
+                    {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                       <th className="px-4 py-3 text-left font-semibold text-gray-700">Actions</th>
                     )}
                   </tr>
@@ -778,7 +919,7 @@ const AcknowledgementReceiptsPage = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance ? 11 : 10} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 11 : 10} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
@@ -879,9 +1020,9 @@ const AcknowledgementReceiptsPage = () => {
                       <td className="px-4 py-3 text-gray-900">
                         {r.issue_date ? formatDateManila(r.issue_date) : '-'}
                       </td>
-                      {isFinanceOrSuperfinance && (
+                      {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                         <td className="px-4 py-3">
-                          {r.ar_type === 'Package' && (r.status === 'Submitted' || r.status === 'Paid') ? (
+                          {isFinanceOrSuperfinance && r.ar_type === 'Package' && (r.status === 'Submitted' || r.status === 'Paid') ? (
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
@@ -899,6 +1040,40 @@ const AcknowledgementReceiptsPage = () => {
                               >
                                 Reject
                               </button>
+                            </div>
+                          ) : isAdminOrSuperadmin ? (
+                            <div className="relative inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenActionMenuId((prev) => (prev === r.ack_receipt_id ? null : r.ack_receipt_id))
+                                }
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
+                                aria-label={`Open actions for acknowledgement receipt ${r.ack_receipt_id}`}
+                              >
+                                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                  <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 5.5A1.5 1.5 0 1010 8.5a1.5 1.5 0 000 3zm0 5.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                                </svg>
+                              </button>
+                              {openActionMenuId === r.ack_receipt_id ? (
+                                <div className="absolute right-0 z-20 mt-2 w-32 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditModalForReceipt(r)}
+                                    className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteReceipt(r)}
+                                    disabled={deleteLoadingId === r.ack_receipt_id}
+                                    className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                  >
+                                    {deleteLoadingId === r.ack_receipt_id ? 'Deleting...' : 'Delete'}
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400">-</span>
@@ -1637,6 +1812,32 @@ const AcknowledgementReceiptsPage = () => {
                   })()
                 }
 
+                {arType === 'Package' && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="payment_method"
+                      value={createFormData.payment_method}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
+                    >
+                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
+                        <option key={method} value={method}>{method}</option>
+                      ))}
+                    </select>
+                    {createFormErrors.payment_method && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
+                    )}
+                    {createFormData.payment_method === 'Cash' && isAdminOrSuperadmin && (
+                      <p className="text-xs text-emerald-600 mt-1">
+                        Cash AR by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div>
                   <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
                   <input
@@ -1654,7 +1855,7 @@ const AcknowledgementReceiptsPage = () => {
                 <div>
                   <label className="label-field text-xs">Attachment (image)</label>
                   <p className="text-xs text-gray-500 mb-1">
-                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF – max 5 MB)
+                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 5 MB)
                   </p>
                   <input
                     type="file"
@@ -1696,32 +1897,6 @@ const AcknowledgementReceiptsPage = () => {
                   </>
                 )}
 
-                {arType === 'Package' && (
-                  <div>
-                    <label className="label-field text-xs">
-                      Payment Method <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="payment_method"
-                      value={createFormData.payment_method}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
-                    >
-                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
-                        <option key={method} value={method}>{method}</option>
-                      ))}
-                    </select>
-                    {createFormErrors.payment_method && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
-                    )}
-                    {createFormData.payment_method === 'Cash' && isAdminOrSuperadmin && (
-                      <p className="text-xs text-emerald-600 mt-1">
-                        Cash AR by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
-                      </p>
-                    )}
-                  </div>
-                )}
-
                 <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                   <button
                     type="button"
@@ -1744,6 +1919,194 @@ const AcknowledgementReceiptsPage = () => {
                     }
                   >
                     {creating ? 'Saving?' : 'Done'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {editModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/30 p-4"
+            onClick={closeEditModal}
+          >
+            <div
+              className="w-full max-w-2xl rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+                <h3 className="text-base font-semibold text-gray-900">Edit Acknowledgement Receipt</h3>
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  disabled={editSaving}
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handleEditSubmit} className="space-y-4 px-5 py-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Student Name <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      name="prospect_student_name"
+                      value={editFormData.prospect_student_name}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_name && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_name}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Guardian Name</label>
+                    <input
+                      type="text"
+                      name="prospect_student_contact"
+                      value={editFormData.prospect_student_contact}
+                      onChange={handleEditInputChange}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Email</label>
+                    <input
+                      type="email"
+                      name="prospect_student_email"
+                      value={editFormData.prospect_student_email}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_email && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_email}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Level Tag</label>
+                    <select
+                      name="level_tag"
+                      value={editFormData.level_tag}
+                      onChange={handleEditInputChange}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    >
+                      <option value="">Select level tag</option>
+                      {LEVEL_TAG_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Issue Date <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      name="issue_date"
+                      value={editFormData.issue_date}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.issue_date && <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Payment Method</label>
+                    <select
+                      name="payment_method"
+                      value={editFormData.payment_method}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.payment_method ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    >
+                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
+                        <option key={method} value={method}>{method}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Tip Amount</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      name="tip_amount"
+                      value={editFormData.tip_amount}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.tip_amount && <p className="mt-1 text-xs text-red-500">{editFormErrors.tip_amount}</p>}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Reference Number</label>
+                    <input
+                      type="text"
+                      name="reference_number"
+                      value={editFormData.reference_number}
+                      onChange={handleEditInputChange}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Attachment URL</label>
+                    <input
+                      type="text"
+                      name="payment_attachment_url"
+                      value={editFormData.payment_attachment_url}
+                      onChange={handleEditInputChange}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Notes</label>
+                    <textarea
+                      name="prospect_student_notes"
+                      value={editFormData.prospect_student_notes}
+                      onChange={handleEditInputChange}
+                      rows={3}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 border-t border-gray-200 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeEditModal}
+                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    disabled={editSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    disabled={editSaving}
+                  >
+                    {editSaving ? 'Saving...' : 'Save Changes'}
                   </button>
                 </div>
               </form>

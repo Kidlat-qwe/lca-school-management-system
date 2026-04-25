@@ -2725,7 +2725,9 @@ const initializePackageMerchSelections = useCallback(
     setSelectedClassForEnrollment(classItem);
     setEnrollStep('enrollment-option');
     setSelectedPackage(null);
-    setSelectedStudents([]);
+    if (selectedEnrollmentOption !== 'per-phase') {
+      setSelectedStudents([]);
+    }
     setSelectedPricingLists([]);
     setSelectedMerchandise([]);
     setGeneratedInvoices([]);
@@ -2738,6 +2740,43 @@ const initializePackageMerchSelections = useCallback(
     fetchEnrollReservedStudents(classItem.class_id);
     
     // Fetch packages, students, pricing lists, and merchandise for this branch
+    if (classItem.branch_id) {
+      fetchPackages(classItem.branch_id);
+      fetchStudents(classItem.branch_id);
+      fetchPricingLists(classItem.branch_id);
+      fetchMerchandise(classItem.branch_id);
+    }
+  };
+
+  const openContinuePerPhaseModal = (student, classItem) => {
+    if (!student || !classItem) return;
+    setOpenMenuId(null);
+    setOpenViewStudentMenuKey(null);
+    setViewStudentMenuTarget(null);
+    setIsViewStudentsModalOpen(false);
+    setSelectedClassForView(null);
+    setViewStudentsStep('phase-selection');
+    setSelectedPhaseForView(null);
+    setViewEnrolledStudents([]);
+
+    setSelectedClassForEnrollment(classItem);
+    setEnrollStep('package-selection');
+    setSelectedPackage(null);
+    setSelectedStudents([student]);
+    setSelectedPricingLists([]);
+    setSelectedMerchandise([]);
+    setGeneratedInvoices([]);
+    setShowPackageDetails(false);
+    setSelectedEnrollmentOption('per-phase');
+    setSelectedPhaseNumber(null);
+    setPerPhaseAmount('');
+    setStudentSearchTerm('');
+    setShowStudentDropdown(false);
+    setIsEnrollModalOpen(true);
+
+    fetchEnrolledStudents(classItem.class_id);
+    fetchEnrollReservedStudents(classItem.class_id);
+
     if (classItem.branch_id) {
       fetchPackages(classItem.branch_id);
       fetchStudents(classItem.branch_id);
@@ -2818,14 +2857,21 @@ const initializePackageMerchSelections = useCallback(
       setAckReceiptsLoading(true);
       setAckReceiptsError('');
       const params = new URLSearchParams();
-      params.set('status', 'Submitted,Pending,Paid,Verified,Applied');
+      params.set('status', 'Submitted,Pending,Paid,Verified');
       if (branchId) params.set('branch_id', String(branchId));
       if (search && search.trim()) params.set('search', search.trim());
       params.set('limit', '50');
+      params.set('only_unused', '1');
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       const all = response.data || [];
       setAckReceipts(
-        all.filter((ar) => ar.ar_type === 'Package' && !ar.invoice_id && !ar.payment_id)
+        all.filter(
+          (ar) =>
+            ar.ar_type === 'Package' &&
+            !ar.invoice_id &&
+            !ar.payment_id &&
+            String(ar.status || '').trim().toLowerCase() !== 'applied'
+        )
       );
     } catch (err) {
       console.error('Error fetching acknowledgement receipts for enrollment:', err);
@@ -2951,12 +2997,21 @@ const initializePackageMerchSelections = useCallback(
     setAvailablePromos([]); // Clear available promos
     setShowPackageDetails(true); // Show package details by default when package is selected
     const shouldShowInstallmentSetup =
-      selectedEnrollmentOption === 'package' && isInstallmentPackageSelection(packageItem);
+      (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') &&
+      isInstallmentPackageSelection(packageItem);
     if (shouldShowInstallmentSetup) {
       const { minPhase, maxPhase } = getInstallmentPhaseBounds(packageItem);
+      const selectedStudentHighestPhase =
+        selectedEnrollmentOption === 'per-phase' && selectedStudents.length > 0
+          ? Number(selectedStudents[0]?.highestPhase ?? selectedStudents[0]?.phase_number)
+          : null;
+      const effectiveMinPhase =
+        Number.isInteger(selectedStudentHighestPhase) && selectedStudentHighestPhase >= 1
+          ? Math.min(maxPhase, Math.max(minPhase, selectedStudentHighestPhase + 1))
+          : minPhase;
       const hasConfiguredDownpayment = parseFloat(packageItem?.downpayment_amount || 0) > 0;
       setInstallmentScopeSettings({
-        phase_start: String(minPhase),
+        phase_start: String(effectiveMinPhase),
         phase_end: String(maxPhase),
         include_downpayment: hasConfiguredDownpayment,
       });
@@ -2966,7 +3021,9 @@ const initializePackageMerchSelections = useCallback(
     }
     setStudentSearchTerm('');
     setShowStudentDropdown(false);
-    setSelectedStudents([]);
+    if (selectedEnrollmentOption !== 'per-phase') {
+      setSelectedStudents([]);
+    }
     
     // Fetch available promos for this package (will fetch student-specific when student is selected)
     if (packageItem.package_id) {
@@ -3580,11 +3637,14 @@ const initializePackageMerchSelections = useCallback(
 
     // Validate per-phase enrollment
     if (selectedEnrollmentOption === 'per-phase') {
-      const isPhasePackage = selectedPackage && selectedPackage.package_type === 'Phase';
+      const isPackageDrivenPerPhase = Boolean(
+        selectedPackage &&
+        (selectedPackage.package_type === 'Phase' || selectedPackage.package_type === 'Installment')
+      );
       
       // When using Phase packages, phase and amount come from the package,
       // and included pricing/merchandise are defined by the package — no extra selections needed.
-      if (!isPhasePackage) {
+      if (!isPackageDrivenPerPhase) {
         if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
           appAlert('Please select a phase for per-phase enrollment');
           return;
@@ -3982,7 +4042,7 @@ const initializePackageMerchSelections = useCallback(
                 frequency_months: installmentSettings.frequency_months,
               }
             } : {}),
-            ...(selectedEnrollmentOption === 'package' &&
+            ...((selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') &&
             selectedPackage &&
             isInstallmentPackageSelection(selectedPackage) &&
             installmentScopeSettings.phase_start &&
@@ -9866,7 +9926,7 @@ const initializePackageMerchSelections = useCallback(
                   <div className="text-center mb-4">
                     <h3 className="text-xl font-bold text-gray-900 mb-1">Select Acknowledgement Receipt</h3>
                     <p className="text-sm text-gray-500">
-                      Select an acknowledgement receipt (not yet attached to an invoice). You can only use Verified receipts, except Cash receipts which can be used immediately.
+                      Each acknowledgement receipt can be used only once. Only unused receipts are listed. Use Verified receipts, or Cash receipts which can be used immediately after creation.
                     </p>
                   </div>
                   <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
@@ -9912,7 +9972,7 @@ const initializePackageMerchSelections = useCallback(
                             <tbody className="bg-white divide-y divide-gray-200">
                               {ackReceipts.map((ar) => {
                                 const isCashMethod = String(ar.payment_method || '').trim().toLowerCase() === 'cash';
-                                const isVerified = ['Verified', 'Applied'].includes(String(ar.status || '').trim());
+                                const isVerified = String(ar.status || '').trim() === 'Verified';
                                 const canUseReceipt = isVerified || isCashMethod;
                                 const disabledReason = isCashMethod
                                   ? ''
@@ -9999,7 +10059,11 @@ const initializePackageMerchSelections = useCallback(
                       selectedEnrollmentOption === 'reservation'
                         ? packages.filter(pkg => pkg.package_type === 'Reserved')
                         : selectedEnrollmentOption === 'per-phase'
-                        ? packages.filter(pkg => pkg.package_type === 'Phase')
+                        ? packages.filter(
+                            (pkg) =>
+                              pkg.package_type === 'Phase' ||
+                              pkg.package_type === 'Installment'
+                          )
                         : packages.filter(pkg =>
                             pkg.package_type === 'Fullpayment' ||
                             pkg.package_type === 'Installment' ||
@@ -10181,14 +10245,27 @@ const initializePackageMerchSelections = useCallback(
 
                   {(() => {
                     const { minPhase, maxPhase } = getInstallmentPhaseBounds(selectedPackage);
+                    const selectedStudentHighestPhase =
+                      selectedEnrollmentOption === 'per-phase' && selectedStudents.length > 0
+                        ? Number(selectedStudents[0]?.highestPhase ?? selectedStudents[0]?.phase_number)
+                        : null;
+                    const effectiveMinPhase =
+                      Number.isInteger(selectedStudentHighestPhase) && selectedStudentHighestPhase >= 1
+                        ? Math.min(maxPhase, Math.max(minPhase, selectedStudentHighestPhase + 1))
+                        : minPhase;
                     const phaseOptions = Array.from(
-                      { length: maxPhase - minPhase + 1 },
-                      (_, idx) => minPhase + idx
+                      { length: Math.max(0, maxPhase - effectiveMinPhase + 1) },
+                      (_, idx) => effectiveMinPhase + idx
                     );
                     const hasDownpayment = parseFloat(selectedPackage.downpayment_amount || 0) > 0;
 
                     return (
                       <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
+                        {phaseOptions.length === 0 ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            No remaining phases are available for this student in the selected package range.
+                          </div>
+                        ) : null}
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end">
                           <div>
                             <label className="label-field text-xs">
@@ -11869,7 +11946,7 @@ const initializePackageMerchSelections = useCallback(
                                   <strong>Monthly:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
                                 </p>
                               )}
-                              {selectedEnrollmentOption === 'package' && installmentScopeSettings.phase_start && installmentScopeSettings.phase_end && (
+                              {(selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') && installmentScopeSettings.phase_start && installmentScopeSettings.phase_end && (
                                 <>
                                   <p className="text-sm text-gray-700">
                                     <strong>Phase Scope:</strong> Phase {installmentScopeSettings.phase_start} to Phase {installmentScopeSettings.phase_end}
@@ -12345,10 +12422,10 @@ const initializePackageMerchSelections = useCallback(
                   type="button"
                   onClick={() => {
                     if (enrollStep === 'student-selection') {
-                      if (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation') {
+                      if (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'reservation' || selectedEnrollmentOption === 'per-phase') {
                         // For installment package flow, go back to setup step first.
                         if (
-                          selectedEnrollmentOption === 'package' &&
+                          (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') &&
                           selectedPackage &&
                           isInstallmentPackageSelection(selectedPackage)
                         ) {
@@ -12394,11 +12471,15 @@ const initializePackageMerchSelections = useCallback(
                     
                     // Validate per-phase enrollment requirements
                     if (selectedEnrollmentOption === 'per-phase') {
+                      const isPackageDrivenPerPhase = Boolean(
+                        selectedPackage &&
+                        (selectedPackage.package_type === 'Phase' || selectedPackage.package_type === 'Installment')
+                      );
                       if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
                         appAlert('Please select a phase for per-phase enrollment');
                         return;
                       }
-                      if (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0) {
+                      if (!isPackageDrivenPerPhase && (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0)) {
                         appAlert('Please enter a valid amount for per-phase enrollment');
                         return;
                       }
@@ -12483,6 +12564,9 @@ const initializePackageMerchSelections = useCallback(
                     if (endPhase < startPhase) {
                       appAlert('End phase must be greater than or equal to start phase.');
                       return;
+                    }
+                    if (selectedEnrollmentOption === 'per-phase') {
+                      setSelectedPhaseNumber(startPhase);
                     }
                     setEnrollStep('student-selection');
                   }}
@@ -13793,6 +13877,16 @@ const initializePackageMerchSelections = useCallback(
                 className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
               >
                 Move
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeViewStudentActionMenu();
+                  openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
+                }}
+                className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
+              >
+                Continue per phase
               </button>
               <button
                 type="button"
