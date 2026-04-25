@@ -5,7 +5,7 @@ import API_BASE_URL, { apiRequest } from '../../config/api';
 import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
@@ -18,6 +18,7 @@ const AcknowledgementReceiptsPage = () => {
   const isSuperadmin = userType === 'Superadmin';
   const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
   const isFinanceOrSuperfinance = userType === 'Finance' || userType === 'Superfinance';
+  const currentUserId = Number(userInfo?.user_id || userInfo?.userId || 0) || null;
   const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get('status') || '';
@@ -82,9 +83,13 @@ const AcknowledgementReceiptsPage = () => {
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingReceiptId, setEditingReceiptId] = useState(null);
+  const [editingReceiptMeta, setEditingReceiptMeta] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [isResubmitFlow, setIsResubmitFlow] = useState(false);
+  const [financeReturnNote, setFinanceReturnNote] = useState('');
   const [deleteLoadingId, setDeleteLoadingId] = useState(null);
   const [editFormData, setEditFormData] = useState({
+    package_id: '',
     prospect_student_name: '',
     prospect_student_contact: '',
     prospect_student_email: '',
@@ -96,7 +101,21 @@ const AcknowledgementReceiptsPage = () => {
     tip_amount: '',
     payment_attachment_url: '',
   });
+  const [editPayableAmount, setEditPayableAmount] = useState(0);
   const [editFormErrors, setEditFormErrors] = useState({});
+
+  const extractLatestTagNote = (notes, tag) => {
+    const text = String(notes || '');
+    if (!text) return '';
+    const safeTag = String(tag || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\[${safeTag}\\]\\s*([^\\n\\r]*)`, 'gi');
+    let match;
+    let latest = '';
+    while ((match = regex.exec(text)) !== null) {
+      latest = String(match[1] || '').trim();
+    }
+    return latest;
+  };
 
   useEffect(() => {
     fetchReceipts(initialPage);
@@ -685,17 +704,30 @@ const AcknowledgementReceiptsPage = () => {
 
   const handleVerifyReceipt = async (receipt, approve) => {
     if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    const promptedRemarks = !approve
+      ? await appPrompt({
+          title: 'Return Acknowledgement Receipt',
+          message: 'Add a note for the AR creator (required).',
+          placeholder: 'Reason for return...',
+          confirmLabel: 'Return',
+          cancelLabel: 'Cancel',
+          variant: 'info',
+          required: true,
+        })
+      : '';
+    if (!approve && promptedRemarks === null) return;
+    const remarks = (promptedRemarks || '').trim();
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
       await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
-        body: JSON.stringify({ approve }),
+        body: JSON.stringify({ approve, remarks: remarks || undefined }),
       });
-      appAlert(approve ? 'Acknowledgement receipt verified.' : 'Acknowledgement receipt rejected.');
+      appAlert(approve ? 'Acknowledgement receipt verified.' : 'Acknowledgement receipt returned.');
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
-      console.error('AR verify/reject error:', err);
-      appAlert(err?.message || `Failed to ${approve ? 'verify' : 'reject'} acknowledgement receipt.`);
+      console.error('AR verify/return error:', err);
+      appAlert(err?.message || `Failed to ${approve ? 'verify' : 'return'} acknowledgement receipt.`);
     } finally {
       setVerifyLoadingId(null);
     }
@@ -705,14 +737,25 @@ const AcknowledgementReceiptsPage = () => {
     if (editSaving) return;
     setEditModalOpen(false);
     setEditingReceiptId(null);
+    setEditingReceiptMeta(null);
     setEditFormErrors({});
+    setIsResubmitFlow(false);
+    setFinanceReturnNote('');
   };
 
-  const openEditModalForReceipt = (receipt) => {
+  const openEditModalForReceipt = (receipt, { asResubmit = false } = {}) => {
     if (!receipt?.ack_receipt_id) return;
     setOpenActionMenuId(null);
     setEditingReceiptId(receipt.ack_receipt_id);
+    setEditingReceiptMeta(receipt);
+    setIsResubmitFlow(asResubmit);
+    setFinanceReturnNote(asResubmit ? extractLatestTagNote(receipt.prospect_student_notes, 'Returned') : '');
+    setEditPayableAmount(Number(receipt.payment_amount || 0) || 0);
+    if (asResubmit && receipt.branch_id) {
+      fetchPackages(receipt.branch_id);
+    }
     setEditFormData({
+      package_id: receipt.package_id ? String(receipt.package_id) : '',
       prospect_student_name: receipt.prospect_student_name || '',
       prospect_student_contact: receipt.prospect_student_contact || '',
       prospect_student_email: receipt.prospect_student_email || '',
@@ -731,8 +774,23 @@ const AcknowledgementReceiptsPage = () => {
     setEditModalOpen(true);
   };
 
+  const openResubmitModalForReceipt = (receipt) => {
+    openEditModalForReceipt(receipt, { asResubmit: true });
+  };
+
   const handleEditInputChange = (e) => {
     const { name, value } = e.target;
+    if (name === 'package_id') {
+      const pkg = packages.find((p) => String(p.package_id) === String(value));
+      const packagePrice = Number(pkg?.package_price || 0);
+      const downpayment = Number(pkg?.downpayment_amount || 0);
+      const packageType = String(pkg?.package_type || '').toLowerCase();
+      const paymentOption = String(pkg?.payment_option || '').toLowerCase();
+      const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(editingReceiptMeta?.installment_option || '').toLowerCase() === 'downpayment_only';
+      const nextPayable = isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+      setEditPayableAmount(Number.isFinite(nextPayable) ? nextPayable : 0);
+    }
     setEditFormData((prev) => ({ ...prev, [name]: value }));
     if (editFormErrors[name]) {
       setEditFormErrors((prev) => {
@@ -745,6 +803,9 @@ const AcknowledgementReceiptsPage = () => {
 
   const validateEditForm = () => {
     const errors = {};
+    if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' && !(editFormData.package_id || '').trim()) {
+      errors.package_id = 'Package is required';
+    }
     if (!(editFormData.prospect_student_name || '').trim()) {
       errors.prospect_student_name = 'Student name is required';
     }
@@ -784,13 +845,24 @@ const AcknowledgementReceiptsPage = () => {
         tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
         payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
       };
+      if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package') {
+        payload.package_id = parseInt(editFormData.package_id, 10);
+      }
 
       await apiRequest(`/acknowledgement-receipts/${editingReceiptId}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
 
-      appAlert('Acknowledgement receipt updated successfully.');
+      if (isResubmitFlow) {
+        await apiRequest(`/acknowledgement-receipts/${editingReceiptId}/resubmit`, {
+          method: 'PUT',
+          body: JSON.stringify({}),
+        });
+        appAlert('Acknowledgement receipt updated and resubmitted successfully.');
+      } else {
+        appAlert('Acknowledgement receipt updated successfully.');
+      }
       closeEditModal();
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
@@ -803,9 +875,14 @@ const AcknowledgementReceiptsPage = () => {
 
   const handleDeleteReceipt = async (receipt) => {
     if (!receipt?.ack_receipt_id || deleteLoadingId) return;
-    const ok = window.confirm(
-      `Delete acknowledgement receipt #${receipt.ack_receipt_id}? This cannot be undone.`
-    );
+    const ok = await appConfirm({
+      title: 'Delete Acknowledgement Receipt',
+      message: `Delete acknowledgement receipt #${receipt.ack_receipt_id}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      destructive: true,
+      variant: 'error',
+    });
     if (!ok) return;
 
     setOpenActionMenuId(null);
@@ -985,6 +1062,8 @@ const AcknowledgementReceiptsPage = () => {
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
                             r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
                               ? 'bg-green-100 text-green-800'
+                              : r.status === 'Returned'
+                              ? 'bg-orange-100 text-orange-800'
                               : r.status === 'Rejected' || r.status === 'Cancelled'
                               ? 'bg-red-100 text-red-800'
                               : 'bg-yellow-100 text-yellow-800'
@@ -1038,7 +1117,7 @@ const AcknowledgementReceiptsPage = () => {
                                 disabled={verifyLoadingId === r.ack_receipt_id}
                                 className="px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 hover:bg-red-200 disabled:opacity-50"
                               >
-                                Reject
+                                Return
                               </button>
                             </div>
                           ) : isAdminOrSuperadmin ? (
@@ -1056,7 +1135,19 @@ const AcknowledgementReceiptsPage = () => {
                                 </svg>
                               </button>
                               {openActionMenuId === r.ack_receipt_id ? (
-                                <div className="absolute right-0 z-20 mt-2 w-32 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                                <div className="absolute right-0 z-20 mt-2 w-36 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                                  {r.ar_type === 'Package' &&
+                                  r.status === 'Returned' &&
+                                  currentUserId != null &&
+                                  Number(r.created_by) === Number(currentUserId) ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => openResubmitModalForReceipt(r)}
+                                      className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+                                    >
+                                      Resubmit
+                                    </button>
+                                  ) : null}
                                   <button
                                     type="button"
                                     onClick={() => openEditModalForReceipt(r)}
@@ -1934,11 +2025,13 @@ const AcknowledgementReceiptsPage = () => {
             onClick={closeEditModal}
           >
             <div
-              className="w-full max-w-2xl rounded-lg bg-white shadow-xl"
+              className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-                <h3 className="text-base font-semibold text-gray-900">Edit Acknowledgement Receipt</h3>
+                <h3 className="text-base font-semibold text-gray-900">
+                  {isResubmitFlow ? 'Review & Resubmit Acknowledgement Receipt' : 'Edit Acknowledgement Receipt'}
+                </h3>
                 <button
                   type="button"
                   onClick={closeEditModal}
@@ -1953,7 +2046,77 @@ const AcknowledgementReceiptsPage = () => {
               </div>
 
               <form onSubmit={handleEditSubmit} className="space-y-4 px-5 py-4">
+                {isResubmitFlow && financeReturnNote ? (
+                  <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-orange-900">Noted from Finance / Superfinance</p>
+                    <p className="mt-1 text-sm text-orange-800">{financeReturnNote}</p>
+                  </div>
+                ) : null}
+                <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Receipt details</p>
+                  <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-700 sm:grid-cols-2">
+                    <p><span className="font-semibold">Type:</span> {editingReceiptMeta?.ar_type || '-'}</p>
+                    <p><span className="font-semibold">Status:</span> {editingReceiptMeta?.status || '-'}</p>
+                    <p><span className="font-semibold">Package / Items:</span> {editingReceiptMeta?.ar_type === 'Merchandise' ? 'Merchandise' : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || '-')}</p>
+                    <p>
+                      <span className="font-semibold">Total Amount:</span>{' '}
+                      ₱{(Number(editingReceiptMeta?.payment_amount || 0) + Number(editingReceiptMeta?.tip_amount || 0)).toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </p>
+                    <p><span className="font-semibold">Branch:</span> {editingReceiptMeta?.branch_name || '-'}</p>
+                    <p><span className="font-semibold">Reference No.:</span> {editingReceiptMeta?.reference_number || '-'}</p>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="label-field text-xs">Package</label>
+                    {isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' ? (
+                      <>
+                        <select
+                          name="package_id"
+                          value={editFormData.package_id}
+                          onChange={handleEditInputChange}
+                          className={`input-field text-sm ${editFormErrors.package_id ? 'border-red-500' : ''}`}
+                          disabled={editSaving}
+                        >
+                          <option value="">Select package</option>
+                          {packages.map((pkg) => (
+                            <option key={pkg.package_id} value={pkg.package_id}>
+                              {pkg.package_name} - ₱{Number(pkg.package_price || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </option>
+                          ))}
+                        </select>
+                        {editFormErrors.package_id && <p className="mt-1 text-xs text-red-500">{editFormErrors.package_id}</p>}
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        value={editingReceiptMeta?.ar_type === 'Merchandise'
+                          ? 'Merchandise'
+                          : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || 'N/A')}
+                        className="input-field text-sm bg-gray-100"
+                        disabled
+                        readOnly
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Payable Amount</label>
+                    <input
+                      type="text"
+                      value={`₱${Number(editPayableAmount || 0).toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}`}
+                      className="input-field text-sm bg-gray-100"
+                      disabled
+                      readOnly
+                    />
+                  </div>
+
                   <div className="sm:col-span-2">
                     <label className="label-field text-xs">Student Name <span className="text-red-500">*</span></label>
                     <input
@@ -2068,15 +2231,38 @@ const AcknowledgementReceiptsPage = () => {
                   </div>
 
                   <div className="sm:col-span-2">
-                    <label className="label-field text-xs">Attachment URL</label>
-                    <input
-                      type="text"
-                      name="payment_attachment_url"
-                      value={editFormData.payment_attachment_url}
-                      onChange={handleEditInputChange}
-                      className="input-field text-sm"
-                      disabled={editSaving}
-                    />
+                    <label className="label-field text-xs">Attachment</label>
+                    {editFormData.payment_attachment_url ? (
+                      <div className="rounded-md border border-gray-200 bg-white p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-xs text-gray-600">Preview of attached file</div>
+                          <button
+                            type="button"
+                            onClick={() => openAttachmentViewer(editFormData.payment_attachment_url)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            View full preview
+                          </button>
+                        </div>
+                        <div className="mt-2 overflow-hidden rounded border border-gray-200 bg-gray-50">
+                          {/\.((png|jpe?g|webp|gif))(\\?.*)?$/i.test(editFormData.payment_attachment_url) ? (
+                            <img
+                              src={editFormData.payment_attachment_url}
+                              alt="Receipt attachment preview"
+                              className="max-h-48 w-full object-contain"
+                            />
+                          ) : (
+                            <div className="p-3 text-xs text-gray-600">
+                              Non-image attachment. Click "View full preview" to open.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                        No attachment uploaded.
+                      </div>
+                    )}
                   </div>
 
                   <div className="sm:col-span-2">
@@ -2103,10 +2289,12 @@ const AcknowledgementReceiptsPage = () => {
                   </button>
                   <button
                     type="submit"
-                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    className={`rounded-md px-4 py-2 text-sm font-medium text-white disabled:opacity-50 ${
+                      isResubmitFlow ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
                     disabled={editSaving}
                   >
-                    {editSaving ? 'Saving...' : 'Save Changes'}
+                    {editSaving ? 'Saving...' : isResubmitFlow ? 'Save & Resubmit' : 'Save Changes'}
                   </button>
                 </div>
               </form>

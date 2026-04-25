@@ -56,6 +56,7 @@ const formatCurrency = (amount) => {
   if (!Number.isFinite(n)) return '₱0.00';
   return `₱${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
 
 const AdminFinancialDashboard = () => {
   const navigate = useNavigate();
@@ -65,6 +66,7 @@ const AdminFinancialDashboard = () => {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
 
   const branchName = useMemo(() => {
     return userInfo?.branch_name || userInfo?.branchName || 'Your Branch';
@@ -77,6 +79,9 @@ const AdminFinancialDashboard = () => {
       setError('');
       const params = new URLSearchParams();
       params.append('branch_id', String(adminBranchId));
+      if (selectedMonth) {
+        params.append('month', selectedMonth);
+      }
       const response = await apiRequest(`/dashboard?${params.toString()}`);
       setMetrics(response.data);
     } catch (err) {
@@ -89,7 +94,7 @@ const AdminFinancialDashboard = () => {
   useEffect(() => {
     fetchDashboardData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminBranchId]);
+  }, [adminBranchId, selectedMonth]);
 
   const totals = metrics?.totals || { total_branches: 0, total_students: 0, total_teachers: 0, active_classes: 0 };
 
@@ -136,6 +141,16 @@ const AdminFinancialDashboard = () => {
             <p className="text-sm text-gray-500">Branch overview: {branchName}</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
+            <label className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Month</span>
+              <input
+                type="month"
+                value={selectedMonth}
+                max={CURRENT_MONTH}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              />
+            </label>
             <button
               type="button"
               onClick={fetchDashboardData}

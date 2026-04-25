@@ -14,6 +14,7 @@ import {
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 let ackVerifierColumnsKnownTrue = false;
+let announcementTargetUserIdKnownTrue = false;
 
 const ackReceiptHasVerifierColumns = async () => {
   if (ackVerifierColumnsKnownTrue) return true;
@@ -30,6 +31,27 @@ const ackReceiptHasVerifierColumns = async () => {
     );
     if (r.rows.length > 0) {
       ackVerifierColumnsKnownTrue = true;
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+};
+
+const announcementstblHasTargetUserIdColumn = async () => {
+  if (announcementTargetUserIdKnownTrue) return true;
+  try {
+    const r = await query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'announcementstbl'
+         AND column_name = 'target_user_id'
+       LIMIT 1`
+    );
+    if (r.rows.length > 0) {
+      announcementTargetUserIdKnownTrue = true;
       return true;
     }
   } catch {
@@ -86,6 +108,66 @@ const createArSubmissionNotification = async ({
     );
   } catch (err) {
     console.error('createArSubmissionNotification:', err?.message || err);
+  }
+};
+
+const notifyArReturnedToCreator = async ({
+  ackReceiptId,
+  branchId,
+  returnedByUserId,
+  creatorUserId,
+  studentName,
+  reason,
+}) => {
+  try {
+    if (!branchId || !creatorUserId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
+    const [branchRes, returnerRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+        [branchId]
+      ),
+      query(`SELECT full_name, email FROM userstbl WHERE user_id = $1`, [returnedByUserId]),
+    ]);
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const returnedBy = returnerRes.rows[0]?.full_name || returnerRes.rows[0]?.email || 'Finance';
+    const studentLabel = studentName || 'Student';
+    const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
+    const body = `AR #${ackReceiptId} (${studentLabel}) was returned by ${returnedBy} at ${branchName} for correction.${reasonText}`;
+
+    if (!hasTargetUserIdColumn) {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+        [
+          'Acknowledgement Receipt returned — action needed',
+          body,
+          ['Admin'],
+          branchId,
+          returnedByUserId,
+          'acknowledgement-receipts',
+          'status=Returned&page=1',
+        ]
+      );
+      return;
+    }
+
+    await query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+      [
+        'Acknowledgement Receipt returned — action needed',
+        body,
+        ['All'],
+        branchId,
+        returnedByUserId,
+        creatorUserId,
+        'acknowledgement-receipts',
+        'status=Returned&page=1',
+      ]
+    );
+  } catch (err) {
+    console.error('notifyArReturnedToCreator:', err?.message || err);
   }
 };
 
@@ -909,7 +991,7 @@ router.post(
 
       const ackPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
       const isCashAck = ackPaymentMethod === 'cash';
-      const isRejectedOrCancelled = ['Rejected', 'Cancelled'].includes(ackStatus);
+      const isRejectedOrCancelled = ['Rejected', 'Cancelled', 'Returned'].includes(ackStatus);
       // "Applied" = already used (handled above). Here: finance-verified, or cash (no separate verify).
       const isVerifiedForAttach = ackStatusUpper === 'VERIFIED';
       const canAttachAck = !isRejectedOrCancelled && (isVerifiedForAttach || isCashAck);
@@ -1610,6 +1692,7 @@ router.put(
       .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
     body('issue_date').optional({ nullable: true }).isISO8601().withMessage('Issue date must be a valid date'),
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be >= 0'),
+    body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -1617,7 +1700,7 @@ router.put(
     try {
       const { id } = req.params;
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id
+        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -1683,6 +1766,55 @@ router.put(
       if (Object.prototype.hasOwnProperty.call(raw, 'tip_amount')) {
         const tip = raw.tip_amount === '' || raw.tip_amount == null ? 0 : parseFloat(raw.tip_amount);
         pushUpdate('tip_amount', Number.isFinite(tip) && tip >= 0 ? tip : 0);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'package_id')) {
+        const nextPackageId = raw.package_id == null || raw.package_id === '' ? null : parseInt(raw.package_id, 10);
+        if (!Number.isInteger(nextPackageId) || nextPackageId <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'A valid package is required',
+          });
+        }
+        if (ack.ar_type !== 'Package') {
+          return res.status(400).json({
+            success: false,
+            message: 'Package can only be changed for Package acknowledgement receipts',
+          });
+        }
+        const pkgResult = await query(
+          `SELECT package_id, package_name, package_price, branch_id, package_type, downpayment_amount, payment_option
+           FROM packagestbl
+           WHERE package_id = $1`,
+          [nextPackageId]
+        );
+        if (pkgResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Selected package not found',
+          });
+        }
+        const pkg = pkgResult.rows[0];
+        if (pkg.branch_id != null && Number(pkg.branch_id) !== Number(ack.branch_id)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Selected package does not belong to this acknowledgement receipt branch',
+          });
+        }
+        const packagePrice = parseFloat(pkg.package_price ?? 0) || 0;
+        const downpayment = parseFloat(pkg.downpayment_amount ?? 0) || 0;
+        const packageType = String(pkg.package_type || '').toLowerCase();
+        const paymentOption = String(pkg.payment_option || '').toLowerCase();
+        const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+        const computedPayable =
+          isInstallmentLike && String(ack.installment_option || '').toLowerCase() === 'downpayment_only' && downpayment > 0
+            ? downpayment
+            : packagePrice;
+
+        pushUpdate('package_id', pkg.package_id);
+        pushUpdate('package_name_snapshot', pkg.package_name || null);
+        pushUpdate('package_amount_snapshot', packagePrice);
+        // Payable is always system-derived from package selection for consistency with create flow.
+        pushUpdate('payment_amount', computedPayable);
       }
 
       if (updates.length === 0) {
@@ -1766,7 +1898,7 @@ router.delete(
 
 /**
  * PUT /api/sms/acknowledgement-receipts/:id/verify
- * Verify or reject a package acknowledgement receipt.
+ * Verify or return a package acknowledgement receipt.
  * Access: Finance, Superfinance
  */
 router.put(
@@ -1785,7 +1917,7 @@ router.put(
       const remarks = String(req.body?.remarks || '').trim() || null;
 
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes
+        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by, prospect_student_name
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -1803,7 +1935,7 @@ router.put(
       if (ack.ar_type !== 'Package') {
         return res.status(400).json({
           success: false,
-          message: 'Only Package acknowledgement receipts can be verified/rejected in this flow',
+          message: 'Only Package acknowledgement receipts can be verified/returned in this flow',
         });
       }
 
@@ -1828,7 +1960,20 @@ router.put(
         });
       }
 
-      const nextStatus = approve ? 'Verified' : 'Rejected';
+      if (!approve && ack.status === 'Returned') {
+        return res.status(400).json({
+          success: false,
+          message: 'This acknowledgement receipt is already returned',
+        });
+      }
+      if (!approve && !remarks) {
+        return res.status(400).json({
+          success: false,
+          message: 'Return note is required',
+        });
+      }
+
+      const nextStatus = approve ? 'Verified' : 'Returned';
       const updatedNotes = remarks
         ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${nextStatus}] ${remarks}`
         : ack.prospect_student_notes;
@@ -1858,11 +2003,118 @@ router.put(
             [nextStatus, updatedNotes, id]
           );
 
+      if (!approve) {
+        const returnedByUserId = req.user.userId || req.user.user_id || null;
+        await notifyArReturnedToCreator({
+          ackReceiptId: ack.ack_receipt_id,
+          branchId: ack.branch_id,
+          returnedByUserId,
+          creatorUserId: ack.created_by,
+          studentName: ack.prospect_student_name,
+          reason: remarks,
+        });
+      }
+
       return res.json({
         success: true,
         message: approve
           ? 'Acknowledgement receipt verified successfully'
-          : 'Acknowledgement receipt rejected successfully',
+          : 'Acknowledgement receipt returned successfully',
+        data: omitAckReceiptNumber(updateRes.rows[0]),
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/acknowledgement-receipts/:id/resubmit
+ * Resubmit a returned package acknowledgement receipt.
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.put(
+  '/:id/resubmit',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const remarks = String(req.body?.remarks || '').trim() || null;
+      const ackResult = await query(
+        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1`,
+        [id]
+      );
+      if (ackResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ack = ackResult.rows[0];
+      if (ack.ar_type !== 'Package') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only Package acknowledgement receipts can be resubmitted in this flow',
+        });
+      }
+      if (ack.status !== 'Returned') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only returned acknowledgement receipts can be resubmitted',
+        });
+      }
+
+      const actorId = req.user.userId || req.user.user_id || null;
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      if (!isSuperadmin && Number(actorId) !== Number(ack.created_by)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the AR creator can resubmit this acknowledgement receipt',
+        });
+      }
+      if (req.user.userType === 'Admin' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this acknowledgement receipt',
+        });
+      }
+
+      const updatedNotes = remarks
+        ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[Resubmitted] ${remarks}`
+        : ack.prospect_student_notes;
+
+      const hasVerifierCols = await ackReceiptHasVerifierColumns();
+      const updateRes = hasVerifierCols
+        ? await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET status = 'Submitted',
+                 prospect_student_notes = $1,
+                 verified_by_user_id = NULL,
+                 verified_at = NULL
+             WHERE ack_receipt_id = $2
+             RETURNING *`,
+            [updatedNotes, id]
+          )
+        : await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET status = 'Submitted',
+                 prospect_student_notes = $1
+             WHERE ack_receipt_id = $2
+             RETURNING *`,
+            [updatedNotes, id]
+          );
+
+      return res.json({
+        success: true,
+        message: 'Acknowledgement receipt resubmitted successfully',
         data: omitAckReceiptNumber(updateRes.rows[0]),
       });
     } catch (err) {

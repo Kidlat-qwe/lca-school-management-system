@@ -245,7 +245,16 @@ const OperationalDashboard = () => {
       {/* Cohort Retention Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Cohort Retention Analysis</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-900">Cohort Retention Analysis</h3>
+            <span
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-gray-100 text-xs font-semibold text-gray-500 cursor-help"
+              title="Cohort retention tracks students by first enrollment month and shows what percent of that same group enrolled again in each following month."
+              aria-label="Cohort retention definition"
+            >
+              ?
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <label htmlFor="cohort-year" className="text-sm font-medium text-gray-700">Year</label>
             <select

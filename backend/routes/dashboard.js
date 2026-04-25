@@ -13,11 +13,12 @@ const formatMonthLabel = (date) => {
   return date.toLocaleString('default', { month: 'short', year: 'numeric' });
 };
 
-const buildMonthSequence = (monthsBack = 6) => {
-  const today = new Date();
+const buildMonthSequence = (monthsBack = 6, anchorDateInput = new Date()) => {
+  const today = anchorDateInput instanceof Date ? anchorDateInput : new Date(anchorDateInput);
+  const anchorDate = Number.isNaN(today.getTime()) ? new Date() : today;
   const sequence = [];
   for (let i = monthsBack - 1; i >= 0; i -= 1) {
-    const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const date = new Date(anchorDate.getFullYear(), anchorDate.getMonth() - i, 1);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     sequence.push({
       key,
@@ -27,7 +28,24 @@ const buildMonthSequence = (monthsBack = 6) => {
   return sequence;
 };
 
+const parseMonthRange = (monthKey) => {
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(String(monthKey))) return null;
+  const [yearStr, monthStr] = String(monthKey).split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+  return {
+    key: `${yearStr}-${monthStr}`,
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+    anchorDate: new Date(year, month - 1, 1),
+  };
+};
+
 const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+const getCurrentManilaMonthKey = () => getTodayManila().slice(0, 7);
 
 const buildRecentDaySequence = (daysBack = 7, endDateIso = getTodayManila()) => {
   const baseDate = endDateIso ? new Date(`${endDateIso}T12:00:00+08:00`) : new Date();
@@ -55,13 +73,22 @@ router.get(
   '/',
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
-      const { branch_id } = req.query;
+      const { branch_id, month } = req.query;
       const branchFilter = branch_id ? parseInt(branch_id, 10) : null;
+      const monthRange = parseMonthRange(month);
+      if (monthRange && monthRange.key > getCurrentManilaMonthKey()) {
+        return res.status(400).json({
+          success: false,
+          message: 'month cannot be in the future',
+        });
+      }
+      const selectedMonth = monthRange?.key || null;
 
       // Build queries with parameterized values for security
       const branchParams = branchFilter ? [branchFilter] : [];
@@ -93,8 +120,10 @@ router.get(
         active_classes: 0,
       };
 
-      const monthSequence = buildMonthSequence(6);
+      const monthSequence = buildMonthSequence(6, monthRange?.anchorDate || new Date());
       const monthKeys = monthSequence.map((m) => m.key);
+      const monthStartDate = monthRange?.start || null;
+      const monthEndDate = monthRange?.end || null;
 
       const enrollmentsQuery = branchFilter
         ? `
@@ -190,6 +219,7 @@ router.get(
             COALESCE(SUM(amount), 0) AS total_amount
           FROM invoicestbl i
           WHERE i.branch_id = $1
+            ${monthStartDate ? 'AND i.issue_date >= $2::date AND i.issue_date < $3::date' : ''}
           GROUP BY status
         `
         : `
@@ -198,9 +228,13 @@ router.get(
             COUNT(*) AS count,
             COALESCE(SUM(amount), 0) AS total_amount
           FROM invoicestbl i
+          ${monthStartDate ? 'WHERE i.issue_date >= $1::date AND i.issue_date < $2::date' : ''}
           GROUP BY status
         `;
-      const invoiceStatusResult = await query(invoiceStatusQuery, branchParams);
+      const invoiceStatusParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const invoiceStatusResult = await query(invoiceStatusQuery, invoiceStatusParams);
 
       // Completed payments split by Finance/Superfinance approval (same rules as Payment Logs)
       const paymentVerificationQuery = branchFilter
@@ -226,6 +260,7 @@ router.get(
             ) AS unverified_amount
           FROM paymenttbl p
           WHERE p.branch_id = $1
+            ${monthStartDate ? 'AND p.issue_date >= $2::date AND p.issue_date < $3::date' : ''}
         `
         : `
           SELECT
@@ -248,8 +283,12 @@ router.get(
               0
             ) AS unverified_amount
           FROM paymenttbl p
+          ${monthStartDate ? 'WHERE p.issue_date >= $1::date AND p.issue_date < $2::date' : ''}
         `;
-      const paymentVerificationResult = await query(paymentVerificationQuery, branchParams);
+      const paymentVerificationParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const paymentVerificationResult = await query(paymentVerificationQuery, paymentVerificationParams);
       const pvRow = paymentVerificationResult.rows[0] || {};
 
       // Package AR lifecycle split for verification monitoring.
@@ -277,6 +316,7 @@ router.get(
             ) AS unverified_amount
           FROM acknowledgement_receiptstbl ar
           WHERE ar.branch_id = $1
+            ${monthStartDate ? 'AND ar.issue_date >= $2::date AND ar.issue_date < $3::date' : ''}
         `
         : `
           SELECT
@@ -299,8 +339,12 @@ router.get(
               0
             ) AS unverified_amount
           FROM acknowledgement_receiptstbl ar
+          ${monthStartDate ? 'WHERE ar.issue_date >= $1::date AND ar.issue_date < $2::date' : ''}
         `;
-      const arVerificationResult = await query(arVerificationQuery, branchParams);
+      const arVerificationParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const arVerificationResult = await query(arVerificationQuery, arVerificationParams);
       const arvRow = arVerificationResult.rows[0] || {};
 
       const reservationStatusQuery = branchFilter
@@ -310,6 +354,7 @@ router.get(
             COUNT(*) AS count
           FROM reservedstudentstbl r
           WHERE r.branch_id = $1
+            ${monthStartDate ? 'AND r.reserved_at >= $2::date AND r.reserved_at < $3::date' : ''}
           GROUP BY status
         `
         : `
@@ -317,9 +362,13 @@ router.get(
             status,
             COUNT(*) AS count
           FROM reservedstudentstbl r
+          ${monthStartDate ? 'WHERE r.reserved_at >= $1::date AND r.reserved_at < $2::date' : ''}
           GROUP BY status
         `;
-      const reservationStatusResult = await query(reservationStatusQuery, branchParams);
+      const reservationStatusParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const reservationStatusResult = await query(reservationStatusQuery, reservationStatusParams);
 
       // Get all branches for filter dropdown
       const branchesResult = await query(`
@@ -358,6 +407,7 @@ router.get(
             AND c.branch_id IS NOT NULL
             AND u.branch_id != c.branch_id
             AND (u.branch_id = $1 OR c.branch_id = $1)
+            ${monthStartDate ? 'AND cs.enrolled_at >= $2::date AND cs.enrolled_at < $3::date' : ''}
           ORDER BY cs.enrolled_at DESC
           LIMIT 50
         `
@@ -386,10 +436,14 @@ router.get(
             AND u.branch_id IS NOT NULL
             AND c.branch_id IS NOT NULL
             AND u.branch_id != c.branch_id
+            ${monthStartDate ? 'AND cs.enrolled_at >= $1::date AND cs.enrolled_at < $2::date' : ''}
           ORDER BY cs.enrolled_at DESC
           LIMIT 50
         `;
-      const crossingProceduresResult = await query(crossingProceduresQuery, branchParams);
+      const crossingProceduresParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const crossingProceduresResult = await query(crossingProceduresQuery, crossingProceduresParams);
 
       res.json({
         success: true,
@@ -450,6 +504,7 @@ router.get(
               phase_number: row.phase_number,
             })),
           },
+          selected_month: selectedMonth,
           selected_branch_id: branchFilter,
           updated_at: new Date().toISOString(),
         },
@@ -513,8 +568,10 @@ router.get(
                 p.branch_id,
                 COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS daily_sales_amount
               FROM paymenttbl p
+              LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+              LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
               WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 1}::date
+                AND COALESCE(ar.issue_date, p.issue_date) = $${branchParams.length + 1}::date
               GROUP BY p.branch_id
             ),
             ar_sales AS (
@@ -662,15 +719,17 @@ router.get(
         query(
           `
             SELECT
-              p.issue_date::text AS issue_date,
+              COALESCE(ar.issue_date, p.issue_date)::text AS issue_date,
               COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total_amount
             FROM paymenttbl p
+            LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+            LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
             WHERE p.status = 'Completed'
-              AND p.issue_date >= $${branchParams.length + 1}::date - INTERVAL '6 days'
-              AND p.issue_date <= $${branchParams.length + 1}::date
+              AND COALESCE(ar.issue_date, p.issue_date) >= $${branchParams.length + 1}::date - INTERVAL '6 days'
+              AND COALESCE(ar.issue_date, p.issue_date) <= $${branchParams.length + 1}::date
               ${branchFilter ? 'AND p.branch_id = $1' : ''}
-            GROUP BY p.issue_date
-            ORDER BY p.issue_date ASC
+            GROUP BY COALESCE(ar.issue_date, p.issue_date)
+            ORDER BY COALESCE(ar.issue_date, p.issue_date) ASC
           `,
           [...branchParams, summaryDate]
         ),
@@ -824,6 +883,7 @@ router.get(
   '/enrollment',
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance'),
@@ -831,27 +891,32 @@ router.get(
     try {
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && (req.user.branchId == null);
+      const monthRange = parseMonthRange(req.query.month);
+      if (monthRange && monthRange.key > getCurrentManilaMonthKey()) {
+        return res.status(400).json({
+          success: false,
+          message: 'month cannot be in the future',
+        });
+      }
       const branchFilter = isSuperadmin || isFinanceNoBranch
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
       const branchParams = branchFilter ? [branchFilter] : [];
+      const monthStartDate = monthRange?.start || null;
+      const monthEndDate = monthRange?.end || null;
 
       const studentWhere = branchFilter
         ? 'WHERE u.user_type = \'Student\' AND u.branch_id = $1'
         : 'WHERE u.user_type = \'Student\'';
-      const classJoin = branchFilter
-        ? 'INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1'
-        : 'INNER JOIN classestbl c ON cs.class_id = c.class_id';
       const activeEnrollment = "COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL";
 
-      // Total students (by branch if filter)
+      // KPI cards: always system snapshot (not month-scoped). Month only affects the enrollments trend chart.
       const totalStudentsResult = await query(
         `SELECT COUNT(*) AS count FROM userstbl u ${studentWhere}`,
         branchParams
       );
       const totalStudents = parseInt(totalStudentsResult.rows[0]?.count, 10) || 0;
 
-      // Active students: distinct students with at least one active enrollment
       const activeQuery = branchFilter
         ? `
           SELECT COUNT(DISTINCT cs.student_id) AS count
@@ -867,14 +932,73 @@ router.get(
         `;
       const activeResult = await query(activeQuery, branchParams);
       const activeStudents = parseInt(activeResult.rows[0]?.count, 10) || 0;
-
-      // Inactive = total students - active (students with no active enrollment)
       const inactiveStudents = Math.max(0, totalStudents - activeStudents);
+
+      // Re-enrollment: more than one classstudent row for the same (student, class) = enrolled again in that class.
+      // Rate = active students who have at least one such same-class re-enrollment / all active students.
+      const reEnrollmentQuery = branchFilter
+        ? `
+          WITH enrollment_rows AS (
+            SELECT cs.student_id, cs.class_id
+            FROM classstudentstbl cs
+            INNER JOIN classestbl c ON cs.class_id = c.class_id
+            WHERE c.branch_id = $1
+          ),
+          reenrollment_pairs AS (
+            SELECT student_id, class_id
+            FROM enrollment_rows
+            GROUP BY student_id, class_id
+            HAVING COUNT(*) > 1
+          ),
+          active_students AS (
+            SELECT DISTINCT cs.student_id
+            FROM classstudentstbl cs
+            INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
+            WHERE ${activeEnrollment}
+          )
+          SELECT
+            (
+              SELECT COUNT(DISTINCT rp.student_id)
+              FROM reenrollment_pairs rp
+              INNER JOIN active_students a ON a.student_id = rp.student_id
+            )::int AS reenrolled_active_count
+        `
+        : `
+          WITH enrollment_rows AS (
+            SELECT cs.student_id, cs.class_id
+            FROM classstudentstbl cs
+            INNER JOIN classestbl c ON cs.class_id = c.class_id
+          ),
+          reenrollment_pairs AS (
+            SELECT student_id, class_id
+            FROM enrollment_rows
+            GROUP BY student_id, class_id
+            HAVING COUNT(*) > 1
+          ),
+          active_students AS (
+            SELECT DISTINCT cs.student_id
+            FROM classstudentstbl cs
+            INNER JOIN classestbl c ON cs.class_id = c.class_id
+            WHERE ${activeEnrollment}
+          )
+          SELECT
+            (
+              SELECT COUNT(DISTINCT rp.student_id)
+              FROM reenrollment_pairs rp
+              INNER JOIN active_students a ON a.student_id = rp.student_id
+            )::int AS reenrolled_active_count
+        `;
+      const reEnrollmentResult = await query(reEnrollmentQuery, branchParams);
+      const reEnrollmentCount = parseInt(reEnrollmentResult.rows[0]?.reenrolled_active_count, 10) || 0;
+      const reEnrollmentBaseStudents = activeStudents;
       const enrollmentRate = totalStudents > 0
         ? Number(((activeStudents / totalStudents) * 100).toFixed(2))
         : 0;
+      const reEnrollmentRate = reEnrollmentBaseStudents > 0
+        ? Number(((reEnrollmentCount / reEnrollmentBaseStudents) * 100).toFixed(2))
+        : 0;
 
-      // Reserved-only: students who have at least one reservation and zero active enrollments
+      // Reserved-only: at least one reservation, no current active enrollment (not month-scoped)
       const reservedOnlyQuery = branchFilter
         ? `
           SELECT COUNT(DISTINCT r.student_id) AS count
@@ -884,7 +1008,8 @@ router.get(
             AND NOT EXISTS (
               SELECT 1 FROM classstudentstbl cs
               INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = r.branch_id
-              WHERE cs.student_id = r.student_id AND ${activeEnrollment}
+              WHERE cs.student_id = r.student_id
+                AND ${activeEnrollment}
             )
         `
         : `
@@ -894,31 +1019,41 @@ router.get(
             AND NOT EXISTS (
               SELECT 1 FROM classstudentstbl cs
               INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.student_id = r.student_id AND ${activeEnrollment}
+              WHERE cs.student_id = r.student_id
+                AND ${activeEnrollment}
             )
         `;
       const reservedOnlyResult = await query(reservedOnlyQuery, branchParams);
       const reservedOnlyCount = parseInt(reservedOnlyResult.rows[0]?.count, 10) || 0;
 
       // Monthly enrollments (last 6 months) for bar chart
-      const monthSequence = buildMonthSequence(6);
+      const monthSequence = buildMonthSequence(6, monthRange?.anchorDate || new Date());
       const monthKeys = monthSequence.map((m) => m.key);
       const enrollmentsByMonthQuery = branchFilter
         ? `
           SELECT TO_CHAR(DATE_TRUNC('month', cs.enrolled_at), 'YYYY-MM') AS month, COUNT(*) AS count
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
-          WHERE cs.enrolled_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          WHERE cs.enrolled_at >= ${
+            monthStartDate ? '($2::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
+          }
+            ${monthStartDate ? 'AND cs.enrolled_at < $3::date' : ''}
           GROUP BY 1 ORDER BY 1
         `
         : `
           SELECT TO_CHAR(DATE_TRUNC('month', cs.enrolled_at), 'YYYY-MM') AS month, COUNT(*) AS count
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE cs.enrolled_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          WHERE cs.enrolled_at >= ${
+            monthStartDate ? '($1::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
+          }
+            ${monthStartDate ? 'AND cs.enrolled_at < $2::date' : ''}
           GROUP BY 1 ORDER BY 1
         `;
-      const enrollmentsByMonthResult = await query(enrollmentsByMonthQuery, branchParams);
+      const enrollmentsByMonthParams = branchFilter
+        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
+        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+      const enrollmentsByMonthResult = await query(enrollmentsByMonthQuery, enrollmentsByMonthParams);
       const enrollmentMap = enrollmentsByMonthResult.rows.reduce((acc, row) => {
         acc[row.month] = parseInt(row.count, 10);
         return acc;
@@ -928,7 +1063,7 @@ router.get(
         count: enrollmentMap[m.key] || 0,
       }));
 
-      // Active vs Inactive by branch (for bar chart when no branch filter)
+      // Active vs Inactive by branch (bar chart when no branch filter; same snapshot as KPI cards)
       let active_inactive_by_branch = [];
       if (!branchFilter) {
         const byBranchQuery = `
@@ -969,10 +1104,14 @@ router.get(
           active_students: activeStudents,
           inactive_students: inactiveStudents,
           enrollment_rate: enrollmentRate,
+          re_enrollment_count: reEnrollmentCount,
+          re_enrollment_base_students: reEnrollmentBaseStudents,
+          re_enrollment_rate: reEnrollmentRate,
           reserved_only_count: reservedOnlyCount,
           monthly_enrollments,
           active_inactive_by_branch,
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
+          selected_month: monthRange?.key || null,
           selected_branch_id: branchFilter,
         },
       });
@@ -1039,44 +1178,81 @@ router.get(
         ? `AND ${filterConditions.join(' AND ')}`
         : '';
 
-      // Step 1: Get student cohorts (first enrollment month)
+      // Cohort retention:
+      // - Cohort month = student's first enrollment month (paid enrollment flow creates classstudent row)
+      // - Retention at month M = % of that original cohort with at least one enrollment record in month M
+      // This aligns with standard cohort analysis where denominator is fixed at cohort start.
       const cohortsQuery = `
-        WITH student_first_enrollment AS (
+        WITH filtered_enrollments AS (
           SELECT 
             cs.student_id,
-            DATE_TRUNC('month', MIN(cs.enrolled_at))::date AS cohort_month
+            DATE_TRUNC('month', cs.enrolled_at)::date AS enrollment_month
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE 1=1 ${filterWhere}
-          GROUP BY cs.student_id
+          WHERE cs.enrolled_at IS NOT NULL ${filterWhere}
         ),
-        -- For each student and each month, check if active
-        student_monthly_activity AS (
+        student_first_enrollment AS (
+          SELECT
+            fe.student_id,
+            MIN(fe.enrollment_month)::date AS cohort_month
+          FROM filtered_enrollments fe
+          GROUP BY fe.student_id
+        ),
+        cohort_sizes AS (
+          SELECT
+            sfe.cohort_month,
+            COUNT(DISTINCT sfe.student_id)::int AS cohort_size
+          FROM student_first_enrollment sfe
+          GROUP BY sfe.cohort_month
+        ),
+        cohort_activity AS (
           SELECT 
             sfe.cohort_month,
             sfe.student_id,
-            DATE_TRUNC('month', cs.enrolled_at)::date AS activity_month,
-            MAX(CASE 
-              WHEN cs.enrollment_status = 'Active' 
-                AND (cs.removed_at IS NULL OR cs.removed_at > DATE_TRUNC('month', cs.enrolled_at))
-              THEN 1 
-              ELSE 0 
-            END) AS is_active
+            fe.enrollment_month AS activity_month
           FROM student_first_enrollment sfe
-          INNER JOIN classstudentstbl cs ON sfe.student_id = cs.student_id
-          INNER JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE 1=1 ${filterWhere}
-          GROUP BY sfe.cohort_month, sfe.student_id, activity_month
+          INNER JOIN filtered_enrollments fe ON fe.student_id = sfe.student_id
+          GROUP BY sfe.cohort_month, sfe.student_id, fe.enrollment_month
+        ),
+        month_bounds AS (
+          SELECT
+            MIN(cohort_month)::date AS min_month,
+            DATE_TRUNC('month', CURRENT_DATE)::date AS max_month
+          FROM cohort_sizes
+        ),
+        month_grid AS (
+          SELECT generate_series(mb.min_month, mb.max_month, interval '1 month')::date AS activity_month
+          FROM month_bounds mb
+          WHERE mb.min_month IS NOT NULL
+        ),
+        cohort_month_matrix AS (
+          SELECT
+            cs.cohort_month,
+            mg.activity_month
+          FROM cohort_sizes cs
+          INNER JOIN month_grid mg ON mg.activity_month >= cs.cohort_month
+        ),
+        retention_counts AS (
+          SELECT
+            cmm.cohort_month,
+            cmm.activity_month,
+            cs.cohort_size,
+            COUNT(DISTINCT ca.student_id)::int AS retained_count
+          FROM cohort_month_matrix cmm
+          INNER JOIN cohort_sizes cs ON cs.cohort_month = cmm.cohort_month
+          LEFT JOIN cohort_activity ca
+            ON ca.cohort_month = cmm.cohort_month
+           AND ca.activity_month = cmm.activity_month
+          GROUP BY cmm.cohort_month, cmm.activity_month, cs.cohort_size
         )
         SELECT 
           TO_CHAR(cohort_month, 'Mon YYYY') AS cohort_label,
           cohort_month,
           TO_CHAR(activity_month, 'Mon YYYY') AS activity_label,
           activity_month,
-          SUM(is_active) AS active_count,
-          COUNT(DISTINCT student_id) AS cohort_size
-        FROM student_monthly_activity
-        GROUP BY cohort_month, activity_month
+          retained_count AS active_count,
+          cohort_size
+        FROM retention_counts
         ORDER BY cohort_month, activity_month;
       `;
 
