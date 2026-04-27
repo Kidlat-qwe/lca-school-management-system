@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS public.acknowledgement_receiptstbl
     level_tag character varying(100) COLLATE pg_catalog."default",
     ar_type character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Package'::character varying,
     merchandise_items_snapshot jsonb,
+    prospect_student_email text COLLATE pg_catalog."default",
+    tip_amount numeric(12, 2) DEFAULT 0,
+    payment_method character varying(50) COLLATE pg_catalog."default" DEFAULT 'Cash'::character varying,
+    verified_by_user_id integer,
+    verified_at timestamp with time zone,
     CONSTRAINT acknowledgement_receiptstbl_pkey PRIMARY KEY (ack_receipt_id)
 );
 
@@ -45,6 +50,15 @@ COMMENT ON COLUMN public.acknowledgement_receiptstbl.ar_type
 
 COMMENT ON COLUMN public.acknowledgement_receiptstbl.merchandise_items_snapshot
     IS 'For Merchandise AR: snapshot of purchased items [{merchandise_id, merchandise_name, size, quantity, price, branch_id}]';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.payment_method
+    IS 'Payment method chosen during AR creation (Cash, Online Banking, Credit Card, E-wallets).';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.verified_by_user_id
+    IS 'User ID of Finance/Superfinance (or auto-verifying admin) who verified the acknowledgement receipt.';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.verified_at
+    IS 'Timestamp when the acknowledgement receipt was verified.';
 
 CREATE TABLE IF NOT EXISTS public.announcement_readstbl
 (
@@ -84,6 +98,8 @@ CREATE TABLE IF NOT EXISTS public.announcementstbl
     end_date date,
     attachment_url text COLLATE pg_catalog."default",
     target_user_id integer,
+    navigation_key character varying(100) COLLATE pg_catalog."default",
+    navigation_query text COLLATE pg_catalog."default",
     CONSTRAINT announcementstbl_pkey PRIMARY KEY (announcement_id)
 );
 
@@ -122,6 +138,12 @@ COMMENT ON COLUMN public.announcementstbl.attachment_url
 
 COMMENT ON COLUMN public.announcementstbl.target_user_id
     IS 'Optional direct recipient user ID. If set, only this user receives the announcement in notifications.';
+
+COMMENT ON COLUMN public.announcementstbl.navigation_key
+    IS 'Optional logical destination for notification clicks (e.g. payment-logs, merchandise, daily-summary-sales, announcements).';
+
+COMMENT ON COLUMN public.announcementstbl.navigation_query
+    IS 'Optional query string appended on notification click (e.g. notificationTab=return).';
 
 CREATE TABLE IF NOT EXISTS public.ar_number_counter
 (
@@ -209,6 +231,9 @@ CREATE TABLE IF NOT EXISTS public.cash_deposit_summarytbl
     remarks text COLLATE pg_catalog."default",
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    reference_number character varying(255) COLLATE pg_catalog."default",
+    deposit_attachment_url text COLLATE pg_catalog."default",
+    cash_payment_snapshot jsonb,
     CONSTRAINT cash_deposit_summarytbl_pkey PRIMARY KEY (cash_deposit_summary_id),
     CONSTRAINT cash_deposit_summarytbl_branch_period_unique UNIQUE (branch_id, start_date, end_date)
 );
@@ -230,6 +255,15 @@ COMMENT ON COLUMN public.cash_deposit_summarytbl.completed_cash_count
 
 COMMENT ON COLUMN public.cash_deposit_summarytbl.status
     IS 'Submitted (awaiting approval), Approved, Rejected';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.reference_number
+    IS 'Branch cash deposit reference number (e.g., deposit slip or transaction number).';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.deposit_attachment_url
+    IS 'S3 URL of the uploaded deposit proof image submitted by branch admin.';
+
+COMMENT ON COLUMN public.cash_deposit_summarytbl.cash_payment_snapshot
+    IS 'Immutable snapshot of cash payment rows included at submission time for details viewing.';
 
 CREATE TABLE IF NOT EXISTS public.class_merge_historytbl
 (
@@ -429,6 +463,7 @@ CREATE TABLE IF NOT EXISTS public.guardianstbl
     postal_code character varying(20) COLLATE pg_catalog."default",
     country character varying(100) COLLATE pg_catalog."default",
     state_province_region character varying(100) COLLATE pg_catalog."default",
+    tin_number text COLLATE pg_catalog."default",
     CONSTRAINT guardianstbl_pkey PRIMARY KEY (guardian_id)
 );
 
@@ -537,6 +572,9 @@ CREATE TABLE IF NOT EXISTS public.invoicestbl
     late_penalty_applied_for_due_date date,
     ack_receipt_id integer,
     invoice_ar_number character varying(50) COLLATE pg_catalog."default",
+    parent_invoice_id integer,
+    balance_invoice_id integer,
+    invoice_chain_root_id integer,
     CONSTRAINT invoicestbl_pkey PRIMARY KEY (invoice_id)
 );
 
@@ -554,6 +592,15 @@ COMMENT ON COLUMN public.invoicestbl.ack_receipt_id
 
 COMMENT ON COLUMN public.invoicestbl.invoice_ar_number
     IS 'AR#: 2-digit year + 4-digit sequence (e.g. 260001). Existing legacy invoices may be NULL.';
+
+COMMENT ON COLUMN public.invoicestbl.parent_invoice_id
+    IS 'Previous invoice in chain when this row was generated to carry the remaining balance.';
+
+COMMENT ON COLUMN public.invoicestbl.balance_invoice_id
+    IS 'If set, remaining balance was moved to this invoice — do not record new payments here.';
+
+COMMENT ON COLUMN public.invoicestbl.invoice_chain_root_id
+    IS 'First invoice in this billing chain; reservation / profile links use the root.';
 
 CREATE TABLE IF NOT EXISTS public.invoicestudentstbl
 (
@@ -700,11 +747,10 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     returned_by integer,
     returned_at timestamp without time zone,
     action_owner_user_id integer,
+    tip_amount numeric(12, 2) DEFAULT 0,
+    finance_verified_reference_number text COLLATE pg_catalog."default",
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
-
-COMMENT ON COLUMN public.paymenttbl.action_owner_user_id
-    IS 'User responsible when Finance returns a payment for correction — usually invoicestbl.created_by (invoice issuer). Drives Return tab (my_return_queue) and targeted notifications.';
 
 COMMENT ON COLUMN public.paymenttbl.approval_status
     IS 'Pending | Approved | Returned — Returned means sent back to branch for reference/attachment correction.';
@@ -726,6 +772,12 @@ COMMENT ON COLUMN public.paymenttbl.returned_by
 
 COMMENT ON COLUMN public.paymenttbl.returned_at
     IS 'When the payment was returned for correction.';
+
+COMMENT ON COLUMN public.paymenttbl.action_owner_user_id
+    IS 'User responsible for return fixes — aligned with invoicestbl.created_by (invoice issuer). Used for my_return_queue and notifications.';
+
+COMMENT ON COLUMN public.paymenttbl.finance_verified_reference_number
+    IS 'Reference number entered by Finance/Superfinance during payment verification approval.';
 
 CREATE TABLE IF NOT EXISTS public.phasesessionstbl
 (
@@ -1481,6 +1533,15 @@ CREATE INDEX IF NOT EXISTS idx_invoicestbl_ack_receipt_id
 
 
 ALTER TABLE IF EXISTS public.invoicestbl
+    ADD CONSTRAINT invoicestbl_balance_invoice_id_fkey FOREIGN KEY (balance_invoice_id)
+    REFERENCES public.invoicestbl (invoice_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_invoicestbl_balance_invoice_id
+    ON public.invoicestbl(balance_invoice_id);
+
+
+ALTER TABLE IF EXISTS public.invoicestbl
     ADD CONSTRAINT invoicestbl_branch_id_fkey FOREIGN KEY (branch_id)
     REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
     ON UPDATE NO ACTION
@@ -1508,12 +1569,30 @@ CREATE INDEX IF NOT EXISTS idx_invoice_installment_profile_id
 
 
 ALTER TABLE IF EXISTS public.invoicestbl
+    ADD CONSTRAINT invoicestbl_invoice_chain_root_id_fkey FOREIGN KEY (invoice_chain_root_id)
+    REFERENCES public.invoicestbl (invoice_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_invoicestbl_invoice_chain_root_id
+    ON public.invoicestbl(invoice_chain_root_id);
+
+
+ALTER TABLE IF EXISTS public.invoicestbl
     ADD CONSTRAINT invoicestbl_package_id_fkey FOREIGN KEY (package_id)
     REFERENCES public.packagestbl (package_id) MATCH SIMPLE
     ON UPDATE NO ACTION
     ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_invoice_package_id
     ON public.invoicestbl(package_id);
+
+
+ALTER TABLE IF EXISTS public.invoicestbl
+    ADD CONSTRAINT invoicestbl_parent_invoice_id_fkey FOREIGN KEY (parent_invoice_id)
+    REFERENCES public.invoicestbl (invoice_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_invoicestbl_parent_invoice_id
+    ON public.invoicestbl(parent_invoice_id);
 
 
 ALTER TABLE IF EXISTS public.invoicestbl
@@ -1623,6 +1702,15 @@ CREATE INDEX IF NOT EXISTS idx_package_branch_id
 
 
 ALTER TABLE IF EXISTS public.paymenttbl
+    ADD CONSTRAINT paymenttbl_action_owner_user_id_fkey FOREIGN KEY (action_owner_user_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_paymenttbl_action_owner_user_id
+    ON public.paymenttbl(action_owner_user_id);
+
+
+ALTER TABLE IF EXISTS public.paymenttbl
     ADD CONSTRAINT paymenttbl_approved_by_fkey FOREIGN KEY (approved_by)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
@@ -1643,15 +1731,6 @@ ALTER TABLE IF EXISTS public.paymenttbl
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
     ON DELETE SET NULL;
-
-
-ALTER TABLE IF EXISTS public.paymenttbl
-    ADD CONSTRAINT paymenttbl_action_owner_user_id_fkey FOREIGN KEY (action_owner_user_id)
-    REFERENCES public.userstbl (user_id) MATCH SIMPLE
-    ON UPDATE NO ACTION
-    ON DELETE SET NULL;
-CREATE INDEX IF NOT EXISTS idx_paymenttbl_action_owner_user_id
-    ON public.paymenttbl(action_owner_user_id);
 
 
 ALTER TABLE IF EXISTS public.paymenttbl

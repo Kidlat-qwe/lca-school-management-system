@@ -258,10 +258,12 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
             u.level_tag AS student_level_tag,
             i.invoice_description,
             TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
-            i.ack_receipt_id
+            i.ack_receipt_id,
+            ar.payment_method AS ar_payment_method
      FROM paymenttbl p
      LEFT JOIN userstbl u ON p.student_id = u.user_id
      LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+     LEFT JOIN acknowledgement_receiptstbl ar ON ar.ack_receipt_id = i.ack_receipt_id
      WHERE ${whereClause}
      ORDER BY p.payment_id DESC`,
     params
@@ -293,8 +295,16 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
       }
     }
 
+    const rawPaymentMethod = String(paymentRow.payment_method || '').trim();
+    const arPaymentMethod = String(paymentRow.ar_payment_method || '').trim();
+    const shouldUseArMethod =
+      arPaymentMethod &&
+      rawPaymentMethod.toLowerCase() === 'cash' &&
+      arPaymentMethod.toLowerCase() !== 'cash';
+
     payments.push({
       ...paymentRow,
+      payment_method: shouldUseArMethod ? arPaymentMethod : paymentRow.payment_method,
       student_name: studentName,
       student_email: studentEmail,
     });
@@ -920,6 +930,7 @@ router.get(
                 i.invoice_description,
                 i.ack_receipt_id,
                 ar.prospect_student_name,
+                ar.payment_method AS ar_payment_method,
                 ar.level_tag AS ar_level_tag
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
@@ -935,9 +946,16 @@ router.get(
         const resolvedStudentName = isWalkIn && row.prospect_student_name
           ? row.prospect_student_name
           : row.student_name;
+        const rawPaymentMethod = String(row.payment_method || '').trim();
+        const arPaymentMethod = String(row.ar_payment_method || '').trim();
+        const shouldUseArMethod =
+          arPaymentMethod &&
+          rawPaymentMethod.toLowerCase() === 'cash' &&
+          arPaymentMethod.toLowerCase() !== 'cash';
 
         return {
           ...row,
+          payment_method: shouldUseArMethod ? arPaymentMethod : row.payment_method,
           student_name: resolvedStudentName,
           program_level_tag: row.ar_level_tag || row.student_level_tag || null,
         };
