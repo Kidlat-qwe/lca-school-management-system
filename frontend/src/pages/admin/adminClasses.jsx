@@ -1456,9 +1456,16 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
+      // Hide unenrolled/removed rows in the Manage Enrolled Students modal.
+      const visibleEnrolledStudents = enrolledStudents.filter((student) => {
+        const status = String(student.enrollment_status || '').trim().toLowerCase();
+        const studentType = String(student.student_type || '').trim().toLowerCase();
+        return status !== 'removed' && studentType !== 'unenrolled';
+      });
+
       // Group enrolled students by student_id to show only unique students
       // Collect all phases for each student and keep the earliest enrollment info
-      const uniqueEnrolledStudents = enrolledStudents.reduce((acc, student) => {
+      const uniqueEnrolledStudents = visibleEnrolledStudents.reduce((acc, student) => {
         const existing = acc.find(s => s.user_id === student.user_id);
         if (!existing) {
           // First time seeing this student - initialize with phases array
@@ -1691,9 +1698,16 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
+      // Hide unenrolled/removed rows in View Students as well for consistency.
+      const visibleEnrolledStudents = enrolledStudents.filter((student) => {
+        const status = String(student.enrollment_status || '').trim().toLowerCase();
+        const studentType = String(student.student_type || '').trim().toLowerCase();
+        return status !== 'removed' && studentType !== 'unenrolled';
+      });
+
       // Group enrolled students by student_id to show only unique students
       // Collect all phases for each student and keep the earliest enrollment info
-      const uniqueEnrolledStudents = enrolledStudents.reduce((acc, student) => {
+      const uniqueEnrolledStudents = visibleEnrolledStudents.reduce((acc, student) => {
         const existing = acc.find(s => s.user_id === student.user_id);
         if (!existing) {
           // First time seeing this student - initialize with phases array

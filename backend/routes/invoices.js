@@ -640,8 +640,6 @@ router.get(
            INNER JOIN classestbl c ON cs.class_id = c.class_id
            LEFT JOIN programstbl p ON c.program_id = p.program_id
            WHERE cs.student_id = ANY($1::int[])
-             AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
-             AND cs.removed_at IS NULL
            ORDER BY cs.student_id, cs.classstudent_id DESC`,
           [invoiceStudentIds]
         );

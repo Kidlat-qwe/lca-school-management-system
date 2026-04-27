@@ -549,45 +549,51 @@ const DailySummarySalesApprovalPage = () => {
           document.body
         )}
 
-      {rejectModal.open && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
-        >
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
-            <p className="mt-2 text-sm text-gray-600">
-              Optional: Add a reason so the branch admin understands why this submission was rejected.
-            </p>
-            <textarea
-              value={rejectModal.remarks}
-              onChange={(e) => setRejectModal((prev) => ({ ...prev, remarks: e.target.value }))}
-              className="input-field mt-2 w-full min-h-[80px]"
-              placeholder="Reason (optional)"
-            />
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleFlag}
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700"
-              >
-                Reject
-              </button>
+      {rejectModal.open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
+          >
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
+              <p className="mt-2 text-sm text-gray-600">
+                Optional: Add a reason so the branch admin understands why this submission was rejected.
+              </p>
+              <textarea
+                value={rejectModal.remarks}
+                onChange={(e) => setRejectModal((prev) => ({ ...prev, remarks: e.target.value }))}
+                className="input-field mt-2 w-full min-h-[80px]"
+                placeholder="Reason (optional)"
+              />
+              <div className="flex justify-end gap-2 mt-4">
+                <button
+                  onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleFlag}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700"
+                >
+                  Reject
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
-      {verifyModal.open && verifyModal.record && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={() => !approvingId && setVerifyModal({ open: false, record: null })}
-        >
+      {verifyModal.open &&
+        verifyModal.record &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={() => !approvingId && setVerifyModal({ open: false, record: null })}
+          >
           <div
             className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col p-6"
             onClick={(e) => e.stopPropagation()}
@@ -712,14 +718,18 @@ const DailySummarySalesApprovalPage = () => {
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
-      {detailModal.open && detailModal.record && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={() => setDetailModal({ open: false, record: null })}
-        >
+      {detailModal.open &&
+        detailModal.record &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={() => setDetailModal({ open: false, record: null })}
+          >
           <div
             className="bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
@@ -984,8 +994,9 @@ const DailySummarySalesApprovalPage = () => {
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {attachmentPreviewUrl && (
         <div

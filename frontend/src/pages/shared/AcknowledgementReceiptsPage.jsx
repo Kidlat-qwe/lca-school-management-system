@@ -704,6 +704,18 @@ const AcknowledgementReceiptsPage = () => {
 
   const handleVerifyReceipt = async (receipt, approve) => {
     if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    const confirmed = await appConfirm({
+      title: approve ? 'Verify Acknowledgement Receipt' : 'Return Acknowledgement Receipt',
+      message: approve
+        ? 'Are you sure you want to verify this acknowledgement receipt?'
+        : 'Are you sure you want to return this acknowledgement receipt to the branch?',
+      confirmLabel: approve ? 'Verify' : 'Return',
+      cancelLabel: 'Cancel',
+      variant: 'info',
+      destructive: !approve,
+    });
+    if (!confirmed) return;
+
     const promptedRemarks = !approve
       ? await appPrompt({
           title: 'Return Acknowledgement Receipt',

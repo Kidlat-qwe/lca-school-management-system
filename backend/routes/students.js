@@ -529,7 +529,9 @@ router.get(
       );
       const classBranchId = classResult.rows[0]?.branch_id ?? null;
 
-      // Get enrolled students
+      // Get enrolled + removed students.
+      // Removed enrollments are kept for historical visibility in class/payment/invoice contexts,
+      // but should not count toward active capacity.
       const enrolledResult = await query(
         `SELECT 
           cs.classstudent_id,
@@ -550,7 +552,11 @@ router.get(
           u.gender,
           u.level_tag,
           u.profile_picture_url,
-          'enrolled' as student_type,
+          CASE
+            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Removed' OR cs.removed_at IS NOT NULL
+              THEN 'unenrolled'
+            ELSE 'enrolled'
+          END as student_type,
           CASE
             WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN true
             WHEN active_profile.package_id IS NOT NULL
@@ -570,15 +576,7 @@ router.get(
            ORDER BY ip.installmentinvoiceprofiles_id DESC
            LIMIT 1
          ) active_profile ON true
-         WHERE cs.class_id = $1
-           AND (
-             (COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL)
-             OR (
-               active_profile.package_id IS NOT NULL
-               AND COALESCE(cs.enrollment_status, 'Active') <> 'Removed'
-               AND cs.removed_at IS NULL
-             )
-           )`,
+         WHERE cs.class_id = $1`,
         [classId]
       );
 

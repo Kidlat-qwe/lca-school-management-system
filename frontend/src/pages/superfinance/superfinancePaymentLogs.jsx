@@ -44,6 +44,7 @@ const SuperfinancePaymentLogs = () => {
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
   const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [showReturnModal, setShowReturnModal] = useState(false);
   const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
   const [referenceModalInput, setReferenceModalInput] = useState('');
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
@@ -196,6 +197,16 @@ const SuperfinancePaymentLogs = () => {
     setReturnReasonInput('');
   };
 
+  const openReturnModal = () => {
+    if (!selectedPaymentForReference) return;
+    setShowReturnModal(true);
+  };
+
+  const closeReturnModal = () => {
+    setShowReturnModal(false);
+    setReturnReasonInput('');
+  };
+
   const openReturnDetailsModal = (payment) => {
     setSelectedReturnDetailsPayment(payment);
     setShowReturnDetailsModal(true);
@@ -219,6 +230,7 @@ const SuperfinancePaymentLogs = () => {
         method: 'PUT',
         body: JSON.stringify({ reason: note }),
       });
+      closeReturnModal();
       closeReferenceModal();
       await fetchPayments(pagination.page);
       appAlert('Payment returned to branch for correction.');
@@ -1128,27 +1140,15 @@ const SuperfinancePaymentLogs = () => {
                 </div>
                 <div className="mb-4 pt-4 border-t border-gray-200">
                   <p className="text-xs text-gray-600 mb-2">
-                    If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span> and enter a short note (notes are required only for that action). You can <span className="font-medium text-gray-800">Verify &amp; approve</span> without a note.
+                    If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span>. You will be asked for a required note in the next step.
                   </p>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Note to branch{' '}
-                    <span className="text-gray-500 font-normal">(required when returning)</span>
-                  </label>
-                  <textarea
-                    value={returnReasonInput}
-                    onChange={(e) => setReturnReasonInput(e.target.value)}
-                    rows={2}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
-                    placeholder="e.g. Reference on image does not match encoded reference"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  />
                   <button
                     type="button"
-                    onClick={handleReturnToBranch}
+                    onClick={openReturnModal}
                     className="mt-3 w-full sm:w-auto px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md border border-amber-200 disabled:opacity-50"
                     disabled={referenceModalUpdating || returnActionLoading}
                   >
-                    {returnActionLoading ? 'Returning...' : 'Return to branch'}
+                    Return to branch
                   </button>
                 </div>
                 <div className="flex justify-end gap-3">
@@ -1169,6 +1169,67 @@ const SuperfinancePaymentLogs = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {showReturnModal && selectedPaymentForReference && createPortal(
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/20 p-4"
+          onClick={closeReturnModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Return to branch</h2>
+                <button
+                  type="button"
+                  onClick={closeReturnModal}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={returnActionLoading}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mb-3">
+                Add a note so the branch knows exactly what to fix for INV-{selectedPaymentForReference.invoice_id}.
+              </p>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Note to branch <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={returnReasonInput}
+                onChange={(e) => setReturnReasonInput(e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
+                placeholder="e.g. Reference on image does not match encoded reference"
+                disabled={returnActionLoading}
+              />
+              <div className="mt-4 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleReturnToBranch}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-md disabled:opacity-50"
+                  disabled={returnActionLoading}
+                >
+                  {returnActionLoading ? 'Returning...' : 'Confirm return'}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeReturnModal}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                  disabled={returnActionLoading}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>,
