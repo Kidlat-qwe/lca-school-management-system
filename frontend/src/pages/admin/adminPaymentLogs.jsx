@@ -827,7 +827,7 @@ const AdminPaymentLogs = () => {
         'Level Tag': payment.student_level_tag || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
-        'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'Payment Date': (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-',
         'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
@@ -1177,7 +1177,7 @@ const AdminPaymentLogs = () => {
                         ) : (
                           depositData.payments.map((p) => (
                             <tr key={p.payment_id} className="hover:bg-gray-50/80">
-                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">{formatDate(p.issue_date)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">{formatDate(p.payment_date || p.issue_date)}</td>
                               <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
                                 {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
                               </td>
@@ -1592,7 +1592,7 @@ const AdminPaymentLogs = () => {
                       <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                      {formatDate(payment.payment_date || payment.issue_date)}
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">

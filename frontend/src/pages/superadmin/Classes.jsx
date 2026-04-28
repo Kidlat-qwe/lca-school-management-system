@@ -3011,7 +3011,7 @@ const initializePackageMerchSelections = useCallback(
     setAvailablePromos([]); // Clear available promos
     setShowPackageDetails(true); // Show package details by default when package is selected
     const shouldShowInstallmentSetup =
-      (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') &&
+      (selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase' || selectedEnrollmentOption === 'ack-receipt') &&
       isInstallmentPackageSelection(packageItem);
     if (shouldShowInstallmentSetup) {
       const { minPhase, maxPhase } = getInstallmentPhaseBounds(packageItem);
@@ -4056,7 +4056,14 @@ const initializePackageMerchSelections = useCallback(
                 frequency_months: installmentSettings.frequency_months,
               }
             } : {}),
-            ...((selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') &&
+            ...(selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt
+              ? {
+                  ack_receipt_id: selectedAckReceipt.ack_receipt_id,
+                  ack_installment_option: selectedAckReceipt.installment_option || null,
+                  ack_paid_amount: selectedAckReceipt.payment_amount != null ? Number(selectedAckReceipt.payment_amount) : null,
+                }
+              : {}),
+            ...((selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase' || selectedEnrollmentOption === 'ack-receipt') &&
             selectedPackage &&
             isInstallmentPackageSelection(selectedPackage) &&
             installmentScopeSettings.phase_start &&
@@ -10025,7 +10032,6 @@ const initializePackageMerchSelections = useCallback(
                                         }
                                         setSelectedAckReceipt(ar);
                                         handlePackageSelect(pkg);
-                                        setEnrollStep('student-selection');
                                       }}
                                       className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                                         canUseReceipt
@@ -10335,13 +10341,23 @@ const initializePackageMerchSelections = useCallback(
                             <input
                               type="checkbox"
                               checked={Boolean(installmentScopeSettings.include_downpayment)}
-                              disabled={!hasDownpayment}
-                              onChange={(e) =>
+                              disabled={
+                                !hasDownpayment ||
+                                (selectedEnrollmentOption === 'ack-receipt' &&
+                                  selectedAckReceipt &&
+                                  String(selectedAckReceipt.installment_option || '').toLowerCase().startsWith('downpayment'))
+                              }
+                              onChange={(e) => {
+                                const locked =
+                                  selectedEnrollmentOption === 'ack-receipt' &&
+                                  selectedAckReceipt &&
+                                  String(selectedAckReceipt.installment_option || '').toLowerCase().startsWith('downpayment');
+                                if (locked) return;
                                 setInstallmentScopeSettings((prev) => ({
                                   ...prev,
                                   include_downpayment: e.target.checked,
-                                }))
-                              }
+                                }));
+                              }}
                               className="mt-1 h-4 w-4 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
                             />
                               <span>
@@ -10353,6 +10369,11 @@ const initializePackageMerchSelections = useCallback(
                                   ? `Downpayment amount: ₱${Number(selectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                   : 'This package has no configured downpayment amount.'}
                                 </span>
+                                {selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt && (
+                                  <span className="block text-xs text-amber-700 mt-1">
+                                    Paid via AR: {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')} — Amount: ₱{Number(selectedAckReceipt.payment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                )}
                               </span>
                             </label>
                           </div>
@@ -11960,7 +11981,7 @@ const initializePackageMerchSelections = useCallback(
                                   <strong>Monthly:</strong> ₱{parseFloat(selectedPackage.package_price).toFixed(2)}
                                 </p>
                               )}
-                              {(selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase') && installmentScopeSettings.phase_start && installmentScopeSettings.phase_end && (
+                              {(selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase' || selectedEnrollmentOption === 'ack-receipt') && installmentScopeSettings.phase_start && installmentScopeSettings.phase_end && (
                                 <>
                                   <p className="text-sm text-gray-700">
                                     <strong>Phase Scope:</strong> Phase {installmentScopeSettings.phase_start} to Phase {installmentScopeSettings.phase_end}
@@ -12415,7 +12436,13 @@ const initializePackageMerchSelections = useCallback(
               {enrollStep === 'installment-setup' && (
                 <button
                   type="button"
-                  onClick={() => setEnrollStep('package-selection')}
+                  onClick={() => {
+                    if (selectedEnrollmentOption === 'ack-receipt') {
+                      setEnrollStep('ack-receipt-selection');
+                      return;
+                    }
+                    setEnrollStep('package-selection');
+                  }}
                   className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                   disabled={enrollSubmitting}
                 >
@@ -12448,8 +12475,13 @@ const initializePackageMerchSelections = useCallback(
                           setEnrollStep('package-selection');
                         }
                       } else if (selectedEnrollmentOption === 'ack-receipt') {
-                        // Go back to AR selection (package was auto-selected from AR)
-                        setEnrollStep('ack-receipt-selection');
+                        // For installment package flow, go back to setup step first.
+                        if (selectedPackage && isInstallmentPackageSelection(selectedPackage)) {
+                          setEnrollStep('installment-setup');
+                        } else {
+                          // Go back to AR selection (package was auto-selected from AR)
+                          setEnrollStep('ack-receipt-selection');
+                        }
                       } else {
                         // Clear package-related state when going back to enrollment-option from student-selection
                         setSelectedPackage(null);

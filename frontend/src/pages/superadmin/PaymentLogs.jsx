@@ -588,7 +588,7 @@ const PaymentLogs = () => {
         row['Amount (₱)'] = payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00';
         row['Status'] = payment.status || 'N/A';
         row['Branch'] = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
-        row['Issue Date'] = payment.issue_date ? formatDate(payment.issue_date) : '-';
+        row['Payment Date'] = (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-';
         row['AR#'] = payment.invoice_ar_number || '-';
         row['Reference Number'] = payment.reference_number || '-';
         row['Remarks'] = payment.remarks || '-';
@@ -912,7 +912,7 @@ const PaymentLogs = () => {
                       })()}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                      {formatDate(payment.payment_date || payment.issue_date)}
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">

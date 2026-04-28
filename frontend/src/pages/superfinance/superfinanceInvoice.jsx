@@ -1347,6 +1347,7 @@ const SuperfinanceInvoice = () => {
                 <col style={{ width: '110px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '120px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '90px' }} />
               </colgroup>
@@ -1448,6 +1449,9 @@ const SuperfinanceInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Issue Date
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
+                    Payment Date
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Due Date
                   </th>
@@ -1459,7 +1463,7 @@ const SuperfinanceInvoice = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center">
+                    <td colSpan={11} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || studentNameSearch || filterBranch || filterStatus
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -1601,6 +1605,13 @@ const SuperfinanceInvoice = () => {
                         {invoice.issue_date
                           ? formatDateManila(invoice.issue_date)
                           : '-'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        {invoice.last_payment_date
+                          ? formatDateManila(invoice.last_payment_date)
+                          : '—'}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">

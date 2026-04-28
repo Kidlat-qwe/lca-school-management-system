@@ -126,8 +126,16 @@ router.get(
       const useIssueRange = Boolean(issueDateFrom || issueDateTo);
 
       let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
-                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
-                        TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
+                       TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
+                       TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
+                       (
+                         SELECT TO_CHAR(
+                           (MAX(COALESCE(p.approved_at, p.created_at)) AT TIME ZONE 'Asia/Manila')::date,
+                           'YYYY-MM-DD'
+                         )
+                         FROM paymenttbl p
+                         WHERE p.invoice_id = i.invoice_id AND p.status = 'Completed'
+                       ) AS last_payment_date,
                         i.created_by,
                         i.installmentinvoiceprofiles_id,
                         i.parent_invoice_id, i.balance_invoice_id, i.invoice_chain_root_id,
@@ -531,6 +539,17 @@ router.get(
           amount: effectiveAmount,
           total_tip_amount: totalTip,
           total_received_amount: totalPaid + totalTip,
+          last_payment_date: (
+            await query(
+              `SELECT TO_CHAR(
+                 DATE_TRUNC('day', MAX(COALESCE(p.approved_at, p.created_at))),
+                 'YYYY-MM-DD'
+               ) AS last_payment_date
+               FROM paymenttbl p
+               WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
+              [id]
+            )
+          ).rows?.[0]?.last_payment_date || null,
           display_description: displayDescription,
           items,
           students: studentsWithDisplayName,
@@ -657,7 +676,7 @@ router.get(
         }
       }
 
-      // Fetch payments for this invoice
+      // Fetch payments for this invoice (and compute the actual recorded payment date)
       const paymentsResult = await query(
         `SELECT p.payment_method, p.payment_type, p.payable_amount, p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as payment_date_raw
@@ -666,6 +685,19 @@ router.get(
          ORDER BY p.issue_date DESC`,
         [id]
       );
+      const lastPaymentTimestampResult = await query(
+        `SELECT
+           MAX(COALESCE(p.approved_at, p.created_at)) AS last_payment_ts,
+           TO_CHAR(
+             (MAX(COALESCE(p.approved_at, p.created_at)) AT TIME ZONE 'Asia/Manila')::date,
+             'YYYY-MM-DD'
+           ) AS last_payment_ymd
+         FROM paymenttbl p
+         WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
+        [id]
+      );
+      const lastPaymentTs = lastPaymentTimestampResult.rows?.[0]?.last_payment_ts || null;
+      const lastPaymentYmd = lastPaymentTimestampResult.rows?.[0]?.last_payment_ymd || null;
 
       // Prepare logo path (if exists)
       const logoPath = path.resolve(process.cwd(), '../frontend/public/LCA Icon.png');
@@ -735,12 +767,74 @@ router.get(
         const contentWidth = right - left;
         let y = 42;
 
-        const studentName = studentsResult.rows.length > 0
-          ? studentsResult.rows.map((s) => s.full_name || 'Student').join(', ')
-          : 'No student linked';
+        // Prefer AR prospect_student_name (merchandise flow) and avoid "Walk-in Customer" placeholder.
+        let studentName = 'No student linked';
+        try {
+          // 1) AR-provided prospect name (most reliable for merchandise ARs)
+          let arProspectStudentName = '';
+          try {
+            const arNameRes = await query(
+              `SELECT NULLIF(TRIM(ar.prospect_student_name), '') AS prospect_student_name
+               FROM acknowledgement_receiptstbl ar
+               WHERE ar.invoice_id = $1
+               ORDER BY ar.ack_receipt_id DESC
+               LIMIT 1`,
+              [id]
+            );
+            arProspectStudentName = String(arNameRes.rows[0]?.prospect_student_name || '').trim();
+          } catch {
+            arProspectStudentName = '';
+          }
+
+          if (arProspectStudentName) {
+            studentName = arProspectStudentName;
+          } else {
+            // 2) Latest completed payment student, but ignore walk-in placeholder user
+            const payNameRes = await query(
+              `SELECT u.full_name, u.email
+             FROM paymenttbl p
+             LEFT JOIN userstbl u ON p.student_id = u.user_id
+             WHERE p.invoice_id = $1 AND p.status = 'Completed'
+             ORDER BY p.payment_id DESC
+             LIMIT 1`,
+              [id]
+            );
+
+            const paymentStudentName = String(payNameRes.rows[0]?.full_name || '').trim();
+            const paymentStudentEmail = String(payNameRes.rows[0]?.email || '').trim().toLowerCase();
+            const isWalkInPaymentStudent =
+              paymentStudentEmail === 'walkin@merchandise.psms.internal' ||
+              paymentStudentName.toLowerCase() === 'walk-in customer';
+
+            if (paymentStudentName && !isWalkInPaymentStudent) {
+              studentName = paymentStudentName;
+            } else if (studentsResult.rows.length > 0) {
+              // 3) Invoice-linked students, skipping walk-in placeholder if possible
+              const names = (studentsResult.rows || [])
+                .map((s) => String(s?.full_name || '').trim())
+                .filter(Boolean)
+                .filter((n) => n.toLowerCase() !== 'walk-in customer');
+              if (names.length > 0) {
+                studentName = names.join(', ');
+              }
+            }
+          }
+        } catch {
+          if (studentsResult.rows.length > 0) {
+            const names = (studentsResult.rows || [])
+              .map((s) => String(s?.full_name || '').trim())
+              .filter(Boolean)
+              .filter((n) => n.toLowerCase() !== 'walk-in customer');
+            if (names.length > 0) {
+              studentName = names.join(', ');
+            }
+          }
+        }
         const classLabel = arClassLabel;
         const arNumber = invoice.invoice_ar_number || `AR-${invoice.invoice_id}`;
-        const arDate = formatDate(invoice.issue_date) || '-';
+        // For AR, show actual payment date (Manila-normalized), not scheduled invoice issue_date.
+        // Use the pre-formatted YMD string to avoid timezone day shifts.
+        const arDate = formatDate(lastPaymentYmd || invoice.issue_date) || '-';
         const amountPaid = Math.max(0, totalPayments || 0);
         const monthLabel = (() => {
           if (!invoice.due_date) return '';

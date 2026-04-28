@@ -536,6 +536,7 @@ router.get(
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                         p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
+                        TO_CHAR((COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date, 'YYYY-MM-DD') as payment_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,

@@ -523,7 +523,7 @@ const SuperfinancePaymentLogs = () => {
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
         'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
-        'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+        'Payment Date': (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-',
         'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
@@ -839,7 +839,7 @@ const SuperfinancePaymentLogs = () => {
                       })()}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.issue_date)}
+                      {formatDate(payment.payment_date || payment.issue_date)}
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
