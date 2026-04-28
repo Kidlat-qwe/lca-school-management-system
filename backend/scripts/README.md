@@ -78,6 +78,34 @@ node scripts/listFirebaseUsers.js --help
 - Firebase Admin SDK has a limit of 1000 users per page, so pagination is handled automatically
 - The script respects the `--limit` option but may retrieve more users if pagination is needed
 
+### `diagnoseStudentInstallment.js`
+
+Read-only diagnostic for one student: installment profiles, **`installmentinvoicestbl`** schedule rows (what the Finance Installment Invoice page lists), and linked **`invoicestbl`** rows. Uses `backend/.env` database settings (production if that file points to prod).
+
+**Usage:**
+```bash
+cd backend
+
+node scripts/diagnoseStudentInstallment.js --user-id 12345
+node scripts/diagnoseStudentInstallment.js --email student@school.com
+node scripts/diagnoseStudentInstallment.js --name "Penelope"
+node scripts/diagnoseStudentInstallment.js --name Cudia --json
+
+node scripts/diagnoseStudentInstallment.js --help
+```
+
+**Options:**
+- `--user-id`: `userstbl.user_id`
+- `--email`: Exact email match (trimmed, case-insensitive)
+- `--name`: Partial match on `full_name`; if multiple students match, script lists them and exits without querying profiles (narrow the name or use `--user-id`).
+- `--json`: Print a single JSON object instead of tables.
+
+### Installment invoice list / NULL `status` (migration `105`)
+
+If Finance **Installment Invoice Logs** missed students because only the first 100 API rows loaded, deploy the frontend/backend changes that paginate until all rows are fetched and return `pagination.total`.
+
+To backfill **`installmentinvoicestbl.status`** where it was `NULL`, apply migration **`105_backfill_installmentinvoicestbl_status.sql`** on production.
+
 ## Adding New Scripts
 
 When adding new scripts to this directory:

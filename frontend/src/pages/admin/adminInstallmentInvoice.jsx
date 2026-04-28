@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -123,11 +124,13 @@ const AdminInstallmentInvoice = () => {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const [invRes, needRes] = await Promise.all([
-        apiRequest(`/installment-invoices/invoices?branch_id=${adminBranchId}&limit=100`),
+      const [invData, needRes] = await Promise.all([
+        fetchAllInstallmentInvoicePages(apiRequest, {
+          extraSearchParams: adminBranchId ? { branch_id: adminBranchId } : {},
+        }),
         apiRequest(`/installment-invoices/profiles-needed-phase-1?branch_id=${adminBranchId}`),
       ]);
-      setInvoices(invRes.data || []);
+      setInvoices(invData);
       setProfilesNeedingPhase1(needRes.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch installment invoices');

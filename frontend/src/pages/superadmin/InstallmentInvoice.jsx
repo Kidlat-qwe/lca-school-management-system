@@ -5,6 +5,7 @@ import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -95,8 +96,8 @@ const InstallmentInvoice = () => {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await apiRequest('/installment-invoices/invoices?limit=100');
-      setInvoices(response.data || []);
+      const data = await fetchAllInstallmentInvoicePages(apiRequest);
+      setInvoices(data);
     } catch (err) {
       setError(err.message || 'Failed to fetch installment invoices');
       console.error('Error fetching invoices:', err);

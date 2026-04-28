@@ -657,13 +657,49 @@ router.get(
     queryValidator('profile_id').optional().isInt().withMessage('Profile ID must be an integer'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 500 }).withMessage('Limit must be between 1 and 500'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { profile_id, status, page = 1, limit = 20 } = req.query;
-      const offset = (page - 1) * limit;
+      const { profile_id, status } = req.query;
+      const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limitNum = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 20));
+      const offset = (pageNum - 1) * limitNum;
+
+      const filterFragments = [];
+      const filterParams = [];
+      let fp = 0;
+
+      // Filter by branch (non-superadmin users are limited to their branch)
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        fp++;
+        filterFragments.push(`ip.branch_id = $${fp}`);
+        filterParams.push(req.user.branchId);
+      }
+
+      if (profile_id) {
+        fp++;
+        filterFragments.push(`ii.installmentinvoiceprofiles_id = $${fp}`);
+        filterParams.push(profile_id);
+      }
+
+      if (status) {
+        fp++;
+        filterFragments.push(`ii.status = $${fp}`);
+        filterParams.push(status);
+      }
+
+      const filterSql = filterFragments.length ? ` AND ${filterFragments.join(' AND ')}` : '';
+
+      const countSql = `
+        SELECT COUNT(*)::bigint AS total
+        FROM installmentinvoicestbl ii
+        JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+        WHERE 1=1${filterSql}
+      `;
+      const countResult = await query(countSql, filterParams);
+      const total = parseInt(countResult.rows[0]?.total || 0, 10);
 
       let sql = `
         SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
@@ -699,42 +735,27 @@ router.get(
         LEFT JOIN classestbl c ON ip.class_id = c.class_id
         LEFT JOIN programstbl p ON c.program_id = p.program_id
         LEFT JOIN userstbl u ON ip.student_id = u.user_id
-        WHERE 1=1
+        WHERE 1=1${filterSql}
       `;
-      const params = [];
-      let paramCount = 0;
 
-      // Filter by branch (non-superadmin users are limited to their branch)
-      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
-        paramCount++;
-        sql += ` AND ip.branch_id = $${paramCount}`;
-        params.push(req.user.branchId);
-      }
+      const listParams = [...filterParams];
+      fp = filterParams.length;
+      sql += ` ORDER BY ii.scheduled_date DESC LIMIT $${fp + 1} OFFSET $${fp + 2}`;
+      listParams.push(limitNum, offset);
 
-      if (profile_id) {
-        paramCount++;
-        sql += ` AND ii.installmentinvoiceprofiles_id = $${paramCount}`;
-        params.push(profile_id);
-      }
-
-      if (status) {
-        paramCount++;
-        sql += ` AND ii.status = $${paramCount}`;
-        params.push(status);
-      }
-
-      sql += ` ORDER BY ii.scheduled_date DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-      params.push(limit, offset);
-
-      const result = await query(sql, params);
+      const result = await query(sql, listParams);
       const enrichedRows = await Promise.all(result.rows.map(enrichInstallmentInvoiceRow));
+
+      const totalPages = total > 0 ? Math.ceil(total / limitNum) : 1;
 
       res.json({
         success: true,
         data: enrichedRows,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages,
         },
       });
     } catch (error) {
