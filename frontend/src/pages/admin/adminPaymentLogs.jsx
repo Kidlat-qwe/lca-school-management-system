@@ -1247,8 +1247,8 @@ const AdminPaymentLogs = () => {
 
       {/* End of Shift Confirmation Modal */}
       {endOfShiftModalOpen && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-3 sm:p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-[min(1440px,calc(100vw-2rem))] max-h-[92vh] flex flex-col p-5 sm:p-7 min-w-0" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 shrink-0">End of Shift</h3>
             <p className="mt-2 text-sm text-gray-600 shrink-0">
               Submit all today&apos;s sales for proper closure? This will submit your branch EOD for Finance/Superfinance verification, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
@@ -1264,46 +1264,82 @@ const AdminPaymentLogs = () => {
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
                   Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({(endOfShiftPreview.completed_payment_count ?? endOfShiftPreview.payment_count ?? 0)} completed payment(s), {(endOfShiftPreview.ar_sales_count ?? 0)} AR receipt(s))
                 </p>
+                <p className="mt-1 text-xs text-gray-500 shrink-0">
+                  Collected per row is payable plus tip (matches today&apos;s total). Invoice total is the invoice document amount from line items (or manual invoice amount).
+                </p>
                 {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
-                  <div className="mt-4 shrink-0">
+                  <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Records to be submitted</p>
-                    <div className="overflow-hidden rounded-lg border border-gray-200">
-                      <table className="w-full table-fixed text-xs sm:text-sm">
+                    <div className="rounded-lg border border-gray-200 min-w-0 overflow-hidden">
+                      <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
                         <thead className="bg-gray-50">
                           <tr>
-                            <th className="w-[12%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Invoice</th>
-                            <th className="w-[13%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Invoice Date</th>
-                            <th className="w-[20%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Student</th>
-                            <th className="w-[16%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Level Tag</th>
-                            <th className="w-[11%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Method</th>
-                            <th className="w-[13%] px-2 py-2 text-right text-[11px] font-medium text-gray-500 uppercase">Amount</th>
-                            <th className="w-[15%] px-2 py-2 text-left text-[11px] font-medium text-gray-500 uppercase">Reference</th>
+                            <th className="w-[9%] py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
+                            <th className="w-[9%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Date</th>
+                            <th className="w-[17%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Student</th>
+                            <th className="w-[10%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
+                            <th className="w-[11%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
+                            <th className="w-[11%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
+                            <th className="w-[12%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
+                            <th className="w-[11%] py-2.5 px-3 text-center text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
+                            <th className="w-[10%] py-2.5 ps-3 pe-4 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-200 bg-white">
-                          {endOfShiftPreview.payments.map((p) => (
-                            <tr key={p.payment_id} className="hover:bg-gray-50/80">
-                              <td className="px-2 py-2 font-medium text-gray-900 whitespace-nowrap">
-                                {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
-                              </td>
-                              <td className="px-2 py-2 text-gray-700 whitespace-nowrap">
-                                {p.invoice_date ? formatDate(p.invoice_date) : '-'}
-                              </td>
-                              <td className="px-2 py-2 text-gray-700 min-w-0">
-                                <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
-                              </td>
-                              <td className="px-2 py-2 text-gray-700 min-w-0">
-                                <span className="truncate block" title={p.student_level_tag || '-'}>{p.student_level_tag || '-'}</span>
-                              </td>
-                              <td className="px-2 py-2 text-gray-700 whitespace-nowrap">{p.payment_method || '-'}</td>
-                              <td className="px-2 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
-                                {formatCurrency(p.payable_amount)}
-                              </td>
-                              <td className="px-2 py-2 text-gray-500 min-w-0">
-                                <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
-                              </td>
-                            </tr>
-                          ))}
+                        <tbody className="bg-white">
+                          {endOfShiftPreview.payments.map((p) => {
+                            const tip = parseFloat(p.tip_amount) || 0;
+                            const payable = parseFloat(p.payable_amount) || 0;
+                            const collected = payable + tip;
+                            const invTotal = p.invoice_document_total;
+                            const attUrl = (p.payment_attachment_url || '').trim();
+                            return (
+                              <tr key={p.payment_id} className="hover:bg-gray-50/80 border-b border-gray-100 last:border-b-0">
+                                <td className="py-2.5 ps-4 pe-3 font-medium text-gray-900 truncate align-top" title={p.invoice_id ? `INV-${p.invoice_id}` : ''}>
+                                  {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 truncate align-top" title={p.invoice_date ? formatDate(p.invoice_date) : ''}>
+                                  {p.invoice_date ? formatDate(p.invoice_date) : '-'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 min-w-0 align-top">
+                                  <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 min-w-0 align-top">
+                                  <span className="truncate block" title={p.student_level_tag || '-'}>{p.student_level_tag || '-'}</span>
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 truncate align-top" title={p.payment_method || ''}>{p.payment_method || '-'}</td>
+                                <td className="py-2.5 px-3 text-right font-medium text-gray-800 tabular-nums align-top truncate" title={invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : ''}>
+                                  {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
+                                </td>
+                                <td className="py-2.5 px-3 text-right align-top min-w-0">
+                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                  {tip > 0 && (
+                                    <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
+                                      {formatCurrency(payable)} + tip {formatCurrency(tip)}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-center align-top whitespace-nowrap">
+                                  {attUrl ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAttachmentViewerUrl(attUrl);
+                                        setShowAttachmentViewer(true);
+                                      }}
+                                      className="text-xs font-medium text-primary-600 hover:text-primary-800 hover:underline"
+                                    >
+                                      View
+                                    </button>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 ps-3 pe-4 text-gray-500 min-w-0 align-top">
+                                  <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>

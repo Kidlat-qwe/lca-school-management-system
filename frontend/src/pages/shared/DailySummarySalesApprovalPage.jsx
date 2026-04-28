@@ -8,6 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
+import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
@@ -33,6 +34,7 @@ const DailySummarySalesApprovalPage = () => {
   const [verifyData, setVerifyData] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
+  const [paymentAttachmentViewerUrl, setPaymentAttachmentViewerUrl] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const openedNotificationDetailRef = useRef(null);
@@ -304,7 +306,8 @@ const DailySummarySalesApprovalPage = () => {
     if (isCashDepositTab || detailPayments.length === 0) return [];
     const totals = detailPayments.reduce((acc, payment) => {
       const key = (payment.payment_method || 'Unknown').trim() || 'Unknown';
-      acc[key] = (acc[key] || 0) + (Number(payment.payable_amount) || 0);
+      const line = (Number(payment.payable_amount) || 0) + (Number(payment.tip_amount) || 0);
+      acc[key] = (acc[key] || 0) + line;
       return acc;
     }, {});
     return Object.entries(totals).map(([name, value]) => ({ name, value }));
@@ -314,7 +317,8 @@ const DailySummarySalesApprovalPage = () => {
     if (isCashDepositTab || detailPayments.length === 0) return [];
     const totals = detailPayments.reduce((acc, payment) => {
       const key = (payment.program_level_tag || 'Unassigned').trim() || 'Unassigned';
-      acc[key] = (acc[key] || 0) + (Number(payment.payable_amount) || 0);
+      const line = (Number(payment.payable_amount) || 0) + (Number(payment.tip_amount) || 0);
+      acc[key] = (acc[key] || 0) + line;
       return acc;
     }, {});
     return Object.entries(totals).map(([name, value]) => ({ name, value }));
@@ -595,7 +599,9 @@ const DailySummarySalesApprovalPage = () => {
             onClick={() => !approvingId && setVerifyModal({ open: false, record: null })}
           >
           <div
-            className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col p-6"
+            className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] flex flex-col p-6 min-w-0 ${
+              isCashDepositTab ? 'max-w-4xl' : 'max-w-[min(1440px,calc(100vw-2rem))]'
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-gray-900 shrink-0">
@@ -626,35 +632,27 @@ const DailySummarySalesApprovalPage = () => {
               </p>
               {verifyLoading ? (
                 <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
-              ) : (
+              ) : isCashDepositTab ? (
                 <div
                   className="overflow-x-auto rounded-lg border border-gray-200 max-h-56"
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
-                  <table className="text-sm" style={{ width: '100%', minWidth: isCashDepositTab ? '760px' : '520px' }}>
+                  <table className="text-sm" style={{ width: '100%', minWidth: '760px' }}>
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
-                        {!isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        ) : (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
-                        )}
-                        {isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        ) : null}
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                        {isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        ) : null}
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {verifyPayments.length === 0 ? (
                         <tr>
-                          <td colSpan={isCashDepositTab ? 7 : 5} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={7} className="px-3 py-4 text-center text-gray-500">
                             No payment records found for this submission.
                           </td>
                         </tr>
@@ -669,20 +667,12 @@ const DailySummarySalesApprovalPage = () => {
                                 {payment.student_name || '-'}
                               </span>
                             </td>
-                            {!isCashDepositTab ? (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
-                            ) : (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
-                            )}
-                            {isCashDepositTab ? (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
-                            ) : null}
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
                             <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
                               {formatCurrency(payment.payable_amount)}
                             </td>
-                            {isCashDepositTab ? (
-                              <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
-                            ) : null}
+                            <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
                             <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[120px]">
                               <span className="truncate block" title={payment.reference_number || '-'}>
                                 {payment.reference_number || '-'}
@@ -690,6 +680,91 @@ const DailySummarySalesApprovalPage = () => {
                             </td>
                           </tr>
                         ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-gray-200 max-h-56 overflow-y-auto min-w-0 overflow-x-hidden">
+                  <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="w-[8%] py-2 ps-4 pe-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
+                        <th className="w-[9%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Date</th>
+                        <th className="w-[15%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Student</th>
+                        <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
+                        <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
+                        <th className="w-[10%] py-2 px-2 text-center font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
+                        <th className="w-[16%] py-2 ps-2 pe-4 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white">
+                      {verifyPayments.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-3 py-4 text-center text-gray-500 border-b border-gray-100">
+                            No payment records found for this submission.
+                          </td>
+                        </tr>
+                      ) : (
+                        verifyPayments.map((payment) => {
+                          const tip = Number(payment.tip_amount) || 0;
+                          const payable = Number(payment.payable_amount) || 0;
+                          const collected = payable + tip;
+                          const invTotal = payment.invoice_document_total;
+                          const attUrl = (payment.payment_attachment_url || '').trim();
+                          return (
+                            <tr key={payment.payment_id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
+                              <td className="py-2 ps-4 pe-2 font-medium text-gray-900 truncate align-top">
+                                {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 truncate align-top">
+                                {payment.invoice_date ? formatDateManila(payment.invoice_date) : '-'}
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 min-w-0 align-top">
+                                <span className="truncate block" title={payment.student_name || '-'}>
+                                  {payment.student_name || '-'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 min-w-0 align-top">
+                                <span className="truncate block" title={payment.program_level_tag || '-'}>
+                                  {payment.program_level_tag || '-'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 truncate align-top">{payment.payment_method || '-'}</td>
+                              <td className="py-2 px-2 text-right font-medium text-gray-800 tabular-nums align-top truncate">
+                                {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
+                              </td>
+                              <td className="py-2 px-2 text-right align-top min-w-0">
+                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                {tip > 0 ? (
+                                  <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
+                                    {formatCurrency(payable)} + tip {formatCurrency(tip)}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="py-2 px-2 text-center align-top whitespace-nowrap">
+                                {attUrl ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPaymentAttachmentViewerUrl(attUrl)}
+                                    className="text-xs font-medium text-primary-600 hover:text-primary-800 hover:underline"
+                                  >
+                                    View
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2 ps-2 pe-4 text-gray-500 min-w-0 align-top">
+                                <span className="truncate block" title={payment.reference_number || '-'}>
+                                  {payment.reference_number || '-'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -731,7 +806,9 @@ const DailySummarySalesApprovalPage = () => {
             onClick={() => setDetailModal({ open: false, record: null })}
           >
           <div
-            className="bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden"
+            className={`bg-white rounded-xl shadow-xl w-full max-h-[92vh] flex flex-col overflow-hidden min-w-0 ${
+              isCashDepositTab ? 'max-w-5xl' : 'max-w-[min(1440px,calc(100vw-2rem))]'
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 shrink-0">
@@ -895,36 +972,28 @@ const DailySummarySalesApprovalPage = () => {
               </p>
               {detailLoading ? (
                 <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
-              ) : (
+              ) : isCashDepositTab ? (
                 <div
                   className="overflow-x-auto rounded-lg border border-gray-200 max-h-56"
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
-                  <table className="text-sm" style={{ width: '100%', minWidth: isCashDepositTab ? '760px' : '520px' }}>
+                  <table className="text-sm" style={{ width: '100%', minWidth: '760px' }}>
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Program/Level Tag</th>
-                        {!isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        ) : (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
-                        )}
-                        {isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        ) : null}
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                        {isCashDepositTab ? (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        ) : null}
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {detailPayments.length === 0 ? (
                         <tr>
-                          <td colSpan={isCashDepositTab ? 8 : 6} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={8} className="px-3 py-4 text-center text-gray-500">
                             No payment records found for this submission.
                           </td>
                         </tr>
@@ -944,20 +1013,12 @@ const DailySummarySalesApprovalPage = () => {
                                 {payment.program_level_tag || '-'}
                               </span>
                             </td>
-                            {!isCashDepositTab ? (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
-                            ) : (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
-                            )}
-                            {isCashDepositTab ? (
-                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
-                            ) : null}
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
                             <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
                               {formatCurrency(payment.payable_amount)}
                             </td>
-                            {isCashDepositTab ? (
-                              <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
-                            ) : null}
+                            <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
                             <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[120px]">
                               <span className="truncate block" title={payment.reference_number || '-'}>
                                 {payment.reference_number || '-'}
@@ -965,6 +1026,91 @@ const DailySummarySalesApprovalPage = () => {
                             </td>
                           </tr>
                         ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-gray-200 max-h-56 overflow-y-auto min-w-0 overflow-x-hidden">
+                  <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="w-[8%] py-2 ps-4 pe-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
+                        <th className="w-[9%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Date</th>
+                        <th className="w-[15%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Student</th>
+                        <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
+                        <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
+                        <th className="w-[10%] py-2 px-2 text-center font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
+                        <th className="w-[16%] py-2 ps-2 pe-4 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white">
+                      {detailPayments.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-3 py-4 text-center text-gray-500 border-b border-gray-100">
+                            No payment records found for this submission.
+                          </td>
+                        </tr>
+                      ) : (
+                        detailPayments.map((payment) => {
+                          const tip = Number(payment.tip_amount) || 0;
+                          const payable = Number(payment.payable_amount) || 0;
+                          const collected = payable + tip;
+                          const invTotal = payment.invoice_document_total;
+                          const attUrl = (payment.payment_attachment_url || '').trim();
+                          return (
+                            <tr key={payment.payment_id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
+                              <td className="py-2 ps-4 pe-2 font-medium text-gray-900 truncate align-top">
+                                {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 truncate align-top">
+                                {payment.invoice_date ? formatDateManila(payment.invoice_date) : '-'}
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 min-w-0 align-top">
+                                <span className="truncate block" title={payment.student_name || '-'}>
+                                  {payment.student_name || '-'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 min-w-0 align-top">
+                                <span className="truncate block" title={payment.program_level_tag || '-'}>
+                                  {payment.program_level_tag || '-'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2 text-gray-700 truncate align-top">{payment.payment_method || '-'}</td>
+                              <td className="py-2 px-2 text-right font-medium text-gray-800 tabular-nums align-top truncate">
+                                {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
+                              </td>
+                              <td className="py-2 px-2 text-right align-top min-w-0">
+                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                {tip > 0 ? (
+                                  <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
+                                    {formatCurrency(payable)} + tip {formatCurrency(tip)}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="py-2 px-2 text-center align-top whitespace-nowrap">
+                                {attUrl ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPaymentAttachmentViewerUrl(attUrl)}
+                                    className="text-xs font-medium text-primary-600 hover:text-primary-800 hover:underline"
+                                  >
+                                    View
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2 ps-2 pe-4 text-gray-500 min-w-0 align-top">
+                                <span className="truncate block" title={payment.reference_number || '-'}>
+                                  {payment.reference_number || '-'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -997,6 +1143,12 @@ const DailySummarySalesApprovalPage = () => {
           </div>,
           document.body
         )}
+
+      <PaymentAttachmentViewerModal
+        open={Boolean(paymentAttachmentViewerUrl)}
+        url={paymentAttachmentViewerUrl}
+        onClose={() => setPaymentAttachmentViewerUrl(null)}
+      />
 
       {attachmentPreviewUrl && (
         <div

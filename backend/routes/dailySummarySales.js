@@ -251,15 +251,70 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
             p.student_id,
             p.payment_method,
             p.payable_amount,
+            COALESCE(p.tip_amount, 0) AS tip_amount,
+            p.payment_attachment_url,
             p.reference_number,
             TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
             u.full_name AS student_name,
             u.email AS student_email,
-            u.level_tag AS student_level_tag,
+            COALESCE(
+              NULLIF(TRIM(u.level_tag), ''),
+              NULLIF(TRIM(ar.level_tag), ''),
+              NULLIF(
+                TRIM(
+                  (
+                    SELECT ar2.level_tag
+                    FROM acknowledgement_receiptstbl ar2
+                    WHERE ar2.invoice_id = i.invoice_id
+                    ORDER BY ar2.ack_receipt_id DESC
+                    LIMIT 1
+                  )
+                ),
+                ''
+              ),
+              NULLIF(
+                TRIM(
+                  (
+                    SELECT c.level_tag
+                    FROM classstudentstbl cs
+                    INNER JOIN classestbl c ON c.class_id = cs.class_id
+                    WHERE cs.student_id = p.student_id
+                    ORDER BY
+                      CASE
+                        WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN 0
+                        ELSE 1
+                      END,
+                      cs.classstudent_id DESC
+                    LIMIT 1
+                  )
+                ),
+                ''
+              )
+            ) AS student_level_tag,
             i.invoice_description,
             TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
             i.ack_receipt_id,
-            ar.payment_method AS ar_payment_method
+            ar.payment_method AS ar_payment_method,
+            CASE
+              WHEN p.invoice_id IS NULL THEN NULL
+              WHEN EXISTS (
+                SELECT 1 FROM invoiceitemstbl ii WHERE ii.invoice_id = p.invoice_id
+              ) THEN (
+                SELECT ROUND(
+                  COALESCE(
+                    SUM(
+                      (COALESCE(ii.amount, 0) - COALESCE(ii.discount_amount, 0) + COALESCE(ii.penalty_amount, 0)) *
+                      (1 + COALESCE(ii.tax_percentage, 0) / 100.0)
+                    ),
+                    0
+                  )::numeric,
+                  2
+                )
+                FROM invoiceitemstbl ii
+                WHERE ii.invoice_id = p.invoice_id
+              )
+              ELSE ROUND(COALESCE(i.amount, 0)::numeric, 2)
+            END AS invoice_document_total
      FROM paymenttbl p
      LEFT JOIN userstbl u ON p.student_id = u.user_id
      LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -922,16 +977,72 @@ router.get(
                 p.student_id,
                 p.payment_method,
                 p.payable_amount,
+                COALESCE(p.tip_amount, 0) AS tip_amount,
+                p.payment_attachment_url,
                 p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
                 u.full_name AS student_name,
                 u.email AS student_email,
-                u.level_tag AS student_level_tag,
+                COALESCE(
+                  NULLIF(TRIM(u.level_tag), ''),
+                  NULLIF(TRIM(ar.level_tag), ''),
+                  NULLIF(
+                    TRIM(
+                      (
+                        SELECT ar2.level_tag
+                        FROM acknowledgement_receiptstbl ar2
+                        WHERE ar2.invoice_id = i.invoice_id
+                        ORDER BY ar2.ack_receipt_id DESC
+                        LIMIT 1
+                      )
+                    ),
+                    ''
+                  ),
+                  NULLIF(
+                    TRIM(
+                      (
+                        SELECT c.level_tag
+                        FROM classstudentstbl cs
+                        INNER JOIN classestbl c ON c.class_id = cs.class_id
+                        WHERE cs.student_id = p.student_id
+                        ORDER BY
+                          CASE
+                            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN 0
+                            ELSE 1
+                          END,
+                          cs.classstudent_id DESC
+                        LIMIT 1
+                      )
+                    ),
+                    ''
+                  )
+                ) AS student_level_tag,
                 i.invoice_description,
+                TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
                 i.ack_receipt_id,
                 ar.prospect_student_name,
                 ar.payment_method AS ar_payment_method,
-                ar.level_tag AS ar_level_tag
+                ar.level_tag AS ar_level_tag,
+                CASE
+                  WHEN p.invoice_id IS NULL THEN NULL
+                  WHEN EXISTS (
+                    SELECT 1 FROM invoiceitemstbl ii WHERE ii.invoice_id = p.invoice_id
+                  ) THEN (
+                    SELECT ROUND(
+                      COALESCE(
+                        SUM(
+                          (COALESCE(ii.amount, 0) - COALESCE(ii.discount_amount, 0) + COALESCE(ii.penalty_amount, 0)) *
+                          (1 + COALESCE(ii.tax_percentage, 0) / 100.0)
+                        ),
+                        0
+                      )::numeric,
+                      2
+                    )
+                    FROM invoiceitemstbl ii
+                    WHERE ii.invoice_id = p.invoice_id
+                  )
+                  ELSE ROUND(COALESCE(i.amount, 0)::numeric, 2)
+                END AS invoice_document_total
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
          LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
@@ -957,7 +1068,7 @@ router.get(
           ...row,
           payment_method: shouldUseArMethod ? arPaymentMethod : row.payment_method,
           student_name: resolvedStudentName,
-          program_level_tag: row.ar_level_tag || row.student_level_tag || null,
+          program_level_tag: row.student_level_tag || row.ar_level_tag || null,
         };
       });
 
