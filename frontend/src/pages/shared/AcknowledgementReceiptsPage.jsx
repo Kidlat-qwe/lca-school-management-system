@@ -578,8 +578,23 @@ const AcknowledgementReceiptsPage = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        // Unexpected non-JSON success response; fail safely
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
       setCreateFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
     } catch (err) {
       console.error('AR attachment upload error:', err);
@@ -616,8 +631,22 @@ const AcknowledgementReceiptsPage = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
       setEditFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
       setEditFormErrors((prev) => {
         const next = { ...prev };
@@ -659,8 +688,22 @@ const AcknowledgementReceiptsPage = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
       setViewModalAttachmentUrl(data.imageUrl || '');
     } catch (err) {
       console.error('AR view modal attachment upload error:', err);
