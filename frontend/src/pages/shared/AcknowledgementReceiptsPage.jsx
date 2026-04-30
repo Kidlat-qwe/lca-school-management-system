@@ -1195,8 +1195,8 @@ const AcknowledgementReceiptsPage = () => {
     actionMenuReceipt &&
     actionMenuReceipt.ar_type === 'Package' &&
     actionMenuReceipt.status === 'Returned' &&
-    currentUserId != null &&
-    Number(actionMenuReceipt.created_by) === Number(currentUserId);
+    (arAdminTab === 'return' ||
+      (currentUserId != null && Number(actionMenuReceipt.created_by) === Number(currentUserId)));
   const actionMenuWidthPx = 176;
 
   return (
