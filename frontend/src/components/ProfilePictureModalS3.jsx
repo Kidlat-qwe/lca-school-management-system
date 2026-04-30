@@ -73,9 +73,9 @@ const ProfilePictureModalS3 = ({ isOpen, onClose, currentProfilePicture }) => {
       return;
     }
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      setError('Image size must be less than 5MB');
+    // Validate file size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      setError('Image size must be less than 50MB');
       return;
     }
 
@@ -289,7 +289,7 @@ const ProfilePictureModalS3 = ({ isOpen, onClose, currentProfilePicture }) => {
                         Click to upload a new profile picture
                       </p>
                       <p className="text-xs text-gray-500 mt-1">
-                        PNG, JPG, GIF up to 5MB
+                        PNG, JPG, GIF up to 50MB
                       </p>
                     </div>
                   </label>

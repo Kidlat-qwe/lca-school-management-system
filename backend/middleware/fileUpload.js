@@ -31,7 +31,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'), // 10MB default
+    fileSize: parseInt(process.env.MAX_FILE_SIZE || '52428800'), // 50MB default
   },
 });
 
@@ -53,7 +53,7 @@ const attachmentFileFilter = (req, file, cb) => {
 const uploadAttachment = multer({
   storage,
   fileFilter: attachmentFileFilter,
-  limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760') },
+  limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '52428800') },
 });
 
 /**

@@ -79,9 +79,9 @@ const MerchandiseImageUploadS3 = ({ currentImageUrl, onImageUploaded, merchandis
       return;
     }
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      setError('Image size must be less than 5MB');
+    // Validate file size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      setError('Image size must be less than 50MB');
       return;
     }
 
@@ -294,7 +294,7 @@ const MerchandiseImageUploadS3 = ({ currentImageUrl, onImageUploaded, merchandis
           </label>
           {!previewUrl && (
             <p className="text-xs text-gray-500">
-              Recommended: Square image, max 5MB
+              Recommended: Square image, max 50MB
             </p>
           )}
         </div>

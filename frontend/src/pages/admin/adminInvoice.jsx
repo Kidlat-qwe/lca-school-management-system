@@ -828,8 +828,8 @@ const AdminInvoice = () => {
       appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      appAlert('Image must be 5MB or less.');
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50MB or less.');
       return;
     }
     setPaymentAttachmentUploading(true);
@@ -2834,7 +2834,7 @@ const AdminInvoice = () => {
 
                 <div>
                   <label className="label-field text-xs">Attachment (image) *</label>
-                  <p className="text-xs text-gray-500 mb-1">Upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 5MB)</p>
+                  <p className="text-xs text-gray-500 mb-1">Upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 50MB)</p>
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"

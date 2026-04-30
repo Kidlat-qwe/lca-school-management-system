@@ -126,7 +126,7 @@ export const getSignedUrlForFile = async (fileName, expiresIn = 3600) => {
  */
 export const validateImageFile = (file) => {
   // Check file size
-  const maxSize = parseInt(process.env.MAX_FILE_SIZE || '5242880'); // 5MB default
+  const maxSize = parseInt(process.env.MAX_FILE_SIZE || '52428800'); // 50MB default
   if (file.size > maxSize) {
     throw new Error(`File size exceeds maximum allowed size of ${maxSize / (1024 * 1024)}MB`);
   }

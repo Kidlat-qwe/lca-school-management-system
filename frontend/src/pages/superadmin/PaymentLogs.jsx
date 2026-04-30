@@ -342,8 +342,8 @@ const PaymentLogs = () => {
       appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      appAlert('Image must be 5MB or less.');
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50MB or less.');
       return;
     }
     setReturnFixAttachmentUploading(true);
@@ -1355,7 +1355,7 @@ const PaymentLogs = () => {
                 <div className="mb-6">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Proof of payment (image)</label>
                   <p className="text-xs text-gray-500 mb-2">
-                    Upload a new receipt or proof if you are replacing the image (JPEG, PNG, WebP, or GIF, max 5MB).
+                    Upload a new receipt or proof if you are replacing the image (JPEG, PNG, WebP, or GIF, max 50MB).
                   </p>
                   <input
                     type="file"

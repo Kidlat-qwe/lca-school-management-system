@@ -564,8 +564,8 @@ const AcknowledgementReceiptsPage = () => {
       appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      appAlert('Image must be 5 MB or less.');
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
       return;
     }
     setAttachmentUploading(true);
@@ -617,8 +617,8 @@ const AcknowledgementReceiptsPage = () => {
       appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      appAlert('Image must be 5 MB or less.');
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
       return;
     }
     setEditAttachmentUploading(true);
@@ -674,8 +674,8 @@ const AcknowledgementReceiptsPage = () => {
       appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      appAlert('Image must be 5 MB or less.');
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
       return;
     }
     setViewModalAttachmentUploading(true);
@@ -2108,7 +2108,7 @@ const AcknowledgementReceiptsPage = () => {
                     </div>
                     <div>
                       <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
-                      <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 5 MB)</p>
+                  <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 50 MB)</p>
                       <input
                         type="file"
                         accept="image/jpeg,image/png,image/webp,image/gif"
@@ -2420,7 +2420,7 @@ const AcknowledgementReceiptsPage = () => {
                 <div>
                   <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
                   <p className="text-xs text-gray-500 mb-1">
-                    Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 5 MB)
+                    Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 50 MB)
                   </p>
                   <input
                     type="file"
@@ -2716,7 +2716,7 @@ const AcknowledgementReceiptsPage = () => {
                   <div className="sm:col-span-2">
                     <label className="label-field text-xs">Attachment <span className="text-red-600">*</span></label>
                     <p className="text-xs text-gray-500 mb-1">
-                      Upload or replace proof of payment (JPEG, PNG, WebP, GIF — max 5 MB)
+                      Upload or replace proof of payment (JPEG, PNG, WebP, GIF — max 50 MB)
                     </p>
                     <input
                       type="file"
@@ -3090,7 +3090,7 @@ const AcknowledgementReceiptsPage = () => {
                     Attachment (image) <span className="text-red-600">*</span>
                   </label>
                   <p className="mb-1 text-xs text-gray-500">
-                    Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 5 MB).
+                    Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 50 MB).
                   </p>
                   <input
                     type="file"
