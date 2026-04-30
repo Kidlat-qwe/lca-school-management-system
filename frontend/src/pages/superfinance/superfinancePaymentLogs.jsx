@@ -53,6 +53,8 @@ const SuperfinancePaymentLogs = () => {
   const [showReturnDetailsModal, setShowReturnDetailsModal] = useState(false);
   const [selectedReturnDetailsPayment, setSelectedReturnDetailsPayment] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  /** Total Returned payments for current filters — Return tab badge */
+  const [returnedPaymentLogCount, setReturnedPaymentLogCount] = useState(null);
   const latestFetchIdRef = useRef(0);
 
   useEffect(() => {
@@ -81,7 +83,7 @@ const SuperfinancePaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, financeLogTab]);
+  }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, financeLogTab, filterPaymentMethod]);
 
   useEffect(() => {
     if (financeLogTab === 'return') {
@@ -89,6 +91,29 @@ const SuperfinancePaymentLogs = () => {
       setStatusDropdownRect(null);
     }
   }, [financeLogTab]);
+
+  const fetchReturnedPaymentLogCount = async () => {
+    try {
+      const params = new URLSearchParams({ limit: '1', page: '1' });
+      if (filterBranch) params.set('branch_id', filterBranch);
+      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      params.set('approval_status', 'Returned');
+      if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
+      const response = await apiRequest(`/payments?${params.toString()}`);
+      const raw = response.pagination?.total;
+      const total = typeof raw === 'number' ? raw : parseInt(raw, 10) || 0;
+      setReturnedPaymentLogCount(total);
+    } catch (err) {
+      console.error('fetchReturnedPaymentLogCount:', err);
+      setReturnedPaymentLogCount(0);
+    }
+  };
+
+  useEffect(() => {
+    fetchReturnedPaymentLogCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterBranch, filterIssueDateFrom, filterIssueDateTo, filterPaymentMethod]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -139,6 +164,7 @@ const SuperfinancePaymentLogs = () => {
       } else {
         params.set('pending_only', '0');
       }
+      if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const endpoint = useUnifiedEndpoint ? '/payments/finance-unified' : '/payments';
       const response = await apiRequest(`${endpoint}?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
@@ -233,6 +259,7 @@ const SuperfinancePaymentLogs = () => {
       closeReturnModal();
       closeReferenceModal();
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
       appAlert('Payment returned to branch for correction.');
     } catch (err) {
       appAlert(err.message || 'Failed to return payment.');
@@ -280,6 +307,7 @@ const SuperfinancePaymentLogs = () => {
       );
       closeReferenceModal();
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
     } catch (err) {
       appAlert(err.message || 'Failed to save and approve payment.');
     } finally {
@@ -300,6 +328,7 @@ const SuperfinancePaymentLogs = () => {
         body: JSON.stringify({ approve }),
       });
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
     } catch (err) {
       setError(err.message || (approve ? 'Failed to approve payment' : 'Failed to revoke approval'));
     } finally {
@@ -424,9 +453,8 @@ const SuperfinancePaymentLogs = () => {
         (payment.approval_status || 'Pending') === 'Approved') ||
       (filterFinanceApproval === 'pending' &&
         (payment.approval_status || 'Pending') !== 'Approved');
-    const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
-    
-    return matchesSearch && matchesBranch && matchesFinanceApproval && matchesPaymentMethod;
+
+    return matchesSearch && matchesBranch && matchesFinanceApproval;
   });
   const filteredTotalAmount = filteredPayments.reduce(
     (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
@@ -607,7 +635,7 @@ const SuperfinancePaymentLogs = () => {
         </button>
       </div>
 
-      <BranchPaymentLogTabs value={financeLogTab} onChange={setFinanceLogTab} />
+      <BranchPaymentLogTabs value={financeLogTab} onChange={setFinanceLogTab} returnBadgeCount={returnedPaymentLogCount} />
 
       {/* Error Message */}
       {error && (
@@ -662,6 +690,10 @@ const SuperfinancePaymentLogs = () => {
         <div className="mb-2 px-1">
           <p className="text-sm font-semibold text-gray-700">
             Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <span className="block sm:inline sm:ml-4 text-xs font-normal text-gray-600 mt-1 sm:mt-0">
+              Payment method filter:{' '}
+              <span className="font-semibold text-gray-900">{filterPaymentMethod || 'All'}</span>
+            </span>
           </p>
         </div>
         <div className="rounded-lg overflow-x-auto">
@@ -743,7 +775,17 @@ const SuperfinancePaymentLogs = () => {
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
-                        <span>Payment Method</span>
+                        <span className="leading-tight text-left">
+                          <span className="block">Payment Method</span>
+                          {filterPaymentMethod ? (
+                            <span
+                              className="block text-[10px] font-semibold text-primary-700 normal-case tracking-normal mt-0.5 truncate max-w-[7rem]"
+                              title={filterPaymentMethod}
+                            >
+                              {filterPaymentMethod}
+                            </span>
+                          ) : null}
+                        </span>
                         <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterPaymentMethod ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

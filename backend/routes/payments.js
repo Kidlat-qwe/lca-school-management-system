@@ -492,6 +492,7 @@ router.get(
     queryValidator('returned_by_me').optional().isString().withMessage('returned_by_me must be a string'),
     queryValidator('my_return_queue').optional().isString().withMessage('my_return_queue must be a string'),
     queryValidator('issued_by_me').optional().isString().withMessage('issued_by_me must be a string'),
+    queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -509,9 +510,13 @@ router.get(
         returned_by_me: returnedByMeRaw,
         my_return_queue: myReturnQueueRaw,
         issued_by_me: issuedByMeRaw,
+        payment_method: paymentMethodRaw,
         page = 1,
         limit = 20,
       } = req.query;
+      const paymentMethodFilter = paymentMethodRaw != null && String(paymentMethodRaw).trim() !== ''
+        ? String(paymentMethodRaw).trim()
+        : '';
       const returnedByMe =
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
       let myReturnQueue =
@@ -689,6 +694,12 @@ router.get(
         params.push(req.user.userId);
       }
 
+      if (paymentMethodFilter) {
+        paramCount++;
+        sql += ` AND p.payment_method = $${paramCount}`;
+        params.push(paymentMethodFilter);
+      }
+
       sql += ` ORDER BY p.payment_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -825,6 +836,12 @@ router.get(
         countParams.push(req.user.userId);
       }
 
+      if (paymentMethodFilter) {
+        countParamCount++;
+        countSql += ` AND p.payment_method = $${countParamCount}`;
+        countParams.push(paymentMethodFilter);
+      }
+
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total);
 
@@ -858,6 +875,7 @@ router.get(
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
     queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
     queryValidator('pending_only').optional().isString().withMessage('pending_only must be a string'),
+    queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -871,9 +889,14 @@ router.get(
         issue_date_from: issueDateFrom,
         issue_date_to: issueDateTo,
         pending_only: pendingOnlyRaw,
+        payment_method: paymentMethodRaw,
         page = 1,
         limit = 20,
       } = req.query;
+      const pmFilter =
+        paymentMethodRaw != null && String(paymentMethodRaw).trim() !== ''
+          ? String(paymentMethodRaw).trim()
+          : '';
 
       const pageNum = parseInt(page, 10) || 1;
       const limitNum = parseInt(limit, 10) || 20;
@@ -966,6 +989,14 @@ router.get(
         paySql += ` AND (p.approval_status IS NULL OR p.approval_status <> 'Returned')`;
       }
 
+      if (pmFilter && pmFilter !== 'Acknowledgement Receipt') {
+        payPc++;
+        paySql += ` AND p.payment_method = $${payPc}`;
+        payParams.push(pmFilter);
+      } else if (pmFilter === 'Acknowledgement Receipt') {
+        paySql += ` AND FALSE`;
+      }
+
       paySql += ` ORDER BY p.issue_date DESC, p.payment_id DESC`;
 
       const payRes = await query(paySql, payParams);
@@ -1043,46 +1074,49 @@ router.get(
       }
 
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
-      const arRes = await query(arSql, arParams);
-      const arRows = (arRes.rows || []).map((row) => ({
-        payment_id: `AR-${row.ack_receipt_id}`,
-        invoice_id: null,
-        student_id: null,
-        branch_id: row.branch_id,
-        payment_method: 'Acknowledgement Receipt',
-        payment_type: 'Unapplied AR',
-        payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
-        issue_date: row.issue_date,
-        status: 'Verified',
-        reference_number: row.reference_number,
-        remarks: 'Awaiting enrollment attachment',
-        payment_attachment_url: row.payment_attachment_url,
-        created_by: row.created_by,
-        created_at: null,
-        approval_status: 'Pending',
-        approved_by: null,
-        approved_at: null,
-        return_reason: null,
-        returned_at: null,
-        returned_by: null,
-        returned_by_name: null,
-        student_name: row.prospect_student_name || 'Walk-in / AR',
-        student_email: row.prospect_student_email || null,
-        student_level_tag: row.level_tag || null,
-        invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
-        invoice_amount: null,
-        invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
-        branch_name: row.branch_name,
-        approved_by_name: null,
-        payment_created_by_name: row.created_by_name || null,
-        payment_created_by_email: row.created_by_email || null,
-        invoice_issued_by_name: null,
-        invoice_issued_by_email: null,
-        ar_prospect_student_name: row.prospect_student_name || null,
-        source_type: 'UNAPPLIED_AR',
-        source_id: `AR-${row.ack_receipt_id}`,
-        sort_id: Number(row.ack_receipt_id) || 0,
-      }));
+      let arRows = [];
+      if (!pmFilter || pmFilter === 'Acknowledgement Receipt') {
+        const arRes = await query(arSql, arParams);
+        arRows = (arRes.rows || []).map((row) => ({
+          payment_id: `AR-${row.ack_receipt_id}`,
+          invoice_id: null,
+          student_id: null,
+          branch_id: row.branch_id,
+          payment_method: 'Acknowledgement Receipt',
+          payment_type: 'Unapplied AR',
+          payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
+          issue_date: row.issue_date,
+          status: 'Verified',
+          reference_number: row.reference_number,
+          remarks: 'Awaiting enrollment attachment',
+          payment_attachment_url: row.payment_attachment_url,
+          created_by: row.created_by,
+          created_at: null,
+          approval_status: 'Pending',
+          approved_by: null,
+          approved_at: null,
+          return_reason: null,
+          returned_at: null,
+          returned_by: null,
+          returned_by_name: null,
+          student_name: row.prospect_student_name || 'Walk-in / AR',
+          student_email: row.prospect_student_email || null,
+          student_level_tag: row.level_tag || null,
+          invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
+          invoice_amount: null,
+          invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
+          branch_name: row.branch_name,
+          approved_by_name: null,
+          payment_created_by_name: row.created_by_name || null,
+          payment_created_by_email: row.created_by_email || null,
+          invoice_issued_by_name: null,
+          invoice_issued_by_email: null,
+          ar_prospect_student_name: row.prospect_student_name || null,
+          source_type: 'UNAPPLIED_AR',
+          source_id: `AR-${row.ack_receipt_id}`,
+          sort_id: Number(row.ack_receipt_id) || 0,
+        }));
+      }
 
       // ---------- 3) Merge, sort, paginate ----------
       const merged = [...paymentRows, ...arRows].sort((a, b) => {

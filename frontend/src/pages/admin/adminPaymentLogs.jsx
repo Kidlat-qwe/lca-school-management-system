@@ -70,6 +70,8 @@ const AdminPaymentLogs = () => {
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  /** Total items in Return queue for current filters — Return tab badge */
+  const [returnedPaymentLogCount, setReturnedPaymentLogCount] = useState(null);
   const [endOfShiftLoading, setEndOfShiftLoading] = useState(false);
   const [endOfShiftModalOpen, setEndOfShiftModalOpen] = useState(false);
   const [endOfShiftPreview, setEndOfShiftPreview] = useState(null);
@@ -454,7 +456,7 @@ const AdminPaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, branchLogTab]);
+  }, [filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, branchLogTab, filterPaymentMethod]);
 
   useEffect(() => {
     if (branchLogTab === 'return') {
@@ -540,6 +542,7 @@ const AdminPaymentLogs = () => {
       );
       closeReferenceModal();
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
     } catch (err) {
       appAlert(err.message || 'Failed to save and approve payment.');
     } finally {
@@ -556,6 +559,7 @@ const AdminPaymentLogs = () => {
         body: JSON.stringify({ approve }),
       });
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
     } catch (err) {
       setError(err.message || (approve ? 'Failed to approve payment' : 'Failed to revoke approval'));
     } finally {
@@ -636,6 +640,7 @@ const AdminPaymentLogs = () => {
       appAlert('Payment updated and sent back to Finance for verification.');
       closeReturnFixModal();
       await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
     } catch (err) {
       appAlert(err.message || 'Failed to update and resubmit.');
     } finally {
@@ -647,11 +652,12 @@ const AdminPaymentLogs = () => {
     const fetchId = ++latestFetchIdRef.current;
     try {
       setLoading(true);
-      const limit = 100;
+      const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (adminBranchId) params.set('branch_id', String(adminBranchId));
       if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
       if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       if (branchLogTab === 'return') {
         params.set('my_return_queue', 'true');
       } else if (filterFinanceApproval === 'approved') {
@@ -686,6 +692,31 @@ const AdminPaymentLogs = () => {
       setLoading(false);
     }
   };
+
+  const fetchReturnedPaymentLogCount = async () => {
+    if (!adminBranchId) return;
+    try {
+      const params = new URLSearchParams({ limit: '1', page: '1' });
+      params.set('branch_id', String(adminBranchId));
+      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
+      params.set('my_return_queue', 'true');
+      const response = await apiRequest(`/payments?${params.toString()}`);
+      const raw = response.pagination?.total;
+      const total = typeof raw === 'number' ? raw : parseInt(raw, 10) || 0;
+      setReturnedPaymentLogCount(total);
+    } catch (err) {
+      console.error('fetchReturnedPaymentLogCount:', err);
+      setReturnedPaymentLogCount(0);
+    }
+  };
+
+  useEffect(() => {
+    if (!adminBranchId) return;
+    fetchReturnedPaymentLogCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminBranchId, filterIssueDateFrom, filterIssueDateTo, filterPaymentMethod]);
 
   // Removed fetchBranches - admin only sees their branch
   // Removed getBranchName and formatBranchName - admin only sees their branch
@@ -767,9 +798,7 @@ const AdminPaymentLogs = () => {
         (payment.approval_status || 'Pending') === 'Approved') ||
       (filterFinanceApproval === 'pending' &&
         (payment.approval_status || 'Pending') !== 'Approved');
-    const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
-    
-    return matchesSearch && matchesFinanceApproval && matchesPaymentMethod;
+    return matchesSearch && matchesFinanceApproval;
   });
   const filteredTotalAmount = filteredPayments.reduce(
     (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
@@ -985,7 +1014,7 @@ const AdminPaymentLogs = () => {
         </div>
       </div>
 
-      <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} />
+      <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} returnBadgeCount={returnedPaymentLogCount} />
 
       {/* Deposit Cash — date range summary (server-side from payment logs) */}
       {depositModalOpen && createPortal(
@@ -1428,6 +1457,10 @@ const AdminPaymentLogs = () => {
         <div className="mb-2 px-1">
           <p className="text-sm font-semibold text-gray-700">
             Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <span className="block sm:inline sm:ml-4 text-xs font-normal text-gray-600 mt-1 sm:mt-0">
+              Payment method filter:{' '}
+              <span className="font-semibold text-gray-900">{filterPaymentMethod || 'All'}</span>
+            </span>
           </p>
         </div>
         <div className="rounded-lg overflow-x-auto">
@@ -1507,7 +1540,17 @@ const AdminPaymentLogs = () => {
                         }}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
-                        <span>Payment Method</span>
+                        <span className="leading-tight text-left">
+                          <span className="block">Payment Method</span>
+                          {filterPaymentMethod ? (
+                            <span
+                              className="block text-[10px] font-semibold text-primary-700 normal-case tracking-normal mt-0.5 truncate max-w-[7rem]"
+                              title={filterPaymentMethod}
+                            >
+                              {filterPaymentMethod}
+                            </span>
+                          ) : null}
+                        </span>
                         <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterPaymentMethod ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

@@ -25,7 +25,7 @@ import { getClient } from '../config/database.js';
 const isDryRun = process.argv.includes('--dry-run');
 
 const TARGET_STUDENT_EMAILS = [
-  'climacoedellyn@gmail.com',
+  'monica.ladioray@yahoo.com',
 ];
 
 async function main() {

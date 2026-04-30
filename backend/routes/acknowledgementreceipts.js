@@ -182,18 +182,23 @@ router.get(
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('search').optional().isString().withMessage('Search term must be a string'),
+    queryValidator('payment_method')
+      .optional()
+      .isIn(ALLOWED_AR_PAYMENT_METHODS)
+      .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     queryValidator('only_unused')
       .optional()
       .isIn(['0', '1', 'true', 'false'])
       .withMessage('only_unused must be 0, 1, true, or false'),
+    queryValidator('exclude_status').optional().isString().withMessage('exclude_status must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
   async (req, res, next) => {
     try {
-      const { status, branch_id, search, page = 1, limit = 20, only_unused } = req.query;
+      const { status, branch_id, search, payment_method, page = 1, limit = 20, only_unused, exclude_status } = req.query;
       const onlyUnusedList =
         String(only_unused || '') === '1' || String(only_unused || '').toLowerCase() === 'true';
       const pageNum = parseInt(page) || 1;
@@ -241,6 +246,18 @@ router.get(
         }
       }
 
+      if (exclude_status) {
+        const excluded = String(exclude_status)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (excluded.length > 0) {
+          paramCount += 1;
+          sql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${paramCount}::text[])))`;
+          params.push(excluded);
+        }
+      }
+
       if (search) {
         paramCount += 1;
         const likeParam = `%${search}%`;
@@ -250,6 +267,12 @@ router.get(
           OR COALESCE(ar.reference_number, '') ILIKE $${paramCount}
         )`;
         params.push(likeParam);
+      }
+
+      if (payment_method) {
+        paramCount += 1;
+        sql += ` AND ar.payment_method = $${paramCount}`;
+        params.push(payment_method);
       }
 
       sql += ` ORDER BY ar.ack_receipt_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
@@ -285,6 +308,18 @@ router.get(
         }
       }
 
+      if (exclude_status) {
+        const excluded = String(exclude_status)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (excluded.length > 0) {
+          countParamCount += 1;
+          countSql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${countParamCount}::text[])))`;
+          countParams.push(excluded);
+        }
+      }
+
       if (search) {
         countParamCount += 1;
         const likeParam = `%${search}%`;
@@ -294,6 +329,12 @@ router.get(
           OR COALESCE(ar.reference_number, '') ILIKE $${countParamCount}
         )`;
         countParams.push(likeParam);
+      }
+
+      if (payment_method) {
+        countParamCount += 1;
+        countSql += ` AND ar.payment_method = $${countParamCount}`;
+        countParams.push(payment_method);
       }
 
       const countResult = await query(countSql, countParams);
@@ -346,7 +387,9 @@ router.post(
       .withMessage('Reference number is required')
       .isString()
       .withMessage('Reference number must be a string'),
-    body('payment_attachment_url').optional({ nullable: true }).isString().withMessage('Attachment URL must be a string'),
+    body('payment_attachment_url')
+      .custom((value) => typeof value === 'string' && value.trim().length > 0)
+      .withMessage('Attachment image is required'),
     body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
     body('installment_option')
       .optional({ nullable: true })
@@ -1685,7 +1728,12 @@ router.put(
     body('prospect_student_notes').optional({ nullable: true }).isString().withMessage('Notes must be a string'),
     body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
     body('reference_number').optional({ nullable: true }).isString().withMessage('Reference number must be a string'),
-    body('payment_attachment_url').optional({ nullable: true }).isString().withMessage('Attachment URL must be a string'),
+    body('payment_attachment_url')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('Attachment URL must be a string')
+      .custom((value) => value == null || String(value).trim().length > 0)
+      .withMessage('Attachment image is required'),
     body('payment_method')
       .optional({ nullable: true })
       .isIn(ALLOWED_AR_PAYMENT_METHODS)
@@ -1700,7 +1748,7 @@ router.put(
     try {
       const { id } = req.params;
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option
+        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option, payment_attachment_url
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -1728,6 +1776,18 @@ router.put(
         });
       }
 
+      const raw = req.body || {};
+      const currentAttachment = ack.payment_attachment_url || null;
+      const nextAttachment = Object.prototype.hasOwnProperty.call(raw, 'payment_attachment_url')
+        ? (String(raw.payment_attachment_url || '').trim() || null)
+        : currentAttachment;
+      if (!nextAttachment) {
+        return res.status(400).json({
+          success: false,
+          message: 'Attachment image is required',
+        });
+      }
+
       const updates = [];
       const params = [];
       const pushUpdate = (column, value) => {
@@ -1735,7 +1795,6 @@ router.put(
         updates.push(`${column} = $${params.length}`);
       };
 
-      const raw = req.body || {};
       if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_name')) {
         pushUpdate('prospect_student_name', String(raw.prospect_student_name || '').trim() || null);
       }

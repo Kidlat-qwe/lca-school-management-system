@@ -6,6 +6,10 @@ import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
+import {
+  canGenerateInstallmentInvoice,
+  installmentGenerateBlockedReason,
+} from '../../utils/installmentInvoiceCanGenerate';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -150,13 +154,21 @@ const InstallmentInvoice = () => {
     setOpenActionMenu(null);
     setActionMenuPosition(null);
 
-    if (invoice.profile_is_active === false) {
-      appAlert('This student is already unenrolled. Existing installment invoices stay visible for history, but no new installment invoices can be generated.');
+    if (!canGenerateInstallmentInvoice(invoice)) {
+      const reason = installmentGenerateBlockedReason(invoice);
+      if (reason === 'unenrolled') {
+        appAlert(
+          'This student is unenrolled. Installment history stays visible, but you cannot generate new installment invoices.'
+        );
+      } else if (reason === 'complete') {
+        appAlert(
+          'Phase progress for this installment plan is already complete. No further installment invoices can be generated.'
+        );
+      } else {
+        appAlert('Invoice generation is not available for this record.');
+      }
       return;
     }
-    
-    // The backend will validate if invoice generation is allowed based on paid phases
-    // We removed frontend validation to allow the backend to make the final decision
     
     setSelectedInvoiceForGeneration(invoice);
     
@@ -592,30 +604,19 @@ const InstallmentInvoice = () => {
                         e.stopPropagation();
                         handleGenerateInvoice(invoice);
                       }}
-                      disabled={
-                        invoice.profile_is_active === false ||
-                        (invoice.total_phases !== null &&
-                          invoice.total_phases !== undefined &&
-                          (invoice.generated_count || 0) >= invoice.total_phases)
-                      }
+                      disabled={!canGenerateInstallmentInvoice(invoice)}
                       className={`block w-full text-left px-4 py-2 text-sm transition-colors ${
-                        invoice.profile_is_active === false ||
-                        (invoice.total_phases !== null &&
-                          invoice.total_phases !== undefined &&
-                          (invoice.generated_count || 0) >= invoice.total_phases)
+                        !canGenerateInstallmentInvoice(invoice)
                           ? 'text-gray-400 cursor-not-allowed'
                           : 'text-gray-700 hover:bg-gray-100'
                       }`}
                     >
                       Generate Invoice
-                      {invoice.profile_is_active === false && (
+                      {installmentGenerateBlockedReason(invoice) === 'unenrolled' && (
                         <span className="ml-2 text-xs">(Stopped)</span>
                       )}
-                      {invoice.profile_is_active !== false &&
-                        invoice.total_phases !== null &&
-                        invoice.total_phases !== undefined &&
-                        (invoice.generated_count || 0) >= invoice.total_phases && (
-                        <span className="ml-2 text-xs">(Limit Reached)</span>
+                      {installmentGenerateBlockedReason(invoice) === 'complete' && (
+                        <span className="ml-2 text-xs">(Complete)</span>
                       )}
                     </button>
                     <button

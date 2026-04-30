@@ -7,6 +7,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -23,6 +25,11 @@ const AcknowledgementReceiptsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get('status') || '';
   const initialSearch = searchParams.get('search') || '';
+  const initialPaymentMethod = searchParams.get('payment_method') || '';
+  const initialArAdminTab =
+    (userType === 'Superadmin' || userType === 'Admin') && searchParams.get('tab') === 'return'
+      ? 'return'
+      : 'main';
   const initialPageRaw = parseInt(searchParams.get('page') || '1', 10);
   const initialPage = Number.isFinite(initialPageRaw) && initialPageRaw > 0 ? initialPageRaw : 1;
   const initialLimitRaw = parseInt(searchParams.get('limit') || '10', 10);
@@ -32,8 +39,12 @@ const AcknowledgementReceiptsPage = () => {
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [searchTerm, setSearchTerm] = useState(initialSearch);
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState(initialPaymentMethod);
   const searchHydratedRef = useRef(false);
   const statusHydratedRef = useRef(false);
+  const paymentMethodHydratedRef = useRef(false);
+  const [arAdminTab, setArAdminTab] = useState(initialArAdminTab);
+  const arAdminTabHydratedRef = useRef(false);
   const [pagination, setPagination] = useState({
     page: initialPage,
     limit: initialLimit,
@@ -53,7 +64,28 @@ const AcknowledgementReceiptsPage = () => {
 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerUrl, setViewerUrl] = useState('');
-  const [viewerError, setViewerError] = useState('');
+
+  /** Returned-queue count (Finance/Superfinance returns) — Admin/Superadmin tabs badge */
+  const [returnedArCount, setReturnedArCount] = useState(null);
+  const [actionMenuRect, setActionMenuRect] = useState(null);
+  const [viewReceipt, setViewReceipt] = useState(null);
+  const [viewFormData, setViewFormData] = useState({
+    package_id: '',
+    prospect_student_name: '',
+    prospect_student_contact: '',
+    prospect_student_email: '',
+    prospect_student_notes: '',
+    level_tag: '',
+    reference_number: '',
+    payment_method: 'Cash',
+    issue_date: todayManilaYMD(),
+    tip_amount: '',
+  });
+  const [viewPayableAmount, setViewPayableAmount] = useState(0);
+  const [viewModalAttachmentUrl, setViewModalAttachmentUrl] = useState('');
+  const [viewModalAttachmentUploading, setViewModalAttachmentUploading] = useState(false);
+  const [viewResubmitSaving, setViewResubmitSaving] = useState(false);
+  const [editAttachmentUploading, setEditAttachmentUploading] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -160,8 +192,16 @@ const AcknowledgementReceiptsPage = () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
       params.set('limit', String(effectiveLimit));
-      if (statusFilter) params.set('status', statusFilter);
+      if (isAdminOrSuperadmin && arAdminTab === 'return') {
+        params.set('status', 'Returned');
+      } else {
+        if (statusFilter) params.set('status', statusFilter);
+        if (isAdminOrSuperadmin && arAdminTab === 'main') {
+          params.set('exclude_status', 'Returned');
+        }
+      }
       if (searchTerm.trim()) params.set('search', searchTerm.trim());
+      if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
       if (isSuperadmin && selectedBranchId) params.set('branch_id', selectedBranchId);
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
@@ -178,10 +218,18 @@ const AcknowledgementReceiptsPage = () => {
       }
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
-        if (statusFilter) next.set('status', statusFilter);
-        else next.delete('status');
+        if (isAdminOrSuperadmin && arAdminTab === 'return') {
+          next.delete('status');
+          next.set('tab', 'return');
+        } else {
+          if (statusFilter) next.set('status', statusFilter);
+          else next.delete('status');
+          next.delete('tab');
+        }
         if (searchTerm.trim()) next.set('search', searchTerm.trim());
         else next.delete('search');
+        if (paymentMethodFilter) next.set('payment_method', paymentMethodFilter);
+        else next.delete('payment_method');
         next.set('page', String(page));
         next.set('limit', String(effectiveLimit));
         return next;
@@ -261,6 +309,64 @@ const AcknowledgementReceiptsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
+  useEffect(() => {
+    if (!paymentMethodHydratedRef.current) {
+      paymentMethodHydratedRef.current = true;
+      return;
+    }
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentMethodFilter]);
+
+  useEffect(() => {
+    if (!isAdminOrSuperadmin) return;
+    if (!arAdminTabHydratedRef.current) {
+      arAdminTabHydratedRef.current = true;
+      return;
+    }
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arAdminTab, isAdminOrSuperadmin]);
+
+  const fetchReturnedCount = async () => {
+    if (!isAdminOrSuperadmin) return;
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '1', status: 'Returned' });
+      if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
+      if (isSuperadmin && selectedBranchId) params.set('branch_id', selectedBranchId);
+      const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+      const raw = response.pagination?.total;
+      const total = typeof raw === 'number' ? raw : parseInt(raw, 10) || 0;
+      setReturnedArCount(total);
+    } catch (err) {
+      console.error('fetchReturnedCount:', err);
+      setReturnedArCount(0);
+    }
+  };
+
+  useEffect(() => {
+    if (!isAdminOrSuperadmin) return;
+    fetchReturnedCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminOrSuperadmin, selectedBranchId, paymentMethodFilter]);
+
+  useEffect(() => {
+    if (!openActionMenuId) return;
+    const closeOnOutside = (e) => {
+      if (e.target.closest?.('.ar-action-menu-trigger') || e.target.closest?.('.ar-action-menu-portal')) return;
+      setOpenActionMenuId(null);
+      setActionMenuRect(null);
+    };
+    document.addEventListener('mousedown', closeOnOutside);
+    return () => document.removeEventListener('mousedown', closeOnOutside);
+  }, [openActionMenuId]);
+
+  useEffect(() => {
+    if (viewReceipt?.ack_receipt_id) {
+      setViewModalAttachmentUrl(viewReceipt.payment_attachment_url || '');
+    }
+  }, [viewReceipt]);
+
   const resetCreateForm = () => {
     setArType('Package');
     setSelectedPackage(null);
@@ -287,80 +393,12 @@ const AcknowledgementReceiptsPage = () => {
   const openAttachmentViewer = (url) => {
     if (!url) return;
     setViewerUrl(url);
-    setViewerError('');
     setViewerOpen(true);
   };
 
   const closeAttachmentViewer = () => {
     setViewerOpen(false);
     setViewerUrl('');
-    setViewerError('');
-  };
-
-  const renderAttachmentViewer = () => {
-    if (!viewerOpen || !viewerUrl || typeof document === 'undefined') return null;
-    const cleanedUrl = viewerUrl.split('?')[0] || '';
-    const isImage = /\.(png|jpe?g|webp|gif)$/i.test(cleanedUrl);
-
-    return createPortal(
-      <div
-        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-        onClick={closeAttachmentViewer}
-      >
-        <div
-          className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-            <h2 className="text-sm font-semibold text-gray-900">Attachment preview</h2>
-            <button
-              type="button"
-              onClick={closeAttachmentViewer}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <span className="sr-only">Close</span>
-              <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                <path
-                  fillRule="evenodd"
-                  d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </button>
-          </div>
-          <div className="flex-1 bg-gray-50 flex items-center justify-center overflow-auto">
-            {viewerError ? (
-              <div className="p-4 text-center text-sm text-gray-600">
-                <p className="mb-2">
-                  We couldn&apos;t load the preview in this browser. You can open the file directly:
-                </p>
-                <a
-                  href={viewerUrl}
-                  className="text-blue-600 hover:underline break-all"
-                >
-                  {viewerUrl}
-                </a>
-              </div>
-            ) : isImage ? (
-              <img
-                src={viewerUrl}
-                alt="Attachment preview"
-                className="max-h-[80vh] w-auto object-contain"
-                onError={() => setViewerError('image')}
-              />
-            ) : (
-              <iframe
-                src={viewerUrl}
-                className="w-full h-[80vh] border-0 bg-white"
-                title="Attachment"
-                onError={() => setViewerError('iframe')}
-              />
-            )}
-          </div>
-        </div>
-      </div>,
-      document.body
-    );
   };
 
   const openCreateModal = (preserveArType) => {
@@ -556,6 +594,180 @@ const AcknowledgementReceiptsPage = () => {
     setCreateFormData((prev) => ({ ...prev, payment_attachment_url: '' }));
   };
 
+  const handleEditAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      appAlert('Image must be 5 MB or less.');
+      return;
+    }
+    setEditAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+      setEditFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
+      setEditFormErrors((prev) => {
+        const next = { ...prev };
+        delete next.payment_attachment_url;
+        return next;
+      });
+    } catch (err) {
+      console.error('AR edit attachment upload error:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setEditAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearEditAttachment = () => {
+    setEditFormData((prev) => ({ ...prev, payment_attachment_url: '' }));
+  };
+
+  const handleViewModalAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      appAlert('Image must be 5 MB or less.');
+      return;
+    }
+    setViewModalAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Upload failed');
+      setViewModalAttachmentUrl(data.imageUrl || '');
+    } catch (err) {
+      console.error('AR view modal attachment upload error:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setViewModalAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearViewModalAttachment = () => setViewModalAttachmentUrl('');
+
+  const canResubmitViewReceipt =
+    viewReceipt &&
+    viewReceipt.ar_type === 'Package' &&
+    viewReceipt.status === 'Returned';
+
+  const handleViewInputChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'issue_date') return;
+    if (name === 'package_id') {
+      const pkg = packages.find((p) => String(p.package_id) === String(value));
+      const packagePrice = Number(pkg?.package_price || 0);
+      const downpayment = Number(pkg?.downpayment_amount || 0);
+      const packageType = String(pkg?.package_type || '').toLowerCase();
+      const paymentOption = String(pkg?.payment_option || '').toLowerCase();
+      const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(viewReceipt?.installment_option || '').toLowerCase() === 'downpayment_only';
+      const nextPayable = isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+      setViewPayableAmount(Number.isFinite(nextPayable) ? nextPayable : 0);
+    }
+    setViewFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleViewModalResubmit = async () => {
+    if (!viewReceipt?.ack_receipt_id || !canResubmitViewReceipt) return;
+    const attach = (viewModalAttachmentUrl || '').trim();
+    if (!attach) {
+      appAlert('Please upload an attachment image before resubmitting.');
+      return;
+    }
+    const id = viewReceipt.ack_receipt_id;
+    const email = (viewFormData.prospect_student_email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      appAlert('Please enter a valid client email before resubmitting.');
+      return;
+    }
+    if (!(viewFormData.prospect_student_name || '').trim()) {
+      appAlert('Student name is required.');
+      return;
+    }
+    if (!(viewFormData.package_id || '').trim()) {
+      appAlert('Package is required.');
+      return;
+    }
+    if (!AR_PAYMENT_METHOD_OPTIONS.includes(viewFormData.payment_method || '')) {
+      appAlert('Invalid payment method on this receipt.');
+      return;
+    }
+    const issueToday = todayManilaYMD();
+    const tipNum =
+      viewFormData.tip_amount == null || viewFormData.tip_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(String(viewFormData.tip_amount)));
+    let pkgId = viewFormData.package_id ? parseInt(viewFormData.package_id, 10) : NaN;
+    if (!Number.isFinite(pkgId)) {
+      appAlert('Package is missing on this receipt. Please choose a package, then resubmit.');
+      return;
+    }
+
+    setViewResubmitSaving(true);
+    try {
+      const payload = {
+        prospect_student_name: (viewFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (viewFormData.prospect_student_contact || '').trim() || null,
+        prospect_student_email: email || null,
+        prospect_student_notes: (viewFormData.prospect_student_notes || '').trim() || null,
+        level_tag: (viewFormData.level_tag || '').trim() || null,
+        reference_number: (viewFormData.reference_number || '').trim() || null,
+        payment_method: viewFormData.payment_method || 'Cash',
+        issue_date: issueToday,
+        tip_amount: tipNum,
+        payment_attachment_url: attach,
+        package_id: pkgId,
+      };
+
+      await apiRequest(`/acknowledgement-receipts/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      await apiRequest(`/acknowledgement-receipts/${id}/resubmit`, {
+        method: 'PUT',
+        body: JSON.stringify({}),
+      });
+      appAlert('Acknowledgement receipt updated and resubmitted successfully.');
+      setViewReceipt(null);
+      setViewModalAttachmentUrl('');
+      await fetchReceipts(pagination.page || 1);
+      if (isAdminOrSuperadmin) await fetchReturnedCount();
+    } catch (err) {
+      console.error('AR view resubmit error:', err);
+      appAlert(err?.message || 'Failed to resubmit acknowledgement receipt.');
+    } finally {
+      setViewResubmitSaving(false);
+    }
+  };
+
   const validateCreateForm = () => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
@@ -570,10 +782,7 @@ const AcknowledgementReceiptsPage = () => {
     }
 
     if (isMerch) {
-      const paymentDate = (createFormData.issue_date || '').trim();
-      if (!paymentDate) {
-        errors.issue_date = 'Payment date is required';
-      }
+      // Issue/payment date is always today (Manila) — no user validation needed
       const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
       if (merchandiseSelections.length === 0 || configuredCount === 0) {
         errors.merchandise = 'Select at least one merchandise item and configure size';
@@ -610,6 +819,9 @@ const AcknowledgementReceiptsPage = () => {
     }
     if (!AR_PAYMENT_METHOD_OPTIONS.includes(createFormData.payment_method || '')) {
       errors.payment_method = 'Payment method is required';
+    }
+    if (!(createFormData.payment_attachment_url || '').trim()) {
+      errors.payment_attachment_url = 'Attachment image is required';
     }
 
     setCreateFormErrors(errors);
@@ -648,11 +860,10 @@ const AcknowledgementReceiptsPage = () => {
           tip_amount:
             createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
           payment_method: createFormData.payment_method || 'Cash',
-          issue_date: createFormData.issue_date,
+          issue_date: todayManilaYMD(),
           branch_id: branchId,
         };
         if (!payload.reference_number) delete payload.reference_number;
-        if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
         if (!payload.level_tag) delete payload.level_tag;
       } else {
         const isInstallmentPkg =
@@ -681,7 +892,6 @@ const AcknowledgementReceiptsPage = () => {
         if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
         if (!payload.level_tag) delete payload.level_tag;
         if (!payload.reference_number) delete payload.reference_number;
-        if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
       }
 
       const result = await apiRequest('/acknowledgement-receipts', {
@@ -753,11 +963,13 @@ const AcknowledgementReceiptsPage = () => {
     setEditFormErrors({});
     setIsResubmitFlow(false);
     setFinanceReturnNote('');
+    setEditAttachmentUploading(false);
   };
 
   const openEditModalForReceipt = (receipt, { asResubmit = false } = {}) => {
     if (!receipt?.ack_receipt_id) return;
     setOpenActionMenuId(null);
+    setActionMenuRect(null);
     setEditingReceiptId(receipt.ack_receipt_id);
     setEditingReceiptMeta(receipt);
     setIsResubmitFlow(asResubmit);
@@ -775,7 +987,11 @@ const AcknowledgementReceiptsPage = () => {
       level_tag: receipt.level_tag || '',
       reference_number: receipt.reference_number || '',
       payment_method: receipt.payment_method || 'Cash',
-      issue_date: receipt.issue_date ? String(receipt.issue_date).slice(0, 10) : todayManilaYMD(),
+      issue_date: asResubmit
+        ? todayManilaYMD()
+        : receipt.issue_date
+          ? String(receipt.issue_date).slice(0, 10)
+          : todayManilaYMD(),
       tip_amount:
         receipt.tip_amount == null || Number(receipt.tip_amount) === 0
           ? ''
@@ -790,8 +1006,55 @@ const AcknowledgementReceiptsPage = () => {
     openEditModalForReceipt(receipt, { asResubmit: true });
   };
 
+  const openViewReceiptModal = (receipt) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    if (receipt.ar_type === 'Package' && receipt.branch_id) {
+      fetchPackages(receipt.branch_id);
+    }
+    setViewFormData({
+      package_id: receipt.package_id ? String(receipt.package_id) : '',
+      prospect_student_name: receipt.prospect_student_name || '',
+      prospect_student_contact: receipt.prospect_student_contact || '',
+      prospect_student_email: receipt.prospect_student_email || '',
+      prospect_student_notes: receipt.prospect_student_notes || '',
+      level_tag: receipt.level_tag || '',
+      reference_number: receipt.reference_number || '',
+      payment_method: receipt.payment_method || 'Cash',
+      issue_date: todayManilaYMD(),
+      tip_amount:
+        receipt.tip_amount == null || Number(receipt.tip_amount) === 0
+          ? ''
+          : String(Number(receipt.tip_amount)),
+    });
+    setViewPayableAmount(Number(receipt.payment_amount || 0) || 0);
+    setViewReceipt(receipt);
+  };
+
+  const closeViewReceiptModal = () => {
+    setViewReceipt(null);
+    setViewFormData({
+      package_id: '',
+      prospect_student_name: '',
+      prospect_student_contact: '',
+      prospect_student_email: '',
+      prospect_student_notes: '',
+      level_tag: '',
+      reference_number: '',
+      payment_method: 'Cash',
+      issue_date: todayManilaYMD(),
+      tip_amount: '',
+    });
+    setViewPayableAmount(0);
+    setViewModalAttachmentUrl('');
+    setViewModalAttachmentUploading(false);
+    setViewResubmitSaving(false);
+  };
+
   const handleEditInputChange = (e) => {
     const { name, value } = e.target;
+    if (isResubmitFlow && name === 'issue_date') return;
     if (name === 'package_id') {
       const pkg = packages.find((p) => String(p.package_id) === String(value));
       const packagePrice = Number(pkg?.package_price || 0);
@@ -834,6 +1097,9 @@ const AcknowledgementReceiptsPage = () => {
     if (editFormData.tip_amount !== '' && Number(editFormData.tip_amount) < 0) {
       errors.tip_amount = 'Tip amount cannot be negative';
     }
+    if (!(editFormData.payment_attachment_url || '').trim()) {
+      errors.payment_attachment_url = 'Attachment image is required';
+    }
     setEditFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -853,7 +1119,7 @@ const AcknowledgementReceiptsPage = () => {
         level_tag: (editFormData.level_tag || '').trim() || null,
         reference_number: (editFormData.reference_number || '').trim() || null,
         payment_method: editFormData.payment_method || 'Cash',
-        issue_date: editFormData.issue_date,
+        issue_date: isResubmitFlow ? todayManilaYMD() : editFormData.issue_date,
         tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
         payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
       };
@@ -877,6 +1143,7 @@ const AcknowledgementReceiptsPage = () => {
       }
       closeEditModal();
       await fetchReceipts(pagination.page || 1);
+      if (isAdminOrSuperadmin) await fetchReturnedCount();
     } catch (err) {
       console.error('AR update error:', err);
       appAlert(err?.message || 'Failed to update acknowledgement receipt.');
@@ -898,6 +1165,7 @@ const AcknowledgementReceiptsPage = () => {
     if (!ok) return;
 
     setOpenActionMenuId(null);
+    setActionMenuRect(null);
     setDeleteLoadingId(receipt.ack_receipt_id);
     try {
       await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`, {
@@ -905,6 +1173,7 @@ const AcknowledgementReceiptsPage = () => {
       });
       appAlert('Acknowledgement receipt deleted successfully.');
       await fetchReceipts(pagination.page || 1);
+      if (isAdminOrSuperadmin) await fetchReturnedCount();
     } catch (err) {
       console.error('AR delete error:', err);
       appAlert(err?.message || 'Failed to delete acknowledgement receipt.');
@@ -920,6 +1189,15 @@ const AcknowledgementReceiptsPage = () => {
     });
     return Array.from(set);
   };
+
+  const actionMenuReceipt = receipts.find((x) => x.ack_receipt_id === openActionMenuId);
+  const canResubmitFromActionMenu =
+    actionMenuReceipt &&
+    actionMenuReceipt.ar_type === 'Package' &&
+    actionMenuReceipt.status === 'Returned' &&
+    currentUserId != null &&
+    Number(actionMenuReceipt.created_by) === Number(currentUserId);
+  const actionMenuWidthPx = 176;
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
@@ -939,7 +1217,27 @@ const AcknowledgementReceiptsPage = () => {
         </button>
       </div>
 
+      {isAdminOrSuperadmin ? (
+        <BranchPaymentLogTabs
+          value={arAdminTab}
+          onChange={(v) => {
+            setArAdminTab(v);
+            setStatusFilter('');
+          }}
+          mainLabel="Acknowledgement receipts"
+          returnLabel="Return"
+          ariaLabel="Acknowledgement receipt views"
+          returnBadgeCount={returnedArCount}
+        />
+      ) : null}
+
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-5 space-y-4">
+        {isAdminOrSuperadmin && arAdminTab === 'return' ? (
+          <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
+            These package ARs were <span className="font-semibold">returned by Finance or Superfinance</span> for
+            correction. Use <span className="font-semibold">Resubmit</span> after you fix details.
+          </p>
+        ) : null}
         <div className="flex flex-col md:flex-row gap-3 md:items-end">
           <div className="flex-1">
             <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
@@ -953,17 +1251,36 @@ const AcknowledgementReceiptsPage = () => {
           </div>
           <div className="w-full md:w-48">
             <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
+            {isAdminOrSuperadmin && arAdminTab === 'return' ? (
+              <div className="input-field text-sm bg-gray-50 text-gray-800">Returned only</div>
+            ) : (
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="input-field text-sm"
+              >
+                <option value="">All</option>
+                <option value="Verified,Applied">Verified (Verified + Applied)</option>
+                <option value="Submitted,Pending,Paid">Unverified (Submitted + Pending + Paid)</option>
+                {uniqueStatuses().map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="w-full md:w-48">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Payment Method</label>
             <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              value={paymentMethodFilter}
+              onChange={(e) => setPaymentMethodFilter(e.target.value)}
               className="input-field text-sm"
             >
               <option value="">All</option>
-              <option value="Verified,Applied">Verified (Verified + Applied)</option>
-              <option value="Submitted,Pending,Paid">Unverified (Submitted + Pending + Paid)</option>
-              {uniqueStatuses().map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {AR_PAYMENT_METHOD_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
                 </option>
               ))}
             </select>
@@ -986,7 +1303,7 @@ const AcknowledgementReceiptsPage = () => {
             >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1220px' }}
+                style={{ width: '100%', minWidth: '1340px' }}
               >
                 <thead className="bg-gray-50">
                   <tr>
@@ -997,6 +1314,7 @@ const AcknowledgementReceiptsPage = () => {
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Total Amount</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Branch</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Payment Method</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Ref. No.</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Attachment</th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
@@ -1008,13 +1326,16 @@ const AcknowledgementReceiptsPage = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 11 : 10} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 12 : 11} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
                   ) : (
                     receipts.map((r) => (
-                    <tr key={r.ack_receipt_id}>
+                    <tr
+                      key={r.ack_receipt_id}
+                      className={r.status === 'Returned' ? 'bg-red-50/70' : ''}
+                    >
                       <td className="px-4 py-3">
                         <div className="text-gray-900 font-medium">
                           {r.prospect_student_name || '-'}
@@ -1075,7 +1396,7 @@ const AcknowledgementReceiptsPage = () => {
                             r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
                               ? 'bg-green-100 text-green-800'
                               : r.status === 'Returned'
-                              ? 'bg-orange-100 text-orange-800'
+                              ? 'bg-red-100 text-red-800'
                               : r.status === 'Rejected' || r.status === 'Cancelled'
                               ? 'bg-red-100 text-red-800'
                               : 'bg-yellow-100 text-yellow-800'
@@ -1083,6 +1404,9 @@ const AcknowledgementReceiptsPage = () => {
                         >
                           {r.status}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {r.payment_method || <span className="text-gray-300">?</span>}
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-sm">
                         {r.reference_number || <span className="text-gray-300">?</span>}
@@ -1136,47 +1460,25 @@ const AcknowledgementReceiptsPage = () => {
                             <div className="relative inline-block text-left">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setOpenActionMenuId((prev) => (prev === r.ack_receipt_id ? null : r.ack_receipt_id))
-                                }
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const id = r.ack_receipt_id;
+                                  if (openActionMenuId === id) {
+                                    setOpenActionMenuId(null);
+                                    setActionMenuRect(null);
+                                  } else {
+                                    setOpenActionMenuId(id);
+                                    setActionMenuRect(e.currentTarget.getBoundingClientRect());
+                                  }
+                                }}
+                                className="ar-action-menu-trigger inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
                                 aria-label={`Open actions for acknowledgement receipt ${r.ack_receipt_id}`}
+                                aria-expanded={openActionMenuId === r.ack_receipt_id}
                               >
                                 <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                   <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 5.5A1.5 1.5 0 1010 8.5a1.5 1.5 0 000 3zm0 5.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
                                 </svg>
                               </button>
-                              {openActionMenuId === r.ack_receipt_id ? (
-                                <div className="absolute right-0 z-20 mt-2 w-36 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
-                                  {r.ar_type === 'Package' &&
-                                  r.status === 'Returned' &&
-                                  currentUserId != null &&
-                                  Number(r.created_by) === Number(currentUserId) ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => openResubmitModalForReceipt(r)}
-                                      className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
-                                    >
-                                      Resubmit
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    onClick={() => openEditModalForReceipt(r)}
-                                    className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteReceipt(r)}
-                                    disabled={deleteLoadingId === r.ack_receipt_id}
-                                    className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                                  >
-                                    {deleteLoadingId === r.ack_receipt_id ? 'Deleting...' : 'Delete'}
-                                  </button>
-                                </div>
-                              ) : null}
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400">-</span>
@@ -1192,7 +1494,104 @@ const AcknowledgementReceiptsPage = () => {
           )}
         </div>
 
-        {renderAttachmentViewer()}
+        <PaymentAttachmentViewerModal open={viewerOpen} url={viewerUrl} onClose={closeAttachmentViewer} />
+
+        {openActionMenuId && actionMenuRect && actionMenuReceipt && isAdminOrSuperadmin
+          ? createPortal(
+              (() => {
+                const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
+                const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+                const itemCount =
+                  arAdminTab === 'return'
+                    ? 1 + (canResubmitFromActionMenu ? 1 : 0)
+                    : 2 + (canResubmitFromActionMenu ? 1 : 0);
+                const approxH = Math.min(200, itemCount * 40 + 8);
+                const pad = 4;
+                let top = actionMenuRect.bottom + pad;
+                if (top + approxH > h - 8) {
+                  top = Math.max(8, actionMenuRect.top - approxH - pad);
+                }
+                const left = Math.max(8, Math.min(actionMenuRect.right - actionMenuWidthPx, w - actionMenuWidthPx - 8));
+                return (
+                  <div
+                    className="ar-action-menu-portal fixed z-[300] w-44 rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+                    style={{ top, left }}
+                    role="menu"
+                  >
+                    {arAdminTab === 'return' ? (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => openViewReceiptModal(actionMenuReceipt)}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          View
+                        </button>
+                        {canResubmitFromActionMenu ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              openResubmitModalForReceipt(actionMenuReceipt);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+                          >
+                            Resubmit
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {canResubmitFromActionMenu ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              openResubmitModalForReceipt(actionMenuReceipt);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+                          >
+                            Resubmit
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenActionMenuId(null);
+                            setActionMenuRect(null);
+                            openEditModalForReceipt(actionMenuReceipt);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenActionMenuId(null);
+                            setActionMenuRect(null);
+                            handleDeleteReceipt(actionMenuReceipt);
+                          }}
+                          disabled={deleteLoadingId === actionMenuReceipt.ack_receipt_id}
+                          className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          {deleteLoadingId === actionMenuReceipt.ack_receipt_id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })(),
+              document.body
+            )
+          : null}
 
         {pagination.total > 0 && (
           <div className="pt-3 border-t border-gray-200 space-y-3">
@@ -1601,13 +2000,13 @@ const AcknowledgementReceiptsPage = () => {
                       <input
                         type="date"
                         name="issue_date"
-                        value={createFormData.issue_date}
-                        onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                        readOnly
+                        tabIndex={-1}
+                        value={todayManilaYMD()}
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                        aria-readonly="true"
                       />
-                      {createFormErrors.issue_date && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.issue_date}</p>
-                      )}
+                      <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time).</p>
                     </div>
                     <div>
                       <label className="label-field text-xs">Amount</label>
@@ -1665,8 +2064,8 @@ const AcknowledgementReceiptsPage = () => {
                       />
                     </div>
                     <div>
-                      <label className="label-field text-xs">Attachment (image)</label>
-                      <p className="text-xs text-gray-500 mb-1">Optional: upload receipt or proof (JPEG, PNG, WebP, GIF – max 5 MB)</p>
+                      <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
+                      <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 5 MB)</p>
                       <input
                         type="file"
                         accept="image/jpeg,image/png,image/webp,image/gif"
@@ -1675,6 +2074,9 @@ const AcknowledgementReceiptsPage = () => {
                         className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                       />
                       {attachmentUploading && <p className="text-xs text-amber-600 mt-1">Uploading…</p>}
+                      {createFormErrors.payment_attachment_url && (
+                        <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
+                      )}
                       {createFormData.payment_attachment_url && !attachmentUploading && (
                         <div className="mt-2">
                           <img
@@ -1941,6 +2343,23 @@ const AcknowledgementReceiptsPage = () => {
                   </div>
                 )}
 
+                {arType === 'Package' && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      readOnly
+                      tabIndex={-1}
+                      value={todayManilaYMD()}
+                      className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                      aria-readonly="true"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time).</p>
+                  </div>
+                )}
+
                 <div>
                   <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
                   <input
@@ -1956,9 +2375,9 @@ const AcknowledgementReceiptsPage = () => {
                 </div>
 
                 <div>
-                  <label className="label-field text-xs">Attachment (image)</label>
+                  <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
                   <p className="text-xs text-gray-500 mb-1">
-                    Optional: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 5 MB)
+                    Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 5 MB)
                   </p>
                   <input
                     type="file"
@@ -1995,6 +2414,9 @@ const AcknowledgementReceiptsPage = () => {
                       </div>
                     </div>
                   )}
+                  {createFormErrors.payment_attachment_url && (
+                    <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
+                  )}
                 </div>
 
                   </>
@@ -2015,6 +2437,7 @@ const AcknowledgementReceiptsPage = () => {
                     disabled={
                       creating ||
                       attachmentUploading ||
+                      !(createFormData.payment_attachment_url || '').trim() ||
                       (arType === 'Package' &&
                         (!createFormData.package_id ||
                           !(parseFloat(createFormData.payment_amount) > 0))) ||
@@ -2192,11 +2615,16 @@ const AcknowledgementReceiptsPage = () => {
                     <input
                       type="date"
                       name="issue_date"
-                      value={editFormData.issue_date}
+                      value={isResubmitFlow ? todayManilaYMD() : editFormData.issue_date}
                       onChange={handleEditInputChange}
-                      className={`input-field text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''}`}
+                      readOnly={isResubmitFlow}
+                      tabIndex={isResubmitFlow ? -1 : undefined}
+                      className={`input-field text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''} ${isResubmitFlow ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                       disabled={editSaving}
                     />
+                    {isResubmitFlow ? (
+                      <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time) when resubmitting.</p>
+                    ) : null}
                     {editFormErrors.issue_date && <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>}
                   </div>
 
@@ -2243,18 +2671,41 @@ const AcknowledgementReceiptsPage = () => {
                   </div>
 
                   <div className="sm:col-span-2">
-                    <label className="label-field text-xs">Attachment</label>
+                    <label className="label-field text-xs">Attachment <span className="text-red-600">*</span></label>
+                    <p className="text-xs text-gray-500 mb-1">
+                      Upload or replace proof of payment (JPEG, PNG, WebP, GIF — max 5 MB)
+                    </p>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      onChange={handleEditAttachmentChange}
+                      disabled={editSaving || editAttachmentUploading}
+                      className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                    />
+                    {editAttachmentUploading && (
+                      <p className="text-xs text-amber-600 mt-1">Uploading...</p>
+                    )}
                     {editFormData.payment_attachment_url ? (
                       <div className="rounded-md border border-gray-200 bg-white p-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-xs text-gray-600">Preview of attached file</div>
-                          <button
-                            type="button"
-                            onClick={() => openAttachmentViewer(editFormData.payment_attachment_url)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            View full preview
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openAttachmentViewer(editFormData.payment_attachment_url)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              View full preview
+                            </button>
+                            <button
+                              type="button"
+                              onClick={clearEditAttachment}
+                              disabled={editSaving || editAttachmentUploading}
+                              className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
                         <div className="mt-2 overflow-hidden rounded border border-gray-200 bg-gray-50">
                           {/\.((png|jpe?g|webp|gif))(\\?.*)?$/i.test(editFormData.payment_attachment_url) ? (
@@ -2272,7 +2723,10 @@ const AcknowledgementReceiptsPage = () => {
                       </div>
                     ) : (
                       <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500">
-                        No attachment uploaded.
+                        No attachment uploaded. Please upload an image before saving.
+                        {editFormErrors.payment_attachment_url && (
+                          <div className="mt-2 text-xs text-red-500">{editFormErrors.payment_attachment_url}</div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2310,6 +2764,352 @@ const AcknowledgementReceiptsPage = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {viewReceipt &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/30 p-4"
+            onClick={closeViewReceiptModal}
+          >
+            <div
+              className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+                <h3 className="text-base font-semibold text-gray-900">View acknowledgement receipt</h3>
+                <button
+                  type="button"
+                  onClick={closeViewReceiptModal}
+                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4 px-5 py-4">
+                {extractLatestTagNote(viewReceipt.prospect_student_notes, 'Returned') ? (
+                  <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-orange-900">Noted from Finance / Superfinance</p>
+                    <p className="mt-1 text-sm text-orange-800">
+                      {extractLatestTagNote(viewReceipt.prospect_student_notes, 'Returned')}
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                  <span className="font-semibold">Status:</span>{' '}
+                  <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-800">
+                    {viewReceipt.status || '—'}
+                  </span>
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">Branch:</span> {viewReceipt.branch_name || '—'}
+                </div>
+
+                {viewReceipt.ar_type === 'Merchandise' ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Type</label>
+                        <input type="text" readOnly className="input-field text-sm bg-gray-100 cursor-not-allowed" value="Merchandise" />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Total</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={`₱${(
+                            Number(viewReceipt.payment_amount || 0) + Number(viewReceipt.tip_amount || 0)
+                          ).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Student Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={viewReceipt.prospect_student_name || ''}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Guardian Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={viewReceipt.prospect_student_contact || ''}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                      <input
+                        type="email"
+                        readOnly
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                        value={viewReceipt.prospect_student_email || ''}
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Notes</label>
+                      <textarea
+                        readOnly
+                        rows={3}
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                        value={viewReceipt.prospect_student_notes || ''}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Student Name</label>
+                        <input
+                          type="text"
+                          name="prospect_student_name"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_name}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Guardian Name</label>
+                        <input
+                          type="text"
+                          name="prospect_student_contact"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_contact}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                      <input
+                        type="email"
+                        name="prospect_student_email"
+                        className="input-field text-sm"
+                        value={viewFormData.prospect_student_email}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Notes</label>
+                      <textarea
+                        name="prospect_student_notes"
+                        rows={2}
+                        className="input-field text-sm"
+                        value={viewFormData.prospect_student_notes}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Level Tag</label>
+                      <select
+                        name="level_tag"
+                        value={viewFormData.level_tag}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                        className="input-field text-sm"
+                      >
+                        <option value="">—</option>
+                        {LEVEL_TAG_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Package</label>
+                        <select
+                          name="package_id"
+                          value={viewFormData.package_id}
+                          onChange={handleViewInputChange}
+                          className="input-field text-sm"
+                          disabled={viewResubmitSaving || packagesLoading}
+                        >
+                          <option value="">{packagesLoading ? 'Loading packages...' : 'Select package'}</option>
+                          {viewFormData.package_id && !packages.some((pkg) => String(pkg.package_id) === String(viewFormData.package_id)) ? (
+                            <option value={viewFormData.package_id}>
+                              {viewReceipt.package_name_snapshot || viewReceipt.package_name || 'Current package'}
+                            </option>
+                          ) : null}
+                          {packages.map((pkg) => (
+                            <option key={pkg.package_id} value={pkg.package_id}>
+                              {pkg.package_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Payment amount</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={
+                            viewPayableAmount == null
+                              ? ''
+                              : `₱${Number(viewPayableAmount).toLocaleString('en-PH', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}`
+                          }
+                        />
+                        <p className="mt-1 text-xs text-gray-500">Set from the package; not editable here.</p>
+                      </div>
+                    </div>
+                    {String(viewReceipt.installment_option || '').toLowerCase() === 'downpayment_only' ? (
+                      <p className="text-xs text-gray-600">
+                        <span className="font-semibold">Installment:</span> Down payment only
+                      </p>
+                    ) : null}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Tip / Excess Amount</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          name="tip_amount"
+                          className="input-field text-sm"
+                          value={viewFormData.tip_amount}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Issue Date</label>
+                        <input
+                          type="date"
+                          name="issue_date"
+                          readOnly
+                          tabIndex={-1}
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={todayManilaYMD()}
+                          aria-readonly="true"
+                          disabled={viewResubmitSaving}
+                        />
+                        <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time).</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Payment Method</label>
+                        <select
+                          name="payment_method"
+                          value={viewFormData.payment_method}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                          className="input-field text-sm"
+                        >
+                          {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
+                            <option key={method} value={method}>
+                              {method}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Reference Number</label>
+                        <input
+                          type="text"
+                          name="reference_number"
+                          className="input-field text-sm"
+                          value={viewFormData.reference_number}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="sm:col-span-2">
+                  <label className="label-field text-xs">
+                    Attachment (image) <span className="text-red-600">*</span>
+                  </label>
+                  <p className="mb-1 text-xs text-gray-500">
+                    Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 5 MB).
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={handleViewModalAttachmentChange}
+                    disabled={viewResubmitSaving || viewModalAttachmentUploading}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200"
+                  />
+                  {viewModalAttachmentUploading ? (
+                    <p className="mt-1 text-xs text-amber-600">Uploading…</p>
+                  ) : null}
+                  {viewModalAttachmentUrl ? (
+                    <div className="mt-3 rounded-md border border-gray-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentViewer(viewModalAttachmentUrl)}
+                          className="text-sm font-medium text-blue-600 hover:underline"
+                        >
+                          View attachment
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearViewModalAttachment}
+                          disabled={viewResubmitSaving || viewModalAttachmentUploading}
+                          className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="mt-2 overflow-hidden rounded border border-gray-200 bg-gray-50">
+                        {/\.((png|jpe?g|webp|gif))(\?.*)?$/i.test(viewModalAttachmentUrl) ? (
+                          <img
+                            src={viewModalAttachmentUrl}
+                            alt="Receipt attachment preview"
+                            className="max-h-48 w-full object-contain"
+                          />
+                        ) : (
+                          <div className="p-3 text-xs text-gray-600">
+                            Non-image file. Use View attachment to open.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                      No attachment yet. Upload an image to resubmit.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex border-t border-gray-200 px-5 py-4 sm:justify-end">
+                <button
+                  type="button"
+                  onClick={handleViewModalResubmit}
+                  disabled={!canResubmitViewReceipt || viewResubmitSaving || viewModalAttachmentUploading || !viewModalAttachmentUrl?.trim()}
+                  className="w-full rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 sm:w-auto"
+                >
+                  {viewResubmitSaving ? 'Resubmitting…' : 'Resubmit'}
+                </button>
+              </div>
             </div>
           </div>,
           document.body

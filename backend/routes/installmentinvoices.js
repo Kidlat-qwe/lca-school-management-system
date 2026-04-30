@@ -39,11 +39,19 @@ const enrichInstallmentInvoiceRow = async (row) => {
     ? Math.min(billingPhaseProgress, totalPhases)
     : billingPhaseProgress;
 
+  const phaseProgressComplete =
+    totalPhases != null &&
+    totalPhases > 0 &&
+    displayPhaseProgress >= totalPhases;
+  const canGenerateInstallment = row.profile_is_active !== false && !phaseProgressComplete;
+
   if (!isPhaseInstallmentProfile(profile)) {
     return {
       ...row,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
+      phase_progress_complete: phaseProgressComplete,
+      can_generate_installment: canGenerateInstallment,
     };
   }
 
@@ -59,6 +67,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
       ...row,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
+      phase_progress_complete: phaseProgressComplete,
+      can_generate_installment: canGenerateInstallment,
       current_phase_number: schedule.current_phase_number,
       current_phase_start_date: schedule.current_phase_start_date,
       current_issue_date: schedule.current_issue_date,
@@ -78,6 +88,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
       ...row,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
+      phase_progress_complete: phaseProgressComplete,
+      can_generate_installment: canGenerateInstallment,
       phase_schedule_error: error.message,
     };
   }
@@ -692,24 +704,99 @@ router.get(
 
       const filterSql = filterFragments.length ? ` AND ${filterFragments.join(' AND ')}` : '';
 
+      // (1) One schedule row per profile. (2) One profile per student+class: keep the "real" row (more billing progress / active).
       const countSql = `
-        SELECT COUNT(*)::bigint AS total
-        FROM installmentinvoicestbl ii
-        JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
-        WHERE 1=1${filterSql}
+        WITH sched_ranked AS (
+          SELECT
+               ip.student_id,
+               ip.class_id,
+               ip.installmentinvoiceprofiles_id,
+               CASE
+                 WHEN ip.is_active = true THEN true
+                 WHEN ip.is_active = false AND ip.class_id IS NOT NULL AND EXISTS (
+                   SELECT 1
+                   FROM classstudentstbl cs
+                   WHERE cs.student_id = ip.student_id
+                     AND cs.class_id = ip.class_id
+                     AND cs.removed_at IS NULL
+                     AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+                 ) THEN true
+                 ELSE ip.is_active
+               END as profile_is_active,
+               (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                FROM invoicestbl i
+                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                  AND i.status = 'Paid'
+                  AND (
+                    ip.downpayment_invoice_id IS NULL OR
+                    COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                  )
+               )::integer as paid_phases,
+               (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                FROM invoicestbl i
+                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                  AND (
+                    ip.downpayment_invoice_id IS NULL OR
+                    COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                  )
+               )::integer as generated_phases,
+               COALESCE(ip.generated_count, 0)::integer as gen_ct,
+               ROW_NUMBER() OVER (
+                 PARTITION BY ip.installmentinvoiceprofiles_id
+                 ORDER BY
+                   CASE WHEN UPPER(COALESCE(ii.status, '')) = 'PENDING' THEN 0 ELSE 1 END,
+                   ii.scheduled_date DESC NULLS LAST,
+                   ii.installmentinvoicedtl_id DESC
+               ) AS _rn_sched
+          FROM installmentinvoicestbl ii
+          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+          LEFT JOIN classestbl c ON ip.class_id = c.class_id
+          LEFT JOIN programstbl p ON c.program_id = p.program_id
+          WHERE 1=1${filterSql}
+        ),
+        one_sched AS (
+          SELECT * FROM sched_ranked WHERE _rn_sched = 1
+        ),
+        dup_ranked AS (
+          SELECT *,
+            ROW_NUMBER() OVER (
+              PARTITION BY student_id, COALESCE(class_id, -installmentinvoiceprofiles_id)
+              ORDER BY
+                (CASE WHEN profile_is_active THEN 1 ELSE 0 END) DESC,
+                COALESCE(paid_phases, 0) DESC,
+                COALESCE(generated_phases, 0) DESC,
+                COALESCE(gen_ct, 0) DESC,
+                installmentinvoiceprofiles_id DESC
+            ) AS _rn_dup
+          FROM one_sched
+        )
+        SELECT COUNT(*)::bigint AS total FROM dup_ranked WHERE _rn_dup = 1
       `;
       const countResult = await query(countSql, filterParams);
       const total = parseInt(countResult.rows[0]?.total || 0, 10);
 
       let sql = `
-        SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
+        WITH sched_ranked AS (
+          SELECT
+               ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount,
                ip.frequency as profile_frequency, ip.description, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
-               ip.is_active as profile_is_active,
+               CASE
+                 WHEN ip.is_active = true THEN true
+                 WHEN ip.is_active = false AND ip.class_id IS NOT NULL AND EXISTS (
+                   SELECT 1
+                   FROM classstudentstbl cs
+                   WHERE cs.student_id = ip.student_id
+                     AND cs.class_id = ip.class_id
+                     AND cs.removed_at IS NULL
+                     AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+                 ) THEN true
+                 ELSE ip.is_active
+               END as profile_is_active,
                ip.downpayment_invoice_id,
                c.start_date::text as class_start_date,
                (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
-                FROM invoicestbl i 
-                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id 
+                FROM invoicestbl i
+                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
                   AND i.status = 'Paid'
                   AND (
                     ip.downpayment_invoice_id IS NULL OR
@@ -717,8 +804,8 @@ router.get(
                   )
                ) as paid_phases,
                (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
-                FROM invoicestbl i 
-                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id 
+                FROM invoicestbl i
+                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
                   AND (
                     ip.downpayment_invoice_id IS NULL OR
                     COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
@@ -729,22 +816,57 @@ router.get(
                 WHERE cs.student_id = ip.student_id
                   AND cs.class_id = ip.class_id
                ) as last_enrolled_phase_number,
-               p.program_name, u.full_name as student_name
-        FROM installmentinvoicestbl ii
-        JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
-        LEFT JOIN classestbl c ON ip.class_id = c.class_id
-        LEFT JOIN programstbl p ON c.program_id = p.program_id
-        LEFT JOIN userstbl u ON ip.student_id = u.user_id
-        WHERE 1=1${filterSql}
+               p.program_name,
+               u.full_name as student_name_from_user,
+               ROW_NUMBER() OVER (
+                 PARTITION BY ip.installmentinvoiceprofiles_id
+                 ORDER BY
+                   CASE WHEN UPPER(COALESCE(ii.status, '')) = 'PENDING' THEN 0 ELSE 1 END,
+                   ii.scheduled_date DESC NULLS LAST,
+                   ii.installmentinvoicedtl_id DESC
+               ) AS _rn_sched
+          FROM installmentinvoicestbl ii
+          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+          LEFT JOIN classestbl c ON ip.class_id = c.class_id
+          LEFT JOIN programstbl p ON c.program_id = p.program_id
+          LEFT JOIN userstbl u ON ip.student_id = u.user_id
+          WHERE 1=1${filterSql}
+        ),
+        one_sched AS (
+          SELECT * FROM sched_ranked WHERE _rn_sched = 1
+        ),
+        dup_ranked AS (
+          SELECT *,
+            ROW_NUMBER() OVER (
+              PARTITION BY student_id, COALESCE(class_id, -installmentinvoiceprofiles_id)
+              ORDER BY
+                (CASE WHEN profile_is_active THEN 1 ELSE 0 END) DESC,
+                COALESCE(paid_phases::integer, 0) DESC,
+                COALESCE(generated_phases::integer, 0) DESC,
+                COALESCE(generated_count, 0) DESC,
+                installmentinvoiceprofiles_id DESC
+            ) AS _rn_dup
+          FROM one_sched
+        )
+        SELECT * FROM dup_ranked WHERE _rn_dup = 1
       `;
 
       const listParams = [...filterParams];
       fp = filterParams.length;
-      sql += ` ORDER BY ii.scheduled_date DESC LIMIT $${fp + 1} OFFSET $${fp + 2}`;
+      sql += ` ORDER BY scheduled_date DESC NULLS LAST LIMIT $${fp + 1} OFFSET $${fp + 2}`;
       listParams.push(limitNum, offset);
 
       const result = await query(sql, listParams);
-      const enrichedRows = await Promise.all(result.rows.map(enrichInstallmentInvoiceRow));
+      const enrichedRows = await Promise.all(
+        result.rows.map((row) => {
+          const { _rn_sched, _rn_dup, student_name_from_user, ...rest } = row;
+          const displayName =
+            (typeof student_name_from_user === 'string' && student_name_from_user.trim() !== ''
+              ? student_name_from_user.trim()
+              : null) || rest.student_name;
+          return enrichInstallmentInvoiceRow({ ...rest, student_name: displayName });
+        })
+      );
 
       const totalPages = total > 0 ? Math.ceil(total / limitNum) : 1;
 
@@ -778,10 +900,46 @@ router.get(
     try {
       const { id } = req.params;
       const result = await query(
-        `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
+        `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount,
                 ip.frequency as profile_frequency, ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
+                CASE
+                  WHEN ip.is_active = true THEN true
+                  WHEN ip.is_active = false AND ip.class_id IS NOT NULL AND EXISTS (
+                    SELECT 1
+                    FROM classstudentstbl cs
+                    WHERE cs.student_id = ip.student_id
+                      AND cs.class_id = ip.class_id
+                      AND cs.removed_at IS NULL
+                      AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+                  ) THEN true
+                  ELSE ip.is_active
+                END as profile_is_active,
+                ip.downpayment_invoice_id,
                 c.start_date::text as class_start_date,
-                p.program_name, u.full_name as student_name
+                (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                 FROM invoicestbl i
+                 WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                   AND i.status = 'Paid'
+                   AND (
+                     ip.downpayment_invoice_id IS NULL OR
+                     COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                   )
+                ) as paid_phases,
+                (SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                 FROM invoicestbl i
+                 WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                   AND (
+                     ip.downpayment_invoice_id IS NULL OR
+                     COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
+                   )
+                ) as generated_phases,
+                (SELECT MAX(cs.phase_number)
+                 FROM classstudentstbl cs
+                 WHERE cs.student_id = ip.student_id
+                   AND cs.class_id = ip.class_id
+                ) as last_enrolled_phase_number,
+                p.program_name,
+                u.full_name as student_name_from_user
          FROM installmentinvoicestbl ii
          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
          LEFT JOIN classestbl c ON ip.class_id = c.class_id
@@ -798,7 +956,13 @@ router.get(
         });
       }
 
-      const enrichedRow = await enrichInstallmentInvoiceRow(result.rows[0]);
+      const raw = result.rows[0];
+      const displayName =
+        (typeof raw.student_name_from_user === 'string' && raw.student_name_from_user.trim() !== ''
+          ? raw.student_name_from_user.trim()
+          : null) || raw.student_name;
+      const { student_name_from_user: _snfu, ...forEnrich } = raw;
+      const enrichedRow = await enrichInstallmentInvoiceRow({ ...forEnrich, student_name: displayName });
 
       res.json({
         success: true,
@@ -985,10 +1149,69 @@ router.post(
 
       const installmentInvoice = installmentResult.rows[0];
       if (installmentInvoice.profile_is_active === false) {
+        // Backward compatibility: some profiles were incorrectly marked inactive when the last phase invoice was generated.
+        // Treat as active if the student is still enrolled in the linked class.
+        let isStillEnrolled = false;
+        if (installmentInvoice.class_id) {
+          const enrolledCheck = await client.query(
+            `SELECT 1
+             FROM classstudentstbl cs
+             WHERE cs.student_id = $1
+               AND cs.class_id = $2
+               AND cs.removed_at IS NULL
+               AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+             LIMIT 1`,
+            [installmentInvoice.student_id, installmentInvoice.class_id]
+          );
+          isStillEnrolled = enrolledCheck.rows.length > 0;
+        }
+
+        if (!isStillEnrolled) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'This student has already been unenrolled. Existing installment invoices and payment logs are preserved, but new installment invoices can no longer be generated.',
+          });
+        }
+      }
+
+      const totalPhasesEarly =
+        installmentInvoice.total_phases != null ? parseInt(installmentInvoice.total_phases, 10) : null;
+      const downpaymentIdEarly = installmentInvoice.downpayment_invoice_id || null;
+      const paidEarlyResult = await client.query(
+        `SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id)) AS paid_phase_count
+         FROM invoicestbl i
+         WHERE i.installmentinvoiceprofiles_id = $1
+           AND i.status = 'Paid'
+           AND (
+             $2::INTEGER IS NULL OR
+             COALESCE(i.invoice_chain_root_id, i.invoice_id) != $2::INTEGER
+           )`,
+        [installmentInvoice.installmentinvoiceprofiles_id, downpaymentIdEarly]
+      );
+      const genEarlyResult = await client.query(
+        `SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id)) AS generated_phase_count
+         FROM invoicestbl i
+         WHERE i.installmentinvoiceprofiles_id = $1
+           AND (
+             $2::INTEGER IS NULL OR
+             COALESCE(i.invoice_chain_root_id, i.invoice_id) != $2::INTEGER
+           )`,
+        [installmentInvoice.installmentinvoiceprofiles_id, downpaymentIdEarly]
+      );
+      const paidPhasesEarly = parseInt(paidEarlyResult.rows[0]?.paid_phase_count || 0, 10);
+      const generatedPhasesEarly = parseInt(genEarlyResult.rows[0]?.generated_phase_count || 0, 10);
+      const billingProgressEarly = Math.max(paidPhasesEarly, generatedPhasesEarly, 0);
+      const displayProgressEarly =
+        totalPhasesEarly != null && totalPhasesEarly > 0
+          ? Math.min(billingProgressEarly, totalPhasesEarly)
+          : billingProgressEarly;
+      if (totalPhasesEarly !== null && totalPhasesEarly > 0 && displayProgressEarly >= totalPhasesEarly) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'This student has already been unenrolled. Existing installment invoices and payment logs are preserved, but new installment invoices can no longer be generated.',
+          message: `Installment phase progress is already complete (${displayProgressEarly}/${totalPhasesEarly}). No further invoices can be generated for this plan.`,
         });
       }
 
@@ -1081,43 +1304,11 @@ router.post(
         [newInvoice.invoice_id, profile.student_id]
       );
 
-      // Check phase limit before generating
-      // Logic: We can generate invoices until all phases are paid
-      // Downpayment is NOT counted as a phase - only paid installment invoices count
       const totalPhases = installmentInvoice.total_phases;
       const maxInvoices = totalPhases !== null ? totalPhases : null; // Max invoices = total_phases (downpayment doesn't count)
-      
-      const canonicalCountsResult = await client.query(
-        `SELECT COUNT(DISTINCT COALESCE(i.invoice_chain_root_id, i.invoice_id)) AS paid_phase_count
-         FROM invoicestbl i
-         WHERE i.installmentinvoiceprofiles_id = $1
-           AND i.status = 'Paid'
-           AND (
-             $2::INTEGER IS NULL OR
-             COALESCE(i.invoice_chain_root_id, i.invoice_id) != $2::INTEGER
-           )`,
-        [installmentInvoice.installmentinvoiceprofiles_id, installmentInvoice.downpayment_invoice_id || null]
-      );
-      
-      const paidPhases = parseInt(canonicalCountsResult.rows[0]?.paid_phase_count || 0, 10);
+
       const currentCount = installmentInvoice.generated_count || 0;
-      
-      // Debug logging
-      console.log('Paid invoices count:', paidPhases);
-      console.log('Total phases:', totalPhases);
-      console.log('Downpayment invoice ID:', installmentInvoice.downpayment_invoice_id);
-      
-      // Check if all phases are already paid (not just generated)
-      // If paid_phases < total_phases, we can still generate invoices
-      // This is the key check: allow generation based on paid status, not generated count
-      if (totalPhases !== null && paidPhases >= totalPhases) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: `All phases are already paid (${paidPhases}/${totalPhases}). Downpayment is not counted as a phase. Cannot generate more invoices.`,
-        });
-      }
-      
+
       // Increment generated count
       const newCount = currentCount + 1;
       await client.query(
@@ -1142,12 +1333,8 @@ router.post(
         : (maxInvoices !== null && newCount >= maxInvoices);
       
       if (isLastInvoice) {
-        // Last invoice - mark profile as inactive and update installment invoice status
-        await client.query(
-          'UPDATE installmentinvoiceprofilestbl SET is_active = false WHERE installmentinvoiceprofiles_id = $1',
-          [installmentInvoice.installmentinvoiceprofiles_id]
-        );
-        
+        // Last invoice for this schedule row - update installment invoice status.
+        // Do NOT mark the profile inactive here; inactivity should represent unenrollment, not "final invoice generated".
         await client.query(
           `UPDATE installmentinvoicestbl 
            SET status = 'Generated', scheduled_date = $1
