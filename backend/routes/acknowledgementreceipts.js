@@ -1748,7 +1748,8 @@ router.put(
     try {
       const { id } = req.params;
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option, payment_attachment_url
+        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option, payment_attachment_url, issue_date,
+                prospect_student_notes
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -1777,6 +1778,22 @@ router.put(
       }
 
       const raw = req.body || {};
+      const notesText = String(ack.prospect_student_notes || '');
+      const hadReturnedTag = notesText.includes('[Returned]');
+      if (
+        hadReturnedTag &&
+        Object.prototype.hasOwnProperty.call(raw, 'prospect_student_notes')
+      ) {
+        const nextNotes = String(raw.prospect_student_notes ?? '');
+        if (!nextNotes.includes('[Returned]')) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Notes must keep the Finance return marker ([Returned]). You may add text, but do not remove that history.',
+          });
+        }
+      }
+
       const currentAttachment = ack.payment_attachment_url || null;
       const nextAttachment = Object.prototype.hasOwnProperty.call(raw, 'payment_attachment_url')
         ? (String(raw.payment_attachment_url || '').trim() || null)
@@ -1819,7 +1836,11 @@ router.put(
       if (Object.prototype.hasOwnProperty.call(raw, 'payment_method')) {
         pushUpdate('payment_method', raw.payment_method || null);
       }
-      if (Object.prototype.hasOwnProperty.call(raw, 'issue_date')) {
+      // Preserve issue_date after Finance has returned this AR (sale / EOD attribution must stay fixed).
+      // While status is Returned, or notes still contain the "[Returned]" tag (after resubmit to Submitted),
+      // ignore client issue_date — edits + resubmit must not move the AR to another calendar day.
+      const issueDateLocked = ack.status === 'Returned' || notesText.includes('[Returned]');
+      if (Object.prototype.hasOwnProperty.call(raw, 'issue_date') && !issueDateLocked) {
         pushUpdate('issue_date', raw.issue_date || null);
       }
       if (Object.prototype.hasOwnProperty.call(raw, 'tip_amount')) {

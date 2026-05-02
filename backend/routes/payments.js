@@ -2051,6 +2051,29 @@ router.put(
         });
       }
 
+      const remarksText = String(payment.remarks || '');
+      const hadReturnedTag = remarksText.includes('[Returned]');
+      const issueDateLocked =
+        String(payment.approval_status || '') === 'Returned' || hadReturnedTag;
+
+      if (hadReturnedTag && remarks !== undefined) {
+        const nextRemarks = String(remarks ?? '');
+        if (!nextRemarks.includes('[Returned]')) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'Remarks must keep the Finance return marker ([Returned]). You may add detail, but do not remove that history.',
+          });
+        }
+      }
+
+      const effectiveIssueDateForLogic = issueDateLocked
+        ? payment.issue_date
+        : issue_date !== undefined
+          ? issue_date
+          : payment.issue_date;
+
       // Build update query
       const updates = [];
       const params = [];
@@ -2059,6 +2082,9 @@ router.put(
       const fields = { payment_method, payment_type, payable_amount, tip_amount, issue_date, status, reference_number, remarks };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {
+          if (key === 'issue_date' && issueDateLocked) {
+            return;
+          }
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           params.push(value);
@@ -2336,7 +2362,10 @@ router.put(
                   );
                   const studentName = studentResult.rows[0]?.full_name || 'Student';
                   
-                  const firstPaymentIssueDate = issue_date || payment.issue_date || formatYmdLocal(new Date());
+                  const firstPaymentIssueDate =
+                    effectiveIssueDateForLogic != null && effectiveIssueDateForLogic !== ''
+                      ? formatYmdLocal(new Date(effectiveIssueDateForLogic))
+                      : formatYmdLocal(new Date());
                   const { firstInvoiceRecord } = await createFirstInstallmentRecordAfterDownpayment({
                     client,
                     profileId: invoice.installmentinvoiceprofiles_id,
@@ -3012,7 +3041,11 @@ router.put(
              returned_by = $2,
              returned_at = CURRENT_TIMESTAMP,
              approved_by = NULL,
-             approved_at = NULL
+             approved_at = NULL,
+             remarks = CASE
+               WHEN COALESCE(remarks, '') LIKE '%[Returned]%' THEN remarks
+               ELSE RTRIM(COALESCE(remarks, '') || E'\\n[Returned] ' || COALESCE($1::text, ''))
+             END
          WHERE payment_id = $3
          RETURNING payment_id, approval_status, return_reason,
                    TO_CHAR(returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at, returned_by`,

@@ -12,7 +12,8 @@
     "migrate:sessions": "node migrations/012_generate_sessions_for_existing_classes.js",
     "migrate:currency-php": "node migrations/run_056_set_default_currency_to_php.js",
     "migrate:supabase-to-s3": "node scripts/migrateSupabaseToS3.js",
-    "list:firebase-users": "node scripts/listFirebaseUsers.js"
+    "list:firebase-users": "node scripts/listFirebaseUsers.js",
+    "repair:ar-issue-date": "node scripts/repairArIssueDateFromAckNumber.js"
   },
   "keywords": [
     "school",

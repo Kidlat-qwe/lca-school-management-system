@@ -53,6 +53,7 @@ import AdminInvoice from './pages/admin/adminInvoice';
 import AdminInstallmentInvoice from './pages/admin/adminInstallmentInvoice';
 import AdminPaymentLogs from './pages/admin/adminPaymentLogs';
 import AdminAcknowledgementReceipts from './pages/admin/adminAcknowledgementReceipts';
+import AdminDailySummary from './pages/admin/adminDailySummary';
 import AdminReport from './pages/admin/adminReport';
 import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
@@ -164,6 +165,7 @@ function App() {
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
+            <Route path="daily-summary-sales" element={<AdminDailySummary />} />
             <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
             <Route path="system-logs" element={<SystemLogs />} />

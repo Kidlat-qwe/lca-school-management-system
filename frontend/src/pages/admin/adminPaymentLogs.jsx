@@ -51,6 +51,12 @@ const getInvoiceBreakdownForReturnFix = (invoice) => {
   };
 };
 
+/** After Finance return, issue_date must stay fixed for EOD / reporting (backend also ignores edits). */
+const isPaymentIssueDateLocked = (p) =>
+  p &&
+  (String(p.approval_status || '') === 'Returned' ||
+    String(p.remarks || '').includes('[Returned]'));
+
 const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
 
 const AdminPaymentLogs = () => {
@@ -735,12 +741,21 @@ const AdminPaymentLogs = () => {
     if (!returnFixPayment) return;
     setReturnFixLoading(true);
     try {
+      const issueDateLocked = isPaymentIssueDateLocked(returnFixPayment);
+      const remarksHadReturned = String(returnFixPayment.remarks || '').includes('[Returned]');
       const refTrim = returnFixRef.trim();
       const attTrim = returnFixAttachment.trim();
       const issueDateTrim = String(returnFixIssueDate || '').trim();
       if (!issueDateTrim) {
         appAlert('Please select the correct payment date before resubmitting.');
         return;
+      }
+      if (remarksHadReturned) {
+        const nextRemarks = String(returnFixRemarks || '');
+        if (!nextRemarks.includes('[Returned]')) {
+          appAlert('Remarks must keep the Finance return marker ([Returned]).');
+          return;
+        }
       }
       if (!String(returnFixPaymentType || '').trim()) {
         appAlert('Please select a payment type.');
@@ -785,11 +800,13 @@ const AdminPaymentLogs = () => {
         reference_number: refTrim,
         attachment_url: attTrim,
         payment_method: returnFixPaymentMethod.trim() || undefined,
-        issue_date: issueDateTrim,
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
       };
+      if (!issueDateLocked) {
+        payload.issue_date = issueDateTrim;
+      }
       if (returnFixRemarks.trim()) {
         payload.remarks = returnFixRemarks.trim();
       }
@@ -1446,7 +1463,8 @@ const AdminPaymentLogs = () => {
               Submit all today&apos;s sales for proper closure? This will submit your branch EOD for Finance/Superfinance verification, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
             </p>
             <p className="mt-1 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
-              One submission per day: totals include all payments dated today for your branch. You cannot submit again until tomorrow.
+              One submission per day: totals include completed payments and standalone AR receipts with{' '}
+              <strong>issue date today</strong> for your branch. You cannot submit again until tomorrow.
             </p>
             <p className="mt-1 text-sm font-medium text-gray-700 shrink-0">
               Date & time: {formatDateTimeManila(new Date())} (Manila)
@@ -1454,14 +1472,17 @@ const AdminPaymentLogs = () => {
             {endOfShiftPreview && (
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
-                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({(endOfShiftPreview.completed_payment_count ?? endOfShiftPreview.payment_count ?? 0)} completed payment(s), {(endOfShiftPreview.ar_sales_count ?? 0)} AR receipt(s))
+                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
+                  {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone AR receipt(s))
                 </p>
                 <p className="mt-1 text-xs text-gray-500 shrink-0">
                   Collected per row is payable plus tip (matches today&apos;s total). Invoice total is the invoice document amount from line items (or manual invoice amount).
                 </p>
                 {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Records to be submitted</p>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                      Payment records (issue date today)
+                    </p>
                     <div className="rounded-lg border border-gray-200 min-w-0 overflow-hidden">
                       <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
                         <thead className="bg-gray-50">
@@ -1537,9 +1558,114 @@ const AdminPaymentLogs = () => {
                     </div>
                   </div>
                 )}
-                {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length === 0 && endOfShiftPreview.payment_count === 0 && (
+                {Array.isArray(endOfShiftPreview.ar_receipts) && endOfShiftPreview.ar_receipts.length > 0 && (
+                  <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                      Standalone AR sales (issue date today)
+                    </p>
+                    <div
+                      className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto"
+                      style={{
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#cbd5e0 #f7fafc',
+                        WebkitOverflowScrolling: 'touch',
+                      }}
+                    >
+                      <table className="w-full border-collapse text-[11px] sm:text-xs" style={{ minWidth: '680px' }}>
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Receipt
+                            </th>
+                            <th className="py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Issue date
+                            </th>
+                            <th className="py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Prospect
+                            </th>
+                            <th className="py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Level tag
+                            </th>
+                            <th className="py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Method
+                            </th>
+                            <th className="py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Collected
+                            </th>
+                            <th className="py-2.5 px-3 text-center text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Attached image
+                            </th>
+                            <th className="py-2.5 ps-3 pe-4 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Reference
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white">
+                          {endOfShiftPreview.ar_receipts.map((a) => {
+                            const tip = parseFloat(a.tip_amount) || 0;
+                            const pamt = parseFloat(a.payment_amount) || 0;
+                            const collected = pamt + tip;
+                            const attUrl = (a.payment_attachment_url || '').trim();
+                            return (
+                              <tr key={a.ack_receipt_id} className="hover:bg-gray-50/80 border-b border-gray-100 last:border-b-0">
+                                <td className="py-2.5 ps-4 pe-3 font-medium text-gray-900 truncate align-top" title={a.ack_receipt_number || ''}>
+                                  {a.ack_receipt_number || `#${a.ack_receipt_id}`}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 truncate align-top" title={a.issue_date ? formatDate(a.issue_date) : ''}>
+                                  {a.issue_date ? formatDate(a.issue_date) : '—'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 min-w-0 align-top">
+                                  <span className="truncate block" title={a.prospect_student_name || '-'}>
+                                    {a.prospect_student_name || '—'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 min-w-0 align-top">
+                                  <span className="truncate block" title={a.program_level_tag || a.level_tag || '-'}>
+                                    {a.program_level_tag || a.level_tag || '—'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 truncate align-top">{a.payment_method || '—'}</td>
+                                <td className="py-2.5 px-3 text-right align-top min-w-0">
+                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                  {tip > 0 && (
+                                    <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
+                                      {formatCurrency(pamt)} + tip {formatCurrency(tip)}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-center align-top whitespace-nowrap">
+                                  {attUrl ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAttachmentViewerUrl(attUrl);
+                                        setShowAttachmentViewer(true);
+                                      }}
+                                      className="text-xs font-medium text-primary-600 hover:text-primary-800 hover:underline"
+                                    >
+                                      View
+                                    </button>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 ps-3 pe-4 text-gray-500 min-w-0 align-top">
+                                  <span className="truncate block" title={a.reference_number || '-'}>
+                                    {a.reference_number || '—'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {Number(endOfShiftPreview.completed_payment_count ?? 0) === 0 &&
+                  Number(endOfShiftPreview.ar_sales_count ?? 0) === 0 && (
                   <p className="mt-3 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    No payments recorded for today. You can still submit to close the day with zero sales.
+                    No completed payments or standalone AR for today. You can still submit to close the day with zero sales.
                   </p>
                 )}
               </>
@@ -2150,14 +2276,20 @@ const AdminPaymentLogs = () => {
                       Issue Date <span className="text-red-500">*</span>
                     </label>
                     <p className="text-xs text-gray-500 mb-1">
-                      Match the date on the receipt before resubmitting.
+                      {isPaymentIssueDateLocked(returnFixPayment)
+                        ? 'Original payment date is kept after Finance return (not editable).'
+                        : 'Match the date on the receipt before resubmitting.'}
                     </p>
                     <input
                       id="admin_return_fix_issue_date"
                       type="date"
                       value={returnFixIssueDate}
                       onChange={(e) => setReturnFixIssueDate(e.target.value)}
-                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      disabled={
+                        returnFixLoading ||
+                        returnFixAttachmentUploading ||
+                        isPaymentIssueDateLocked(returnFixPayment)
+                      }
                       className="input-field text-sm"
                       required
                     />

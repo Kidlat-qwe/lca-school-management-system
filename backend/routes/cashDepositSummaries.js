@@ -198,7 +198,10 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('date').optional().isISO8601().withMessage('date must be YYYY-MM-DD'),
-    queryValidator('status').optional().isIn(['Submitted', 'Approved', 'Rejected']).withMessage('status must be Submitted, Approved, or Rejected'),
+    queryValidator('status')
+      .optional()
+      .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
+      .withMessage('status must be Submitted, Approved, Rejected, or Returned'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be positive'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit 1-100'),
     handleValidationErrors,
@@ -247,9 +250,13 @@ router.get(
       }
 
       if (status) {
-        pc++;
-        sql += ` AND c.status = $${pc}`;
-        params.push(status);
+        if (status === 'Returned') {
+          sql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else {
+          pc++;
+          sql += ` AND c.status = $${pc}`;
+          params.push(status);
+        }
       }
 
       sql += ` ORDER BY c.start_date DESC, c.end_date DESC, c.branch_id ASC LIMIT $${pc + 1} OFFSET $${pc + 2}`;
@@ -278,9 +285,13 @@ router.get(
       }
 
       if (status) {
-        cc++;
-        countSql += ` AND c.status = $${cc}`;
-        countParams.push(status);
+        if (status === 'Returned') {
+          countSql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else {
+          cc++;
+          countSql += ` AND c.status = $${cc}`;
+          countParams.push(status);
+        }
       }
 
       const countRes = await query(countSql, countParams);
@@ -459,7 +470,8 @@ router.put(
       }
 
       const record = checkRes.rows[0];
-      if (record.status !== 'Submitted') {
+      const allowedVerifyStatuses = ['Submitted', 'Returned', 'Rejected'];
+      if (!allowedVerifyStatuses.includes(record.status)) {
         return res.status(400).json({
           success: false,
           message: `Cannot change verification. Current status: ${record.status}`,
@@ -467,14 +479,30 @@ router.put(
       }
 
       const isApproved = approve === true || approve === 'true';
-      const newStatus = isApproved ? 'Approved' : 'Rejected';
 
-      await query(
-        `UPDATE cash_deposit_summarytbl
-         SET status = $1, approved_by = $2, approved_at = CURRENT_TIMESTAMP, remarks = $3, updated_at = CURRENT_TIMESTAMP
-         WHERE cash_deposit_summary_id = $4`,
-        [newStatus, req.user.userId, remarks || null, id]
-      );
+      if (isApproved) {
+        await query(
+          `UPDATE cash_deposit_summarytbl
+           SET status = 'Approved',
+               approved_by = $1,
+               approved_at = CURRENT_TIMESTAMP,
+               remarks = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE cash_deposit_summary_id = $3`,
+          [req.user.userId, remarks || null, id]
+        );
+      } else {
+        await query(
+          `UPDATE cash_deposit_summarytbl
+           SET status = 'Returned',
+               approved_by = NULL,
+               approved_at = NULL,
+               remarks = $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE cash_deposit_summary_id = $2`,
+          [remarks || null, id]
+        );
+      }
 
       const updated = await query(
         `SELECT c.cash_deposit_summary_id, c.branch_id,
@@ -494,8 +522,139 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Cash deposit summary verified' : 'Cash deposit summary rejected',
+        message: isApproved ? 'Cash deposit summary verified' : 'Cash deposit summary returned for correction',
         data: updated.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/cash-deposit-summaries/:id/resubmit
+ * Branch Admin resubmits a rejected cash deposit summary (refreshes totals; optional reference/attachment updates).
+ */
+router.put(
+  '/:id/resubmit',
+  requireRole('Admin'),
+  [
+    param('id').isInt().withMessage('id must be an integer'),
+    body('reference_number').optional({ nullable: true }).isString().withMessage('reference_number must be a string'),
+    body('deposit_attachment_url')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('deposit_attachment_url must be a string'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can resubmit cash deposit summaries.',
+        });
+      }
+
+      const rowRes = await query(
+        `SELECT cash_deposit_summary_id, branch_id,
+                TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
+                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
+                status, submitted_by, reference_number, deposit_attachment_url
+         FROM cash_deposit_summarytbl
+         WHERE cash_deposit_summary_id = $1`,
+        [id]
+      );
+      if (rowRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Cash deposit summary not found' });
+      }
+
+      const rec = rowRes.rows[0];
+      if (Number(rec.branch_id) !== Number(userBranchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only resubmit cash deposit summaries for your branch',
+        });
+      }
+      if (rec.status !== 'Rejected' && rec.status !== 'Returned') {
+        return res.status(400).json({
+          success: false,
+          message: `Only returned summaries can be resubmitted. Current status: ${rec.status}`,
+        });
+      }
+      if (Number(rec.submitted_by) !== Number(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the Admin who submitted this summary can resubmit it',
+        });
+      }
+
+      const raw = req.body || {};
+      const nextRef = Object.prototype.hasOwnProperty.call(raw, 'reference_number')
+        ? String(raw.reference_number || '').trim()
+        : String(rec.reference_number || '').trim();
+      const nextAttach = Object.prototype.hasOwnProperty.call(raw, 'deposit_attachment_url')
+        ? String(raw.deposit_attachment_url || '').trim()
+        : String(rec.deposit_attachment_url || '').trim();
+
+      if (!nextRef) {
+        return res.status(400).json({
+          success: false,
+          message: 'reference_number is required',
+        });
+      }
+      if (!nextAttach) {
+        return res.status(400).json({
+          success: false,
+          message: 'deposit_attachment_url is required (upload deposit proof)',
+        });
+      }
+
+      const snapshot = await getCashDepositSnapshot({
+        branchId: rec.branch_id,
+        startDate: rec.start_date,
+        endDate: rec.end_date,
+      });
+
+      const updateRes = await query(
+        `UPDATE cash_deposit_summarytbl
+         SET total_deposit_amount = $1,
+             total_cash_amount = $2,
+             payment_count = $3,
+             completed_cash_count = $4,
+             cash_payment_snapshot = $5::jsonb,
+             reference_number = $6,
+             deposit_attachment_url = $7,
+             status = 'Submitted',
+             approved_by = NULL,
+             approved_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE cash_deposit_summary_id = $8
+         RETURNING cash_deposit_summary_id, branch_id,
+                   TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
+                   TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
+                   total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
+                   status, submitted_at, reference_number, deposit_attachment_url`,
+        [
+          snapshot.total_deposit_amount,
+          snapshot.total_cash_amount,
+          snapshot.payment_count,
+          snapshot.completed_cash_count,
+          JSON.stringify(snapshot.payments || []),
+          nextRef,
+          nextAttach,
+          id,
+        ]
+      );
+
+      return res.json({
+        success: true,
+        message: 'Cash deposit summary resubmitted for verification',
+        data: updateRes.rows[0],
       });
     } catch (error) {
       next(error);

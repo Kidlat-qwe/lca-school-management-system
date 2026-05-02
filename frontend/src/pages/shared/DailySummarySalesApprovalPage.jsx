@@ -14,6 +14,9 @@ const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
 const PIE_COLORS = ['#16A34A', '#2563EB', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#6366F1', '#EC4899'];
 
+/** Superadmin/Finance "reject" stores Returned (legacy rows may still be Rejected until migrated). */
+const isFinanceReturnedSummaryStatus = (s) => s === 'Returned' || s === 'Rejected';
+
 /** Normalize GET /daily-summary-sales/:id/payments (object with payments + AR + totals). */
 const parseDailySummaryPaymentsResponse = (res) => {
   const d = res?.data;
@@ -321,11 +324,16 @@ const DailySummarySalesApprovalPage = () => {
     const classes = {
       Submitted: 'bg-yellow-100 text-yellow-800',
       Approved: 'bg-green-100 text-green-800',
+      Returned: 'bg-amber-100 text-amber-800',
       Rejected: 'bg-amber-100 text-amber-800',
     };
-    const label = status === 'Approved' ? 'Verified' : status === 'Rejected' ? 'Flagged' : status;
+    const key = isFinanceReturnedSummaryStatus(status) ? 'Returned' : status;
+    const label =
+      status === 'Approved' ? 'Verified' : isFinanceReturnedSummaryStatus(status) ? 'Returned' : status;
     return (
-      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[status] || 'bg-gray-100 text-gray-800'}`}>
+      <span
+        className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[key] || classes[status] || 'bg-gray-100 text-gray-800'}`}
+      >
         {label}
       </span>
     );
@@ -338,6 +346,30 @@ const DailySummarySalesApprovalPage = () => {
     const right = viewportWidth - rect.right;
     setMenuPosition({ top, right });
     setOpenMenuId((prev) => (prev === id ? null : id));
+  };
+
+  /** Returned / legacy Rejected rows are not “verified approved”; also clears misleading approved_by from old data. */
+  const summaryVerificationActorLabel = (record) => {
+    if (!record) return '—';
+    if (isFinanceReturnedSummaryStatus(record.status)) return '—';
+    return record.approved_by_name || '—';
+  };
+
+  /**
+   * List uses stored total_amount / payment_count only (API does not send live_grand_*).
+   */
+  const endOfShiftListAmount = (record) => {
+    if (record?.live_grand_total != null && Number.isFinite(Number(record.live_grand_total))) {
+      return Number(record.live_grand_total);
+    }
+    return Number(record?.total_amount ?? 0);
+  };
+
+  const endOfShiftListPaymentCount = (record) => {
+    if (record?.live_grand_count != null && Number.isFinite(Number(record.live_grand_count))) {
+      return Number(record.live_grand_count);
+    }
+    return Number(record?.payment_count ?? 0);
   };
 
   const selectedRecord = records.find((record) => record[recordIdField] === openMenuId) || null;
@@ -394,12 +426,6 @@ const DailySummarySalesApprovalPage = () => {
     [detailMethodPieData]
   );
 
-  const detailTotalsDrift =
-    !isCashDepositTab &&
-    detailTotals &&
-    detailSubmittedSnapshot &&
-    Math.abs(Number(detailSubmittedSnapshot.total_amount ?? 0) - Number(detailTotals.grand_total ?? 0)) > 0.01;
-
   const cashDepositTotalsDrift =
     isCashDepositTab &&
     cashDetailTotals &&
@@ -436,12 +462,15 @@ const DailySummarySalesApprovalPage = () => {
     : [
         { label: 'Date', value: formatPeriod(detailModal.record) },
         {
-          label: 'Total Amount',
-          value: formatCurrency(detailTotals?.grand_total ?? detailModal.record?.total_amount),
+          label: 'Total amount',
+          value: formatCurrency(
+            detailTotals?.grand_total ?? detailModal.record?.total_amount
+          ),
         },
         {
           label: 'Records',
-          value: detailTotals?.grand_count ?? detailModal.record?.payment_count ?? 0,
+          value:
+            detailTotals?.grand_count ?? detailModal.record?.payment_count ?? 0,
         },
         ...(detailTotals && !detailLoading
           ? [
@@ -509,7 +538,7 @@ const DailySummarySalesApprovalPage = () => {
             <option value="">All</option>
             <option value="Submitted">Submitted</option>
             <option value="Approved">Verified</option>
-            <option value="Rejected">Flagged</option>
+            <option value="Returned">Returned</option>
           </select>
         </div>
         <div>
@@ -574,10 +603,12 @@ const DailySummarySalesApprovalPage = () => {
                   <td className="px-4 py-3 text-sm text-gray-900">{record.branch_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-900">{formatPeriod(record)}</td>
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                    {formatCurrency(isCashDepositTab ? record.total_deposit_amount : record.total_amount)}
+                    {formatCurrency(
+                      isCashDepositTab ? record.total_deposit_amount : endOfShiftListAmount(record)
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
-                    {isCashDepositTab ? (record.completed_cash_count ?? 0) : (record.payment_count ?? 0)}
+                    {isCashDepositTab ? (record.completed_cash_count ?? 0) : endOfShiftListPaymentCount(record)}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
                     {isCashDepositTab ? (record.payment_count ?? 0) : statusBadge(record.status)}
@@ -587,7 +618,7 @@ const DailySummarySalesApprovalPage = () => {
                   ) : null}
                   <td className="px-4 py-3 text-sm text-gray-600">{record.submitted_by_name || '-'}</td>
                   {!isCashDepositTab ? (
-                    <td className="px-4 py-3 text-sm text-gray-600">{record.approved_by_name || '-'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{summaryVerificationActorLabel(record)}</td>
                   ) : null}
                   <td className="px-4 py-3 text-right whitespace-nowrap align-middle">
                     <div className="inline-flex items-center justify-end">
@@ -642,7 +673,9 @@ const DailySummarySalesApprovalPage = () => {
               >
                 View details
               </button>
-              {canVerifySummary && selectedRecord?.status === 'Submitted' ? (
+              {canVerifySummary &&
+              selectedRecord &&
+              ['Submitted', 'Returned', 'Rejected'].includes(String(selectedRecord.status || '')) ? (
                 <>
                   <button
                     type="button"
@@ -1075,7 +1108,9 @@ const DailySummarySalesApprovalPage = () => {
                 </div>
                 <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
                   <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Verified By</p>
-                  <p className="mt-1 text-gray-900 font-medium truncate">{detailModal.record.approved_by_name || '-'}</p>
+                  <p className="mt-1 text-gray-900 font-medium truncate">
+                    {summaryVerificationActorLabel(detailModal.record)}
+                  </p>
                 </div>
                 <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
                   <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Verified At</p>
@@ -1107,15 +1142,6 @@ const DailySummarySalesApprovalPage = () => {
                 ) : null}
               </div>
 
-              {!isCashDepositTab && !detailLoading && detailTotalsDrift ? (
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  Submitted total was{' '}
-                  <span className="font-semibold">{formatCurrency(detailSubmittedSnapshot.total_amount)}</span>
-                  {' '}({detailSubmittedSnapshot.payment_count} record(s) at submit). Current total for this summary date is{' '}
-                  <span className="font-semibold">{formatCurrency(detailTotals.grand_total)}</span>
-                  {' '}— payments or AR may have changed after submission.
-                </div>
-              ) : null}
               {isCashDepositTab && !detailLoading && cashDepositTotalsDrift ? (
                 <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                   Submitted amounts: Cash to Deposit{' '}
@@ -1206,12 +1232,12 @@ const DailySummarySalesApprovalPage = () => {
               )}
               {!isCashDepositTab && detailTotals && detailMethodPieData.length > 0 ? (
                 <p className="mb-4 text-[11px] text-gray-500">
-                  Segment totals match <span className="font-medium text-gray-700">Total Amount</span> (
+                  Segment totals match <span className="font-medium text-gray-700">total amount</span> (
                   {formatCurrency(detailTotals.grand_total)}
                   {Math.abs(detailPieSum - Number(detailTotals.grand_total || 0)) > 0.02
-                    ? ` · segments ${formatCurrency(detailPieSum)}`
+                    ? ` · segment sum ${formatCurrency(detailPieSum)}`
                     : ''}
-                  ).
+                  ) for this summary date (completed payments + standalone AR).
                 </p>
               ) : null}
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
@@ -1472,7 +1498,7 @@ const DailySummarySalesApprovalPage = () => {
 
               <div className="mt-4">
                 <p className="text-xs font-medium text-gray-500">
-                  {detailModal.record.status === 'Rejected' ? 'Flag reason' : 'Remarks'}
+                  {isFinanceReturnedSummaryStatus(detailModal.record.status) ? 'Return reason' : 'Remarks'}
                 </p>
                 <p className="mt-1 text-sm text-gray-800 whitespace-pre-line">
                   {detailModal.record.remarks && detailModal.record.remarks.trim()

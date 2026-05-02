@@ -29,7 +29,10 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('summary_date').optional().isISO8601().withMessage('summary_date must be YYYY-MM-DD'),
-    queryValidator('status').optional().isIn(['Submitted', 'Approved', 'Rejected']).withMessage('status must be Submitted, Approved, or Rejected'),
+    queryValidator('status')
+      .optional()
+      .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
+      .withMessage('status must be Submitted, Approved, Rejected, or Returned'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be positive'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit 1-100'),
     handleValidationErrors,
@@ -74,15 +77,29 @@ router.get(
         params.push(summary_date);
       }
       if (status) {
-        pc++;
-        sql += ` AND d.status = $${pc}`;
-        params.push(status);
+        if (status === 'Returned') {
+          sql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          pc++;
+          sql += ` AND d.status = $${pc}`;
+          params.push(status);
+        }
       }
 
       sql += ` ORDER BY d.summary_date DESC, d.branch_id ASC LIMIT $${pc + 1} OFFSET $${pc + 2}`;
       params.push(limitNum, offset);
 
       const result = await query(sql, params);
+
+      /**
+       * Never attach live_grand_* on the list for any role. Amount/count columns reflect only DB snapshots
+       * (submit + resubmit after return). Live breakdown stays in preview/modals until explicit resubmit updates the row.
+       */
+      const dataRows = (result.rows || []).map((row) => ({
+        ...row,
+        live_grand_total: null,
+        live_grand_count: null,
+      }));
 
       // Count total
       let countSql = `SELECT COUNT(*) AS total FROM daily_summary_salestbl d WHERE 1=1`;
@@ -103,16 +120,20 @@ router.get(
         countParams.push(summary_date);
       }
       if (status) {
-        cc++;
-        countSql += ` AND d.status = $${cc}`;
-        countParams.push(status);
+        if (status === 'Returned') {
+          countSql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          cc++;
+          countSql += ` AND d.status = $${cc}`;
+          countParams.push(status);
+        }
       }
       const countRes = await query(countSql, countParams);
       const total = parseInt(countRes.rows[0]?.total || 0, 10);
 
       res.json({
         success: true,
-        data: result.rows,
+        data: dataRows,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -171,6 +192,7 @@ router.get(
         summaryDate: targetDate,
         submittedAfter: null,
       });
+      const ar_receipts = await getEodStandaloneArReceipts(targetBranchId, targetDate);
 
       res.json({
         success: true,
@@ -184,6 +206,7 @@ router.get(
           ar_sales_total: snapshot.arSalesTotal,
           ar_sales_count: snapshot.arSalesCount,
           payments: snapshot.payments,
+          ar_receipts,
           last_submitted_at: lastSubmittedAt,
         },
       });
@@ -194,6 +217,72 @@ router.get(
 );
 
 const TODAY_MANILA = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+/** Normalize Postgres DATE / string / Date to YYYY-MM-DD (calendar date for branch summary). */
+const summaryDateToYmd = (value) => {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value.slice(0, 10);
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(value).slice(0, 10);
+};
+
+const buildEodPaymentWhere = (branchId, summaryDate, submittedAfter = null) => {
+  const whereParts = ['p.branch_id = $1', 'p.issue_date = $2::date', "p.status = 'Completed'"];
+  const params = [branchId, summaryDate];
+  let pc = 2;
+  if (submittedAfter) {
+    pc += 1;
+    whereParts.push(`p.created_at > $${pc}`);
+    params.push(submittedAfter);
+  }
+  return { whereClause: whereParts.join(' AND '), params };
+};
+
+/** Completed payments + standalone AR totals only (no payment row fetch). Used for list API enrichment. */
+const getEodGrandTotalsOnly = async ({ branchId, summaryDate, submittedAfter = null }) => {
+  const { whereClause, params } = buildEodPaymentWhere(branchId, summaryDate, submittedAfter);
+  const sumRes = await query(
+    `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total,
+            COUNT(*) AS payment_count
+     FROM paymenttbl p
+     WHERE ${whereClause}`,
+    params
+  );
+  const arRes = await query(
+    `SELECT
+       COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_total,
+       COUNT(*) AS ar_count
+     FROM acknowledgement_receiptstbl ar
+     WHERE ar.branch_id = $1
+       AND ar.issue_date = $2::date
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+       AND ar.payment_id IS NULL
+       AND ar.invoice_id IS NULL`,
+    [branchId, summaryDate]
+  );
+  const row = sumRes.rows[0];
+  const paymentTotal = Math.round((parseFloat(row?.total || 0)) * 100) / 100;
+  const completedPaymentCount = parseInt(row?.payment_count || 0, 10);
+  const arTotal = Math.round((parseFloat(arRes.rows[0]?.ar_total || 0)) * 100) / 100;
+  const arCount = parseInt(arRes.rows[0]?.ar_count || 0, 10);
+  const total = Math.round((paymentTotal + arTotal) * 100) / 100;
+  const paymentCount = completedPaymentCount + arCount;
+  return {
+    total,
+    paymentCount,
+    completedPaymentTotal: paymentTotal,
+    completedPaymentCount,
+    arSalesTotal: arTotal,
+    arSalesCount: arCount,
+    whereClause,
+    params,
+  };
+};
 
 const getLastEodSubmittedAt = async ({ branchId, summaryDate }) => {
   const result = await query(
@@ -209,41 +298,14 @@ const getLastEodSubmittedAt = async ({ branchId, summaryDate }) => {
 const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = null }) => {
   // Keep this aligned with Daily Operational Dashboard:
   // completed payment sales + AR sales for the selected date.
-  const whereParts = ['p.branch_id = $1', 'p.issue_date = $2::date', "p.status = 'Completed'"];
-  const params = [branchId, summaryDate];
-  let pc = 2;
-
-  if (submittedAfter) {
-    pc += 1;
-    whereParts.push(`p.created_at > $${pc}`);
-    params.push(submittedAfter);
-  }
-
-  const whereClause = whereParts.join(' AND ');
-
-  const sumRes = await query(
-    `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total,
-            COUNT(*) AS payment_count
-     FROM paymenttbl p
-     WHERE ${whereClause}`,
-    params
-  );
-
-  // AR bucket = receipt-only (not yet posted as a completed payment). When an AR is used on
-  // enrollment, a payment is created; exclude that AR from AR totals to avoid double-count
-  // with the Completed Payments total for the same economic event.
-  const arRes = await query(
-    `SELECT
-       COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_total,
-       COUNT(*) AS ar_count
-     FROM acknowledgement_receiptstbl ar
-     WHERE ar.branch_id = $1
-       AND ar.issue_date = $2::date
-       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
-       AND ar.payment_id IS NULL
-       AND ar.invoice_id IS NULL`,
-    [branchId, summaryDate]
-  );
+  const agg = await getEodGrandTotalsOnly({ branchId, summaryDate, submittedAfter });
+  const { whereClause, params } = agg;
+  const paymentTotal = agg.completedPaymentTotal;
+  const completedPaymentCount = agg.completedPaymentCount;
+  const arTotal = agg.arSalesTotal;
+  const arCount = agg.arSalesCount;
+  const total = agg.total;
+  const paymentCount = agg.paymentCount;
 
   const paymentsRes = await query(
     `SELECT p.payment_id,
@@ -325,14 +387,6 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
     params
   );
 
-  const row = sumRes.rows[0];
-  const paymentTotal = Math.round((parseFloat(row?.total || 0)) * 100) / 100;
-  const completedPaymentCount = parseInt(row?.payment_count || 0, 10);
-  const arTotal = Math.round((parseFloat(arRes.rows[0]?.ar_total || 0)) * 100) / 100;
-  const arCount = parseInt(arRes.rows[0]?.ar_count || 0, 10);
-  const total = Math.round((paymentTotal + arTotal) * 100) / 100;
-  const paymentCount = completedPaymentCount + arCount;
-
   // Replace Walk-in Customer with AR prospect name for merchandise AR payments
   const payments = [];
   for (const paymentRow of paymentsRes.rows || []) {
@@ -375,6 +429,35 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
     arSalesCount: arCount,
     payments,
   };
+};
+
+/** Standalone AR rows included in EOD (same filter as grand total / GET :id/payments). */
+const getEodStandaloneArReceipts = async (branchId, summaryDate) => {
+  const arListRes = await query(
+    `SELECT ar.ack_receipt_id,
+            TO_CHAR(ar.issue_date, 'YYYY-MM-DD') AS issue_date,
+            ar.payment_method,
+            COALESCE(ar.payment_amount, 0) AS payment_amount,
+            COALESCE(ar.tip_amount, 0) AS tip_amount,
+            NULLIF(TRIM(ar.level_tag), '') AS level_tag,
+            ar.prospect_student_name,
+            ar.ack_receipt_number,
+            ar.reference_number,
+            ar.payment_attachment_url,
+            COALESCE(ar.status, 'Submitted') AS status
+     FROM acknowledgement_receiptstbl ar
+     WHERE ar.branch_id = $1
+       AND ar.issue_date = $2::date
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+       AND ar.payment_id IS NULL
+       AND ar.invoice_id IS NULL
+     ORDER BY ar.ack_receipt_id DESC`,
+    [branchId, summaryDate]
+  );
+  return (arListRes.rows || []).map((r) => ({
+    ...r,
+    program_level_tag: r.level_tag || null,
+  }));
 };
 
 const escapeHtml = (value) =>
@@ -859,7 +942,8 @@ router.put(
         });
       }
       const rec = checkRes.rows[0];
-      if (rec.status !== 'Submitted') {
+      const allowedVerifyStatuses = ['Submitted', 'Returned', 'Rejected'];
+      if (!allowedVerifyStatuses.includes(rec.status)) {
         return res.status(400).json({
           success: false,
           message: `Cannot change verification. Current status: ${rec.status}`,
@@ -867,14 +951,31 @@ router.put(
       }
 
       const isApproved = approve === true || approve === 'true';
-      const newStatus = isApproved ? 'Approved' : 'Rejected';
+      const newStatus = isApproved ? 'Approved' : 'Returned';
 
-      await query(
-        `UPDATE daily_summary_salestbl
-         SET status = $1, approved_by = $2, approved_at = CURRENT_TIMESTAMP, remarks = $3, updated_at = CURRENT_TIMESTAMP
-         WHERE daily_summary_id = $4`,
-        [newStatus, req.user.userId, remarks || null, id]
-      );
+      if (isApproved) {
+        await query(
+          `UPDATE daily_summary_salestbl
+           SET status = 'Approved',
+               approved_by = $1,
+               approved_at = CURRENT_TIMESTAMP,
+               remarks = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE daily_summary_id = $3`,
+          [req.user.userId, remarks || null, id]
+        );
+      } else {
+        await query(
+          `UPDATE daily_summary_salestbl
+           SET status = 'Returned',
+               approved_by = NULL,
+               approved_at = NULL,
+               remarks = $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE daily_summary_id = $2`,
+          [remarks || null, id]
+        );
+      }
 
       const updated = await query(
         `SELECT d.daily_summary_id, d.branch_id, d.summary_date, d.total_amount, d.payment_count, d.status,
@@ -890,8 +991,96 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Daily summary verified' : 'Daily summary rejected',
+        message: isApproved ? 'Daily summary verified' : 'Daily summary returned for correction',
         data: updated.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/daily-summary-sales/:id/resubmit
+ * Branch Admin resubmits a rejected End of Day summary (refreshes totals from current data).
+ */
+router.put(
+  '/:id/resubmit',
+  requireRole('Admin'),
+  [param('id').isInt().withMessage('id must be an integer'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can resubmit daily summaries.',
+        });
+      }
+
+      const rowRes = await query(
+        `SELECT daily_summary_id,
+                branch_id,
+                summary_date,
+                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                total_amount, payment_count, status, submitted_by
+         FROM daily_summary_salestbl
+         WHERE daily_summary_id = $1`,
+        [id]
+      );
+      if (rowRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+
+      const rec = rowRes.rows[0];
+      if (Number(rec.branch_id) !== Number(userBranchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only resubmit daily summaries for your branch',
+        });
+      }
+      if (rec.status !== 'Rejected' && rec.status !== 'Returned') {
+        return res.status(400).json({
+          success: false,
+          message: `Only returned summaries can be resubmitted. Current status: ${rec.status}`,
+        });
+      }
+      if (Number(rec.submitted_by) !== Number(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the Admin who submitted this summary can resubmit it',
+        });
+      }
+
+      // Use DB calendar string — never rec.summary_date.toISOString() (UTC shift breaks issue_date match → ₱0).
+      const summaryDateStr = String(rec.summary_date_ymd || summaryDateToYmd(rec.summary_date)).slice(0, 10);
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: rec.branch_id,
+        summaryDate: summaryDateStr,
+        submittedAfter: null,
+      });
+
+      const updateRes = await query(
+        `UPDATE daily_summary_salestbl
+         SET total_amount = $1,
+             payment_count = $2,
+             status = 'Submitted',
+             approved_by = NULL,
+             approved_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE daily_summary_id = $3
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [snapshot.total, snapshot.paymentCount, id]
+      );
+
+      return res.json({
+        success: true,
+        message: 'Daily summary resubmitted for verification',
+        data: updateRes.rows[0],
       });
     } catch (error) {
       next(error);
@@ -949,7 +1138,9 @@ router.get(
       const userBranchId = req.user.branchId;
 
       const summaryRes = await query(
-        `SELECT daily_summary_id, branch_id, summary_date, total_amount, payment_count
+        `SELECT daily_summary_id, branch_id, summary_date,
+                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                total_amount, payment_count
          FROM daily_summary_salestbl WHERE daily_summary_id = $1`,
         [id]
       );
@@ -958,7 +1149,7 @@ router.get(
       }
       const summary = summaryRes.rows[0];
       const branchId = summary.branch_id;
-      const summaryDate = summary.summary_date;
+      const summaryDate = String(summary.summary_date_ymd || summaryDateToYmd(summary.summary_date)).slice(0, 10);
 
       if (userType === 'Admin' && userBranchId !== branchId) {
         return res.status(403).json({
@@ -984,32 +1175,7 @@ router.get(
         program_level_tag: row.student_level_tag || row.program_level_tag || null,
       }));
 
-      const arListRes = await query(
-        `SELECT ar.ack_receipt_id,
-                TO_CHAR(ar.issue_date, 'YYYY-MM-DD') AS issue_date,
-                ar.payment_method,
-                COALESCE(ar.payment_amount, 0) AS payment_amount,
-                COALESCE(ar.tip_amount, 0) AS tip_amount,
-                NULLIF(TRIM(ar.level_tag), '') AS level_tag,
-                ar.prospect_student_name,
-                ar.ack_receipt_number,
-                ar.reference_number,
-                ar.payment_attachment_url,
-                COALESCE(ar.status, 'Submitted') AS status
-         FROM acknowledgement_receiptstbl ar
-         WHERE ar.branch_id = $1
-           AND ar.issue_date = $2::date
-           AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
-           AND ar.payment_id IS NULL
-           AND ar.invoice_id IS NULL
-         ORDER BY ar.ack_receipt_id DESC`,
-        [branchId, summaryDate]
-      );
-
-      const ar_receipts = (arListRes.rows || []).map((r) => ({
-        ...r,
-        program_level_tag: r.level_tag || null,
-      }));
+      const ar_receipts = await getEodStandaloneArReceipts(branchId, summaryDate);
 
       res.json({
         success: true,

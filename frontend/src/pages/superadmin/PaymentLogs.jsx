@@ -52,6 +52,12 @@ const getInvoiceBreakdownForReturnFix = (invoice) => {
   };
 };
 
+/** After Finance return, issue_date must stay fixed for EOD / reporting (backend also ignores edits). */
+const isPaymentIssueDateLocked = (p) =>
+  p &&
+  (String(p.approval_status || '') === 'Returned' ||
+    String(p.remarks || '').includes('[Returned]'));
+
 const PaymentLogs = () => {
   const location = useLocation();
   const { userInfo } = useAuth();
@@ -486,12 +492,21 @@ const PaymentLogs = () => {
     if (!returnFixPayment) return;
     setReturnFixLoading(true);
     try {
+      const issueDateLocked = isPaymentIssueDateLocked(returnFixPayment);
+      const remarksHadReturned = String(returnFixPayment.remarks || '').includes('[Returned]');
       const refTrim = returnFixRef.trim();
       const attTrim = returnFixAttachment.trim();
       const issueDateTrim = String(returnFixIssueDate || '').trim();
       if (!issueDateTrim) {
         appAlert('Please select the correct payment date before resubmitting.');
         return;
+      }
+      if (remarksHadReturned) {
+        const nextRemarks = String(returnFixRemarks || '');
+        if (!nextRemarks.includes('[Returned]')) {
+          appAlert('Remarks must keep the Finance return marker ([Returned]).');
+          return;
+        }
       }
       if (!String(returnFixPaymentType || '').trim()) {
         appAlert('Please select a payment type.');
@@ -536,11 +551,13 @@ const PaymentLogs = () => {
         reference_number: refTrim,
         attachment_url: attTrim,
         payment_method: returnFixPaymentMethod.trim() || undefined,
-        issue_date: issueDateTrim,
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
       };
+      if (!issueDateLocked) {
+        payload.issue_date = issueDateTrim;
+      }
       if (returnFixRemarks.trim()) {
         payload.remarks = returnFixRemarks.trim();
       }
@@ -1582,14 +1599,20 @@ const PaymentLogs = () => {
                       Issue Date <span className="text-red-500">*</span>
                     </label>
                     <p className="text-xs text-gray-500 mb-1">
-                      Match the date on the receipt before resubmitting.
+                      {isPaymentIssueDateLocked(returnFixPayment)
+                        ? 'Original payment date is kept after Finance return (not editable).'
+                        : 'Match the date on the receipt before resubmitting.'}
                     </p>
                     <input
                       id="return_fix_issue_date"
                       type="date"
                       value={returnFixIssueDate}
                       onChange={(e) => setReturnFixIssueDate(e.target.value)}
-                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      disabled={
+                        returnFixLoading ||
+                        returnFixAttachmentUploading ||
+                        isPaymentIssueDateLocked(returnFixPayment)
+                      }
                       className="input-field text-sm"
                       required
                     />

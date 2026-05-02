@@ -6,6 +6,21 @@ import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
 const TAB_SUBMIT = 'submit';
 const TAB_DETAILS = 'details';
 
+/** Align list/history with GET /daily-summary-sales live_grand_* (same EOD rules as finance verification page). */
+const endOfShiftHistoryAmount = (record) => {
+  if (record?.live_grand_total != null && Number.isFinite(Number(record.live_grand_total))) {
+    return Number(record.live_grand_total);
+  }
+  return Number(record?.total_amount ?? 0);
+};
+
+const endOfShiftHistoryCount = (record) => {
+  if (record?.live_grand_count != null && Number.isFinite(Number(record.live_grand_count))) {
+    return Number(record.live_grand_count);
+  }
+  return Number(record?.payment_count ?? 0);
+};
+
 const AdminDailySummarySale = () => {
   const { userInfo } = useAuth();
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -113,7 +128,7 @@ const AdminDailySummarySale = () => {
 
   useEffect(() => {
     if (activeTab === TAB_DETAILS) {
-      // Today payments now come from preview endpoint (kept in sync with total)
+      fetchPreview();
       fetchSummaryHistory();
     }
   }, [activeTab, today]);
@@ -146,14 +161,19 @@ const AdminDailySummarySale = () => {
   };
 
   const statusBadge = (status) => {
+    const returnedLike = status === 'Returned' || status === 'Rejected';
     const classes = {
       Submitted: 'bg-yellow-100 text-yellow-800',
       Approved: 'bg-green-100 text-green-800',
+      Returned: 'bg-amber-100 text-amber-800',
       Rejected: 'bg-amber-100 text-amber-800',
     };
-    const label = status === 'Approved' ? 'Verified' : status === 'Rejected' ? 'Flagged' : status;
+    const key = returnedLike ? 'Returned' : status;
+    const label = status === 'Approved' ? 'Verified' : returnedLike ? 'Returned' : status;
     return (
-      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[status] || 'bg-gray-100 text-gray-800'}`}>
+      <span
+        className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${classes[key] || classes[status] || 'bg-gray-100 text-gray-800'}`}
+      >
         {label}
       </span>
     );
@@ -233,12 +253,12 @@ const AdminDailySummarySale = () => {
               <p className="mt-1 text-xl font-bold text-gray-900">
                 ₱{(preview?.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
-              <p className="text-xs text-gray-500 mt-0.5">From Payment Logs</p>
+              <p className="text-xs text-gray-500 mt-0.5">Completed payments + standalone AR (same as EOD submit)</p>
             </div>
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Payments Count</p>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Record count</p>
               <p className="mt-1 text-2xl font-bold text-primary-600">{preview?.payment_count ?? 0}</p>
-              <p className="text-xs text-gray-500 mt-0.5">transactions today</p>
+              <p className="text-xs text-gray-500 mt-0.5">completed rows + AR receipts</p>
             </div>
           </div>
 
@@ -285,11 +305,14 @@ const AdminDailySummarySale = () => {
               <ul className="space-y-2 text-sm text-gray-600">
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
-                  <span>Only one submission per branch per calendar day. Totals include all payments dated today for this branch.</span>
+                  <span>
+                    Only one submission per branch per calendar day. The total matches End of Day rules: completed payments plus
+                    standalone acknowledgement receipts dated today for this branch.
+                  </span>
                 </li>
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
-                  <span>Amount is calculated from all payments in Payment Logs for your branch with today&apos;s date.</span>
+                  <span>Figures stay aligned with the preview API (same calculation Finance uses on Daily Summary Sales).</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="text-primary-500 mt-0.5 shrink-0">•</span>
@@ -311,7 +334,13 @@ const AdminDailySummarySale = () => {
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-base font-semibold text-gray-900">Today&apos;s Payments ({formatDateManila(today)})</h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Payments included in the daily summary total. Total: ₱{(preview?.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({preview?.payment_count ?? 0} payment(s))
+                End of day total (completed payments + standalone AR for today): ₱
+                {(preview?.total_amount ?? 0).toLocaleString('en-US', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                ({preview?.completed_payment_count ?? 0} completed payment row(s), {preview?.ar_sales_count ?? 0} AR receipt(s);{' '}
+                {preview?.payment_count ?? 0} record(s) total)
               </p>
             </div>
             <div
@@ -386,9 +415,12 @@ const AdminDailySummarySale = () => {
                       <tr key={s.daily_summary_id}>
                         <td className="px-4 py-2 text-sm font-medium text-gray-900">{formatDateManila(s.summary_date)}</td>
                         <td className="px-4 py-2 text-sm text-right font-medium text-gray-900">
-                          ₱{(Number(s.total_amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          ₱{(endOfShiftHistoryAmount(s) || 0).toLocaleString('en-US', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                         </td>
-                        <td className="px-4 py-2 text-sm text-center text-gray-600">{s.payment_count ?? 0}</td>
+                        <td className="px-4 py-2 text-sm text-center text-gray-600">{endOfShiftHistoryCount(s)}</td>
                         <td className="px-4 py-2">{statusBadge(s.status)}</td>
                         <td className="px-4 py-2 text-sm text-gray-600">
                           {s.submitted_at ? formatDateManila(s.submitted_at) : '-'}
