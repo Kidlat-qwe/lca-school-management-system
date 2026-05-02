@@ -26,6 +26,31 @@ const getReturnFixPaymentMethodOptions = (currentValue) => {
   return [c, ...RETURN_FIX_PAYMENT_METHOD_OPTIONS];
 };
 
+/** Same breakdown logic as Record Payment (adminInvoice.jsx) — for invoice summary + validation */
+const getInvoiceBreakdownForReturnFix = (invoice) => {
+  const items = Array.isArray(invoice?.items) ? invoice.items : [];
+  const subtotal = items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+  const discount = items.reduce((sum, item) => sum + (parseFloat(item.discount_amount) || 0), 0);
+  const penalty = items.reduce((sum, item) => sum + (parseFloat(item.penalty_amount) || 0), 0);
+  const tax = items.reduce((sum, item) => {
+    const amount = parseFloat(item.amount) || 0;
+    const taxPercentage = parseFloat(item.tax_percentage) || 0;
+    return sum + (amount * taxPercentage) / 100;
+  }, 0);
+  const totalDue = subtotal - discount + penalty + tax;
+  const remaining = parseFloat(invoice?.amount || 0);
+  const paidAmount = Math.max(0, totalDue - remaining);
+  return {
+    subtotal,
+    discount,
+    penalty,
+    tax,
+    totalDue,
+    paidAmount,
+    remaining,
+  };
+};
+
 const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
 
 const AdminPaymentLogs = () => {
@@ -44,6 +69,12 @@ const AdminPaymentLogs = () => {
   const [returnFixIssueDate, setReturnFixIssueDate] = useState('');
   const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
   const [returnFixLoading, setReturnFixLoading] = useState(false);
+  const [returnFixInvoiceSummary, setReturnFixInvoiceSummary] = useState(null);
+  const [returnFixInvoiceLoading, setReturnFixInvoiceLoading] = useState(false);
+  const [returnFixPaymentType, setReturnFixPaymentType] = useState('');
+  const [returnFixPayableAmount, setReturnFixPayableAmount] = useState('');
+  const [returnFixTipAmount, setReturnFixTipAmount] = useState('');
+  const [returnFixRemarks, setReturnFixRemarks] = useState('');
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [exportLoading, setExportLoading] = useState(false);
   const [payments, setPayments] = useState([]);
@@ -573,6 +604,26 @@ const AdminPaymentLogs = () => {
     setReturnFixAttachment(payment.payment_attachment_url || '');
     setReturnFixPaymentMethod((payment.payment_method || 'Cash').trim() || 'Cash');
     setReturnFixIssueDate((payment.issue_date || '').slice(0, 10));
+    setReturnFixPaymentType((payment.payment_type || '').trim() || '');
+    const pa = payment.payable_amount;
+    setReturnFixPayableAmount(pa != null && pa !== '' ? String(pa) : '');
+    const tip = payment.tip_amount;
+    setReturnFixTipAmount(tip != null && tip !== '' ? Number(tip).toFixed(2) : '0.00');
+    setReturnFixRemarks((payment.remarks || '').trim());
+    setReturnFixInvoiceSummary(null);
+    setReturnFixInvoiceLoading(true);
+    (async () => {
+      try {
+        const res = await apiRequest(`/invoices/${payment.invoice_id}`);
+        setReturnFixInvoiceSummary(res.data || null);
+      } catch (err) {
+        console.error('Return-fix invoice fetch:', err);
+        setReturnFixInvoiceSummary(null);
+        appAlert(err.message || 'Could not load invoice details for the summary.');
+      } finally {
+        setReturnFixInvoiceLoading(false);
+      }
+    })();
   };
 
   const closeReturnFixModal = () => {
@@ -582,7 +633,73 @@ const AdminPaymentLogs = () => {
     setReturnFixPaymentMethod('Cash');
     setReturnFixIssueDate('');
     setReturnFixAttachmentUploading(false);
+    setReturnFixInvoiceSummary(null);
+    setReturnFixInvoiceLoading(false);
+    setReturnFixPaymentType('');
+    setReturnFixPayableAmount('');
+    setReturnFixTipAmount('');
+    setReturnFixRemarks('');
   };
+
+  const getReturnFixReleaseCap = () => {
+    if (!returnFixInvoiceSummary || !returnFixPayment) return null;
+    const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
+    const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
+    return Math.max(0, b.remaining + linePayable);
+  };
+
+  const handleReturnFixInputChange = (e) => {
+    const { name, value } = e.target;
+    const inv = returnFixInvoiceSummary;
+    const payment = returnFixPayment;
+    const releaseCap = inv && payment ? getReturnFixReleaseCap() : null;
+
+    if (name === 'payment_type') {
+      if (value === 'Full Payment' && releaseCap != null && releaseCap > 0) {
+        setReturnFixPaymentType(value);
+        setReturnFixPayableAmount(releaseCap.toFixed(2));
+        return;
+      }
+      if (value === 'Partial Payment' && releaseCap != null && releaseCap > 0) {
+        const currentAmount = parseFloat(returnFixPayableAmount || 0);
+        if (currentAmount >= releaseCap) {
+          setReturnFixPaymentType(value);
+          setReturnFixPayableAmount('');
+          return;
+        }
+      }
+      setReturnFixPaymentType(value);
+      return;
+    }
+
+    if (name === 'payable_amount') {
+      if (returnFixPaymentType === 'Partial Payment' && releaseCap != null && releaseCap > 0 && Number(value) >= releaseCap) {
+        return;
+      }
+      setReturnFixPayableAmount(value);
+      return;
+    }
+
+    if (name === 'tip_amount') {
+      setReturnFixTipAmount(value);
+      return;
+    }
+
+    if (name === 'remarks') {
+      setReturnFixRemarks(value);
+    }
+  };
+
+  useEffect(() => {
+    if (!returnFixInvoiceSummary || !returnFixPayment) return;
+    if (returnFixPaymentType !== 'Full Payment') return;
+    const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
+    const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
+    const cap = Math.max(0, b.remaining + linePayable);
+    if (cap > 0) {
+      setReturnFixPayableAmount(cap.toFixed(2));
+    }
+  }, [returnFixInvoiceSummary, returnFixPayment, returnFixPaymentType]);
 
   const handleReturnFixAttachmentChange = async (e) => {
     const file = e.target?.files?.[0];
@@ -625,14 +742,60 @@ const AdminPaymentLogs = () => {
         appAlert('Please select the correct payment date before resubmitting.');
         return;
       }
+      if (!String(returnFixPaymentType || '').trim()) {
+        appAlert('Please select a payment type.');
+        return;
+      }
+      const payableNum = parseFloat(returnFixPayableAmount);
+      if (!returnFixPayableAmount || Number.isNaN(payableNum) || payableNum <= 0) {
+        appAlert('Payable amount must be greater than 0.');
+        return;
+      }
+      const tipNum = returnFixTipAmount === '' ? 0 : parseFloat(returnFixTipAmount);
+      if (Number.isNaN(tipNum) || tipNum < 0) {
+        appAlert('Tip amount must be 0 or greater.');
+        return;
+      }
+      if (!refTrim) {
+        appAlert('Reference number is required.');
+        return;
+      }
+      if (!attTrim) {
+        appAlert('Please keep or upload a proof-of-payment image.');
+        return;
+      }
+      if (returnFixPaymentType === 'Partial Payment') {
+        if (!returnFixInvoiceSummary) {
+          appAlert(
+            returnFixInvoiceLoading
+              ? 'Please wait for the invoice summary to finish loading.'
+              : 'Invoice details are required to validate a partial payment. Close and reopen this modal, then try again.'
+          );
+          return;
+        }
+        const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
+        const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
+        const releaseCap = Math.max(0, b.remaining + linePayable);
+        if (releaseCap > 0 && payableNum >= releaseCap) {
+          appAlert('For partial payment, amount must be less than the remaining invoice amount for this line.');
+          return;
+        }
+      }
+      const payload = {
+        reference_number: refTrim,
+        attachment_url: attTrim,
+        payment_method: returnFixPaymentMethod.trim() || undefined,
+        issue_date: issueDateTrim,
+        payment_type: returnFixPaymentType.trim(),
+        payable_amount: payableNum,
+        tip_amount: tipNum,
+      };
+      if (returnFixRemarks.trim()) {
+        payload.remarks = returnFixRemarks.trim();
+      }
       await apiRequest(`/payments/${returnFixPayment.payment_id}`, {
         method: 'PUT',
-        body: JSON.stringify({
-          reference_number: refTrim || undefined,
-          attachment_url: attTrim === '' ? null : attTrim,
-          payment_method: returnFixPaymentMethod.trim() || undefined,
-          issue_date: issueDateTrim,
-        }),
+        body: JSON.stringify(payload),
       });
       await apiRequest(`/payments/${returnFixPayment.payment_id}/resubmit-for-verification`, {
         method: 'PUT',
@@ -1846,141 +2009,332 @@ const AdminPaymentLogs = () => {
           onClick={closeReturnFixModal}
         >
           <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10">
+              <div>
                 <h2 className="text-xl font-semibold text-gray-900">Fix &amp; resubmit for verification</h2>
-                <button
-                  type="button"
-                  onClick={closeReturnFixModal}
-                  className="text-gray-400 hover:text-gray-600"
-                  disabled={returnFixLoading}
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <p className="text-sm text-gray-600 mt-1">
+                  INV-{returnFixPayment.invoice_id}
+                  {returnFixPayment.student_name ? ` · ${returnFixPayment.student_name}` : ''}
+                </p>
               </div>
-              <p className="text-sm text-gray-600 mb-2">
-                INV-{returnFixPayment.invoice_id} · {returnFixPayment.student_name || 'N/A'}
-              </p>
+              <button
+                type="button"
+                onClick={closeReturnFixModal}
+                className="text-gray-400 hover:text-gray-600 transition-colors shrink-0"
+                disabled={returnFixLoading}
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={submitReturnFix} className="p-6 space-y-6">
               {returnFixPayment.return_reason && (
-                <div className="mb-4 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-900">
+                <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-900">
                   <span className="font-medium">Finance note: </span>
                   {returnFixPayment.return_reason}
                 </div>
               )}
-              <form onSubmit={submitReturnFix}>
-                <div className="mb-4">
-                  <label htmlFor="return_fix_payment_method" className="block text-sm font-medium text-gray-700 mb-2">
-                    Payment method
+
+              <div className="space-y-4">
+                <div>
+                  <label className="label-field text-xs">
+                    Student <span className="text-red-500">*</span>
                   </label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Change this if it does not match your proof of payment (for example cash vs online banking).
-                  </p>
-                  <select
-                    id="return_fix_payment_method"
-                    value={returnFixPaymentMethod}
-                    onChange={(e) => setReturnFixPaymentMethod(e.target.value)}
-                    disabled={returnFixLoading || returnFixAttachmentUploading}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white text-sm"
-                  >
-                    {getReturnFixPaymentMethodOptions(returnFixPaymentMethod).map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="mb-4">
-                  <label htmlFor="admin_return_fix_issue_date" className="block text-sm font-medium text-gray-700 mb-2">
-                    Payment date
-                  </label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Update the payment date to match the actual receipt date before resubmitting.
-                  </p>
-                  <input
-                    id="admin_return_fix_issue_date"
-                    type="date"
-                    value={returnFixIssueDate}
-                    onChange={(e) => setReturnFixIssueDate(e.target.value)}
-                    disabled={returnFixLoading || returnFixAttachmentUploading}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    required
-                  />
-                </div>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference number</label>
                   <input
                     type="text"
-                    value={returnFixRef}
-                    onChange={(e) => setReturnFixRef(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Match the value on the receipt image"
+                    readOnly
+                    value={
+                      `${returnFixPayment.student_name || 'N/A'}` +
+                      (returnFixPayment.student_email ? ` (${returnFixPayment.student_email})` : '')
+                    }
+                    className="input-field text-sm bg-gray-50 text-gray-700 cursor-not-allowed"
                   />
                 </div>
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Proof of payment (image)</label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Upload a new receipt or proof if you are replacing the image (JPEG, PNG, WebP, or GIF, max 50MB).
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="payment_type"
+                      value={returnFixPaymentType}
+                      onChange={handleReturnFixInputChange}
+                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      className="input-field text-sm"
+                      required
+                    >
+                      <option value="">Select Payment Type</option>
+                      <option value="Full Payment">Full Payment</option>
+                      <option value="Partial Payment">Partial Payment</option>
+                      <option value="Advance Payment">Advance Payment</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      id="admin_return_fix_payment_method"
+                      value={returnFixPaymentMethod}
+                      onChange={(e) => setReturnFixPaymentMethod(e.target.value)}
+                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      className="input-field text-sm"
+                      required
+                    >
+                      {getReturnFixPaymentMethodOptions(returnFixPaymentMethod).map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label-field text-xs">
+                      Payable Amount <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      name="payable_amount"
+                      step="0.01"
+                      min="0.01"
+                      max={
+                        returnFixPaymentType === 'Partial Payment' && getReturnFixReleaseCap() != null && getReturnFixReleaseCap() > 0
+                          ? Math.max(0, getReturnFixReleaseCap() - 0.01).toFixed(2)
+                          : undefined
+                      }
+                      value={returnFixPayableAmount}
+                      onChange={handleReturnFixInputChange}
+                      disabled={
+                        returnFixLoading ||
+                        returnFixAttachmentUploading ||
+                        returnFixPaymentType === 'Full Payment'
+                      }
+                      className={`input-field text-sm ${
+                        returnFixPaymentType === 'Full Payment' ? 'bg-gray-100 text-gray-600 cursor-not-allowed' : ''
+                      }`}
+                      placeholder="0.00"
+                      required
+                    />
+                    {returnFixPaymentType === 'Partial Payment' && getReturnFixReleaseCap() != null && getReturnFixReleaseCap() > 0 && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Partial payment must be lower than{' '}
+                        <span className="font-medium">₱{getReturnFixReleaseCap().toFixed(2)}</span> (remaining + this line).
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <input
+                      type="number"
+                      name="tip_amount"
+                      step="0.01"
+                      min="0"
+                      value={returnFixTipAmount}
+                      onChange={handleReturnFixInputChange}
+                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      className="input-field text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">
+                      Issue Date <span className="text-red-500">*</span>
+                    </label>
+                    <p className="text-xs text-gray-500 mb-1">
+                      Match the date on the receipt before resubmitting.
+                    </p>
+                    <input
+                      id="admin_return_fix_issue_date"
+                      type="date"
+                      value={returnFixIssueDate}
+                      onChange={(e) => setReturnFixIssueDate(e.target.value)}
+                      disabled={returnFixLoading || returnFixAttachmentUploading}
+                      className="input-field text-sm"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">
+                    Attachment (image) <span className="text-red-500">*</span>
+                  </label>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Upload a receipt or proof of payment (JPEG, PNG, WebP, GIF, max 50MB).
                   </p>
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     onChange={handleReturnFixAttachmentChange}
                     disabled={returnFixLoading || returnFixAttachmentUploading}
-                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                   />
                   {returnFixAttachmentUploading && (
-                    <p className="text-xs text-amber-600 mt-2">Uploading image…</p>
+                    <p className="text-xs text-amber-600 mt-1">Uploading…</p>
                   )}
                   {returnFixAttachment && !returnFixAttachmentUploading && (
-                    <div className="mt-3 flex flex-col sm:flex-row sm:items-start gap-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAttachmentViewerUrl(returnFixAttachment);
-                          setShowAttachmentViewer(true);
-                        }}
-                        className="shrink-0 rounded-lg border border-gray-200 overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      >
-                        <img
-                          src={returnFixAttachment}
-                          alt="Proof of payment preview"
-                          className="max-h-36 w-auto max-w-full object-contain"
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={clearReturnFixAttachment}
-                        className="text-sm font-medium text-red-600 hover:text-red-800 self-start"
-                      >
-                        Remove image
-                      </button>
+                    <div className="mt-2">
+                      <img
+                        src={returnFixAttachment}
+                        alt="Payment attachment preview"
+                        className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
+                      />
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAttachmentViewerUrl(returnFixAttachment);
+                            setShowAttachmentViewer(true);
+                          }}
+                          className="text-sm text-primary-600 hover:underline"
+                        >
+                          View attached image
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearReturnFixAttachment}
+                          className="text-xs text-red-600 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
-                <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={closeReturnFixModal}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+
+                <div>
+                  <label className="label-field text-xs">
+                    Reference Number <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={returnFixRef}
+                    onChange={(e) => setReturnFixRef(e.target.value)}
                     disabled={returnFixLoading || returnFixAttachmentUploading}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={returnFixLoading || returnFixAttachmentUploading}
-                  >
-                    {returnFixLoading ? 'Saving...' : 'Save & resubmit to Finance'}
-                  </button>
+                    className="input-field text-sm"
+                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
+                  />
                 </div>
-              </form>
-            </div>
+
+                <div>
+                  <label className="label-field text-xs">Remarks</label>
+                  <textarea
+                    name="remarks"
+                    rows={3}
+                    value={returnFixRemarks}
+                    onChange={handleReturnFixInputChange}
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                    className="input-field text-sm"
+                    placeholder="Optional remarks or notes"
+                  />
+                </div>
+
+                {returnFixInvoiceLoading && (
+                  <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">Loading invoice summary…</div>
+                )}
+                {!returnFixInvoiceLoading &&
+                  returnFixInvoiceSummary &&
+                  (() => {
+                    const inv = returnFixInvoiceSummary;
+                    const breakdown = getInvoiceBreakdownForReturnFix(inv);
+                    const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
+                    const enteredAmount = parseFloat(returnFixPayableAmount || 0) || 0;
+                    const payableToApply = Math.max(0, Math.min(enteredAmount, breakdown.remaining + linePayable));
+                    const projectedPaid = breakdown.paidAmount - linePayable + payableToApply;
+                    const projectedRemaining = Math.max(0, breakdown.totalDue - projectedPaid);
+                    return (
+                      <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                        <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <p className="text-xs text-gray-600">Invoice ID</p>
+                            <p className="font-medium text-gray-900 break-words">
+                              {inv.display_description || inv.invoice_description || `INV-${inv.invoice_id}`}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-600">Issue Date</p>
+                            <p className="font-medium text-gray-900">{formatDateManila(inv.issue_date)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-600">Due Date</p>
+                            <p className="font-medium text-gray-900">{formatDateManila(inv.due_date)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-600">Remaining Balance</p>
+                            <p className="font-semibold text-blue-700">₱{breakdown.remaining.toFixed(2)}</p>
+                          </div>
+                        </div>
+                        <div className="border-t border-gray-200 pt-3 space-y-1 text-sm">
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Subtotal</span>
+                            <span className="text-gray-900 shrink-0">₱{breakdown.subtotal.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Discount</span>
+                            <span className="text-gray-900 shrink-0">- ₱{breakdown.discount.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Penalty</span>
+                            <span className="text-gray-900 shrink-0">₱{breakdown.penalty.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Tax</span>
+                            <span className="text-gray-900 shrink-0">₱{breakdown.tax.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between font-semibold border-t border-gray-200 pt-2 mt-2 gap-2">
+                            <span className="text-gray-800">Total Invoice Amount</span>
+                            <span className="text-gray-900 shrink-0">₱{breakdown.totalDue.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Total Paid</span>
+                            <span className="text-emerald-700 shrink-0">₱{breakdown.paidAmount.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Payment to apply (this line)</span>
+                            <span className="text-gray-900 shrink-0">₱{payableToApply.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-gray-600">Projected Total Paid</span>
+                            <span className="text-emerald-700 shrink-0">₱{projectedPaid.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between font-semibold gap-2">
+                            <span className="text-gray-800">Projected Remaining After Payment</span>
+                            <span className="text-blue-700 shrink-0">₱{projectedRemaining.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={closeReturnFixModal}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                  disabled={returnFixLoading || returnFixAttachmentUploading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={returnFixLoading || returnFixAttachmentUploading || returnFixInvoiceLoading}
+                >
+                  {returnFixLoading ? 'Saving...' : 'Save & resubmit to Finance'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body
