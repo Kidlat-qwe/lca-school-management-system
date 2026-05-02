@@ -36,6 +36,7 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
             p.payment_method,
             p.payment_type,
             p.payable_amount,
+            COALESCE(p.tip_amount, 0) AS tip_amount,
             TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
             p.status,
             p.reference_number,
@@ -82,11 +83,13 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
       studentEmail = null;
     }
 
-    const amount = parseFloat(row.payable_amount) || 0;
-    totalCashAmount += amount;
+    const payable = parseFloat(row.payable_amount) || 0;
+    const tip = parseFloat(row.tip_amount) || 0;
+    const lineAmount = payable + tip;
+    totalCashAmount += lineAmount;
 
     if (row.status === 'Completed') {
-      totalDepositAmount += amount;
+      totalDepositAmount += lineAmount;
       completedCashCount += 1;
     }
 
@@ -514,7 +517,7 @@ router.get(
         `SELECT cash_deposit_summary_id, branch_id,
                 TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                 TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
-                cash_payment_snapshot
+                total_deposit_amount, total_cash_amount, payment_count, completed_cash_count
          FROM cash_deposit_summarytbl
          WHERE cash_deposit_summary_id = $1`,
         [id]
@@ -543,20 +546,28 @@ router.get(
         });
       }
 
-      let payments = Array.isArray(summary.cash_payment_snapshot) ? summary.cash_payment_snapshot : [];
-      if (payments.length === 0) {
-        const snapshot = await getCashDepositSnapshot({
-          branchId: summary.branch_id,
-          startDate: summary.start_date,
-          endDate: summary.end_date,
-        });
-        payments = snapshot.payments || [];
-      }
+      const snapshot = await getCashDepositSnapshot({
+        branchId: summary.branch_id,
+        startDate: summary.start_date,
+        endDate: summary.end_date,
+      });
 
       res.json({
         success: true,
         data: {
-          payments,
+          payments: snapshot.payments || [],
+          totals: {
+            total_deposit_amount: snapshot.total_deposit_amount,
+            total_cash_amount: snapshot.total_cash_amount,
+            payment_count: snapshot.payment_count,
+            completed_cash_count: snapshot.completed_cash_count,
+          },
+          submitted_snapshot: {
+            total_deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
+            total_cash_amount: parseFloat(summary.total_cash_amount) || 0,
+            payment_count: parseInt(summary.payment_count, 10) || 0,
+            completed_cash_count: parseInt(summary.completed_cash_count, 10) || 0,
+          },
         },
       });
     } catch (error) {

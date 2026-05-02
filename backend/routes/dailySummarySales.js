@@ -254,6 +254,7 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
             COALESCE(p.tip_amount, 0) AS tip_amount,
             p.payment_attachment_url,
             p.reference_number,
+            p.status,
             TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
             u.full_name AS student_name,
             u.email AS student_email,
@@ -934,8 +935,8 @@ router.get(
 
 /**
  * GET /api/sms/daily-summary-sales/:id/payments
- * Get payment records for a daily summary (by summary id). Uses the summary's stored branch_id and summary_date.
- * Access: Superadmin, Superfinance (and Admin for their own branch).
+ * Same rules as EOD submit snapshot: Completed payments (issue_date = summary date) + standalone AR receipts.
+ * Returns payments, ar_receipts, totals (sums match pies), and submitted_snapshot from the row for drift detection.
  */
 router.get(
   '/:id/payments',
@@ -948,7 +949,8 @@ router.get(
       const userBranchId = req.user.branchId;
 
       const summaryRes = await query(
-        `SELECT daily_summary_id, branch_id, summary_date FROM daily_summary_salestbl WHERE daily_summary_id = $1`,
+        `SELECT daily_summary_id, branch_id, summary_date, total_amount, payment_count
+         FROM daily_summary_salestbl WHERE daily_summary_id = $1`,
         [id]
       );
       if (summaryRes.rows.length === 0) {
@@ -971,110 +973,62 @@ router.get(
         });
       }
 
-      const paymentsRes = await query(
-        `SELECT p.payment_id,
-                p.invoice_id,
-                p.student_id,
-                p.payment_method,
-                p.payable_amount,
-                COALESCE(p.tip_amount, 0) AS tip_amount,
-                p.payment_attachment_url,
-                p.reference_number,
-                TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
-                u.full_name AS student_name,
-                u.email AS student_email,
-                COALESCE(
-                  NULLIF(TRIM(u.level_tag), ''),
-                  NULLIF(TRIM(ar.level_tag), ''),
-                  NULLIF(
-                    TRIM(
-                      (
-                        SELECT ar2.level_tag
-                        FROM acknowledgement_receiptstbl ar2
-                        WHERE ar2.invoice_id = i.invoice_id
-                        ORDER BY ar2.ack_receipt_id DESC
-                        LIMIT 1
-                      )
-                    ),
-                    ''
-                  ),
-                  NULLIF(
-                    TRIM(
-                      (
-                        SELECT c.level_tag
-                        FROM classstudentstbl cs
-                        INNER JOIN classestbl c ON c.class_id = cs.class_id
-                        WHERE cs.student_id = p.student_id
-                        ORDER BY
-                          CASE
-                            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN 0
-                            ELSE 1
-                          END,
-                          cs.classstudent_id DESC
-                        LIMIT 1
-                      )
-                    ),
-                    ''
-                  )
-                ) AS student_level_tag,
-                i.invoice_description,
-                TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
-                i.ack_receipt_id,
+      const snapshot = await getEodPaymentSnapshot({
+        branchId,
+        summaryDate,
+        submittedAfter: null,
+      });
+
+      const paymentsNormalized = (snapshot.payments || []).map((row) => ({
+        ...row,
+        program_level_tag: row.student_level_tag || row.program_level_tag || null,
+      }));
+
+      const arListRes = await query(
+        `SELECT ar.ack_receipt_id,
+                TO_CHAR(ar.issue_date, 'YYYY-MM-DD') AS issue_date,
+                ar.payment_method,
+                COALESCE(ar.payment_amount, 0) AS payment_amount,
+                COALESCE(ar.tip_amount, 0) AS tip_amount,
+                NULLIF(TRIM(ar.level_tag), '') AS level_tag,
                 ar.prospect_student_name,
-                ar.payment_method AS ar_payment_method,
-                ar.level_tag AS ar_level_tag,
-                CASE
-                  WHEN p.invoice_id IS NULL THEN NULL
-                  WHEN EXISTS (
-                    SELECT 1 FROM invoiceitemstbl ii WHERE ii.invoice_id = p.invoice_id
-                  ) THEN (
-                    SELECT ROUND(
-                      COALESCE(
-                        SUM(
-                          (COALESCE(ii.amount, 0) - COALESCE(ii.discount_amount, 0) + COALESCE(ii.penalty_amount, 0)) *
-                          (1 + COALESCE(ii.tax_percentage, 0) / 100.0)
-                        ),
-                        0
-                      )::numeric,
-                      2
-                    )
-                    FROM invoiceitemstbl ii
-                    WHERE ii.invoice_id = p.invoice_id
-                  )
-                  ELSE ROUND(COALESCE(i.amount, 0)::numeric, 2)
-                END AS invoice_document_total
-         FROM paymenttbl p
-         LEFT JOIN userstbl u ON p.student_id = u.user_id
-         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-         LEFT JOIN acknowledgement_receiptstbl ar ON ar.ack_receipt_id = i.ack_receipt_id
-         WHERE p.branch_id = $1 AND p.issue_date = $2
-         ORDER BY p.payment_id DESC`,
+                ar.ack_receipt_number,
+                ar.reference_number,
+                ar.payment_attachment_url,
+                COALESCE(ar.status, 'Submitted') AS status
+         FROM acknowledgement_receiptstbl ar
+         WHERE ar.branch_id = $1
+           AND ar.issue_date = $2::date
+           AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+           AND ar.payment_id IS NULL
+           AND ar.invoice_id IS NULL
+         ORDER BY ar.ack_receipt_id DESC`,
         [branchId, summaryDate]
       );
 
-      const payments = (paymentsRes.rows || []).map((row) => {
-        const isWalkIn = (row.student_email || '').toLowerCase() === 'walkin@merchandise.psms.internal';
-        const resolvedStudentName = isWalkIn && row.prospect_student_name
-          ? row.prospect_student_name
-          : row.student_name;
-        const rawPaymentMethod = String(row.payment_method || '').trim();
-        const arPaymentMethod = String(row.ar_payment_method || '').trim();
-        const shouldUseArMethod =
-          arPaymentMethod &&
-          rawPaymentMethod.toLowerCase() === 'cash' &&
-          arPaymentMethod.toLowerCase() !== 'cash';
-
-        return {
-          ...row,
-          payment_method: shouldUseArMethod ? arPaymentMethod : row.payment_method,
-          student_name: resolvedStudentName,
-          program_level_tag: row.student_level_tag || row.ar_level_tag || null,
-        };
-      });
+      const ar_receipts = (arListRes.rows || []).map((r) => ({
+        ...r,
+        program_level_tag: r.level_tag || null,
+      }));
 
       res.json({
         success: true,
-        data: payments,
+        data: {
+          payments: paymentsNormalized,
+          ar_receipts,
+          totals: {
+            completed_total: snapshot.completedPaymentTotal,
+            ar_total: snapshot.arSalesTotal,
+            grand_total: snapshot.total,
+            completed_count: snapshot.completedPaymentCount,
+            ar_count: snapshot.arSalesCount,
+            grand_count: snapshot.paymentCount,
+          },
+          submitted_snapshot: {
+            total_amount: parseFloat(summary.total_amount) || 0,
+            payment_count: parseInt(summary.payment_count, 10) || 0,
+          },
+        },
       });
     } catch (error) {
       next(error);
