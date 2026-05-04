@@ -44,25 +44,14 @@ const FinanceFinancialDashboard = () => {
       const invoiceQuery = invParams.toString();
       const invoiceUrl = invoiceQuery ? `/invoices?${invoiceQuery}` : '/invoices';
 
-      const fetchAllPayments = async () => {
-        const limit = 100;
-        let page = 1;
-        let allPayments = [];
-        let totalPages = 1;
-        do {
-          const pageParams = new URLSearchParams();
-          if (issueDateFrom.trim()) pageParams.set('issue_date_from', issueDateFrom.trim());
-          if (issueDateTo.trim()) pageParams.set('issue_date_to', issueDateTo.trim());
-          pageParams.set('limit', String(limit));
-          pageParams.set('page', String(page));
-          const response = await apiRequest(`/payments?${pageParams.toString()}`);
-          const pageData = response.data || [];
-          allPayments = allPayments.concat(pageData);
-          totalPages = response.pagination?.totalPages || 1;
-          page += 1;
-        } while (page <= totalPages);
-        return allPayments;
-      };
+      const metricsParams = new URLSearchParams();
+      if (issueDateFrom.trim()) {
+        metricsParams.set('payment_date_from', issueDateFrom.trim());
+      }
+      if (issueDateTo.trim()) {
+        metricsParams.set('payment_date_to', issueDateTo.trim());
+      }
+
       const fetchAllAcknowledgementReceipts = async () => {
         const limit = 100;
         let page = 1;
@@ -70,6 +59,12 @@ const FinanceFinancialDashboard = () => {
         let totalPages = 1;
         do {
           const pageParams = new URLSearchParams();
+          if (issueDateFrom.trim()) {
+            pageParams.set('issue_date_from', issueDateFrom.trim());
+          }
+          if (issueDateTo.trim()) {
+            pageParams.set('issue_date_to', issueDateTo.trim());
+          }
           pageParams.set('limit', String(limit));
           pageParams.set('page', String(page));
           const response = await apiRequest(`/acknowledgement-receipts?${pageParams.toString()}`);
@@ -81,19 +76,20 @@ const FinanceFinancialDashboard = () => {
         return allReceipts;
       };
 
-      const [invoicesResponse, payments, acknowledgementReceipts] = await Promise.all([
+      const metricsQuery = metricsParams.toString();
+      const [invoicesResponse, payMetricsRes, acknowledgementReceipts] = await Promise.all([
         apiRequest(invoiceUrl),
-        fetchAllPayments(),
+        apiRequest(
+          metricsQuery
+            ? `/payments/financial-dashboard-metrics?${metricsQuery}`
+            : '/payments/financial-dashboard-metrics'
+        ),
         fetchAllAcknowledgementReceipts(),
       ]);
 
       const invoices = invoicesResponse.data || [];
+      const pm = payMetricsRes.data || {};
 
-      const paymentTotalAmount = (payment) => (parseFloat(payment?.payable_amount) || 0) + (parseFloat(payment?.tip_amount) || 0);
-      const completedPayments = payments.filter((p) => p.status === 'Completed');
-      const totalRevenue = completedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0);
-      const verifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') === 'Approved');
-      const unverifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') !== 'Approved');
       const pendingInvoices = invoices.filter((i) => i.status === 'Unpaid' || i.status === 'Partial').length;
       const unpaidInvoices = invoices.filter((i) => i.status === 'Unpaid').length;
       const packageAr = (acknowledgementReceipts || []).filter((ar) => ar.ar_type === 'Package');
@@ -103,14 +99,14 @@ const FinanceFinancialDashboard = () => {
       const arAmount = (ar) => (parseFloat(ar.payment_amount) || 0) + (parseFloat(ar.tip_amount) || 0);
 
       setMetrics({
-        totalRevenue,
+        totalRevenue: pm.totalRevenue ?? 0,
         pendingInvoices,
-        completedPayments: completedPayments.length,
+        completedPayments: pm.completedPayments ?? 0,
         unpaidInvoices,
-        verifiedPaymentsCount: verifiedPayments.length,
-        verifiedPaymentsAmount: verifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
-        unverifiedPaymentsCount: unverifiedPayments.length,
-        unverifiedPaymentsAmount: unverifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
+        verifiedPaymentsCount: pm.verifiedPaymentsCount ?? 0,
+        verifiedPaymentsAmount: pm.verifiedPaymentsAmount ?? 0,
+        unverifiedPaymentsCount: pm.unverifiedPaymentsCount ?? 0,
+        unverifiedPaymentsAmount: pm.unverifiedPaymentsAmount ?? 0,
         arSalesCount: arIncludedSales.length,
         arSalesAmount: arIncludedSales.reduce((sum, ar) => sum + arAmount(ar), 0),
         arVerifiedCount: arVerified.length,
@@ -124,10 +120,7 @@ const FinanceFinancialDashboard = () => {
         .slice(0, 2);
       setRecentInvoices(recentInvoicesList);
 
-      const recentPaymentsList = payments
-        .filter((p) => p.status === 'Completed')
-        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-        .slice(0, 2);
+      const recentPaymentsList = (pm.recentPayments || []).slice(0, 2);
       setRecentPayments(recentPaymentsList);
     } catch (err) {
       setError(err.message || 'Failed to load dashboard data');
@@ -170,8 +163,8 @@ const FinanceFinancialDashboard = () => {
     issueDateFrom || issueDateTo
       ? `Applied: ${issueDateFrom ? formatDateManila(issueDateFrom) : '…'} — ${
           issueDateTo ? formatDateManila(issueDateTo) : '…'
-        } (issue dates, inclusive)`
-      : 'No date filter — totals include all invoice and payment issue dates.';
+        } (invoice issue dates for counts; total revenue uses payment date in Manila, inclusive)`
+      : 'No date filter — totals include all invoices and payments.';
 
   const formatCurrency = (amount) => {
     if (!amount && amount !== 0) return '₱0.00';
@@ -254,7 +247,7 @@ const FinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {formatCurrency(metrics.totalRevenue)}
               </p>
-              <p className="mt-1 text-xs text-gray-500">Completed payments in range</p>
+              <p className="mt-1 text-xs text-gray-500">Completed payments with payment date in range (Manila)</p>
             </div>
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
               <DashboardStatIcon name="currency" className="h-6 w-6 text-green-600" />

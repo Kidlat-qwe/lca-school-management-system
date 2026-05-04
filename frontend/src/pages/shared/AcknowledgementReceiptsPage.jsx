@@ -9,19 +9,24 @@ import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
+import { downloadAcknowledgementReceiptsXlsx } from '../../utils/acknowledgementReceiptsExcelExport';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
-const AcknowledgementReceiptsPage = () => {
+const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.user_type || userInfo?.userType;
+  const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
   const isSuperadmin = userType === 'Superadmin';
+  const isGlobalBranchFinance =
+    userType === 'Finance' && (userBranchId === null || userBranchId === undefined || userBranchId === '');
+  const canApplyGlobalBranchFilter =
+    userType === 'Superadmin' || userType === 'Superfinance' || isGlobalBranchFinance;
   const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
   const isFinanceOrSuperfinance = userType === 'Finance' || userType === 'Superfinance';
   const currentUserId = Number(userInfo?.user_id || userInfo?.userId || 0) || null;
-  const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get('status') || '';
   const initialSearch = searchParams.get('search') || '';
@@ -59,7 +64,7 @@ const AcknowledgementReceiptsPage = () => {
   const [branches, setBranches] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState(
-    !isSuperadmin && userBranchId ? String(userBranchId) : ''
+    canApplyGlobalBranchFilter ? '' : (userBranchId ? String(userBranchId) : '')
   );
 
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -120,6 +125,10 @@ const AcknowledgementReceiptsPage = () => {
   const [isResubmitFlow, setIsResubmitFlow] = useState(false);
   const [financeReturnNote, setFinanceReturnNote] = useState('');
   const [deleteLoadingId, setDeleteLoadingId] = useState(null);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportDateFrom, setExportDateFrom] = useState('');
+  const [exportDateTo, setExportDateTo] = useState('');
   const [editFormData, setEditFormData] = useState({
     package_id: '',
     prospect_student_name: '',
@@ -158,7 +167,7 @@ const AcknowledgementReceiptsPage = () => {
   useEffect(() => {
     fetchReceipts(initialPage);
 
-    if (isSuperadmin) {
+    if (canApplyGlobalBranchFilter) {
       fetchBranches();
     } else if (userBranchId) {
       fetchPackages(userBranchId);
@@ -166,28 +175,30 @@ const AcknowledgementReceiptsPage = () => {
       fetchPackages(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuperadmin, userBranchId]);
+  }, [canApplyGlobalBranchFilter, userBranchId]);
 
   useEffect(() => {
-    if (!isSuperadmin) return;
+    if (!canApplyGlobalBranchFilter) return;
     setSelectedBranchId(globalBranchId ? String(globalBranchId) : '');
-  }, [isSuperadmin, globalBranchId]);
+  }, [canApplyGlobalBranchFilter, globalBranchId]);
 
   useEffect(() => {
-    if (!isSuperadmin) return;
-    if (selectedBranchId) {
-      const branchId = parseInt(selectedBranchId, 10);
-      if (!Number.isNaN(branchId)) {
-        fetchPackages(branchId);
-        if (arType === 'Merchandise') fetchMerchandise(branchId);
+    if (!canApplyGlobalBranchFilter) return;
+    if (isSuperadmin) {
+      if (selectedBranchId) {
+        const branchId = parseInt(selectedBranchId, 10);
+        if (!Number.isNaN(branchId)) {
+          fetchPackages(branchId);
+          if (arType === 'Merchandise') fetchMerchandise(branchId);
+        }
+      } else {
+        fetchPackages(null);
+        fetchMerchandise(null);
       }
-    } else {
-      fetchPackages(null);
-      fetchMerchandise(null);
     }
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuperadmin, selectedBranchId]);
+  }, [canApplyGlobalBranchFilter, isSuperadmin, selectedBranchId]);
 
   const fetchReceipts = async (page = 1, limitOverride) => {
     try {
@@ -208,7 +219,7 @@ const AcknowledgementReceiptsPage = () => {
       }
       if (searchTerm.trim()) params.set('search', searchTerm.trim());
       if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
-      if (isSuperadmin && selectedBranchId) params.set('branch_id', selectedBranchId);
+      if (canApplyGlobalBranchFilter && selectedBranchId) params.set('branch_id', selectedBranchId);
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       setReceipts(response.data || []);
@@ -339,7 +350,7 @@ const AcknowledgementReceiptsPage = () => {
     try {
       const params = new URLSearchParams({ page: '1', limit: '1', status: 'Returned' });
       if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
-      if (isSuperadmin && selectedBranchId) params.set('branch_id', selectedBranchId);
+      if (canApplyGlobalBranchFilter && selectedBranchId) params.set('branch_id', selectedBranchId);
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       const raw = response.pagination?.total;
       const total = typeof raw === 'number' ? raw : parseInt(raw, 10) || 0;
@@ -405,6 +416,136 @@ const AcknowledgementReceiptsPage = () => {
   const closeAttachmentViewer = () => {
     setViewerOpen(false);
     setViewerUrl('');
+  };
+
+  const buildReceiptQueryParams = ({ page, limit, issueDateFrom = '', issueDateTo = '' }) => {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    if (isAdminOrSuperadmin && arAdminTab === 'return') {
+      params.set('status', 'Returned');
+    } else {
+      if (statusFilter) params.set('status', statusFilter);
+      if (isAdminOrSuperadmin && arAdminTab === 'main') {
+        params.set('exclude_status', 'Returned');
+      }
+    }
+    if (searchTerm.trim()) params.set('search', searchTerm.trim());
+    if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
+    if (canApplyGlobalBranchFilter && selectedBranchId) params.set('branch_id', selectedBranchId);
+    if (issueDateFrom) params.set('issue_date_from', issueDateFrom);
+    if (issueDateTo) params.set('issue_date_to', issueDateTo);
+    return params;
+  };
+
+  const getArPackageOrItems = (r) => {
+    if (r.ar_type !== 'Merchandise') {
+      return r.package_name_snapshot || r.package_name || 'N/A';
+    }
+    const items =
+      typeof r.merchandise_items_snapshot === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(r.merchandise_items_snapshot);
+            } catch {
+              return [];
+            }
+          })()
+        : r.merchandise_items_snapshot;
+    if (!Array.isArray(items) || items.length === 0) return 'Merchandise';
+    return items
+      .map((i) => `${i.merchandise_name || 'Item'}${i.size ? ` (${i.size})` : ''} x ${i.quantity || 1}`)
+      .join(', ');
+  };
+
+  const fetchAllReceiptsForExport = async ({ issueDateFrom = '', issueDateTo = '' } = {}) => {
+    const pageSize = 100;
+    let page = 1;
+    let totalPages = 1;
+    const all = [];
+    do {
+      const params = buildReceiptQueryParams({ page, limit: pageSize, issueDateFrom, issueDateTo });
+      const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+      all.push(...(response.data || []));
+      totalPages = Number(response.pagination?.totalPages || 1);
+      page += 1;
+    } while (page <= totalPages);
+    return all;
+  };
+
+  const executeExportExcel = async ({ issueDateFrom = '', issueDateTo = '' } = {}) => {
+    try {
+      setExportLoading(true);
+      const rows = await fetchAllReceiptsForExport({ issueDateFrom, issueDateTo });
+      if (!rows.length) {
+        appAlert('No acknowledgement receipts found for the current filters.');
+        return;
+      }
+      const rowsForExport = requireExportDateRange
+        ? rows.filter((r) => {
+            if (r.ar_type !== 'Package') return false;
+            const status = r.status || 'Submitted';
+            return status !== 'Rejected' && status !== 'Cancelled';
+          })
+        : rows;
+
+      if (!rowsForExport.length) {
+        appAlert(
+          requireExportDateRange
+            ? 'No AR sales records found for the selected date range.'
+            : 'No acknowledgement receipts found for the current filters.'
+        );
+        return;
+      }
+
+      const exportRows = rowsForExport.map((r) => ({
+        'AR ID': r.ack_receipt_id ?? '-',
+        'Student Name': r.prospect_student_name || '-',
+        'Guardian Name': r.prospect_student_contact || '-',
+        'Package / Items': getArPackageOrItems(r),
+        'Level Tag': r.level_tag || '-',
+        'Total Amount (PHP)': (Number(r.payment_amount || 0) + Number(r.tip_amount || 0)).toFixed(2),
+        Branch: r.branch_name || '-',
+        Status: r.status || '-',
+        'Payment Method': r.payment_method || '-',
+        'Reference Number': r.reference_number || '-',
+        'Issue Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
+      }));
+      const rangeTag =
+        issueDateFrom || issueDateTo
+          ? `${issueDateFrom || 'all'}_to_${issueDateTo || 'all'}`
+          : todayManilaYMD();
+      const filename = `Acknowledgement_Receipts_${rangeTag}.xlsx`;
+      downloadAcknowledgementReceiptsXlsx(exportRows, filename);
+    } catch (err) {
+      console.error('Error exporting acknowledgement receipts:', err);
+      appAlert(err?.message || 'Failed to export acknowledgement receipts.');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (requireExportDateRange) {
+      setShowExportModal(true);
+      return;
+    }
+    await executeExportExcel();
+  };
+
+  const handleConfirmExportWithDate = async () => {
+    const from = exportDateFrom.trim();
+    const to = exportDateTo.trim();
+    if (!from || !to) {
+      appAlert('Please select both export date from and to.');
+      return;
+    }
+    if (from > to) {
+      appAlert('Export "From" date must be on or before "To" date.');
+      return;
+    }
+    setShowExportModal(false);
+    await executeExportExcel({ issueDateFrom: from, issueDateTo: to });
   };
 
   const openCreateModal = (preserveArType) => {
@@ -1275,14 +1416,77 @@ const AcknowledgementReceiptsPage = () => {
             Record upfront payments quickly and link them to invoices later.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleCreateClick}
-          className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-md shadow-sm text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] transition-colors"
-        >
-          Create Acknowledgement Receipt
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={exportLoading || loading}
+            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-md border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 transition-colors disabled:opacity-60"
+          >
+            {exportLoading ? 'Exporting...' : 'Export to Excel'}
+          </button>
+          <button
+            type="button"
+            onClick={handleCreateClick}
+            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-md shadow-sm text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] transition-colors"
+          >
+            Create Acknowledgement Receipt
+          </button>
+        </div>
       </div>
+
+      {showExportModal &&
+        createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+              <div className="border-b border-gray-100 px-6 py-4">
+                <h2 className="text-lg font-semibold text-gray-900">Export Acknowledgement Receipts</h2>
+                <p className="mt-1 text-sm text-gray-500">Select issue date range before exporting.</p>
+              </div>
+              <div className="space-y-4 px-6 py-5">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Issue Date From</label>
+                  <input
+                    type="date"
+                    value={exportDateFrom}
+                    onChange={(e) => setExportDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Issue Date To</label>
+                  <input
+                    type="date"
+                    value={exportDateTo}
+                    onChange={(e) => setExportDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (exportLoading) return;
+                    setShowExportModal(false);
+                  }}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmExportWithDate}
+                  disabled={exportLoading}
+                  className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60"
+                >
+                  {exportLoading ? 'Exporting...' : 'Export to Excel'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {isAdminOrSuperadmin ? (
         <BranchPaymentLogTabs

@@ -3,7 +3,15 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import * as XLSX from 'xlsx';
+import {
+  downloadInvoiceExportXlsx,
+  getInvoiceExportCollectedAmount,
+  INVOICE_EXPORT_COL_WIDTHS,
+  mapCompletedPaymentsToExportRows,
+  PAYMENT_DATE_EXPORT_COL_WIDTHS,
+  shouldIncludeInvoiceInExport,
+} from '../../utils/invoiceExcelExport.js';
+import { fetchAllPaymentsForExport } from '../../utils/fetchAllPaymentsForExport.js';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -87,6 +95,8 @@ const FinanceInvoice = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
   const [exportDateTo, setExportDateTo] = useState('');
+  /** When false, rows with status "Unpaid" are omitted from the export. */
+  const [exportIncludeUnpaid, setExportIncludeUnpaid] = useState(true);
   const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
@@ -1233,35 +1243,49 @@ const FinanceInvoice = () => {
     }
     try {
       setExportLoading(true);
-      const exportRows = filteredInvoices
-        .filter((invoice) => {
-          const issueYmd = normalizeYmd(invoice.issue_date);
-          if (!issueYmd) return false;
-          if (exportDateFrom && issueYmd < exportDateFrom) return false;
-          if (exportDateTo && issueYmd > exportDateTo) return false;
-          return true;
-        })
-        .map((invoice) => ({
-          'Invoice ID': `INV-${invoice.invoice_id}`,
-          'AR #': invoice.invoice_ar_number || '-',
-          'Student Name(s)': (invoice.students || []).map((s) => s?.full_name).filter(Boolean).join(', ') || '-',
-          Branch: getBranchName(invoice.branch_id) || '-',
-          Status: invoice.status || '-',
-          'Amount (PHP)': Number(getInvoiceDisplayAmount(invoice) || 0).toFixed(2),
-          'Issue Date': invoice.issue_date ? formatDateManila(invoice.issue_date) : '-',
-          'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
-        }));
+      const usePaymentDateExport = Boolean(exportDateFrom?.trim() || exportDateTo?.trim());
+
+      let exportRows;
+      let colWidths;
+      let emptyMessage;
+
+      if (usePaymentDateExport) {
+        const payments = await fetchAllPaymentsForExport(apiRequest, {
+          branchId: null,
+          paymentDateFrom: exportDateFrom?.trim() || '',
+          paymentDateTo: exportDateTo?.trim() || '',
+        });
+        exportRows = mapCompletedPaymentsToExportRows(payments);
+        colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
+        emptyMessage = 'No completed payments found for the selected payment date range.';
+      } else {
+        exportRows = filteredInvoices
+          .filter((invoice) => {
+            if (!shouldIncludeInvoiceInExport(invoice, exportIncludeUnpaid)) return false;
+            return true;
+          })
+          .map((invoice) => ({
+            'Invoice ID': `INV-${invoice.invoice_id}`,
+            'AR #': invoice.invoice_ar_number || '-',
+            'Student Name(s)': (invoice.students || []).map((s) => s?.full_name).filter(Boolean).join(', ') || '-',
+            Branch: getBranchName(invoice.branch_id) || '-',
+            Status: invoice.status || '-',
+            'Amount (PHP)': Number(getInvoiceExportCollectedAmount(invoice) || 0).toFixed(2),
+            'Issue Date': invoice.issue_date ? formatDateManila(invoice.issue_date) : '-',
+            'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
+          }));
+        colWidths = INVOICE_EXPORT_COL_WIDTHS;
+        emptyMessage = 'No invoice records found for export.';
+      }
 
       if (exportRows.length === 0) {
-        appAlert('No invoice records found for the selected date range.');
+        appAlert(emptyMessage);
         return;
       }
 
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportRows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 34 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-      XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
-      XLSX.writeFile(wb, `Finance_Invoice_Export_${exportDateFrom || 'all'}_to_${exportDateTo || 'all'}.xlsx`);
+      downloadInvoiceExportXlsx(exportRows, `Finance_Invoice_Export_${exportDateFrom || 'all'}_to_${exportDateTo || 'all'}.xlsx`, {
+        colWidths,
+      });
       setShowExportModal(false);
       appAlert('Invoice export completed successfully.');
     } catch (err) {
@@ -1933,45 +1957,35 @@ const FinanceInvoice = () => {
           <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
             <div className="border-b border-gray-100 px-6 py-4">
               <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-              <p className="mt-1 text-sm text-gray-500">Filter by issue date range (optional).</p>
+              <p className="mt-1 text-sm text-gray-500">
+                With a date range: exports <span className="font-medium">completed payments</span> by{' '}
+                <span className="font-medium">payment date</span> (Manila), matching Financial Dashboard revenue. Without
+                dates: exports current table rows (invoice view) with optional unpaid filter.
+              </p>
             </div>
             <div className="space-y-4 px-6 py-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date From</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date from</label>
                 <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date To</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date to</label>
                 <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
               </div>
-            </div>
-            <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
-              <button type="button" onClick={() => !exportLoading && setShowExportModal(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button type="button" onClick={handleExportToExcel} disabled={exportLoading} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60">
-                {exportLoading ? 'Exporting...' : 'Export to Excel'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {showExportModal && createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
-            <div className="border-b border-gray-100 px-6 py-4">
-              <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-              <p className="mt-1 text-sm text-gray-500">Filter by issue date range (optional).</p>
-            </div>
-            <div className="space-y-4 px-6 py-5">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date From</label>
-                <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Issue Date To</label>
-                <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
+              {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
+                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={exportIncludeUnpaid}
+                    onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span>
+                    <span className="font-medium">Include unpaid invoices</span>
+                    <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
+                  </span>
+                </label>
+              ) : null}
             </div>
             <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
               <button type="button" onClick={() => !exportLoading && setShowExportModal(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>

@@ -3,7 +3,15 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import * as XLSX from 'xlsx';
+import {
+  downloadInvoiceExportXlsx,
+  getInvoiceExportCollectedAmount,
+  INVOICE_EXPORT_COL_WIDTHS,
+  mapCompletedPaymentsToExportRows,
+  PAYMENT_DATE_EXPORT_COL_WIDTHS,
+  shouldIncludeInvoiceInExport,
+} from '../../utils/invoiceExcelExport.js';
+import { fetchAllPaymentsForExport } from '../../utils/fetchAllPaymentsForExport.js';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -88,6 +96,7 @@ const Invoice = () => {
   const [exportDateFrom, setExportDateFrom] = useState('');
   const [exportDateTo, setExportDateTo] = useState('');
   const [selectedExportBranches, setSelectedExportBranches] = useState([]);
+  const [exportIncludeUnpaid, setExportIncludeUnpaid] = useState(true);
   const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
@@ -1285,65 +1294,78 @@ const Invoice = () => {
 
     try {
       setExportLoading(true);
-      const allInvoices = await fetchAllInvoicesForExport();
+      const usePaymentDateExport = Boolean(exportDateFrom?.trim() || exportDateTo?.trim());
       const selectedBranchSet = new Set(selectedExportBranches.map(String));
-      const exportRows = allInvoices
-        .filter((invoice) => {
-          const invoiceBranch = String(invoice.branch_id || '');
-          if (!selectedBranchSet.has(invoiceBranch)) return false;
-          const issueYmd = normalizeYmd(invoice.issue_date);
-          if (!issueYmd) return false;
-          if (exportDateFrom && issueYmd < exportDateFrom) return false;
-          if (exportDateTo && issueYmd > exportDateTo) return false;
-          return true;
-        })
-        .map((invoice) => {
-          const studentNames = (invoice.students || [])
-            .map((s) => s?.full_name)
-            .filter(Boolean)
-            .join(', ');
-          return {
-            'Invoice ID': `INV-${invoice.invoice_id}`,
-            'AR #': invoice.invoice_ar_number || '-',
-            'Student Name(s)': studentNames || '-',
-            Branch: getBranchName(invoice.branch_id) || '-',
-            Status: invoice.status || '-',
-            'Amount (PHP)': Number(getInvoiceDisplayAmount(invoice) || 0).toFixed(2),
-            'Issue Date': invoice.issue_date ? formatDateManila(invoice.issue_date) : '-',
-            'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
-          };
-        });
+      const fromTrim = exportDateFrom?.trim() || '';
+      const toTrim = exportDateTo?.trim() || '';
 
-      if (exportRows.length === 0) {
-        appAlert('No invoice records found for the selected date range.');
-        return;
+      let exportRows;
+      let colWidths;
+      let emptyMessage;
+
+      if (usePaymentDateExport) {
+        const branchIds = selectedExportBranches.map(String);
+        const batches = await Promise.all(
+          branchIds.map((bid) =>
+            fetchAllPaymentsForExport(apiRequest, {
+              branchId: bid,
+              paymentDateFrom: fromTrim,
+              paymentDateTo: toTrim,
+            })
+          )
+        );
+        const merged = batches.flat();
+        exportRows = mapCompletedPaymentsToExportRows(merged);
+        colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
+        emptyMessage = 'No completed payments found for the selected branches and payment date range.';
+      } else {
+        const allInvoices = await fetchAllInvoicesForExport();
+        exportRows = allInvoices
+          .filter((invoice) => {
+            if (!shouldIncludeInvoiceInExport(invoice, exportIncludeUnpaid)) return false;
+            const invoiceBranch = String(invoice.branch_id || '');
+            if (!selectedBranchSet.has(invoiceBranch)) return false;
+            return true;
+          })
+          .map((invoice) => {
+            const studentNames = (invoice.students || [])
+              .map((s) => s?.full_name)
+              .filter(Boolean)
+              .join(', ');
+            return {
+              'Invoice ID': `INV-${invoice.invoice_id}`,
+              'AR #': invoice.invoice_ar_number || '-',
+              'Student Name(s)': studentNames || '-',
+              Branch: getBranchName(invoice.branch_id) || '-',
+              Status: invoice.status || '-',
+              'Amount (PHP)': Number(getInvoiceExportCollectedAmount(invoice) || 0).toFixed(2),
+              'Issue Date': invoice.issue_date ? formatDateManila(invoice.issue_date) : '-',
+              'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
+            };
+          });
+        colWidths = INVOICE_EXPORT_COL_WIDTHS;
+        emptyMessage = 'No invoice records found for the selected branches.';
       }
 
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportRows);
-      ws['!cols'] = [
-        { wch: 14 },
-        { wch: 12 },
-        { wch: 34 },
-        { wch: 22 },
-        { wch: 16 },
-        { wch: 14 },
-        { wch: 14 },
-        { wch: 14 },
-      ];
-      XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+      if (exportRows.length === 0) {
+        appAlert(emptyMessage);
+        return;
+      }
 
       const branchLabel = selectedExportBranches.length === (branches || []).length
         ? 'all_branches'
         : `${selectedExportBranches.length}_branches`;
       const fromLabel = exportDateFrom || 'all';
       const toLabel = exportDateTo || 'all';
-      XLSX.writeFile(wb, `Invoice_Export_${branchLabel}_${fromLabel}_to_${toLabel}.xlsx`);
+      downloadInvoiceExportXlsx(exportRows, `Invoice_Export_${branchLabel}_${fromLabel}_to_${toLabel}.xlsx`, {
+        colWidths,
+      });
 
       setShowExportModal(false);
       setExportDateFrom('');
       setExportDateTo('');
       setSelectedExportBranches([]);
+      setExportIncludeUnpaid(true);
       appAlert('Invoice export completed successfully.');
     } catch (err) {
       console.error('Error exporting invoices:', err);
@@ -1991,7 +2013,10 @@ const Invoice = () => {
             <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-                <p className="mt-1 text-sm text-gray-500">Select branches and issue date range to export.</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  With a payment date range: exports completed payments by Manila payment date (matches Financial Dashboard
+                  revenue). Without dates: invoice rows for selected branches with optional unpaid filter.
+                </p>
               </div>
               <button
                 type="button"
@@ -2048,7 +2073,7 @@ const Invoice = () => {
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Issue Date From</label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Payment date from</label>
                   <input
                     type="date"
                     value={exportDateFrom}
@@ -2057,7 +2082,7 @@ const Invoice = () => {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Issue Date To</label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Payment date to</label>
                   <input
                     type="date"
                     value={exportDateTo}
@@ -2066,6 +2091,21 @@ const Invoice = () => {
                   />
                 </div>
               </div>
+
+              {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
+                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={exportIncludeUnpaid}
+                    onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span>
+                    <span className="font-medium">Include unpaid invoices</span>
+                    <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
+                  </span>
+                </label>
+              ) : null}
 
               <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Selected: <span className="font-semibold">{selectedExportBranches.length}</span> branch(es)

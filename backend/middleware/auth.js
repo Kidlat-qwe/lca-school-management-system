@@ -110,7 +110,12 @@ export const requireBranchAccess = (req, res, next) => {
     return next();
   }
 
-  // Superfinance (Finance with no branch_id) can access all branches
+  // Superfinance can access all branches (branch filter comes from query/UI)
+  if (req.user.userType === 'Superfinance') {
+    return next();
+  }
+
+  // Legacy: Finance role with no branch_id behaves like Superfinance for routing
   if (req.user.userType === 'Finance' && (req.user.branchId === null || req.user.branchId === undefined)) {
     return next();
   }

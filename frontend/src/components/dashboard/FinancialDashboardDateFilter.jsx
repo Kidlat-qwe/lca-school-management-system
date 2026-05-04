@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
- * Date range by invoice / payment issue_date (Asia/Manila calendar day) for finance dashboards.
+ * Date range: invoice lists use issue date; total revenue and payment-based Excel exports use
+ * payment date in Manila (COALESCE(approved_at, created_at) as calendar day).
  * Renders a header button and opens a modal with From/To, Apply, This month, and Clear.
  */
 const FinancialDashboardDateFilter = ({
@@ -63,8 +64,10 @@ const FinancialDashboardDateFilter = ({
                 Date range
               </h2>
               <p className="text-xs text-gray-500 mt-1">
-                Uses <span className="font-medium text-gray-700">invoice issue date</span> and{' '}
-                <span className="font-medium text-gray-700">payment issue date</span> (business date) for reconciliation.
+                <span className="font-medium text-gray-700">Total revenue</span> and payment totals use{' '}
+                <span className="font-medium text-gray-700">payment date</span> (Manila, when payment was recorded).{' '}
+                Invoice counts on this page still use <span className="font-medium text-gray-700">invoice issue date</span>.{' '}
+                Excel export with dates uses the same payment-date basis so totals match revenue.
               </p>
             </div>
             <button

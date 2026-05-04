@@ -1,7 +1,7 @@
 import AcknowledgementReceiptsPage from '../shared/AcknowledgementReceiptsPage';
 
 const SuperfinanceAcknowledgementReceipts = () => {
-  return <AcknowledgementReceiptsPage />;
+  return <AcknowledgementReceiptsPage requireExportDateRange />;
 };
 
 export default SuperfinanceAcknowledgementReceipts;

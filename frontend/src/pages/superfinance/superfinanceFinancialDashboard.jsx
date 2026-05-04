@@ -63,26 +63,17 @@ const SuperfinanceFinancialDashboard = () => {
         baseParams.append('issue_date_to', issueDateTo.trim());
       }
 
-      const fetchAllPayments = async () => {
-        const limit = 100;
-        let page = 1;
-        let allPayments = [];
-        let totalPages = 1;
+      const metricsParams = new URLSearchParams();
+      if (selectedBranchId) {
+        metricsParams.append('branch_id', selectedBranchId);
+      }
+      if (issueDateFrom.trim()) {
+        metricsParams.append('payment_date_from', issueDateFrom.trim());
+      }
+      if (issueDateTo.trim()) {
+        metricsParams.append('payment_date_to', issueDateTo.trim());
+      }
 
-        do {
-          const pageParams = new URLSearchParams(baseParams.toString());
-          pageParams.append('limit', String(limit));
-          pageParams.append('page', String(page));
-
-          const response = await apiRequest(`/payments?${pageParams.toString()}`);
-          const pageData = response.data || [];
-          allPayments = allPayments.concat(pageData);
-          totalPages = response.pagination?.totalPages || 1;
-          page += 1;
-        } while (page <= totalPages);
-
-        return allPayments;
-      };
       const fetchAllAcknowledgementReceipts = async () => {
         const limit = 100;
         let page = 1;
@@ -92,6 +83,12 @@ const SuperfinanceFinancialDashboard = () => {
           const pageParams = new URLSearchParams();
           if (selectedBranchId) {
             pageParams.append('branch_id', selectedBranchId);
+          }
+          if (issueDateFrom.trim()) {
+            pageParams.append('issue_date_from', issueDateFrom.trim());
+          }
+          if (issueDateTo.trim()) {
+            pageParams.append('issue_date_to', issueDateTo.trim());
           }
           pageParams.append('limit', String(limit));
           pageParams.append('page', String(page));
@@ -105,19 +102,20 @@ const SuperfinanceFinancialDashboard = () => {
       };
 
       const invoiceQs = baseParams.toString();
-      const [invoicesResponse, payments, acknowledgementReceipts] = await Promise.all([
+      const metricsQuery = metricsParams.toString();
+      const [invoicesResponse, payMetricsRes, acknowledgementReceipts] = await Promise.all([
         apiRequest(invoiceQs ? `/invoices?${invoiceQs}` : '/invoices'),
-        fetchAllPayments(),
+        apiRequest(
+          metricsQuery
+            ? `/payments/financial-dashboard-metrics?${metricsQuery}`
+            : '/payments/financial-dashboard-metrics'
+        ),
         fetchAllAcknowledgementReceipts(),
       ]);
 
       const invoices = invoicesResponse.data || [];
+      const pm = payMetricsRes.data || {};
 
-      const paymentTotalAmount = (payment) => (parseFloat(payment?.payable_amount) || 0) + (parseFloat(payment?.tip_amount) || 0);
-      const completedPayments = payments.filter((p) => p.status === 'Completed');
-      const totalRevenue = completedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0);
-      const verifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') === 'Approved');
-      const unverifiedPayments = completedPayments.filter((p) => (p.approval_status || 'Pending') !== 'Approved');
       const pendingInvoices = invoices.filter((i) => i.status === 'Unpaid' || i.status === 'Partial').length;
       const unpaidInvoices = invoices.filter((i) => i.status === 'Unpaid').length;
       const packageAr = (acknowledgementReceipts || []).filter((ar) => ar.ar_type === 'Package');
@@ -126,48 +124,31 @@ const SuperfinanceFinancialDashboard = () => {
       const arUnverified = packageAr.filter((ar) => !['Verified', 'Applied', 'Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
       const arAmount = (ar) => (parseFloat(ar.payment_amount) || 0) + (parseFloat(ar.tip_amount) || 0);
 
-      const revenueByBranchMap = new Map();
-      completedPayments.forEach((payment) => {
-        const branchId = payment.branch_id;
-        let branchName = payment.branch_name;
-        if (!branchName && branchId && branchesData.length > 0) {
-          const branch = branchesData.find((b) => b.branch_id === branchId);
+      const revenueByBranch = (pm.revenueByBranch || []).map((row) => {
+        let branchName = row.branch_name;
+        const bid = row.branch_id;
+        if (!branchName && bid != null && branchesData.length > 0) {
+          const branch = branchesData.find((b) => b.branch_id === bid);
           branchName = branch?.branch_name || null;
         }
-        if (!branchName && branchId) {
-          branchName = `Branch ${branchId}`;
-        }
-        const amount = paymentTotalAmount(payment);
-
-        if (revenueByBranchMap.has(branchId)) {
-          revenueByBranchMap.set(branchId, {
-            branch_id: branchId,
-            branch_name: branchName || `Branch ${branchId}`,
-            revenue: revenueByBranchMap.get(branchId).revenue + amount,
-          });
-        } else {
-          revenueByBranchMap.set(branchId, {
-            branch_id: branchId,
-            branch_name: branchName || `Branch ${branchId}`,
-            revenue: amount,
-          });
-        }
+        return {
+          branch_id: bid,
+          branch_name: branchName || row.branch_name || (bid != null ? `Branch ${bid}` : ''),
+          revenue: parseFloat(row.revenue) || 0,
+        };
       });
-      const revenueByBranch = Array.from(revenueByBranchMap.values())
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 5);
 
       setMetrics({
-        totalRevenue,
+        totalRevenue: pm.totalRevenue ?? 0,
         pendingInvoices,
-        completedPayments: completedPayments.length,
+        completedPayments: pm.completedPayments ?? 0,
         unpaidInvoices,
-        totalBranches: branchesData.length,
+        totalBranches: selectedBranchId ? 1 : branchesData.length,
         revenueByBranch,
-        verifiedPaymentsCount: verifiedPayments.length,
-        verifiedPaymentsAmount: verifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
-        unverifiedPaymentsCount: unverifiedPayments.length,
-        unverifiedPaymentsAmount: unverifiedPayments.reduce((sum, p) => sum + paymentTotalAmount(p), 0),
+        verifiedPaymentsCount: pm.verifiedPaymentsCount ?? 0,
+        verifiedPaymentsAmount: pm.verifiedPaymentsAmount ?? 0,
+        unverifiedPaymentsCount: pm.unverifiedPaymentsCount ?? 0,
+        unverifiedPaymentsAmount: pm.unverifiedPaymentsAmount ?? 0,
         arSalesCount: arIncludedSales.length,
         arSalesAmount: arIncludedSales.reduce((sum, ar) => sum + arAmount(ar), 0),
         arVerifiedCount: arVerified.length,
@@ -181,10 +162,7 @@ const SuperfinanceFinancialDashboard = () => {
         .slice(0, 3);
       setRecentInvoices(recentInvoicesList);
 
-      const recentPaymentsList = payments
-        .filter((p) => p.status === 'Completed')
-        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-        .slice(0, 3);
+      const recentPaymentsList = (pm.recentPayments || []).slice(0, 3);
       setRecentPayments(recentPaymentsList);
     } catch (err) {
       setError(err.message || 'Failed to load dashboard data');
@@ -227,8 +205,8 @@ const SuperfinanceFinancialDashboard = () => {
     issueDateFrom || issueDateTo
       ? `Applied: ${issueDateFrom ? formatDateManila(issueDateFrom) : '…'} — ${
           issueDateTo ? formatDateManila(issueDateTo) : '…'
-        } (issue dates, inclusive)`
-      : 'No date filter — totals include all invoice and payment issue dates.';
+        } (invoice issue dates for counts; total revenue uses payment date in Manila, inclusive)`
+      : 'No date filter — totals include all invoices and payments.';
 
   const formatCurrency = (amount) => {
     if (!amount && amount !== 0) return '₱0.00';
@@ -352,7 +330,7 @@ const SuperfinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {formatCurrency(metrics.totalRevenue)}
               </p>
-              <p className="mt-1 text-xs text-gray-500">Completed payments in range</p>
+              <p className="mt-1 text-xs text-gray-500">Completed payments with payment date in range (Manila)</p>
             </div>
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
               <DashboardStatIcon name="currency" className="h-6 w-6 text-green-600" />

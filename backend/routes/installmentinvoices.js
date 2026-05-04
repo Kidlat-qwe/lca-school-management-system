@@ -705,12 +705,16 @@ router.get(
       const filterSql = filterFragments.length ? ` AND ${filterFragments.join(' AND ')}` : '';
 
       // (1) One schedule row per profile. (2) One profile per student+class: keep the "real" row (more billing progress / active).
+      // Start from profiles so students with installment plans still appear even if no schedule row exists yet.
       const countSql = `
         WITH sched_ranked AS (
           SELECT
                ip.student_id,
+               ip.branch_id,
                ip.class_id,
                ip.installmentinvoiceprofiles_id,
+               ii.installmentinvoicedtl_id,
+               p.program_name,
                CASE
                  WHEN ip.is_active = true THEN true
                  WHEN ip.is_active = false AND ip.class_id IS NOT NULL AND EXISTS (
@@ -748,8 +752,8 @@ router.get(
                    ii.scheduled_date DESC NULLS LAST,
                    ii.installmentinvoicedtl_id DESC
                ) AS _rn_sched
-          FROM installmentinvoicestbl ii
-          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+          FROM installmentinvoiceprofilestbl ip
+          LEFT JOIN installmentinvoicestbl ii ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
           LEFT JOIN classestbl c ON ip.class_id = c.class_id
           LEFT JOIN programstbl p ON c.program_id = p.program_id
           WHERE 1=1${filterSql}
@@ -760,9 +764,10 @@ router.get(
         dup_ranked AS (
           SELECT *,
             ROW_NUMBER() OVER (
-              PARTITION BY student_id, COALESCE(class_id, -installmentinvoiceprofiles_id)
+              PARTITION BY student_id, COALESCE(branch_id, -1), COALESCE(program_name, '__NO_PROGRAM__')
               ORDER BY
                 (CASE WHEN profile_is_active THEN 1 ELSE 0 END) DESC,
+                (CASE WHEN installmentinvoicedtl_id IS NOT NULL THEN 1 ELSE 0 END) DESC,
                 COALESCE(paid_phases, 0) DESC,
                 COALESCE(generated_phases, 0) DESC,
                 COALESCE(gen_ct, 0) DESC,
@@ -825,8 +830,8 @@ router.get(
                    ii.scheduled_date DESC NULLS LAST,
                    ii.installmentinvoicedtl_id DESC
                ) AS _rn_sched
-          FROM installmentinvoicestbl ii
-          JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+          FROM installmentinvoiceprofilestbl ip
+          LEFT JOIN installmentinvoicestbl ii ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
           LEFT JOIN classestbl c ON ip.class_id = c.class_id
           LEFT JOIN programstbl p ON c.program_id = p.program_id
           LEFT JOIN userstbl u ON ip.student_id = u.user_id
@@ -838,9 +843,10 @@ router.get(
         dup_ranked AS (
           SELECT *,
             ROW_NUMBER() OVER (
-              PARTITION BY student_id, COALESCE(class_id, -installmentinvoiceprofiles_id)
+              PARTITION BY student_id, COALESCE(branch_id, -1), COALESCE(program_name, '__NO_PROGRAM__')
               ORDER BY
                 (CASE WHEN profile_is_active THEN 1 ELSE 0 END) DESC,
+                (CASE WHEN installmentinvoicedtl_id IS NOT NULL THEN 1 ELSE 0 END) DESC,
                 COALESCE(paid_phases::integer, 0) DESC,
                 COALESCE(generated_phases::integer, 0) DESC,
                 COALESCE(generated_count, 0) DESC,
@@ -853,7 +859,7 @@ router.get(
 
       const listParams = [...filterParams];
       fp = filterParams.length;
-      sql += ` ORDER BY scheduled_date DESC NULLS LAST LIMIT $${fp + 1} OFFSET $${fp + 2}`;
+      sql += ` ORDER BY scheduled_date DESC NULLS LAST, installmentinvoiceprofiles_id DESC LIMIT $${fp + 1} OFFSET $${fp + 2}`;
       listParams.push(limitNum, offset);
 
       const result = await query(sql, listParams);

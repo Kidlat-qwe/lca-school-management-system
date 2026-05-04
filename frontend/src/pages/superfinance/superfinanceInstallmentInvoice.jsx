@@ -176,6 +176,10 @@ const SuperfinanceInstallmentInvoice = () => {
   const handleGenerateInvoice = (invoice) => {
     setOpenActionMenu(null);
     setActionMenuPosition(null);
+    if (!invoice?.installmentinvoicedtl_id) {
+      appAlert('Installment schedule is not created yet for this student. It will appear once the first schedule row is generated.');
+      return;
+    }
 
     if (!canGenerateInstallmentInvoice(invoice)) {
       const reason = installmentGenerateBlockedReason(invoice);
@@ -291,6 +295,12 @@ const SuperfinanceInstallmentInvoice = () => {
   };
 
   const handleDelete = async (invoice) => {
+    if (!invoice?.installmentinvoicedtl_id) {
+      appAlert('No installment schedule row exists yet for this student.');
+      setOpenActionMenu(null);
+      setActionMenuPosition(null);
+      return;
+    }
     if (
       !(await appConfirm({
         title: 'Delete installment invoice',
@@ -440,7 +450,7 @@ const SuperfinanceInstallmentInvoice = () => {
               ) : (
                 paginatedInvoices.map((invoice) => (
                   <tr
-                    key={invoice.installmentinvoicedtl_id}
+                    key={invoice.installmentinvoicedtl_id ?? `profile-${invoice.installmentinvoiceprofiles_id}`}
                     className={
                       Number(invoice.installmentinvoiceprofiles_id) === highlightedProfileId
                         ? 'bg-amber-50'
@@ -522,11 +532,11 @@ const SuperfinanceInstallmentInvoice = () => {
                           onClick={(e) => {
                             e.stopPropagation();
                             const buttonRect = e.currentTarget.getBoundingClientRect();
-                            if (openActionMenu === invoice.installmentinvoicedtl_id) {
+                            if (openActionMenu === (invoice.installmentinvoicedtl_id ?? `profile-${invoice.installmentinvoiceprofiles_id}`)) {
                               setOpenActionMenu(null);
                               setActionMenuPosition(null);
                             } else {
-                              setOpenActionMenu(invoice.installmentinvoicedtl_id);
+                              setOpenActionMenu(invoice.installmentinvoicedtl_id ?? `profile-${invoice.installmentinvoiceprofiles_id}`);
                               // Calculate available space
                               const viewportHeight = window.innerHeight;
                               const viewportWidth = window.innerWidth;
@@ -610,7 +620,7 @@ const SuperfinanceInstallmentInvoice = () => {
           >
             <div className="py-1">
               {(() => {
-                const invoice = filteredInvoices.find(inv => inv.installmentinvoicedtl_id === openActionMenu);
+                const invoice = filteredInvoices.find(inv => (inv.installmentinvoicedtl_id ?? `profile-${inv.installmentinvoiceprofiles_id}`) === openActionMenu);
                 if (!invoice) return null;
                 return (
                   <>

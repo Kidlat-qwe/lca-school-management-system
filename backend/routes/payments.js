@@ -471,6 +471,177 @@ const notifyPaymentResubmittedForVerification = async ({
 };
 
 /**
+ * GET /api/sms/payments/financial-dashboard-metrics
+ * Single round-trip aggregates for finance/superfinance dashboards (replaces many paginated /payments calls).
+ * Filters by Manila payment date: (COALESCE(approved_at, created_at) AT TIME ZONE 'Asia/Manila')::date.
+ */
+router.get(
+  '/financial-dashboard-metrics',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const branchIdParam = req.query.branch_id ? parseInt(String(req.query.branch_id), 10) : null;
+      const payFrom = req.query.payment_date_from
+        ? String(req.query.payment_date_from).trim().slice(0, 10)
+        : '';
+      const payTo = req.query.payment_date_to ? String(req.query.payment_date_to).trim().slice(0, 10) : '';
+      if (payFrom && payTo && payFrom > payTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+
+      const params = [];
+      let pc = 0;
+      let whereExtra = '';
+
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        pc += 1;
+        whereExtra += ` AND p.branch_id = $${pc}`;
+        params.push(req.user.branchId);
+      } else if (branchIdParam) {
+        pc += 1;
+        whereExtra += ` AND p.branch_id = $${pc}`;
+        params.push(branchIdParam);
+      }
+
+      if (payFrom) {
+        pc += 1;
+        whereExtra += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${pc}::date`;
+        params.push(payFrom);
+      }
+      if (payTo) {
+        pc += 1;
+        whereExtra += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${pc}::date`;
+        params.push(payTo);
+      }
+
+      const baseFrom = `
+        FROM paymenttbl p
+        LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+        LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
+      `;
+
+      const statsSql = `
+        SELECT
+          COALESCE(
+            SUM(CASE WHEN p.status = 'Completed'
+              THEN COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0) ELSE 0 END),
+          0)::numeric AS total_revenue,
+          COUNT(*) FILTER (WHERE p.status = 'Completed')::int AS completed_count,
+          COUNT(*) FILTER (
+            WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
+          )::int AS verified_count,
+          COALESCE(
+            SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
+            ),
+            0
+          )::numeric AS verified_amount,
+          COUNT(*) FILTER (
+            WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+          )::int AS unverified_count,
+          COALESCE(
+            SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+            ),
+            0
+          )::numeric AS unverified_amount
+        ${baseFrom}
+        WHERE 1=1
+        ${whereExtra}
+      `;
+
+      const byBranchSql = `
+        SELECT
+          p.branch_id,
+          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+          COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0)::numeric AS revenue
+        ${baseFrom}
+        WHERE 1=1
+        ${whereExtra}
+          AND p.status = 'Completed'
+        GROUP BY p.branch_id, b.branch_nickname, b.branch_name
+        ORDER BY revenue DESC NULLS LAST
+        LIMIT 5
+      `;
+
+      const recentSql = `
+        SELECT
+          p.payment_id,
+          p.invoice_id,
+          p.student_id,
+          p.branch_id,
+          p.payable_amount,
+          COALESCE(p.tip_amount, 0) AS tip_amount,
+          TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
+          TO_CHAR(
+            (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date,
+            'YYYY-MM-DD'
+          ) AS payment_date,
+          p.status,
+          p.approval_status,
+          p.payment_method,
+          TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+          u.full_name AS student_name
+        FROM paymenttbl p
+        LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+        LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
+        LEFT JOIN userstbl u ON p.student_id = u.user_id
+        WHERE 1=1
+        ${whereExtra}
+          AND p.status = 'Completed'
+        ORDER BY p.payment_id DESC
+        LIMIT 3
+      `;
+
+      const paramsCopy = () => [...params];
+
+      const [statsRes, byBranchRes, recentRes] = await Promise.all([
+        query(statsSql, paramsCopy()),
+        query(byBranchSql, paramsCopy()),
+        query(recentSql, paramsCopy()),
+      ]);
+
+      const row = statsRes.rows[0] || {};
+
+      res.json({
+        success: true,
+        data: {
+          totalRevenue: parseFloat(row.total_revenue) || 0,
+          completedPayments: parseInt(row.completed_count, 10) || 0,
+          verifiedPaymentsCount: parseInt(row.verified_count, 10) || 0,
+          verifiedPaymentsAmount: parseFloat(row.verified_amount) || 0,
+          unverifiedPaymentsCount: parseInt(row.unverified_count, 10) || 0,
+          unverifiedPaymentsAmount: parseFloat(row.unverified_amount) || 0,
+          revenueByBranch: (byBranchRes.rows || []).map((r) => ({
+            branch_id: r.branch_id,
+            branch_name: r.branch_name || (r.branch_id != null ? `Branch ${r.branch_id}` : ''),
+            revenue: parseFloat(r.revenue) || 0,
+          })),
+          recentPayments: recentRes.rows || [],
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * GET /api/sms/payments
  * Get all payments with optional filters
  * Access: All authenticated users
@@ -484,6 +655,22 @@ router.get(
     queryValidator('issue_date').optional().isISO8601().withMessage('issue_date must be YYYY-MM-DD'),
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
     queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('invoice_issue_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('invoice_issue_date_from must be YYYY-MM-DD'),
+    queryValidator('invoice_issue_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('invoice_issue_date_to must be YYYY-MM-DD'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -541,6 +728,7 @@ router.get(
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                         p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
+                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_issue_date,
                         TO_CHAR((COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date, 'YYYY-MM-DD') as payment_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
@@ -628,6 +816,56 @@ router.get(
         paramCount++;
         sql += ` AND p.issue_date = $${paramCount}::date`;
         params.push(issue_date);
+      }
+
+      const invIssueFrom = req.query.invoice_issue_date_from
+        ? String(req.query.invoice_issue_date_from).trim().slice(0, 10)
+        : '';
+      const invIssueTo = req.query.invoice_issue_date_to
+        ? String(req.query.invoice_issue_date_to).trim().slice(0, 10)
+        : '';
+      const useInvoiceIssueRange = Boolean(invIssueFrom || invIssueTo);
+      if (useInvoiceIssueRange) {
+        if (invIssueFrom && invIssueTo && invIssueFrom > invIssueTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'invoice_issue_date_from must be on or before invoice_issue_date_to',
+          });
+        }
+        if (invIssueFrom) {
+          paramCount++;
+          sql += ` AND i.issue_date >= $${paramCount}::date`;
+          params.push(invIssueFrom);
+        }
+        if (invIssueTo) {
+          paramCount++;
+          sql += ` AND i.issue_date <= $${paramCount}::date`;
+          params.push(invIssueTo);
+        }
+      }
+
+      const payDateFrom = req.query.payment_date_from
+        ? String(req.query.payment_date_from).trim().slice(0, 10)
+        : '';
+      const payDateTo = req.query.payment_date_to ? String(req.query.payment_date_to).trim().slice(0, 10) : '';
+      const usePaymentDateRange = Boolean(payDateFrom || payDateTo);
+      if (usePaymentDateRange) {
+        if (payDateFrom && payDateTo && payDateFrom > payDateTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'payment_date_from must be on or before payment_date_to',
+          });
+        }
+        if (payDateFrom) {
+          paramCount++;
+          sql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${paramCount}::date`;
+          params.push(payDateFrom);
+        }
+        if (payDateTo) {
+          paramCount++;
+          sql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${paramCount}::date`;
+          params.push(payDateTo);
+        }
       }
 
       if (status) {
@@ -770,6 +1008,32 @@ router.get(
         countParamCount++;
         countSql += ` AND p.issue_date = $${countParamCount}::date`;
         countParams.push(issue_date);
+      }
+
+      if (useInvoiceIssueRange) {
+        if (invIssueFrom) {
+          countParamCount++;
+          countSql += ` AND i.issue_date >= $${countParamCount}::date`;
+          countParams.push(invIssueFrom);
+        }
+        if (invIssueTo) {
+          countParamCount++;
+          countSql += ` AND i.issue_date <= $${countParamCount}::date`;
+          countParams.push(invIssueTo);
+        }
+      }
+
+      if (usePaymentDateRange) {
+        if (payDateFrom) {
+          countParamCount++;
+          countSql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${countParamCount}::date`;
+          countParams.push(payDateFrom);
+        }
+        if (payDateTo) {
+          countParamCount++;
+          countSql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${countParamCount}::date`;
+          countParams.push(payDateTo);
+        }
       }
 
       if (status) {

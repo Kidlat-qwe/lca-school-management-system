@@ -188,6 +188,14 @@ router.get(
       .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    queryValidator('issue_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('issue_date_from must be YYYY-MM-DD'),
+    queryValidator('issue_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('issue_date_to must be YYYY-MM-DD'),
     queryValidator('only_unused')
       .optional()
       .isIn(['0', '1', 'true', 'false'])
@@ -198,7 +206,26 @@ router.get(
   requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
   async (req, res, next) => {
     try {
-      const { status, branch_id, search, payment_method, page = 1, limit = 20, only_unused, exclude_status } = req.query;
+      const {
+        status,
+        branch_id,
+        search,
+        payment_method,
+        page = 1,
+        limit = 20,
+        only_unused,
+        exclude_status,
+        issue_date_from: issueDateFrom,
+        issue_date_to: issueDateTo,
+      } = req.query;
+      const arFrom = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
+      const arTo = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
+      if (arFrom && arTo && arFrom > arTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'issue_date_from must be on or before issue_date_to',
+        });
+      }
       const onlyUnusedList =
         String(only_unused || '') === '1' || String(only_unused || '').toLowerCase() === 'true';
       const pageNum = parseInt(page) || 1;
@@ -275,6 +302,17 @@ router.get(
         params.push(payment_method);
       }
 
+      if (arFrom) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date >= $${paramCount}::date`;
+        params.push(arFrom);
+      }
+      if (arTo) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date <= $${paramCount}::date`;
+        params.push(arTo);
+      }
+
       sql += ` ORDER BY ar.ack_receipt_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -335,6 +373,17 @@ router.get(
         countParamCount += 1;
         countSql += ` AND ar.payment_method = $${countParamCount}`;
         countParams.push(payment_method);
+      }
+
+      if (arFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date >= $${countParamCount}::date`;
+        countParams.push(arFrom);
+      }
+      if (arTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date <= $${countParamCount}::date`;
+        countParams.push(arTo);
       }
 
       const countResult = await query(countSql, countParams);
