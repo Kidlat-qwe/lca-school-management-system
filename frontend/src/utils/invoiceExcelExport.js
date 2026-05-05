@@ -87,7 +87,7 @@ function appendAmountTotalRow(ws, exportRows) {
   const amountCol = headers.indexOf(amountKey);
   if (amountCol < 0) return;
 
-  ws[XLSX.utils.encode_cell({ r: totalRow, c: 0 })] = { t: 's', v: 'Total' };
+  ws[XLSX.utils.encode_cell({ r: totalRow, c: 0 })] = { t: 's', v: 'Total amount' };
   ws[XLSX.utils.encode_cell({ r: totalRow, c: amountCol })] = {
     t: 'n',
     v: Math.round(sum * 100) / 100,

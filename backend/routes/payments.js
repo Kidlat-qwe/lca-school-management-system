@@ -1109,9 +1109,17 @@ router.get(
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total);
 
+      const sumSql = countSql.replace(
+        /SELECT COUNT\(\*\) as total/i,
+        'SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0)::numeric AS total_line_amount'
+      );
+      const sumResult = await query(sumSql, countParams);
+      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
+
       res.json({
         success: true,
         data: payments,
+        filterTotalLineAmount,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -1138,6 +1146,14 @@ router.get(
     queryValidator('issue_date').optional().isISO8601().withMessage('issue_date must be YYYY-MM-DD'),
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
     queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('pending_only').optional().isString().withMessage('pending_only must be a string'),
     queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
@@ -1178,10 +1194,23 @@ router.get(
         });
       }
 
+      const payDateFrom = req.query.payment_date_from
+        ? String(req.query.payment_date_from).trim().slice(0, 10)
+        : '';
+      const payDateTo = req.query.payment_date_to ? String(req.query.payment_date_to).trim().slice(0, 10) : '';
+      const usePaymentDateRange = Boolean(payDateFrom || payDateTo);
+      if (usePaymentDateRange && payDateFrom && payDateTo && payDateFrom > payDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+
       // ---------- 1) Normal payment rows ----------
       let paySql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
                            p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                            TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
+                           TO_CHAR((COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date, 'YYYY-MM-DD') as payment_date,
                            p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                            TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                            p.approval_status, p.approved_by,
@@ -1246,11 +1275,25 @@ router.get(
         payParams.push(issue_date);
       }
 
+      if (usePaymentDateRange) {
+        if (payDateFrom) {
+          payPc++;
+          paySql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${payPc}::date`;
+          payParams.push(payDateFrom);
+        }
+        if (payDateTo) {
+          payPc++;
+          paySql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${payPc}::date`;
+          payParams.push(payDateTo);
+        }
+      }
+
       if (pendingOnly) {
         paySql += ` AND p.status = 'Completed'
                     AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned'))`;
       } else {
-        paySql += ` AND (p.approval_status IS NULL OR p.approval_status <> 'Returned')`;
+        // "All" queue: same completed-payment scope as Financial Dashboard total revenue (payment date range).
+        paySql += ` AND p.status = 'Completed'`;
       }
 
       if (pmFilter && pmFilter !== 'Acknowledgement Receipt') {
@@ -1337,6 +1380,19 @@ router.get(
         arParams.push(issue_date);
       }
 
+      if (usePaymentDateRange) {
+        if (payDateFrom) {
+          arPc++;
+          arSql += ` AND (COALESCE(ar.verified_at, ar.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${arPc}::date`;
+          arParams.push(payDateFrom);
+        }
+        if (payDateTo) {
+          arPc++;
+          arSql += ` AND (COALESCE(ar.verified_at, ar.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${arPc}::date`;
+          arParams.push(payDateTo);
+        }
+      }
+
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
       if (!pmFilter || pmFilter === 'Acknowledgement Receipt') {
@@ -1393,9 +1449,15 @@ router.get(
       const total = merged.length;
       const pageData = merged.slice(offset, offset + limitNum).map(({ sort_id, ...rest }) => rest);
 
+      const filterTotalLineAmount = merged.reduce(
+        (s, r) => s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0),
+        0
+      );
+
       return res.json({
         success: true,
         data: pageData,
+        filterTotalLineAmount,
         pagination: {
           page: pageNum,
           limit: limitNum,

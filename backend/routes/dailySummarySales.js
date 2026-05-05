@@ -92,14 +92,31 @@ router.get(
       const result = await query(sql, params);
 
       /**
-       * Never attach live_grand_* on the list for any role. Amount/count columns reflect only DB snapshots
-       * (submit + resubmit after return). Live breakdown stays in preview/modals until explicit resubmit updates the row.
+       * Align list Amount with GET /:id/payments totals (same rules as EOD snapshot).
+       * Stored total_amount may lag until resubmit; live_grand_* matches the detail modal.
        */
-      const dataRows = (result.rows || []).map((row) => ({
-        ...row,
-        live_grand_total: null,
-        live_grand_count: null,
-      }));
+      const dataRows = await Promise.all(
+        (result.rows || []).map(async (row) => {
+          const ymd = summaryDateToYmd(row.summary_date);
+          if (!ymd || !row.branch_id) {
+            return { ...row, live_grand_total: null, live_grand_count: null };
+          }
+          try {
+            const agg = await getEodGrandTotalsOnly({
+              branchId: row.branch_id,
+              summaryDate: ymd,
+              submittedAfter: null,
+            });
+            return {
+              ...row,
+              live_grand_total: agg.total,
+              live_grand_count: agg.paymentCount,
+            };
+          } catch {
+            return { ...row, live_grand_total: null, live_grand_count: null };
+          }
+        })
+      );
 
       // Count total
       let countSql = `SELECT COUNT(*) AS total FROM daily_summary_salestbl d WHERE 1=1`;

@@ -1,15 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
+import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import StandardExportModal from '../../components/export/StandardExportModal';
+import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 
 /** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
 const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
@@ -83,6 +86,9 @@ const AdminPaymentLogs = () => {
   const [returnFixRemarks, setReturnFixRemarks] = useState('');
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_nickname || userInfo?.branch_name || 'Your Branch');
   const [exportLoading, setExportLoading] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportPaymentDateFrom, setExportPaymentDateFrom] = useState('');
+  const [exportPaymentDateTo, setExportPaymentDateTo] = useState('');
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -107,6 +113,9 @@ const AdminPaymentLogs = () => {
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
+  const [listRefreshing, setListRefreshing] = useState(false);
+  const initialDataLoadedRef = useRef(false);
   /** Total items in Return queue for current filters — Return tab badge */
   const [returnedPaymentLogCount, setReturnedPaymentLogCount] = useState(null);
   const [endOfShiftLoading, setEndOfShiftLoading] = useState(false);
@@ -239,13 +248,13 @@ const AdminPaymentLogs = () => {
     } else if (financeApproval === 'all' || financeApproval === '') {
       setFilterFinanceApproval('');
     }
-    const issueFrom = (params.get('issue_date_from') || '').trim().slice(0, 10);
-    const issueTo = (params.get('issue_date_to') || '').trim().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(issueFrom)) {
-      setFilterIssueDateFrom(issueFrom);
+    const payFrom = (params.get('payment_date_from') || params.get('issue_date_from') || '').trim().slice(0, 10);
+    const payTo = (params.get('payment_date_to') || params.get('issue_date_to') || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(payFrom)) {
+      setFilterIssueDateFrom(payFrom);
     }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(issueTo)) {
-      setFilterIssueDateTo(issueTo);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(payTo)) {
+      setFilterIssueDateTo(payTo);
     }
   }, [location.search]);
 
@@ -831,12 +840,16 @@ const AdminPaymentLogs = () => {
   const fetchPayments = async (page = 1) => {
     const fetchId = ++latestFetchIdRef.current;
     try {
-      setLoading(true);
+      if (!initialDataLoadedRef.current) {
+        setLoading(true);
+      } else {
+        setListRefreshing(true);
+      }
       const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (adminBranchId) params.set('branch_id', String(adminBranchId));
-      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       if (branchLogTab === 'return') {
         params.set('my_return_queue', 'true');
@@ -848,11 +861,16 @@ const AdminPaymentLogs = () => {
         params.set('status', 'Completed');
         params.set('exclude_approval_status', 'Approved,Returned');
       } else {
-        params.set('exclude_approval_status', 'Returned');
+        params.set('status', 'Completed');
       }
       const response = await apiRequest(`/payments?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
+      if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
+        setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
+      } else {
+        setFilterTotalLineAmount(null);
+      }
       if (response.pagination) {
         setPagination({
           page: response.pagination.page,
@@ -867,9 +885,12 @@ const AdminPaymentLogs = () => {
       console.error('Error fetching payments:', err);
       setError('Failed to load payments. Please try again.');
       setPayments([]);
+      setFilterTotalLineAmount(null);
     } finally {
       if (fetchId !== latestFetchIdRef.current) return;
       setLoading(false);
+      setListRefreshing(false);
+      initialDataLoadedRef.current = true;
     }
   };
 
@@ -878,8 +899,8 @@ const AdminPaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       params.set('branch_id', String(adminBranchId));
-      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       params.set('my_return_queue', 'true');
       const response = await apiRequest(`/payments?${params.toString()}`);
@@ -980,15 +1001,31 @@ const AdminPaymentLogs = () => {
         (payment.approval_status || 'Pending') !== 'Approved');
     return matchesSearch && matchesFinanceApproval;
   });
-  const filteredTotalAmount = filteredPayments.reduce(
-    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
-    0
-  );
 
-  const handleExportToExcel = async () => {
+  const summaryLineTotal = useMemo(() => {
+    const line = (p) => (parseFloat(p.payable_amount) || 0) + (parseFloat(p.tip_amount) || 0);
+    if (searchTerm.trim()) {
+      return filteredPayments.reduce((s, p) => s + line(p), 0);
+    }
+    if (filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))) {
+      return Number(filterTotalLineAmount);
+    }
+    return filteredPayments.reduce((s, p) => s + line(p), 0);
+  }, [searchTerm, filteredPayments, filterTotalLineAmount]);
+
+  const exportPaymentDateRangeInvalid =
+    Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
+
+  const handleExportToExcel = async (opts = {}) => {
+    const { closeModalAfter = false } = opts;
+    let wroteFile = false;
+    if (exportPaymentDateRangeInvalid) {
+      appAlert('"From" date must be on or before "To" date.');
+      return;
+    }
     try {
       setExportLoading(true);
-      
+
       // Fetch all payments for admin's branch (paginate: backend limit max 100)
       const limit = 100;
       const allPayments = [];
@@ -997,8 +1034,8 @@ const AdminPaymentLogs = () => {
       while (hasMore) {
         const params = new URLSearchParams({ limit: String(limit), page: String(page) });
         if (adminBranchId) params.set('branch_id', String(adminBranchId));
-        if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-        if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        if (exportPaymentDateFrom) params.set('payment_date_from', exportPaymentDateFrom);
+        if (exportPaymentDateTo) params.set('payment_date_to', exportPaymentDateTo);
         if (branchLogTab === 'return') {
           params.set('my_return_queue', 'true');
         } else if (filterFinanceApproval === 'approved') {
@@ -1009,7 +1046,7 @@ const AdminPaymentLogs = () => {
           params.set('status', 'Completed');
           params.set('exclude_approval_status', 'Approved,Returned');
         } else {
-          params.set('exclude_approval_status', 'Returned');
+          params.set('status', 'Completed');
         }
         const res = await apiRequest(`/payments?${params.toString()}`);
         const data = res.data || [];
@@ -1021,12 +1058,11 @@ const AdminPaymentLogs = () => {
 
       if (allPayments.length === 0) {
         appAlert('No payment records found to export.');
-        setExportLoading(false);
         return;
       }
 
       // Prepare data for Excel
-      const excelData = allPayments.map(payment => ({
+      const excelData = allPayments.map((payment) => ({
         'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
         'Invoice Description': payment.invoice_description || '-',
         'Student Name': payment.student_name || 'N/A',
@@ -1034,9 +1070,11 @@ const AdminPaymentLogs = () => {
         'Payment Method': payment.payment_method || '-',
         'Package/Item': payment.invoice_description || '-',
         'Level Tag': payment.student_level_tag || '-',
-        'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
+        'Amount (₱)': (Number(payment.payable_amount || 0) + Number(payment.tip_amount || 0)).toFixed(2),
         'Status': payment.status || 'N/A',
-        'Payment Date': (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-',
+        'Payment Date': (payment.payment_date || payment.issue_date)
+          ? formatDate(payment.payment_date || payment.issue_date)
+          : '-',
         'AR#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
         'Remarks': payment.remarks || '-',
@@ -1045,21 +1083,22 @@ const AdminPaymentLogs = () => {
       // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(excelData);
+      appendPaymentLogsAmountTotalRow(ws, excelData);
 
       // Set column widths
       ws['!cols'] = [
-        { wch: 12 },  // Invoice ID
-        { wch: 30 },  // Invoice Description
-        { wch: 25 },  // Student Name
-        { wch: 30 },  // Student Email
-        { wch: 18 },  // Payment Method
-        { wch: 18 },  // Payment Type
-        { wch: 15 },  // Amount
-        { wch: 12 },  // Status
-        { wch: 15 },  // Issue Date
-        { wch: 10 },  // AR#
-        { wch: 20 },  // Reference Number
-        { wch: 30 },  // Remarks
+        { wch: 12 }, // Invoice ID
+        { wch: 30 }, // Invoice Description
+        { wch: 25 }, // Student Name
+        { wch: 30 }, // Student Email
+        { wch: 18 }, // Payment Method
+        { wch: 18 }, // Payment Type
+        { wch: 15 }, // Amount
+        { wch: 12 }, // Status
+        { wch: 15 }, // Issue Date
+        { wch: 10 }, // AR#
+        { wch: 20 }, // Reference Number
+        { wch: 30 }, // Remarks
       ];
 
       // Add worksheet to workbook
@@ -1072,17 +1111,18 @@ const AdminPaymentLogs = () => {
 
       // Save file
       XLSX.writeFile(wb, filename);
-
-      setExportLoading(false);
+      wroteFile = true;
     } catch (error) {
       console.error('Export error:', error);
       appAlert('Failed to export payment logs. Please try again.');
+    } finally {
       setExportLoading(false);
+      if (closeModalAfter && wroteFile) setShowExportModal(false);
     }
   };
 
 
-  if (loading) {
+  if (loading && !initialDataLoadedRef.current) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -1156,7 +1196,9 @@ const AdminPaymentLogs = () => {
                 role="menuitem"
                 onClick={() => {
                   setOpenActionsDropdown(false);
-                  handleExportToExcel();
+                  setExportPaymentDateFrom(filterIssueDateFrom || '');
+                  setExportPaymentDateTo(filterIssueDateTo || '');
+                  setShowExportModal(true);
                 }}
                 disabled={exportLoading}
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 disabled:opacity-50"
@@ -1699,7 +1741,16 @@ const AdminPaymentLogs = () => {
       )}
 
       {/* Payment Logs List */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="relative bg-white rounded-lg shadow">
+        {listRefreshing ? (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]"
+            aria-busy="true"
+            aria-label="Refreshing payment list"
+          >
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end px-3 sm:px-4 py-3 border-b border-gray-200 bg-gray-50/90">
           <div className="flex flex-col gap-1 min-w-0">
             <label htmlFor="admin-payment-logs-issue-date-from" className="text-xs font-medium text-gray-600">
@@ -1745,7 +1796,10 @@ const AdminPaymentLogs = () => {
         </div>
         <div className="mb-2 px-1">
           <p className="text-sm font-semibold text-gray-700">
-            Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            Total Amount:{' '}
+            <span className="text-emerald-700">
+              ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
             <span className="block sm:inline sm:ml-4 text-xs font-normal text-gray-600 mt-1 sm:mt-0">
               Payment method filter:{' '}
               <span className="font-semibold text-gray-900">{filterPaymentMethod || 'All'}</span>
@@ -2585,6 +2639,37 @@ const AdminPaymentLogs = () => {
         </div>,
         document.body
       )}
+
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Payment Logs"
+        description={
+          <>
+            Exports payment rows for <span className="font-medium">{selectedBranchName}</span> using the same tab
+            (main or return) and approval filters as this page. Set payment dates below for this export only (optional).
+          </>
+        }
+        exportLoading={exportLoading}
+        onExport={() => handleExportToExcel({ closeModalAfter: true })}
+        exportDisabled={exportPaymentDateRangeInvalid}
+        maxWidthClass="max-w-lg"
+        scrollable
+        overlayZClass="z-[9999]"
+      >
+        <PaymentLogsExportDateRange
+          idPrefix="admin-pl-export"
+          dateFrom={exportPaymentDateFrom}
+          dateTo={exportPaymentDateTo}
+          onDateFromChange={setExportPaymentDateFrom}
+          onDateToChange={setExportPaymentDateTo}
+          onClear={() => {
+            setExportPaymentDateFrom('');
+            setExportPaymentDateTo('');
+          }}
+          disabled={exportLoading}
+        />
+      </StandardExportModal>
     </div>
   );
 };

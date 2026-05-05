@@ -11,10 +11,11 @@ import {
   PAYMENT_DATE_EXPORT_COL_WIDTHS,
   shouldIncludeInvoiceInExport,
 } from '../../utils/invoiceExcelExport.js';
-import { fetchAllPaymentsForExport } from '../../utils/fetchAllPaymentsForExport.js';
+import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/fetchAllPaymentsForExport.js';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import StandardExportModal from '../../components/export/StandardExportModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -1311,13 +1312,15 @@ const Invoice = () => {
               branchId: bid,
               paymentDateFrom: fromTrim,
               paymentDateTo: toTrim,
+              align: PaymentExportAlignMode.SUPERADMIN,
             })
           )
         );
         const merged = batches.flat();
         exportRows = mapCompletedPaymentsToExportRows(merged);
         colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
-        emptyMessage = 'No completed payments found for the selected branches and payment date range.';
+        emptyMessage =
+          'No payments found for the selected branches and payment date range (same scope as Payment Logs — main list, excluding Finance-returned).';
       } else {
         const allInvoices = await fetchAllInvoicesForExport();
         exportRows = allInvoices
@@ -2007,136 +2010,100 @@ const Invoice = () => {
         document.body
       )}
 
-      {showExportModal && createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  With a payment date range: exports completed payments by Manila payment date (matches Financial Dashboard
-                  revenue). Without dates: invoice rows for selected branches with optional unpaid filter.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (exportLoading) return;
-                  setShowExportModal(false);
-                }}
-                className="text-gray-400 hover:text-gray-600"
-                aria-label="Close export modal"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="space-y-4 px-6 py-5">
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <label className="text-sm font-medium text-gray-700">Select Branches to Export</label>
-                  <button
-                    type="button"
-                    onClick={toggleSelectAllExportBranches}
-                    className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    {selectedExportBranches.length === branches.length ? 'Clear All' : 'Select All'}
-                  </button>
-                </div>
-                <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
-                  {branches.length === 0 ? (
-                    <p className="px-2 py-1 text-xs text-gray-500">No branches found.</p>
-                  ) : (
-                    branches.map((branch) => {
-                      const branchId = String(branch.branch_id);
-                      const checked = selectedExportBranches.includes(branchId);
-                      return (
-                        <label
-                          key={branchId}
-                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleExportBranch(branchId)}
-                            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                          />
-                          <span className="text-gray-700">{branch.branch_nickname || branch.branch_name}</span>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Payment date from</label>
-                  <input
-                    type="date"
-                    value={exportDateFrom}
-                    onChange={(e) => setExportDateFrom(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Payment date to</label>
-                  <input
-                    type="date"
-                    value={exportDateTo}
-                    onChange={(e) => setExportDateTo(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  />
-                </div>
-              </div>
-
-              {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
-                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={exportIncludeUnpaid}
-                    onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <span>
-                    <span className="font-medium">Include unpaid invoices</span>
-                    <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
-                  </span>
-                </label>
-              ) : null}
-
-              <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Selected: <span className="font-semibold">{selectedExportBranches.length}</span> branch(es)
-                {selectedExportBranches.length === 0 ? ' — select at least one to export.' : ''}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
-              <button
-                type="button"
-                onClick={() => {
-                  if (exportLoading) return;
-                  setShowExportModal(false);
-                }}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleExportToExcel}
-                disabled={exportLoading || selectedExportBranches.length === 0}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60"
-              >
-                {exportLoading ? 'Exporting...' : 'Export to Excel'}
-              </button>
-            </div>
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Invoices"
+        description={
+          <>
+            With a payment date range: exports payment lines by Manila <span className="font-medium">payment date</span>,
+            using the same API rules as <span className="font-medium">Payment Logs</span> (main list — excludes
+            Finance-returned). Pick the same branches and dates as Payment Logs to reconcile totals. Without dates:
+            invoice rows for selected branches with optional unpaid filter.
+          </>
+        }
+        exportLoading={exportLoading}
+        onExport={handleExportToExcel}
+        exportDisabled={selectedExportBranches.length === 0}
+      >
+        <div>
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <label className="text-sm font-medium text-gray-700">Select Branches to Export</label>
+            <button
+              type="button"
+              onClick={toggleSelectAllExportBranches}
+              className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-start"
+            >
+              {selectedExportBranches.length === branches.length ? 'Clear All' : 'Select All'}
+            </button>
           </div>
-        </div>,
-        document.body
-      )}
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
+            {branches.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">No branches found.</p>
+            ) : (
+              branches.map((branch) => {
+                const branchId = String(branch.branch_id);
+                const checked = selectedExportBranches.includes(branchId);
+                return (
+                  <label
+                    key={branchId}
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleExportBranch(branchId)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-gray-700">{branch.branch_nickname || branch.branch_name}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date from</label>
+            <input
+              type="date"
+              value={exportDateFrom}
+              onChange={(e) => setExportDateFrom(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date to</label>
+            <input
+              type="date"
+              value={exportDateTo}
+              onChange={(e) => setExportDateTo(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+        </div>
+
+        {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={exportIncludeUnpaid}
+              onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <span>
+              <span className="font-medium">Include unpaid invoices</span>
+              <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
+            </span>
+          </label>
+        ) : null}
+
+        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Selected: <span className="font-semibold">{selectedExportBranches.length}</span> branch(es)
+          {selectedExportBranches.length === 0 ? ' — select at least one to export.' : ''}
+        </div>
+      </StandardExportModal>
 
       {/* Create/Edit Invoice Modal */}
       {isModalOpen && createPortal(

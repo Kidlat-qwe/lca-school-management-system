@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from './DashboardStatIcons';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
@@ -163,18 +164,23 @@ const DailyOperationalDashboardView = ({
     );
   }, [branchId, branchName, data]);
 
-  const verificationAsOf = data?.verification_as_of || getTodayManila();
+  /** YYYY-MM-DD for the selected summary date (matches verification SQL issue_date window). */
+  const verificationDayYmd = data?.verification_as_of || selectedDate || getTodayManila();
+  const verificationAsOfDisplay =
+    verificationDayYmd && /^\d{4}-\d{2}-\d{2}$/.test(verificationDayYmd)
+      ? formatDateManila(`${verificationDayYmd}T12:00:00`)
+      : verificationDayYmd || '-';
 
   const goPaymentLogsByVerify = useCallback(
     (kind) => {
       const p = new URLSearchParams();
       p.set('notificationTab', 'main');
-      p.set('issue_date_from', verificationAsOf);
-      p.set('issue_date_to', verificationAsOf);
+      p.set('issue_date_from', verificationDayYmd);
+      p.set('issue_date_to', verificationDayYmd);
       p.set('financeApproval', kind === 'verified' ? 'approved' : 'pending');
       navigate(`${basePath}/payment-logs?${p.toString()}`);
     },
-    [basePath, navigate, verificationAsOf]
+    [basePath, navigate, verificationDayYmd]
   );
 
   const goArByVerify = useCallback(
@@ -338,7 +344,8 @@ const DailyOperationalDashboardView = ({
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-gray-700">
-            Verification (today, Manila: <span className="font-semibold text-gray-900">{verificationAsOf}</span>)
+            Verification (selected day, Manila:{' '}
+            <span className="font-semibold text-gray-900">{verificationAsOfDisplay}</span>)
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatsCard
@@ -346,25 +353,25 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_verified_count || 0)}
               iconName="currency"
               accent="bg-gradient-to-br from-cyan-500 to-teal-600"
-              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total · completed payments · today · approval=Approved`}
+              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total · completed payments · ${verificationAsOfDisplay} · approval=Approved`}
               onClick={() => goPaymentLogsByVerify('verified')}
-              ariaLabel="Open payment logs for approved completed payments for today in Manila"
+              ariaLabel={`Open payment logs for approved completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
             <StatsCard
               title="Payments (not approved yet)"
               value={formatNumber(totals.pay_unverified_count || 0)}
               iconName="chartBar"
               accent="bg-gradient-to-br from-slate-500 to-slate-600"
-              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total · completed · pending approval`}
+              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total · completed · pending approval · ${verificationAsOfDisplay}`}
               onClick={() => goPaymentLogsByVerify('unverified')}
-              ariaLabel="Open payment logs for not-yet-approved completed payments for today in Manila"
+              ariaLabel={`Open payment logs for not-yet-approved completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
             <StatsCard
               title="AR (verified or applied)"
               value={formatNumber(totals.ar_verified_count || 0)}
               iconName="clipboardList"
               accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
-              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package AR · today issue date`}
+              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package AR · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('verified')}
               ariaLabel="Open AR list filtered to verified and applied"
             />
@@ -373,7 +380,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_unverified_count || 0)}
               iconName="academicCap"
               accent="bg-gradient-to-br from-amber-500 to-orange-600"
-              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total · not verified yet · today issue date`}
+              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total · not verified yet · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('unverified')}
               ariaLabel="Open AR list filtered to unverified statuses"
             />
@@ -440,8 +447,8 @@ const DailyOperationalDashboardView = ({
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Most columns use the selected day; Pay. approved, Pay. pending, Pkg AR verified+, and Pkg AR unverified use
-                today in Manila ({verificationAsOf}).
+                All columns, including payment and package AR verification, use the same selected calendar day in Manila (
+                {verificationAsOfDisplay}).
               </p>
             </div>
             <p className="text-xs text-gray-500">

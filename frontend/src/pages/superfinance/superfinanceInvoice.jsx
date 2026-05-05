@@ -12,10 +12,11 @@ import {
   PAYMENT_DATE_EXPORT_COL_WIDTHS,
   shouldIncludeInvoiceInExport,
 } from '../../utils/invoiceExcelExport.js';
-import { fetchAllPaymentsForExport } from '../../utils/fetchAllPaymentsForExport.js';
+import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/fetchAllPaymentsForExport.js';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import StandardExportModal from '../../components/export/StandardExportModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -97,6 +98,7 @@ const SuperfinanceInvoice = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
   const [exportDateTo, setExportDateTo] = useState('');
+  const [selectedExportBranches, setSelectedExportBranches] = useState([]);
   const [exportIncludeUnpaid, setExportIncludeUnpaid] = useState(true);
   const [exportLoading, setExportLoading] = useState(false);
 
@@ -1242,32 +1244,86 @@ const SuperfinanceInvoice = () => {
     return subtotal + tax;
   };
 
+  const toggleExportBranch = (branchId) => {
+    const normalized = String(branchId);
+    setSelectedExportBranches((prev) =>
+      prev.includes(normalized)
+        ? prev.filter((id) => id !== normalized)
+        : [...prev, normalized]
+    );
+  };
+
+  const toggleSelectAllExportBranches = () => {
+    const allBranchIds = (branches || []).map((b) => String(b.branch_id));
+    setSelectedExportBranches((prev) =>
+      prev.length === allBranchIds.length ? [] : allBranchIds
+    );
+  };
+
+  const fetchAllInvoicesForExport = async () => {
+    const limit = 100;
+    let page = 1;
+    let total = Infinity;
+    const collected = [];
+
+    while (collected.length < total) {
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      const response = await apiRequest(`/invoices?${params.toString()}`);
+      const rows = response.data || [];
+      const paginationTotal = response.pagination?.total ?? rows.length;
+      total = Number(paginationTotal) || rows.length;
+      collected.push(...rows);
+      if (rows.length < limit) break;
+      page += 1;
+    }
+
+    return collected;
+  };
+
   const handleExportToExcel = async () => {
     if (exportDateFrom && exportDateTo && exportDateFrom > exportDateTo) {
       appAlert('Export "From" date must be on or before "To" date.');
       return;
     }
+    if (selectedExportBranches.length === 0) {
+      appAlert('Please select at least one branch to export.');
+      return;
+    }
     try {
       setExportLoading(true);
       const usePaymentDateExport = Boolean(exportDateFrom?.trim() || exportDateTo?.trim());
+      const selectedBranchSet = new Set(selectedExportBranches.map(String));
+      const fromTrim = exportDateFrom?.trim() || '';
+      const toTrim = exportDateTo?.trim() || '';
 
       let exportRows;
       let colWidths;
       let emptyMessage;
 
       if (usePaymentDateExport) {
-        const payments = await fetchAllPaymentsForExport(apiRequest, {
-          branchId: globalBranchId || null,
-          paymentDateFrom: exportDateFrom?.trim() || '',
-          paymentDateTo: exportDateTo?.trim() || '',
-        });
-        exportRows = mapCompletedPaymentsToExportRows(payments);
+        const branchIds = selectedExportBranches.map(String);
+        const batches = await Promise.all(
+          branchIds.map((bid) =>
+            fetchAllPaymentsForExport(apiRequest, {
+              branchId: bid,
+              paymentDateFrom: fromTrim,
+              paymentDateTo: toTrim,
+              align: PaymentExportAlignMode.SUPERFINANCE,
+            })
+          )
+        );
+        const merged = batches.flat();
+        exportRows = mapCompletedPaymentsToExportRows(merged);
         colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
-        emptyMessage = 'No completed payments found for the selected payment date range.';
+        emptyMessage =
+          'No payments found for the selected branches and payment date range (same scope as Payment Logs — completed payments).';
       } else {
-        exportRows = filteredInvoices
+        const allInvoices = await fetchAllInvoicesForExport();
+        exportRows = allInvoices
           .filter((invoice) => {
             if (!shouldIncludeInvoiceInExport(invoice, exportIncludeUnpaid)) return false;
+            const invoiceBranch = String(invoice.branch_id || '');
+            if (!selectedBranchSet.has(invoiceBranch)) return false;
             return true;
           })
           .map((invoice) => ({
@@ -1281,7 +1337,7 @@ const SuperfinanceInvoice = () => {
             'Due Date': invoice.due_date ? formatDateManila(invoice.due_date) : '-',
           }));
         colWidths = INVOICE_EXPORT_COL_WIDTHS;
-        emptyMessage = 'No invoice records found for export.';
+        emptyMessage = 'No invoice records found for the selected branches.';
       }
 
       if (exportRows.length === 0) {
@@ -1289,10 +1345,24 @@ const SuperfinanceInvoice = () => {
         return;
       }
 
-      downloadInvoiceExportXlsx(exportRows, `Superfinance_Invoice_Export_${exportDateFrom || 'all'}_to_${exportDateTo || 'all'}.xlsx`, {
-        colWidths,
-      });
+      const branchLabel =
+        selectedExportBranches.length === (branches || []).length
+          ? 'all_branches'
+          : `${selectedExportBranches.length}_branches`;
+      const fromLabel = exportDateFrom || 'all';
+      const toLabel = exportDateTo || 'all';
+      downloadInvoiceExportXlsx(
+        exportRows,
+        `Invoice_Export_${branchLabel}_${fromLabel}_to_${toLabel}.xlsx`,
+        {
+          colWidths,
+        }
+      );
       setShowExportModal(false);
+      setExportDateFrom('');
+      setExportDateTo('');
+      setSelectedExportBranches([]);
+      setExportIncludeUnpaid(true);
       appAlert('Invoice export completed successfully.');
     } catch (err) {
       console.error('Error exporting invoices:', err);
@@ -1938,51 +2008,99 @@ const SuperfinanceInvoice = () => {
         document.body
       )}
 
-      {showExportModal && createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
-            <div className="border-b border-gray-100 px-6 py-4">
-              <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                With a date range: exports <span className="font-medium">completed payments</span> by{' '}
-                <span className="font-medium">payment date</span> (Manila), matching Financial Dashboard revenue. Branch
-                filter from the header applies. Without dates: current table (invoice view) with optional unpaid filter.
-              </p>
-            </div>
-            <div className="space-y-4 px-6 py-5">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date from</label>
-                <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date to</label>
-                <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
-              {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
-                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={exportIncludeUnpaid}
-                    onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <span>
-                    <span className="font-medium">Include unpaid invoices</span>
-                    <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
-                  </span>
-                </label>
-              ) : null}
-            </div>
-            <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
-              <button type="button" onClick={() => !exportLoading && setShowExportModal(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button type="button" onClick={handleExportToExcel} disabled={exportLoading} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60">
-                {exportLoading ? 'Exporting...' : 'Export to Excel'}
-              </button>
-            </div>
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Invoices"
+        description={
+          <>
+            With a payment date range: exports payment lines by Manila <span className="font-medium">payment date</span>,
+            using the same API rules as <span className="font-medium">Payment Logs</span> (main list — completed
+            payments). Pick the same branches and dates as Payment Logs to reconcile totals. Without dates: invoice rows
+            for selected branches with optional unpaid filter.
+          </>
+        }
+        exportLoading={exportLoading}
+        onExport={handleExportToExcel}
+        exportDisabled={selectedExportBranches.length === 0}
+      >
+        <div>
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <label className="text-sm font-medium text-gray-700">Select Branches to Export</label>
+            <button
+              type="button"
+              onClick={toggleSelectAllExportBranches}
+              className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-start"
+            >
+              {selectedExportBranches.length === branches.length ? 'Clear All' : 'Select All'}
+            </button>
           </div>
-        </div>,
-        document.body
-      )}
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
+            {branches.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">No branches found.</p>
+            ) : (
+              branches.map((branch) => {
+                const branchId = String(branch.branch_id);
+                const checked = selectedExportBranches.includes(branchId);
+                return (
+                  <label
+                    key={branchId}
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleExportBranch(branchId)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-gray-700">{branch.branch_nickname || branch.branch_name}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date from</label>
+            <input
+              type="date"
+              value={exportDateFrom}
+              onChange={(e) => setExportDateFrom(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date to</label>
+            <input
+              type="date"
+              value={exportDateTo}
+              onChange={(e) => setExportDateTo(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+        </div>
+        {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={exportIncludeUnpaid}
+              onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <span>
+              <span className="font-medium">Include unpaid invoices</span>
+              <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
+            </span>
+          </label>
+        ) : null}
+
+        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Selected: <span className="font-semibold">{selectedExportBranches.length}</span> branch(es)
+          {selectedExportBranches.length === 0 ? ' — select at least one to export.' : ''}
+        </div>
+      </StandardExportModal>
 
       {/* Create/Edit Invoice Modal */}
       {isModalOpen && createPortal(

@@ -1,16 +1,19 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import * as XLSX from 'xlsx';
+import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import StandardExportModal from '../../components/export/StandardExportModal';
+import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 
 /** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
 const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
@@ -87,7 +90,7 @@ const PaymentLogs = () => {
   const [filterBranch, setFilterBranch] = useState('');
   /** Finance approval filter — matches the Approval column and dashboard "verified" (Approved) vs pending */
   const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
-  /** YYYY-MM-DD; empty = no bound (server-side issue_date_from / issue_date_to) */
+  /** YYYY-MM-DD Manila payment-date range (API: payment_date_from / payment_date_to) */
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
@@ -100,6 +103,8 @@ const PaymentLogs = () => {
   const [branches, setBranches] = useState([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedExportBranches, setSelectedExportBranches] = useState([]);
+  const [exportPaymentDateFrom, setExportPaymentDateFrom] = useState('');
+  const [exportPaymentDateTo, setExportPaymentDateTo] = useState('');
   const [exportLoading, setExportLoading] = useState(false);
   const [openApprovalMenuId, setOpenApprovalMenuId] = useState(null);
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
@@ -113,6 +118,9 @@ const PaymentLogs = () => {
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   /** Total Returned payments for current filters — Return tab badge */
   const [returnedPaymentLogCount, setReturnedPaymentLogCount] = useState(null);
+  const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
+  const [listRefreshing, setListRefreshing] = useState(false);
+  const initialDataLoadedRef = useRef(false);
   const latestFetchIdRef = useRef(0);
 
   useEffect(() => {
@@ -132,13 +140,13 @@ const PaymentLogs = () => {
     } else if (financeApproval === 'all' || financeApproval === '') {
       setFilterFinanceApproval('');
     }
-    const issueFrom = (params.get('issue_date_from') || '').trim().slice(0, 10);
-    const issueTo = (params.get('issue_date_to') || '').trim().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(issueFrom)) {
-      setFilterIssueDateFrom(issueFrom);
+    const payFrom = (params.get('payment_date_from') || params.get('issue_date_from') || '').trim().slice(0, 10);
+    const payTo = (params.get('payment_date_to') || params.get('issue_date_to') || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(payFrom)) {
+      setFilterIssueDateFrom(payFrom);
     }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(issueTo)) {
-      setFilterIssueDateTo(issueTo);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(payTo)) {
+      setFilterIssueDateTo(payTo);
     }
   }, [location.search]);
 
@@ -159,8 +167,8 @@ const PaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
       params.set('approval_status', 'Returned');
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const response = await apiRequest(`/payments?${params.toString()}`);
@@ -219,12 +227,16 @@ const PaymentLogs = () => {
   const fetchPayments = async (page = 1) => {
     const fetchId = ++latestFetchIdRef.current;
     try {
-      setLoading(true);
+      if (!initialDataLoadedRef.current) {
+        setLoading(true);
+      } else {
+        setListRefreshing(true);
+      }
       const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
+      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
       if (branchLogTab === 'return') {
         params.set('approval_status', 'Returned');
       } else if (filterFinanceApproval === 'approved') {
@@ -235,12 +247,17 @@ const PaymentLogs = () => {
         params.set('status', 'Completed');
         params.set('exclude_approval_status', 'Approved,Returned');
       } else {
-        params.set('exclude_approval_status', 'Returned');
+        params.set('status', 'Completed');
       }
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const response = await apiRequest(`/payments?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
+      if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
+        setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
+      } else {
+        setFilterTotalLineAmount(null);
+      }
       if (response.pagination) {
         setPagination({
           page: response.pagination.page,
@@ -255,9 +272,12 @@ const PaymentLogs = () => {
       console.error('Error fetching payments:', err);
       setError('Failed to load payments. Please try again.');
       setPayments([]);
+      setFilterTotalLineAmount(null);
     } finally {
       if (fetchId !== latestFetchIdRef.current) return;
       setLoading(false);
+      setListRefreshing(false);
+      initialDataLoadedRef.current = true;
     }
   };
 
@@ -693,12 +713,24 @@ const PaymentLogs = () => {
         (payment.approval_status || 'Pending') !== 'Approved');
     return matchesSearch && matchesBranch && matchesFinanceApproval;
   });
-  const filteredTotalAmount = filteredPayments.reduce(
-    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
-    0
-  );
+
+  const summaryLineTotal = useMemo(() => {
+    const line = (p) => (parseFloat(p.payable_amount) || 0) + (parseFloat(p.tip_amount) || 0);
+    if (searchTerm.trim()) {
+      return filteredPayments.reduce((s, p) => s + line(p), 0);
+    }
+    if (filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))) {
+      return Number(filterTotalLineAmount);
+    }
+    return filteredPayments.reduce((s, p) => s + line(p), 0);
+  }, [searchTerm, filteredPayments, filterTotalLineAmount]);
+
+  const exportPaymentDateRangeInvalid =
+    Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
 
   const handleExportClick = () => {
+    setExportPaymentDateFrom(filterIssueDateFrom || '');
+    setExportPaymentDateTo(filterIssueDateTo || '');
     setSelectedExportBranches([]);
     setShowExportModal(true);
   };
@@ -723,6 +755,10 @@ const PaymentLogs = () => {
 
   const handleExportToExcel = async () => {
     if (selectedExportBranches.length === 0) return;
+    if (exportPaymentDateRangeInvalid) {
+      appAlert('"From" date must be on or before "To" date.');
+      return;
+    }
     try {
       setExportLoading(true);
       
@@ -736,8 +772,8 @@ const PaymentLogs = () => {
           page: String(page),
         });
         if (branchId) params.set('branch_id', String(branchId));
-        if (filterIssueDateFrom) params.set('issue_date_from', filterIssueDateFrom);
-        if (filterIssueDateTo) params.set('issue_date_to', filterIssueDateTo);
+        if (exportPaymentDateFrom) params.set('payment_date_from', exportPaymentDateFrom);
+        if (exportPaymentDateTo) params.set('payment_date_to', exportPaymentDateTo);
         if (branchLogTab === 'return') {
           params.set('approval_status', 'Returned');
         } else if (filterFinanceApproval === 'approved') {
@@ -748,7 +784,7 @@ const PaymentLogs = () => {
           params.set('status', 'Completed');
           params.set('exclude_approval_status', 'Approved,Returned');
         } else {
-          params.set('exclude_approval_status', 'Returned');
+          params.set('status', 'Completed');
         }
         return apiRequest(`/payments?${params.toString()}`);
       };
@@ -793,7 +829,7 @@ const PaymentLogs = () => {
         row['Payment Method'] = payment.payment_method || '-';
         row['Package/Item'] = payment.invoice_description || '-';
         row['Level Tag'] = payment.student_level_tag || '-';
-        row['Amount (₱)'] = payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00';
+        row['Amount (₱)'] = (Number(payment.payable_amount || 0) + Number(payment.tip_amount || 0)).toFixed(2);
         row['Status'] = payment.status || 'N/A';
         row['Branch'] = getBranchName(payment.branch_id) || payment.branch_name || 'N/A';
         row['Payment Date'] = (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-';
@@ -806,6 +842,7 @@ const PaymentLogs = () => {
       // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(excelData);
+      appendPaymentLogsAmountTotalRow(ws, excelData);
 
       // Set column widths
       const widthList = [12, 30, 25, 30, 22];
@@ -836,7 +873,7 @@ const PaymentLogs = () => {
   };
 
 
-  if (loading) {
+  if (loading && !initialDataLoadedRef.current) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -875,7 +912,16 @@ const PaymentLogs = () => {
       )}
 
       {/* Payment Logs List */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="relative bg-white rounded-lg shadow">
+        {listRefreshing ? (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]"
+            aria-busy="true"
+            aria-label="Refreshing payment list"
+          >
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end px-3 sm:px-4 py-3 border-b border-gray-200 bg-gray-50/90">
           <div className="flex flex-col gap-1 min-w-0">
             <label htmlFor="payment-logs-issue-date-from" className="text-xs font-medium text-gray-600">
@@ -924,7 +970,7 @@ const PaymentLogs = () => {
               <span>
                 Total Amount:{' '}
                 <span className="text-emerald-700">
-                  ₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </span>
               <span className="text-xs font-normal text-gray-600">
@@ -1890,111 +1936,72 @@ const PaymentLogs = () => {
         document.body
       )}
 
-      {/* Export Modal (portaled so overlay covers header) */}
-      {showExportModal && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4" onClick={() => setShowExportModal(false)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Export Payment Logs</h2>
-                <button
-                  onClick={() => setShowExportModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                  disabled={exportLoading}
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Branches to Export</h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Select at least one branch to include in the export. The Export button is disabled until you select a branch.
-                </p>
-
-                {/* Select All Button */}
-                <div className="mb-4">
-                  <button
-                    onClick={handleSelectAllBranches}
-                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors text-sm font-medium"
-                    disabled={exportLoading}
-                  >
-                    {selectedExportBranches.length === branches.length ? 'Deselect All' : 'Select All'}
-                  </button>
-                </div>
-
-                {/* Branch List */}
-                <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-4">
-                  {branches.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">No branches available</p>
-                  ) : (
-                    branches.map((branch) => (
-                      <label
-                        key={branch.branch_id}
-                        className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedExportBranches.includes(branch.branch_id)}
-                          onChange={() => handleExportBranchToggle(branch.branch_id)}
-                          disabled={exportLoading}
-                          className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-                        />
-                        <span className="text-gray-900">{branch.branch_nickname || branch.branch_name}</span>
-                      </label>
-                    ))
-                  )}
-                </div>
-
-                {/* Export Info */}
-                <div className={`mt-4 p-4 rounded-lg ${selectedExportBranches.length === 0 ? 'bg-amber-50' : 'bg-blue-50'}`}>
-                  <p className={`text-sm ${selectedExportBranches.length === 0 ? 'text-amber-800' : 'text-blue-800'}`}>
-                    <strong>Selected:</strong>{' '}
-                    {selectedExportBranches.length === 0
-                      ? 'No branches selected — select at least one to export'
-                      : selectedExportBranches.length === branches.length
-                      ? 'All Branches'
-                      : `${selectedExportBranches.length} Branch${selectedExportBranches.length !== 1 ? 'es' : ''}`}
-                  </p>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setShowExportModal(false)}
-                  disabled={exportLoading}
-                  className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleExportToExcel}
-                  disabled={exportLoading || branches.length === 0 || selectedExportBranches.length === 0}
-                  className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {exportLoading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Exporting...
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      Export to Excel
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Payment Logs"
+        description="Choose a payment date range (optional), then branches. Exported rows follow the current tab and approval filters on this page; dates apply only to this export."
+        exportLoading={exportLoading}
+        onExport={handleExportToExcel}
+        exportDisabled={
+          branches.length === 0 || selectedExportBranches.length === 0 || exportPaymentDateRangeInvalid
+        }
+        maxWidthClass="max-w-2xl"
+        overlayZClass="z-[9999]"
+        closeOnOverlayClick
+        scrollable
+      >
+        <PaymentLogsExportDateRange
+          idPrefix="superadmin-pl-export"
+          dateFrom={exportPaymentDateFrom}
+          dateTo={exportPaymentDateTo}
+          onDateFromChange={setExportPaymentDateFrom}
+          onDateToChange={setExportPaymentDateTo}
+          onClear={() => {
+            setExportPaymentDateFrom('');
+            setExportPaymentDateTo('');
+          }}
+          disabled={exportLoading}
+        />
+        <div className="mt-4">
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <label className="text-sm font-medium text-gray-700">Select Branches to Export</label>
+            <button
+              type="button"
+              onClick={handleSelectAllBranches}
+              className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-start"
+              disabled={exportLoading}
+            >
+              {selectedExportBranches.length === branches.length ? 'Clear All' : 'Select All'}
+            </button>
           </div>
-        </div>,
-        document.body
-      )}
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
+            {branches.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">No branches available.</p>
+            ) : (
+              branches.map((branch) => (
+                <label
+                  key={branch.branch_id}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedExportBranches.includes(branch.branch_id)}
+                    onChange={() => handleExportBranchToggle(branch.branch_id)}
+                    disabled={exportLoading}
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span className="text-gray-700">{branch.branch_nickname || branch.branch_name}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Selected: <span className="font-semibold">{selectedExportBranches.length}</span> branch(es)
+          {selectedExportBranches.length === 0 ? ' — select at least one to export.' : ''}
+        </div>
+      </StandardExportModal>
     </div>
   );
 };

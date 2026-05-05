@@ -252,9 +252,11 @@ const FinancialDashboard = () => {
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Payment verification (Finance & Superfinance)</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Completed payments only. <span className="font-medium text-gray-700">Verified</span> means approval status is
-              Approved in Payment Logs (Finance branch users or Superfinance org-wide).{' '}
-              <span className="font-medium text-gray-700">Unverified</span> are still Pending or not yet approved.
+              Completed payments only. When a <span className="font-medium text-gray-700">month</span> is selected above,
+              amounts use Manila <span className="font-medium text-gray-700">payment date</span> in that month (same rule as
+              the Finance / Superfinance Financial Dashboard). <span className="font-medium text-gray-700">Verified</span>{' '}
+              means approval status is Approved; <span className="font-medium text-gray-700">Unverified</span> includes
+              Pending, Returned, or not yet approved.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">

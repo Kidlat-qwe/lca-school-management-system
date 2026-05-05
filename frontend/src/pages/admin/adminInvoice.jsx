@@ -11,10 +11,11 @@ import {
   PAYMENT_DATE_EXPORT_COL_WIDTHS,
   shouldIncludeInvoiceInExport,
 } from '../../utils/invoiceExcelExport.js';
-import { fetchAllPaymentsForExport } from '../../utils/fetchAllPaymentsForExport.js';
+import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/fetchAllPaymentsForExport.js';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import StandardExportModal from '../../components/export/StandardExportModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -1257,10 +1258,12 @@ const AdminInvoice = () => {
           branchId: adminBranchId || null,
           paymentDateFrom: exportDateFrom?.trim() || '',
           paymentDateTo: exportDateTo?.trim() || '',
+          align: PaymentExportAlignMode.ADMIN,
         });
         exportRows = mapCompletedPaymentsToExportRows(payments);
         colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
-        emptyMessage = 'No completed payments found for the selected payment date range.';
+        emptyMessage =
+          'No payments found for the selected payment date range (same scope as Payment Logs — main list for your branch).';
       } else {
         exportRows = filteredInvoices
           .filter((invoice) => {
@@ -1870,51 +1873,55 @@ const AdminInvoice = () => {
         document.body
       )}
 
-      {showExportModal && createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
-            <div className="border-b border-gray-100 px-6 py-4">
-              <h2 className="text-lg font-semibold text-gray-900">Export Invoices</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                With a date range: exports <span className="font-medium">completed payments</span> by{' '}
-                <span className="font-medium">payment date</span> (Manila), matching Financial Dashboard revenue. Without
-                dates: current table rows (invoice view) with optional unpaid filter.
-              </p>
-            </div>
-            <div className="space-y-4 px-6 py-5">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date from</label>
-                <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment date to</label>
-                <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              </div>
-              {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
-                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={exportIncludeUnpaid}
-                    onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <span>
-                    <span className="font-medium">Include unpaid invoices</span>
-                    <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
-                  </span>
-                </label>
-              ) : null}
-            </div>
-            <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
-              <button type="button" onClick={() => !exportLoading && setShowExportModal(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button type="button" onClick={handleExportToExcel} disabled={exportLoading} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60">
-                {exportLoading ? 'Exporting...' : 'Export to Excel'}
-              </button>
-            </div>
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Invoices"
+        description={
+          <>
+            With a date range: exports payment lines by Manila <span className="font-medium">payment date</span>, using the
+            same rules as <span className="font-medium">Payment Logs</span> for your branch (main list). Without dates:
+            current table rows (invoice view) with optional unpaid filter.
+          </>
+        }
+        exportLoading={exportLoading}
+        onExport={handleExportToExcel}
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date from</label>
+            <input
+              type="date"
+              value={exportDateFrom}
+              onChange={(e) => setExportDateFrom(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
           </div>
-        </div>,
-        document.body
-      )}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Payment date to</label>
+            <input
+              type="date"
+              value={exportDateTo}
+              onChange={(e) => setExportDateTo(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+        </div>
+        {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={exportIncludeUnpaid}
+              onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <span>
+              <span className="font-medium">Include unpaid invoices</span>
+              <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
+            </span>
+          </label>
+        ) : null}
+      </StandardExportModal>
 
       {/* Create/Edit Invoice Modal */}
       {isModalOpen && createPortal(

@@ -1,7 +1,7 @@
 import AcknowledgementReceiptsPage from '../shared/AcknowledgementReceiptsPage';
 
 const FinanceAcknowledgementReceipts = () => {
-  return <AcknowledgementReceiptsPage />;
+  return <AcknowledgementReceiptsPage requireExportDateRange />;
 };
 
 export default FinanceAcknowledgementReceipts;

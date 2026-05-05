@@ -236,16 +236,25 @@ router.get(
         : (monthStartDate ? [monthStartDate, monthEndDate] : []);
       const invoiceStatusResult = await query(invoiceStatusQuery, invoiceStatusParams);
 
-      // Completed payments split by Finance/Superfinance approval (same rules as Payment Logs)
+      // Completed payments by Finance/Superfinance approval — same logic as
+      // GET /payments/financial-dashboard-metrics (Manila payment date window; COALESCE approval_status).
+      const paymentDateMonthFilterBranch = monthStartDate
+        ? `AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $2::date
+            AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date < $3::date`
+        : '';
+      const paymentDateMonthFilterAll = monthStartDate
+        ? `WHERE (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $1::date
+            AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date < $2::date`
+        : '';
       const paymentVerificationQuery = branchFilter
         ? `
           SELECT
             COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
             )::bigint AS verified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
               ),
               0
             ) AS verified_amount,
@@ -260,16 +269,16 @@ router.get(
             ) AS unverified_amount
           FROM paymenttbl p
           WHERE p.branch_id = $1
-            ${monthStartDate ? 'AND p.issue_date >= $2::date AND p.issue_date < $3::date' : ''}
+            ${paymentDateMonthFilterBranch}
         `
         : `
           SELECT
             COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
             )::bigint AS verified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND p.approval_status = 'Approved'
+                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
               ),
               0
             ) AS verified_amount,
@@ -283,7 +292,7 @@ router.get(
               0
             ) AS unverified_amount
           FROM paymenttbl p
-          ${monthStartDate ? 'WHERE p.issue_date >= $1::date AND p.issue_date < $2::date' : ''}
+          ${paymentDateMonthFilterAll}
         `;
       const paymentVerificationParams = branchFilter
         ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
@@ -642,7 +651,7 @@ router.get(
                 COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS pay_verified_amount
               FROM paymenttbl p
               WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 2}::date
+                AND p.issue_date = $${branchParams.length + 1}::date
                 AND p.approval_status = 'Approved'
               GROUP BY p.branch_id
             ),
@@ -653,7 +662,7 @@ router.get(
                 COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS pay_unverified_amount
               FROM paymenttbl p
               WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 2}::date
+                AND p.issue_date = $${branchParams.length + 1}::date
                 AND (p.approval_status IS NULL OR p.approval_status <> 'Approved')
               GROUP BY p.branch_id
             ),
@@ -664,7 +673,7 @@ router.get(
                 COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_verified_amount
               FROM acknowledgement_receiptstbl ar
               WHERE ar.ar_type = 'Package'
-                AND ar.issue_date = $${branchParams.length + 2}::date
+                AND ar.issue_date = $${branchParams.length + 1}::date
                 AND ar.status IN ('Verified', 'Applied')
               GROUP BY ar.branch_id
             ),
@@ -675,7 +684,7 @@ router.get(
                 COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_unverified_amount
               FROM acknowledgement_receiptstbl ar
               WHERE ar.ar_type = 'Package'
-                AND ar.issue_date = $${branchParams.length + 2}::date
+                AND ar.issue_date = $${branchParams.length + 1}::date
                 AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
               GROUP BY ar.branch_id
             )
@@ -714,7 +723,7 @@ router.get(
               COALESCE(ne.new_enrollees, 0) DESC,
               bs.branch_name ASC
           `,
-          [...branchParams, summaryDate, todayManila]
+          [...branchParams, summaryDate]
         ),
         query(
           `
@@ -826,8 +835,8 @@ router.get(
         success: true,
         data: {
           summary_date: summaryDate,
-          /** Manila calendar date (YYYY-MM-DD) used for payment/AR verification columns and totals — always "today", not the date picker. */
-          verification_as_of: todayManila,
+          /** Same calendar day as `summary_date` (YYYY-MM-DD): verification cards use issue_date = this day (aligned with date picker). */
+          verification_as_of: summaryDate,
           totals,
           branch_breakdown: branchBreakdown,
           charts: {

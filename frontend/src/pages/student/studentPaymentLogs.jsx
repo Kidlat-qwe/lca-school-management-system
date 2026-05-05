@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
+import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
+import StandardExportModal from '../../components/export/StandardExportModal';
+import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -19,6 +22,9 @@ const StudentPaymentLogs = () => {
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportPaymentDateFrom, setExportPaymentDateFrom] = useState('');
+  const [exportPaymentDateTo, setExportPaymentDateTo] = useState('');
 
   const studentId = userInfo?.userId || userInfo?.user_id;
 
@@ -145,6 +151,41 @@ const StudentPaymentLogs = () => {
 
     return matchesSearch && matchesStatus && matchesPaymentMethod && matchesIssueRange;
   });
+
+  const exportPaymentDateRangeInvalid =
+    Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
+
+  const exportModalPayments = useMemo(() => {
+    return payments.filter((payment) => {
+      const matchesSearch =
+        !searchTerm ||
+        payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        payment.payment_id?.toString().includes(searchTerm) ||
+        `INV-${payment.invoice_id}`.includes(searchTerm);
+
+      const matchesStatus = !filterStatus || payment.status === filterStatus;
+      const matchesPaymentMethod = !filterPaymentMethod || payment.payment_method === filterPaymentMethod;
+
+      const issueDay = payment.issue_date ? String(payment.issue_date).slice(0, 10) : '';
+      const hasRange = Boolean(exportPaymentDateFrom || exportPaymentDateTo);
+      let matchesExportDate = true;
+      if (exportPaymentDateRangeInvalid) {
+        matchesExportDate = false;
+      } else if (hasRange) {
+        if (!issueDay) {
+          matchesExportDate = false;
+        } else {
+          if (exportPaymentDateFrom && issueDay < exportPaymentDateFrom) matchesExportDate = false;
+          if (exportPaymentDateTo && issueDay > exportPaymentDateTo) matchesExportDate = false;
+        }
+      }
+
+      return matchesSearch && matchesStatus && matchesPaymentMethod && matchesExportDate;
+    });
+  }, [payments, searchTerm, filterStatus, filterPaymentMethod, exportPaymentDateFrom, exportPaymentDateTo]);
+
   const filteredTotalAmount = filteredPayments.reduce(
     (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
     0
@@ -165,19 +206,22 @@ const StudentPaymentLogs = () => {
     setCurrentPage((page) => Math.min(page, totalPages));
   }, [totalPages]);
 
-  const handleExportToExcel = async () => {
+  const handleExportToExcel = async (opts = {}) => {
+    const { closeModalAfter = false } = opts;
+    let wroteFile = false;
+    if (exportPaymentDateRangeInvalid) {
+      appAlert('"From" date must be on or before "To" date.');
+      return;
+    }
     try {
       setExportLoading(true);
-      
-      // Use current payments data
-      if (filteredPayments.length === 0) {
+
+      if (exportModalPayments.length === 0) {
         appAlert('No payment records found to export.');
-        setExportLoading(false);
         return;
       }
 
-      // Prepare data for Excel
-      const excelData = filteredPayments.map(payment => ({
+      const excelData = exportModalPayments.map((payment) => ({
         'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
         'Invoice Description': payment.invoice_description || '-',
         'Payment Method': payment.payment_method || '-',
@@ -189,40 +233,37 @@ const StudentPaymentLogs = () => {
         'Reference Number': payment.reference_number || '-',
       }));
 
-      // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(excelData);
+      appendPaymentLogsAmountTotalRow(ws, excelData);
 
-      // Set column widths
       ws['!cols'] = [
-        { wch: 12 },  // Invoice ID
-        { wch: 30 },  // Invoice Description
-        { wch: 18 },  // Payment Method
-        { wch: 18 },  // Payment Type
-        { wch: 15 },  // Amount
-        { wch: 12 },  // Status
-        { wch: 15 },  // Payment Date
-        { wch: 10 },  // AR#
-        { wch: 20 },  // Reference Number
+        { wch: 12 },
+        { wch: 30 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 15 },
+        { wch: 12 },
+        { wch: 15 },
+        { wch: 10 },
+        { wch: 20 },
       ];
 
-      // Add worksheet to workbook
       XLSX.utils.book_append_sheet(wb, ws, 'My Payment Logs');
 
-      // Generate filename
       const studentName = userInfo?.fullName || userInfo?.full_name || 'Student';
       const sanitizedName = studentName.replace(/[^a-zA-Z0-9]/g, '_');
       const date = new Date().toISOString().split('T')[0];
       const filename = `Payment_Logs_${sanitizedName}_${date}.xlsx`;
 
-      // Save file
       XLSX.writeFile(wb, filename);
-
-      setExportLoading(false);
+      wroteFile = true;
     } catch (error) {
       console.error('Export error:', error);
       appAlert('Failed to export payment logs. Please try again.');
+    } finally {
       setExportLoading(false);
+      if (closeModalAfter && wroteFile) setShowExportModal(false);
     }
   };
 
@@ -243,7 +284,12 @@ const StudentPaymentLogs = () => {
           <p className="text-sm text-gray-500 mt-1">View your payment history</p>
         </div>
         <button
-          onClick={handleExportToExcel}
+          type="button"
+          onClick={() => {
+            setExportPaymentDateFrom(filterIssueDateFrom || '');
+            setExportPaymentDateTo(filterIssueDateTo || '');
+            setShowExportModal(true);
+          }}
           disabled={exportLoading || filteredPayments.length === 0}
           className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
         >
@@ -549,6 +595,32 @@ const StudentPaymentLogs = () => {
           onPageChange={(page) => setCurrentPage(Math.min(Math.max(page, 1), totalPages))}
         />
       )}
+
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Payment Logs"
+        description="Choose a payment date range (optional). Export includes rows matching your search and status filters; dates apply only to this export."
+        exportLoading={exportLoading}
+        onExport={() => handleExportToExcel({ closeModalAfter: true })}
+        exportDisabled={exportPaymentDateRangeInvalid || exportModalPayments.length === 0}
+        maxWidthClass="max-w-lg"
+        scrollable
+        overlayZClass="z-[9999]"
+      >
+        <PaymentLogsExportDateRange
+          idPrefix="student-pl-export"
+          dateFrom={exportPaymentDateFrom}
+          dateTo={exportPaymentDateTo}
+          onDateFromChange={setExportPaymentDateFrom}
+          onDateToChange={setExportPaymentDateTo}
+          onClear={() => {
+            setExportPaymentDateFrom('');
+            setExportPaymentDateTo('');
+          }}
+          disabled={exportLoading}
+        />
+      </StandardExportModal>
     </div>
   );
 };
