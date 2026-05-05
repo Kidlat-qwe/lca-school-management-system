@@ -3839,10 +3839,13 @@ router.post(
             });
           }
 
-          // Check if student is already enrolled (should not be enrolled if using reservation)
+          // Check if student already has an active enrollment (soft-removed/historical rows must not block reservation)
           const existingEnrollment = await client.query(
-            `SELECT classstudent_id FROM classstudentstbl 
-             WHERE student_id = $1 AND class_id = $2`,
+            `SELECT classstudent_id FROM classstudentstbl
+             WHERE student_id = $1
+               AND class_id = $2
+               AND COALESCE(enrollment_status, 'Active') = 'Active'
+               AND removed_at IS NULL`,
             [student_id, class_id]
           );
 
@@ -3858,7 +3861,10 @@ router.post(
           // Reservations reserve a spot but don't enroll the student
           if (classData.max_students) {
             const enrolledCount = await client.query(
-              "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
+              `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
+               WHERE class_id = $1
+                 AND COALESCE(enrollment_status, 'Active') = 'Active'
+                 AND removed_at IS NULL`,
               [class_id]
             );
             const reservedCount = await client.query(
@@ -4179,7 +4185,10 @@ router.post(
       // Reserved students count toward max_students but are not enrolled yet
       if (classData.max_students) {
         const enrolledCount = await client.query(
-          "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
+          `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
+           WHERE class_id = $1
+             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND removed_at IS NULL`,
           [class_id]
         );
         const reservedCount = await client.query(

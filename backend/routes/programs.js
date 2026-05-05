@@ -19,7 +19,7 @@ router.get(
   [
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 500 }).withMessage('Limit must be between 1 and 500'),
     handleValidationErrors,
   ],
   async (req, res, next) => {

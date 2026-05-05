@@ -439,6 +439,10 @@ router.put(
     body('selected_merchandise').optional().isArray().withMessage('Selected merchandise must be an array'),
     body('promo_id').optional().isInt().withMessage('Promo ID must be an integer'),
     body('promo_code').optional().trim(),
+    body('installment_scope').optional().isObject().withMessage('Installment scope must be an object'),
+    body('installment_scope.phase_start').optional().isInt({ min: 1 }).withMessage('Installment scope phase_start must be a positive integer'),
+    body('installment_scope.phase_end').optional().isInt({ min: 1 }).withMessage('Installment scope phase_end must be a positive integer'),
+    body('installment_scope.include_downpayment').optional().isBoolean().withMessage('Installment scope include_downpayment must be boolean'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -448,7 +452,7 @@ router.put(
       await client.query('BEGIN');
 
       const { id } = req.params;
-      const { enrollment_type, package_id, installment_settings, selected_merchandise = [], selected_pricing_lists = [], per_phase_amount, phase_number, promo_id, promo_code } = req.body;
+      const { enrollment_type, package_id, installment_settings, installment_scope, selected_merchandise = [], selected_pricing_lists = [], per_phase_amount, phase_number, promo_id, promo_code } = req.body;
 
       // Get reservation details
       const reservationResult = await client.query(
@@ -487,22 +491,7 @@ router.put(
         });
       }
 
-      // For expired reservations, we need to check if class is still available
-      // and if max_students hasn't been reached
-      if (reservation.status === 'Expired') {
-        // Check if class is still active
-        if (classData.status !== 'Active') {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Cannot re-upgrade expired reservation. Class is no longer active (status: ${classData.status}).`,
-            class_full: false,
-            class_inactive: true,
-          });
-        }
-      }
-
-      // Get class data with curriculum info
+      // Get class data with curriculum info (required before Expired checks and capacity logic)
       const classResult = await client.query(
         `SELECT c.*, cu.number_of_phase, cu.number_of_session_per_phase, p.program_name, p.curriculum_id
          FROM classestbl c
@@ -522,6 +511,17 @@ router.put(
 
       const classData = classResult.rows[0];
       const branch_id = classData.branch_id;
+
+      // For expired reservations, class must still be active before re-upgrade
+      if (reservation.status === 'Expired' && classData.status !== 'Active') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Cannot re-upgrade expired reservation. Class is no longer active (status: ${classData.status}).`,
+          class_full: false,
+          class_inactive: true,
+        });
+      }
 
       // Get student data
       const studentCheck = await client.query(
@@ -668,9 +668,15 @@ router.put(
       let installmentPricingList = null;
       let hasInstallmentPricing = false;
       let installmentPricingPrice = null;
+      /** Set when package_id branch loads package rows (installment profile section needs this outside that block). */
+      let packageData = null;
       // Optional phase range for Phase packages (used later in invoice remarks for enrollment)
       let phaseStartForRemarks = null;
       let phaseEndForRemarks = null;
+      let installmentPhaseStart = null;
+      let installmentPhaseEnd = null;
+      let installmentIncludeDownpayment = true;
+      let isInstallmentEnrollment = false;
       // Promo tracking variables (scope outside package processing)
       let promoDiscount = 0;
       let promoApplied = null;
@@ -750,7 +756,7 @@ router.put(
           });
         }
 
-        const packageData = packageResult.rows[0];
+        packageData = packageResult.rows[0];
         packageName = packageData.package_name;
 
         // If this is a Phase package, capture its phase range for invoice remarks
@@ -992,6 +998,64 @@ router.put(
           
           totalAmount = adjustedPackageAmount;
         }
+      }
+
+      // Installment phase scope + whether to bill downpayment separately (align with POST /classes/:id/enroll)
+      if (
+        enrollment_type === 'Installment' &&
+        packageData &&
+        (packageData.package_type === 'Installment' ||
+          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
+      ) {
+        isInstallmentEnrollment = true;
+        const classMaxPhase = classData.number_of_phase ? parseInt(classData.number_of_phase, 10) : null;
+        const pkgMinPhase =
+          packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+            ? parseInt(packageData.phase_start, 10) || 1
+            : 1;
+        const pkgMaxPhase =
+          packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+            ? parseInt(packageData.phase_end, 10) || pkgMinPhase
+            : classMaxPhase || pkgMinPhase;
+
+        const requestedStart =
+          installment_scope?.phase_start != null ? parseInt(installment_scope.phase_start, 10) : pkgMinPhase;
+        const requestedEnd =
+          installment_scope?.phase_end != null ? parseInt(installment_scope.phase_end, 10) : pkgMaxPhase;
+
+        if (!Number.isInteger(requestedStart) || !Number.isInteger(requestedEnd) || requestedEnd < requestedStart) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid installment phase scope. Ensure phase_end is greater than or equal to phase_start.',
+          });
+        }
+
+        if (requestedStart < pkgMinPhase || requestedEnd > pkgMaxPhase) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Installment phase scope must be within allowed package range: Phase ${pkgMinPhase} to Phase ${pkgMaxPhase}.`,
+          });
+        }
+
+        if (classMaxPhase && requestedEnd > classMaxPhase) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Installment phase scope exceeds class phase limit (max phase ${classMaxPhase}).`,
+          });
+        }
+
+        installmentPhaseStart = requestedStart;
+        installmentPhaseEnd = requestedEnd;
+        phaseStartForRemarks = requestedStart;
+        phaseEndForRemarks = requestedEnd;
+
+        const hasConfiguredDownpayment = parseFloat(packageData.downpayment_amount || 0) > 0;
+        installmentIncludeDownpayment = hasConfiguredDownpayment
+          ? installment_scope?.include_downpayment !== false
+          : false;
       }
 
       // Process merchandise - validate inventory and deduct
@@ -1275,30 +1339,79 @@ router.put(
           installment_settings.invoice_generation_date &&
           installment_settings.frequency_months) {
         
-        // For installment, the reservation fee is deducted from the first invoice (package price)
-        // The installment profile amount should be the regular installment price (not adjusted)
-        // The first invoice will show the adjusted amount (package price - reservation fee)
-        const installmentProfileAmount = (installmentPricingList && installmentPricingList.pricing_price && !isNaN(parseFloat(installmentPricingList.pricing_price)))
+        // Base recurring amount (monthly / per-phase installment line); optional amortization of DP into this amount
+        let installmentProfileAmount = (installmentPricingList && installmentPricingList.pricing_price && !isNaN(parseFloat(installmentPricingList.pricing_price)))
           ? parseFloat(installmentPricingList.pricing_price)
-          : (packageData.package_price && !isNaN(parseFloat(packageData.package_price)))
+          : (packageData && packageData.package_price && !isNaN(parseFloat(packageData.package_price)))
           ? parseFloat(packageData.package_price)
           : totalAmount;
 
+        const downpaymentConfigured = parseFloat(packageData?.downpayment_amount || 0) || 0;
+        let profilePhaseStart = installmentPhaseStart;
+        let totalPhasesForProfile = classData.number_of_phase || null;
+        if (
+          packageData &&
+          (packageData.package_type === 'Installment' ||
+            (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
+        ) {
+          const scopedStart =
+            installmentPhaseStart != null
+              ? installmentPhaseStart
+              : packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+                ? packageData.phase_start || 1
+                : 1;
+          const scopedEnd =
+            installmentPhaseEnd != null
+              ? installmentPhaseEnd
+              : packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
+                ? packageData.phase_end || scopedStart
+                : classData.number_of_phase || scopedStart;
+          profilePhaseStart = scopedStart;
+          totalPhasesForProfile = Math.max(1, scopedEnd - scopedStart + 1);
+        }
+
+        const amortizationPeriods =
+          installmentPhaseStart != null && installmentPhaseEnd != null
+            ? Math.max(1, installmentPhaseEnd - installmentPhaseStart + 1)
+            : Math.max(1, totalPhasesForProfile || 1);
+        if (
+          isInstallmentEnrollment &&
+          downpaymentConfigured > 0 &&
+          installmentIncludeDownpayment === false
+        ) {
+          installmentProfileAmount += downpaymentConfigured / amortizationPeriods;
+        }
+
         const billingMonthParts = installment_settings.billing_month.split('-');
-        const firstBillingMonth = new Date(parseInt(billingMonthParts[0]), parseInt(billingMonthParts[1]) - 1, 1);
+        const firstBillingMonth = new Date(parseInt(billingMonthParts[0], 10), parseInt(billingMonthParts[1], 10) - 1, 1);
         const dueDate = new Date(installment_settings.invoice_due_date);
         const dayOfMonth = dueDate.getDate();
         const nextInvoiceDueDate = new Date(firstBillingMonth);
         nextInvoiceDueDate.setMonth(nextInvoiceDueDate.getMonth() + (installment_settings.frequency_months || 1));
         const generationDate = new Date(installment_settings.invoice_generation_date);
-        const totalPhases = classData.number_of_phase || null;
+
+        try {
+          await client.query(`
+            DO $$ 
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'installmentinvoiceprofilestbl' AND column_name = 'phase_start'
+              ) THEN
+                ALTER TABLE installmentinvoiceprofilestbl ADD COLUMN phase_start INTEGER DEFAULT NULL;
+              END IF;
+            END $$;
+          `);
+        } catch (err) {
+          console.log('phase_start column check (reservation upgrade):', err.message);
+        }
 
         const profileResult = await client.query(
           `INSERT INTO installmentinvoiceprofilestbl 
            (student_id, branch_id, package_id, amount, frequency, description, 
             day_of_month, is_active, bill_invoice_due_date, next_invoice_due_date, 
-            first_billing_month, first_generation_date, created_by, class_id, total_phases, generated_count)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            first_billing_month, first_generation_date, created_by, class_id, total_phases, generated_count, phase_start)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
            RETURNING *`,
           [
             reservation.student_id,
@@ -1315,8 +1428,9 @@ router.put(
             installment_settings.invoice_generation_date,
             req.user.fullName || req.user.email || null,
             reservation.class_id,
-            totalPhases,
+            totalPhasesForProfile,
             0,
+            profilePhaseStart,
           ]
         );
         installmentProfile = profileResult.rows[0];

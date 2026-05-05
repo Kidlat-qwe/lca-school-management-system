@@ -54,12 +54,6 @@ const getInvoiceBreakdownForReturnFix = (invoice) => {
   };
 };
 
-/** After Finance return, issue_date must stay fixed for EOD / reporting (backend also ignores edits). */
-const isPaymentIssueDateLocked = (p) =>
-  p &&
-  (String(p.approval_status || '') === 'Returned' ||
-    String(p.remarks || '').includes('[Returned]'));
-
 const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
 
 const AdminPaymentLogs = () => {
@@ -750,7 +744,6 @@ const AdminPaymentLogs = () => {
     if (!returnFixPayment) return;
     setReturnFixLoading(true);
     try {
-      const issueDateLocked = isPaymentIssueDateLocked(returnFixPayment);
       const remarksHadReturned = String(returnFixPayment.remarks || '').includes('[Returned]');
       const refTrim = returnFixRef.trim();
       const attTrim = returnFixAttachment.trim();
@@ -812,10 +805,8 @@ const AdminPaymentLogs = () => {
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
+        issue_date: issueDateTrim,
       };
-      if (!issueDateLocked) {
-        payload.issue_date = issueDateTrim;
-      }
       if (returnFixRemarks.trim()) {
         payload.remarks = returnFixRemarks.trim();
       }
@@ -2330,20 +2321,14 @@ const AdminPaymentLogs = () => {
                       Issue Date <span className="text-red-500">*</span>
                     </label>
                     <p className="text-xs text-gray-500 mb-1">
-                      {isPaymentIssueDateLocked(returnFixPayment)
-                        ? 'Original payment date is kept after Finance return (not editable).'
-                        : 'Match the date on the receipt before resubmitting.'}
+                      Defaults to the original payment date; change only if the receipt shows a different date.
                     </p>
                     <input
                       id="admin_return_fix_issue_date"
                       type="date"
                       value={returnFixIssueDate}
                       onChange={(e) => setReturnFixIssueDate(e.target.value)}
-                      disabled={
-                        returnFixLoading ||
-                        returnFixAttachmentUploading ||
-                        isPaymentIssueDateLocked(returnFixPayment)
-                      }
+                      disabled={returnFixLoading || returnFixAttachmentUploading}
                       className="input-field text-sm"
                       required
                     />

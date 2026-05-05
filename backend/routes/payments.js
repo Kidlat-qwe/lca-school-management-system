@@ -2379,8 +2379,6 @@ router.put(
 
       const remarksText = String(payment.remarks || '');
       const hadReturnedTag = remarksText.includes('[Returned]');
-      const issueDateLocked =
-        String(payment.approval_status || '') === 'Returned' || hadReturnedTag;
 
       if (hadReturnedTag && remarks !== undefined) {
         const nextRemarks = String(remarks ?? '');
@@ -2394,9 +2392,8 @@ router.put(
         }
       }
 
-      const effectiveIssueDateForLogic = issueDateLocked
-        ? payment.issue_date
-        : issue_date !== undefined
+      const effectiveIssueDateForLogic =
+        issue_date !== undefined && issue_date !== null && String(issue_date).trim() !== ''
           ? issue_date
           : payment.issue_date;
 
@@ -2408,9 +2405,6 @@ router.put(
       const fields = { payment_method, payment_type, payable_amount, tip_amount, issue_date, status, reference_number, remarks };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {
-          if (key === 'issue_date' && issueDateLocked) {
-            return;
-          }
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           params.push(value);

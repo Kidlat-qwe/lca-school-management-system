@@ -239,7 +239,7 @@ const Classes = () => {
   const [reservationFeePaid, setReservationFeePaid] = useState(0);
   const [alternativeClasses, setAlternativeClasses] = useState([]);
   const [isAlternativeClassesModalOpen, setIsAlternativeClassesModalOpen] = useState(false);
-  const [upgradeStep, setUpgradeStep] = useState('enrollment-option'); // 'enrollment-option', 'package-selection', 'package-config', 'per-phase-selection', 'review'
+  const [upgradeStep, setUpgradeStep] = useState('enrollment-option'); // 'enrollment-option', 'package-selection', 'installment-setup', 'package-config', 'per-phase-selection', 'review'
   const [upgradeEnrollmentOption, setUpgradeEnrollmentOption] = useState(''); // 'package', 'per-phase'
   const [upgradeSelectedPackage, setUpgradeSelectedPackage] = useState(null);
   const [upgradeAvailablePromos, setUpgradeAvailablePromos] = useState([]);
@@ -257,10 +257,18 @@ const Classes = () => {
     frequency_months: 1,
   });
   const [upgradeShowInstallmentSettings, setUpgradeShowInstallmentSettings] = useState(false);
+  /** Phase range + separate downpayment invoice — reservation upgrade (same idea as enroll installment-setup). */
+  const [upgradeInstallmentScopeSettings, setUpgradeInstallmentScopeSettings] = useState({
+    phase_start: '',
+    phase_end: '',
+    include_downpayment: true,
+  });
   const [upgradeShowPackageDetails, setUpgradeShowPackageDetails] = useState(true); // Default to open/expanded
   const [upgradePackageMerchSelections, setUpgradePackageMerchSelections] = useState({});
   const [upgradeStudentMerchandiseSelections, setUpgradeStudentMerchandiseSelections] = useState({});
   const [upgradeUniformCategoryFilters, setUpgradeUniformCategoryFilters] = useState({});
+  /** AR chosen in upgrade flow — same attach-to-invoice pattern as “Enroll student”. */
+  const [upgradeSelectedAckReceipt, setUpgradeSelectedAckReceipt] = useState(null);
 
 const initializePackageMerchSelections = useCallback(
   (pkg) => {
@@ -745,6 +753,19 @@ const initializePackageMerchSelections = useCallback(
     setViewStudentMenuTarget(null);
   };
 
+  /** Reservation may remain status "Reserved" while invoice is Paid / payments verified — still eligible to upgrade. */
+  const canUpgradeReservationRecord = (reservation) => {
+    if (!reservation) return false;
+    const status = reservation.status;
+    if (status === 'Fee Paid' || status === 'Expired') return true;
+    if (status === 'Reserved') {
+      if (reservation.is_payment_verified === true) return true;
+      const inv = String(reservation.invoice_status || '').trim().toLowerCase();
+      if (inv === 'paid') return true;
+    }
+    return false;
+  };
+
   const handleViewStudentActionMenuClick = (student, menuKey, event) => {
     const button = event.currentTarget;
     const rect = button.getBoundingClientRect();
@@ -794,7 +815,7 @@ const initializePackageMerchSelections = useCallback(
   const fetchPrograms = async () => {
     try {
       // Request a higher limit to get all programs (backend default is 20)
-      const response = await apiRequest('/programs?limit=100');
+      const response = await apiRequest('/programs?limit=500');
       setPrograms(response.data || []);
     } catch (err) {
       console.error('Error fetching programs:', err);
@@ -1758,6 +1779,10 @@ const initializePackageMerchSelections = useCallback(
             highestPhase: null,
             earliestEnrollment: reservation.reserved_at,
             shouldCount: shouldCount, // Flag to indicate if this student should be counted
+            is_payment_verified: reservation.is_payment_verified ?? false,
+            payment_verification_status: reservation.payment_verification_status ?? 'Not Verified',
+            unverified_payment_count: reservation.unverified_payment_count ?? 0,
+            reservationRecord: reservation,
           };
         });
       
@@ -2001,6 +2026,7 @@ const initializePackageMerchSelections = useCallback(
             is_payment_verified: reservation.is_payment_verified ?? false,
             payment_verification_status: reservation.payment_verification_status ?? 'Not Verified',
             unverified_payment_count: reservation.unverified_payment_count ?? 0,
+            reservationRecord: reservation,
           };
       });
       
@@ -2512,8 +2538,15 @@ const initializePackageMerchSelections = useCallback(
 
   const openReservedStudentsModal = async (classItem) => {
     setOpenMenuId(null);
-    setSelectedClassForReservations(classItem);
+    const listRow =
+      classes?.find((cl) => String(cl.class_id) === String(classItem.class_id)) || null;
+    setSelectedClassForReservations({
+      ...classItem,
+      number_of_phase: classItem.number_of_phase ?? listRow?.number_of_phase,
+      program_id: classItem.program_id ?? listRow?.program_id,
+    });
     setIsReservedStudentsModalOpen(true);
+    await mergeReservationClassDetailFromApi(classItem.class_id);
     await fetchReservedStudents(classItem.class_id);
   };
 
@@ -2536,11 +2569,41 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
+  /** GET /classes/:id includes curriculum number_of_phase (authoritative — client programs list may be incomplete). */
+  const mergeReservationClassDetailFromApi = async (classId) => {
+    if (classId == null || classId === '') return;
+    try {
+      const res = await apiRequest(`/classes/${classId}`);
+      const d = res?.data;
+      if (!d) return;
+      const num = Number(d.number_of_phase);
+      const validNp = Number.isFinite(num) && num >= 1 ? Math.min(100, Math.floor(num)) : null;
+      setSelectedClassForReservations((prev) => {
+        const idStr = String(classId);
+        const base =
+          prev && String(prev.class_id) === idStr ? { ...prev } : { class_id: classId };
+        return {
+          ...base,
+          class_id: Number(classId) || base.class_id,
+          number_of_phase: validNp != null ? validNp : base.number_of_phase,
+          program_id: d.program_id != null ? d.program_id : base.program_id,
+          branch_id: d.branch_id != null ? d.branch_id : base.branch_id,
+          program_name: d.program_name ?? base.program_name,
+          level_tag: d.level_tag ?? base.level_tag,
+          class_name: d.class_name ?? base.class_name,
+        };
+      });
+    } catch (err) {
+      console.error('Failed to load class detail for reservation phase scope:', err);
+    }
+  };
+
   const handleUpgradeReservation = async (reservation) => {
-    // Allow upgrade for Fee Paid and Expired reservations
-    if (reservation.status !== 'Fee Paid' && reservation.status !== 'Expired') {
+    if (!canUpgradeReservationRecord(reservation)) {
       if (reservation.status === 'Reserved') {
-        appAlert(`Cannot upgrade reservation. The reservation fee must be paid first. Current status: ${reservation.status}`);
+        appAlert(
+          'Cannot upgrade yet. Pay the reservation fee first (invoice must be paid / verified).'
+        );
       } else {
         appAlert(`Cannot upgrade reservation. Current status: ${reservation.status}`);
       }
@@ -2589,9 +2652,23 @@ const initializePackageMerchSelections = useCallback(
       frequency_months: 1,
     });
     setUpgradeShowInstallmentSettings(false);
+    setUpgradeInstallmentScopeSettings({
+      phase_start: '',
+      phase_end: '',
+      include_downpayment: true,
+    });
+    setUpgradeSelectedAckReceipt(null);
     
+    if (reservation.class_id) {
+      await mergeReservationClassDetailFromApi(reservation.class_id);
+    }
+
     // Fetch packages, pricing lists, and merchandise for the class's branch
-    const branchId = reservation.branch_id || selectedClassForEnrollment?.branch_id;
+    const branchId =
+      reservation.branch_id ||
+      selectedClassForReservations?.branch_id ||
+      selectedClassForEnrollment?.branch_id ||
+      selectedClassForView?.branch_id;
     if (branchId) {
       await fetchPackages(branchId);
       await fetchPricingLists(branchId);
@@ -2613,6 +2690,10 @@ const initializePackageMerchSelections = useCallback(
       // - When upgradeEnrollmentOption === 'package': use package for entire class
       // - When upgradeEnrollmentOption === 'per-phase': use Phase-type package for per-phase enrollment
       if (upgradeStep === 'review') {
+        if (upgradeEnrollmentOption === 'ack-receipt' && !upgradeSelectedAckReceipt) {
+          appAlert('Please select an acknowledgement receipt before completing the upgrade.');
+          return;
+        }
         if (!upgradeSelectedPackage) {
           appAlert('Please select a package');
           return;
@@ -2658,15 +2739,61 @@ const initializePackageMerchSelections = useCallback(
                 },
               }
             : {}),
+          ...(!isPhasePerPhase &&
+          isInstallmentPackageSelection(upgradeSelectedPackage) &&
+          upgradeInstallmentScopeSettings.phase_start &&
+          upgradeInstallmentScopeSettings.phase_end
+            ? {
+                installment_scope: {
+                  phase_start: parseInt(upgradeInstallmentScopeSettings.phase_start, 10),
+                  phase_end: parseInt(upgradeInstallmentScopeSettings.phase_end, 10),
+                  include_downpayment: Boolean(upgradeInstallmentScopeSettings.include_downpayment),
+                },
+              }
+            : {}),
         };
       }
 
-      await apiRequest(`/reservations/${selectedReservationForUpgrade.reserved_id}/upgrade`, {
+      const upgradeResponse = await apiRequest(`/reservations/${selectedReservationForUpgrade.reserved_id}/upgrade`, {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
 
-      appAlert('Reservation upgraded to enrollment successfully!');
+      const invoice = upgradeResponse?.data?.invoice;
+      let ackAttachError = null;
+      if (
+        upgradeEnrollmentOption === 'ack-receipt' &&
+        upgradeSelectedAckReceipt &&
+        invoice?.invoice_id
+      ) {
+        try {
+          await apiRequest(
+            `/acknowledgement-receipts/${upgradeSelectedAckReceipt.ack_receipt_id}/attach-to-invoice`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                invoice_id: invoice.invoice_id,
+                student_id: selectedReservationForUpgrade.student_id,
+              }),
+            }
+          );
+        } catch (attachErr) {
+          console.error('Error attaching acknowledgement receipt after reservation upgrade:', attachErr);
+          const attachMessage =
+            attachErr.response?.data?.message ||
+            attachErr.message ||
+            'Failed to attach acknowledgement receipt to invoice.';
+          ackAttachError = attachMessage;
+        }
+      }
+
+      if (ackAttachError) {
+        appAlert(
+          `Reservation upgrade completed, but linking the acknowledgement receipt failed: ${ackAttachError}`
+        );
+      } else {
+        appAlert('Reservation upgraded to enrollment successfully!');
+      }
       setIsUpgradeModalOpen(false);
       setSelectedReservationForUpgrade(null);
       setReservationFeePaid(0);
@@ -2692,6 +2819,12 @@ const initializePackageMerchSelections = useCallback(
         frequency_months: 1,
       });
       setUpgradeShowInstallmentSettings(false);
+      setUpgradeInstallmentScopeSettings({
+        phase_start: '',
+        phase_end: '',
+        include_downpayment: true,
+      });
+      setUpgradeSelectedAckReceipt(null);
       
       if (selectedClassForReservations) {
         await fetchReservedStudents(selectedClassForReservations.class_id);
@@ -2866,6 +2999,139 @@ const initializePackageMerchSelections = useCallback(
     return { minPhase, maxPhase };
   };
 
+  /** Curriculum / program phase count for the reserved class (list row may omit number_of_phase). */
+  const getResolvedClassMaxPhaseForReservations = () => {
+    const c = selectedClassForReservations;
+    if (!c) return null;
+    const positiveInt = (v) => {
+      const x = Number(v);
+      return Number.isFinite(x) && x >= 1 ? Math.min(100, Math.floor(x)) : null;
+    };
+    const direct = positiveInt(c.number_of_phase);
+    if (direct != null) return direct;
+    if (c.program_id != null && programs?.length) {
+      const prog = programs.find((p) => String(p.program_id) === String(c.program_id));
+      const fromProg = positiveInt(prog?.number_of_phase);
+      if (fromProg != null) return fromProg;
+    }
+    if (c.class_id != null && classes?.length) {
+      const row = classes.find((cl) => String(cl.class_id) === String(c.class_id));
+      const fromList = positiveInt(row?.number_of_phase);
+      if (fromList != null) return fromList;
+    }
+    return null;
+  };
+
+  const getUpgradeInstallmentPhaseBounds = (packageItem) => {
+    const classMaxPhase = getResolvedClassMaxPhaseForReservations();
+    let minPhase = 1;
+    let maxPhase = classMaxPhase != null ? classMaxPhase : 1;
+
+    if (packageItem?.package_type === 'Phase' && packageItem?.payment_option === 'Installment') {
+      const pkgStart = Number(packageItem.phase_start) || 1;
+      const pkgEnd = Number(packageItem.phase_end) || pkgStart;
+      minPhase = pkgStart;
+      maxPhase = pkgEnd;
+    }
+
+    if (classMaxPhase != null) {
+      minPhase = Math.min(minPhase, classMaxPhase);
+      maxPhase = Math.min(maxPhase, classMaxPhase);
+    }
+
+    if (maxPhase < minPhase) {
+      maxPhase = minPhase;
+    }
+
+    return { minPhase, maxPhase };
+  };
+
+  /** Shared package selection after user picks a package or an AR (upgrade reservation modal). */
+  const applyUpgradePackageSelection = async (pkg, ackReceipt = null) => {
+    setUpgradeSelectedPackage(pkg);
+    setUpgradeSelectedPromo(null);
+    setUpgradeAvailablePromos([]);
+    setUpgradeShowPackageDetails(true);
+    if (ackReceipt) {
+      setUpgradeSelectedAckReceipt(ackReceipt);
+    } else {
+      setUpgradeSelectedAckReceipt(null);
+    }
+
+    if (pkg.details) {
+      const { merchandiseTypes } = groupPackageDetails(pkg.details || []);
+      const updatedSelections = {};
+      merchandiseTypes.forEach((typeName) => {
+        const items = getMerchandiseItemsByType(typeName);
+        if (items.length === 0) {
+          updatedSelections[typeName] = [];
+          return;
+        }
+        const requiresSizing = requiresSizingForMerchandise(typeName);
+        if (!requiresSizing) {
+          updatedSelections[typeName] = [
+            {
+              merchandise_id: items[0].merchandise_id,
+              size: items[0].size || null,
+            },
+          ];
+          return;
+        }
+        updatedSelections[typeName] = [];
+      });
+      setUpgradePackageMerchSelections(updatedSelections);
+    } else {
+      setUpgradePackageMerchSelections({});
+    }
+
+    if (pkg.package_id && selectedReservationForUpgrade?.student_id) {
+      await fetchUpgradeAvailablePromos(pkg.package_id, selectedReservationForUpgrade.student_id);
+    } else if (pkg.package_id) {
+      await fetchUpgradeAvailablePromos(pkg.package_id);
+    }
+
+    const hasFullpaymentPricing = pkg.details?.some((detail) => {
+      const pricing = pricingLists.find((p) => p.pricinglist_id === detail.pricinglist_id);
+      return pricing && isNewEnrolleeFullpayment(pricing);
+    });
+
+    if (
+      (pkg.package_type === 'Installment' ||
+        (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) &&
+      !hasFullpaymentPricing
+    ) {
+      setUpgradeShowInstallmentSettings(true);
+      const branchId =
+        selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
+      const systemSettings = await fetchInstallmentScheduleSettings(branchId);
+      setUpgradeInstallmentSettings(systemSettings);
+    } else {
+      setUpgradeShowInstallmentSettings(false);
+      setUpgradeInstallmentSettings({
+        invoice_issue_date: '',
+        billing_month: '',
+        invoice_due_date: '',
+        invoice_generation_date: '',
+        frequency_months: 1,
+      });
+    }
+
+    const shouldShowUpgradeInstallmentSetup =
+      isInstallmentPackageSelection(pkg) && !hasFullpaymentPricing;
+    if (shouldShowUpgradeInstallmentSetup) {
+      const { minPhase, maxPhase } = getUpgradeInstallmentPhaseBounds(pkg);
+      const hasConfiguredDownpayment = parseFloat(pkg?.downpayment_amount || 0) > 0;
+      setUpgradeInstallmentScopeSettings({
+        phase_start: String(minPhase),
+        phase_end: String(maxPhase),
+        include_downpayment: hasConfiguredDownpayment,
+      });
+      setUpgradeStep('installment-setup');
+    } else {
+      setUpgradeStep('package-config');
+    }
+  };
+
   const fetchAckReceiptsForEnrollment = useCallback(async (branchId, search = '') => {
     try {
       setAckReceiptsLoading(true);
@@ -2901,10 +3167,31 @@ const initializePackageMerchSelections = useCallback(
   }, [ackSearchTerm]);
 
   useEffect(() => {
-    if (enrollStep !== 'ack-receipt-selection' || !selectedClassForEnrollment) return;
-    const branchId = selectedClassForEnrollment?.branch_id || selectedClassForEnrollment?.branchId || null;
+    const enrollAckFlow =
+      enrollStep === 'ack-receipt-selection' && selectedClassForEnrollment;
+    const upgradeAckFlow =
+      isUpgradeModalOpen &&
+      upgradeStep === 'ack-receipt-selection' &&
+      (selectedClassForReservations || selectedReservationForUpgrade);
+    if (!enrollAckFlow && !upgradeAckFlow) return;
+    const branchId = upgradeAckFlow
+      ? selectedClassForReservations?.branch_id ??
+        selectedReservationForUpgrade?.branch_id ??
+        null
+      : selectedClassForEnrollment?.branch_id ||
+        selectedClassForEnrollment?.branchId ||
+        null;
     fetchAckReceiptsForEnrollment(branchId, debouncedAckSearch);
-  }, [debouncedAckSearch, enrollStep, selectedClassForEnrollment, fetchAckReceiptsForEnrollment]);
+  }, [
+    debouncedAckSearch,
+    enrollStep,
+    upgradeStep,
+    selectedClassForEnrollment,
+    selectedClassForReservations,
+    selectedReservationForUpgrade,
+    isUpgradeModalOpen,
+    fetchAckReceiptsForEnrollment,
+  ]);
 
   const handleEnrollmentOptionContinue = () => {
     if (!selectedEnrollmentOption) return;
@@ -9803,24 +10090,33 @@ const initializePackageMerchSelections = useCallback(
                                 <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
                                   {isRemovedEnrollment ? (
                                     <span className="text-sm text-gray-400">-</span>
-                                  ) : isReserved && reservationStatus === 'Fee Paid' ? (
-                                    <button
-                                      onClick={() => {
-                                        const reservation = enrollReservedStudents.find(
-                                          r => r.reserved_id === student.reservation_id
+                                  ) : isReserved ? (
+                                    (() => {
+                                      const resObj = enrollReservedStudents.find(
+                                        (r) => r.reserved_id === student.reservation_id
+                                      );
+                                      if (resObj && canUpgradeReservationRecord(resObj)) {
+                                        return (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleUpgradeReservation(resObj)}
+                                            className="text-blue-600 hover:text-blue-900"
+                                          >
+                                            Upgrade
+                                          </button>
                                         );
-                                        if (reservation) {
-                                          handleUpgradeReservation(reservation);
-                                        }
-                                      }}
-                                      className="text-blue-600 hover:text-blue-900"
-                                    >
-                                      Upgrade
-                                    </button>
-                                  ) : isReserved && reservationStatus === 'Reserved' ? (
-                                    <span className="text-xs text-gray-500">Pay fee first</span>
-                                  ) : reservationForStudent && reservationStatus === 'Fee Paid' ? (
+                                      }
+                                      if (reservationStatus === 'Reserved') {
+                                        return (
+                                          <span className="text-xs text-gray-500">Pay fee first</span>
+                                        );
+                                      }
+                                      return <span className="text-sm text-gray-400">—</span>;
+                                    })()
+                                  ) : reservationForStudent &&
+                                    canUpgradeReservationRecord(reservationForStudent) ? (
                                     <button
+                                      type="button"
                                       onClick={() => handleUpgradeReservation(reservationForStudent)}
                                       className="text-blue-600 hover:text-blue-900"
                                     >
@@ -13801,6 +14097,17 @@ const initializePackageMerchSelections = useCallback(
                             const notVerifiedHighlight = !isPaymentVerified ? 'bg-amber-50/50' : '';
                             const enrolledByRaw = student.enrolled_by || '-';
                             const enrolledByShort = enrolledByRaw.length > 24 ? `${enrolledByRaw.slice(0, 22)}…` : enrolledByRaw;
+                            const reservedUpgradeEligible =
+                              isReserved &&
+                              canUpgradeReservationRecord(
+                                student.reservationRecord || {
+                                  status: student.reservation_status,
+                                  is_payment_verified: student.is_payment_verified,
+                                  invoice_status: student.invoice_status,
+                                }
+                              );
+                            const showViewStudentActionsMenu =
+                              (!isReserved && !isPending) || reservedUpgradeEligible;
                             
                             return (
                               <tr key={uniqueKey} className={`hover:bg-gray-50/50 transition-colors ${isReserved ? 'bg-amber-50/30' : ''} ${notVerifiedHighlight}`}>
@@ -13850,7 +14157,7 @@ const initializePackageMerchSelections = useCallback(
                                 </td>
                                 <td className="px-3 py-3 text-sm text-gray-500 max-w-[120px] truncate" title={enrolledByRaw}>{enrolledByShort}</td>
                                 <td className="px-3 py-3 whitespace-nowrap">
-                                  {!isReserved && !isPending ? (
+                                  {showViewStudentActionsMenu ? (
                                     <div className="relative view-student-action-menu-container">
                                       <button
                                         type="button"
@@ -13914,36 +14221,60 @@ const initializePackageMerchSelections = useCallback(
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="py-1">
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
-              >
-                Move
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
-              >
-                Continue per phase
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
-              >
-                Update Plan
-              </button>
+              {viewStudentMenuTarget.student_type === 'reserved' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const r =
+                      viewStudentMenuTarget.reservationRecord ||
+                      enrollReservedStudents.find(
+                        (x) => x.reserved_id === viewStudentMenuTarget.reservation_id
+                      );
+                    closeViewStudentActionMenu();
+                    if (r) {
+                      handleUpgradeReservation(r);
+                    } else {
+                      appAlert('Reservation data is missing. Close the modal, refresh the class, and try again.');
+                    }
+                  }}
+                  className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                >
+                  Upgrade to enrollment
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
+                  >
+                    Move
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
+                  >
+                    Continue per phase
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                  >
+                    Update Plan
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </>,
@@ -14462,8 +14793,9 @@ const initializePackageMerchSelections = useCallback(
                             )}
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
-                            {(reservation.status === 'Fee Paid' || reservation.status === 'Expired') && (
+                            {canUpgradeReservationRecord(reservation) && (
                               <button
+                                type="button"
                                 onClick={() => handleUpgradeReservation(reservation)}
                                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                                   reservation.status === 'Expired'
@@ -14474,7 +14806,7 @@ const initializePackageMerchSelections = useCallback(
                                 {reservation.status === 'Expired' ? 'Re-upgrade' : 'Upgrade'}
                               </button>
                             )}
-                            {reservation.status === 'Reserved' && (
+                            {reservation.status === 'Reserved' && !canUpgradeReservationRecord(reservation) && (
                               <span className="text-xs text-gray-500 italic">Pay fee to upgrade</span>
                             )}
                             {reservation.status === 'Upgraded' && (
@@ -14503,7 +14835,7 @@ const initializePackageMerchSelections = useCallback(
           onClick={() => setIsUpgradeModalOpen(false)}
         >
           <div 
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className="bg-white rounded-lg shadow-xl w-full max-w-2xl sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl max-h-[90vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -14543,12 +14875,15 @@ const initializePackageMerchSelections = useCallback(
                     <select
                       value={upgradeEnrollmentOption}
                       onChange={(e) => {
-                        setUpgradeEnrollmentOption(e.target.value);
-                        if (e.target.value === 'package') {
+                        const v = e.target.value;
+                        setUpgradeEnrollmentOption(v);
+                        setUpgradeSelectedAckReceipt(null);
+                        if (v === 'package') {
                           setUpgradeStep('package-selection');
-                        } else if (e.target.value === 'per-phase') {
+                        } else if (v === 'per-phase') {
                           setUpgradeStep('per-phase-selection');
                         }
+                        // NOTE: "With Acknowledgement Receipt" is locked for reservation upgrades for now.
                       }}
                       className="input-field"
                       required
@@ -14558,10 +14893,142 @@ const initializePackageMerchSelections = useCallback(
                       {selectedClassForReservations?.number_of_phase && selectedClassForReservations.number_of_phase > 0 && (
                         <option value="per-phase">Enroll per Phase</option>
                       )}
+                      <option value="ack-receipt" disabled>
+                        With Acknowledgement Receipt (Locked)
+                      </option>
                     </select>
                     <p className="mt-2 text-sm text-gray-500">
-                      Choose how you want to enroll the student. You can select a package or enroll per phase.
+                      Choose a package, or enroll per phase. (AR option is temporarily locked for reservation upgrades.)
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {upgradeStep === 'ack-receipt-selection' && (
+                <div className="space-y-6">
+                  <div className="text-center mb-4">
+                    <h3 className="text-xl font-bold text-gray-900 mb-1">Select Acknowledgement Receipt</h3>
+                    <p className="text-sm text-gray-500">
+                      Same rules as enrollment: unused Package-type receipts only. Verified, or Cash (usable immediately).
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+                      <input
+                        type="text"
+                        value={ackSearchTerm}
+                        onChange={(e) => setAckSearchTerm(e.target.value)}
+                        className="input-field text-sm w-full"
+                        placeholder="Search by name, contact, or reference no."
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="mt-2">
+                      {ackReceiptsLoading ? (
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                      ) : ackReceiptsError ? (
+                        <p className="text-sm text-red-600">{ackReceiptsError}</p>
+                      ) : ackReceipts.length === 0 ? (
+                        <p className="text-sm text-gray-600">
+                          No acknowledgement receipts found for this branch/search yet.
+                        </p>
+                      ) : (
+                        <div
+                          className="overflow-x-auto rounded-lg"
+                          style={{
+                            scrollbarWidth: 'thin',
+                            scrollbarColor: '#cbd5e0 #f7fafc',
+                            WebkitOverflowScrolling: 'touch',
+                          }}
+                        >
+                          <table
+                            className="min-w-full divide-y divide-gray-200 text-sm"
+                            style={{ width: '100%', minWidth: '620px' }}
+                          >
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Payer</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
+                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {ackReceipts.map((ar) => {
+                                const isCashMethod =
+                                  String(ar.payment_method || '').trim().toLowerCase() === 'cash';
+                                const isVerified = String(ar.status || '').trim() === 'Verified';
+                                const canUseReceipt = isVerified || isCashMethod;
+                                const disabledReason = isCashMethod
+                                  ? ''
+                                  : 'This receipt is not verified yet. Finance/Superfinance must verify it first.';
+                                return (
+                                  <tr key={ar.ack_receipt_id}>
+                                    <td className="px-4 py-3">
+                                      <div className="text-gray-900">{ar.prospect_student_name}</div>
+                                      {ar.prospect_student_contact && (
+                                        <div className="text-xs text-gray-500 truncate">
+                                          {ar.prospect_student_contact}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="text-gray-900">
+                                        {ar.package_name_snapshot || ar.package_name || 'N/A'}
+                                      </div>
+                                      <div className="text-xs text-gray-500">
+                                        ₱
+                                        {Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        })}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-900">
+                                      ₱
+                                      {Number(ar.payment_amount || 0).toLocaleString('en-US', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-900">
+                                      {ar.issue_date ? formatDateManila(ar.issue_date) : '-'}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <button
+                                        type="button"
+                                        disabled={!canUseReceipt}
+                                        title={!canUseReceipt ? disabledReason : 'Use this acknowledgement receipt'}
+                                        onClick={async () => {
+                                          if (!canUseReceipt) return;
+                                          const pkg = packages.find((p) => p.package_id === ar.package_id);
+                                          if (!pkg) {
+                                            appAlert(
+                                              'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
+                                            );
+                                            return;
+                                          }
+                                          await applyUpgradePackageSelection(pkg, ar);
+                                        }}
+                                        className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                          canUseReceipt
+                                            ? 'text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E]'
+                                            : 'text-gray-400 bg-gray-100 cursor-not-allowed border border-gray-200'
+                                        }`}
+                                      >
+                                        Use This Receipt
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -14579,77 +15046,20 @@ const initializePackageMerchSelections = useCallback(
                       {packages
                         .filter(pkg => pkg.package_type !== 'Reserved' && pkg.package_type !== 'Phase')
                         .filter(pkg => {
-                          // Filter by level_tag if class has one
-                          if (selectedClassForEnrollment?.level_tag) {
-                            return pkg.level_tag === selectedClassForEnrollment.level_tag;
+                          const levelTag =
+                            selectedClassForReservations?.level_tag ??
+                            selectedClassForEnrollment?.level_tag;
+                          if (levelTag) {
+                            return pkg.level_tag === levelTag;
                           }
                           return true;
                         })
                         .map((pkg) => {
-                        const hasFullpaymentPricing = pkg.details?.some(detail => {
-                          const pricing = pricingLists.find(p => p.pricinglist_id === detail.pricinglist_id);
-                          return pricing && isNewEnrolleeFullpayment(pricing);
-                        });
-                        
                         return (
                           <button
                             key={pkg.package_id}
                             onClick={async () => {
-                              setUpgradeSelectedPackage(pkg);
-                              setUpgradeSelectedPromo(null); // Clear selected promo when package changes
-                              setUpgradeAvailablePromos([]); // Clear available promos
-                              setUpgradeShowPackageDetails(true); // Show package details by default when package is selected
-                              
-                              // Initialize package merchandise selections
-                              if (pkg.details) {
-                                const { merchandiseTypes } = groupPackageDetails(pkg.details || []);
-                                const updatedSelections = {};
-                                merchandiseTypes.forEach((typeName) => {
-                                  const items = getMerchandiseItemsByType(typeName);
-                                  if (items.length === 0) {
-                                    updatedSelections[typeName] = [];
-                                    return;
-                                  }
-                                  // Check if this merchandise type requires sizing
-                                  const requiresSizing = requiresSizingForMerchandise(typeName);
-                                  
-                                  // For items that don't require sizing, auto-select first item
-                                  if (!requiresSizing) {
-                                    updatedSelections[typeName] = [{
-                                      merchandise_id: items[0].merchandise_id,
-                                      size: items[0].size || null,
-                                    }];
-                                    return;
-                                  }
-                                  // For items that require sizing, start empty (user will select)
-                                  updatedSelections[typeName] = [];
-                                });
-                                setUpgradePackageMerchSelections(updatedSelections);
-                              }
-                              
-                              // Fetch available promos for this package and student
-                              if (pkg.package_id && selectedReservationForUpgrade?.student_id) {
-                                await fetchUpgradeAvailablePromos(pkg.package_id, selectedReservationForUpgrade.student_id);
-                              } else if (pkg.package_id) {
-                                await fetchUpgradeAvailablePromos(pkg.package_id);
-                              }
-                              
-                              if ((pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')) && !hasFullpaymentPricing) {
-                                setUpgradeShowInstallmentSettings(true);
-                                const branchId = selectedClassForReservations?.branch_id ?? selectedReservationForUpgrade?.branch_id ?? null;
-                                const systemSettings = await fetchInstallmentScheduleSettings(branchId);
-                                setUpgradeInstallmentSettings(systemSettings);
-                              } else {
-                                setUpgradeShowInstallmentSettings(false);
-                                setUpgradeInstallmentSettings({
-                                  invoice_issue_date: '',
-                                  billing_month: '',
-                                  invoice_due_date: '',
-                                  invoice_generation_date: '',
-                                  frequency_months: 1,
-                                });
-                              }
-                              setUpgradeStep('package-config');
+                              await applyUpgradePackageSelection(pkg);
                             }}
                             className={`group w-full p-5 bg-white border-2 rounded-xl transition-all duration-200 text-left focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2 ${
                               upgradeSelectedPackage?.package_id === pkg.package_id
@@ -14727,6 +15137,146 @@ const initializePackageMerchSelections = useCallback(
                   )}
                 </div>
               )}
+
+              {/* Installment phase scope + downpayment billing (same pattern as enrollment modal) */}
+              {upgradeStep === 'installment-setup' && upgradeSelectedPackage && (() => {
+                const curriculumPhaseCount = getResolvedClassMaxPhaseForReservations();
+                return (
+                <div className="space-y-4 w-full max-w-full">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 md:p-5">
+                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-amber-900">Selected installment package</h4>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                            {upgradeSelectedPackage.package_name}
+                          </span>
+                          {upgradeSelectedPackage.package_price && (
+                            <span className="inline-flex items-center rounded-md bg-white/80 px-2.5 py-1 text-xs font-medium text-amber-900 border border-amber-200">
+                              Monthly: ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {curriculumPhaseCount != null && (
+                        <p className="text-xs text-amber-800 md:text-right md:max-w-xs shrink-0">
+                          Curriculum for this class:{' '}
+                          <span className="font-semibold text-amber-950">
+                            {curriculumPhaseCount} phase
+                            {curriculumPhaseCount !== 1 ? 's' : ''}
+                          </span>{' '}
+                          (from program)
+                        </p>
+                      )}
+                    </div>
+                    <p className="text-xs text-amber-700 mt-3">
+                      Configure phase coverage and whether downpayment is included. If you exclude the downpayment invoice, that amount is spread across each installment period in your selected phase range (added to the recurring installment amount).
+                    </p>
+                  </div>
+
+                  {(() => {
+                    const { minPhase, maxPhase } = getUpgradeInstallmentPhaseBounds(upgradeSelectedPackage);
+                    const phaseOptions = Array.from(
+                      { length: Math.max(0, maxPhase - minPhase + 1) },
+                      (_, idx) => minPhase + idx
+                    );
+                    const hasDownpayment = parseFloat(upgradeSelectedPackage.downpayment_amount || 0) > 0;
+
+                    return (
+                      <div className="rounded-lg border border-gray-200 bg-white p-4 md:p-5 space-y-4">
+                        {phaseOptions.length === 0 ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            No valid phase range for this class package.
+                          </div>
+                        ) : null}
+                        {curriculumPhaseCount == null && phaseOptions.length <= 1 ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                            Could not load curriculum phase count from this class or program. Phase list may be limited — open the class from the list after refresh, or confirm the program has a curriculum with phases.
+                          </div>
+                        ) : null}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-4 xl:gap-6 items-end">
+                          <div className="xl:col-span-3">
+                            <label className="label-field text-xs">
+                              Start Phase <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={upgradeInstallmentScopeSettings.phase_start}
+                              onChange={(e) => {
+                                const startVal = parseInt(e.target.value, 10);
+                                const currentEnd = parseInt(upgradeInstallmentScopeSettings.phase_end, 10);
+                                setUpgradeInstallmentScopeSettings((prev) => ({
+                                  ...prev,
+                                  phase_start: e.target.value,
+                                  phase_end: Number.isFinite(currentEnd) && currentEnd >= startVal
+                                    ? prev.phase_end
+                                    : e.target.value,
+                                }));
+                              }}
+                              className="input-field text-sm"
+                            >
+                              {phaseOptions.map((phase) => (
+                                <option key={`upgrade-installment-start-${phase}`} value={phase}>
+                                  Phase {phase}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="xl:col-span-3">
+                            <label className="label-field text-xs">
+                              End Phase <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={upgradeInstallmentScopeSettings.phase_end}
+                              onChange={(e) =>
+                                setUpgradeInstallmentScopeSettings((prev) => ({
+                                  ...prev,
+                                  phase_end: e.target.value,
+                                }))
+                              }
+                              className="input-field text-sm"
+                            >
+                              {phaseOptions
+                                .filter((phase) => phase >= parseInt(upgradeInstallmentScopeSettings.phase_start || String(minPhase), 10))
+                                .map((phase) => (
+                                  <option key={`upgrade-installment-end-${phase}`} value={phase}>
+                                    Phase {phase}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                          <div className="rounded-md border border-gray-200 p-3 bg-gray-50 sm:col-span-2 xl:col-span-6 xl:self-stretch flex flex-col justify-center min-h-[4.5rem]">
+                            <label className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(upgradeInstallmentScopeSettings.include_downpayment)}
+                                disabled={!hasDownpayment}
+                                onChange={(e) =>
+                                  setUpgradeInstallmentScopeSettings((prev) => ({
+                                    ...prev,
+                                    include_downpayment: e.target.checked,
+                                  }))
+                                }
+                                className="mt-1 h-4 w-4 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
+                              />
+                              <span>
+                                <span className="block text-sm font-medium text-gray-900">
+                                  Include downpayment invoice
+                                </span>
+                                <span className="block text-xs text-gray-600 mt-1">
+                                  {hasDownpayment
+                                    ? `Downpayment amount: ₱${Number(upgradeSelectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    : 'This package has no configured downpayment amount.'}
+                                </span>
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+                );
+              })()}
 
               {/* Package Configuration Step - Show after package selection */}
               {upgradeStep === 'package-config' && upgradeSelectedPackage && (
@@ -15102,6 +15652,11 @@ const initializePackageMerchSelections = useCallback(
                     if (hasFullpaymentPricing || !(upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment'))) {
                       return null;
                     }
+
+                    const isInstallmentCapablePackage =
+                      upgradeSelectedPackage.package_type === 'Installment' ||
+                      (upgradeSelectedPackage.package_type === 'Phase' &&
+                        upgradeSelectedPackage.payment_option === 'Installment');
                     
                     return (
                       <div className="space-y-3">
@@ -15295,6 +15850,20 @@ const initializePackageMerchSelections = useCallback(
                     <p className="text-sm text-gray-500">Review the upgrade details before submitting</p>
                   </div>
 
+                  {upgradeSelectedAckReceipt && (
+                    <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                      <h4 className="font-semibold text-amber-900 mb-1">Acknowledgement receipt</h4>
+                      <p className="text-sm text-amber-900">
+                        {upgradeSelectedAckReceipt.prospect_student_name || '—'} — Ref:{' '}
+                        {upgradeSelectedAckReceipt.ack_receipt_number ||
+                          `#${upgradeSelectedAckReceipt.ack_receipt_id}`}
+                      </p>
+                      <p className="text-xs text-amber-800 mt-1">
+                        After upgrade, this receipt will be linked to the generated invoice (same as standard enrollment).
+                      </p>
+                    </div>
+                  )}
+
                   {upgradeSelectedPackage ? (
                     <div className="space-y-4">
                       <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
@@ -15411,6 +15980,38 @@ const initializePackageMerchSelections = useCallback(
                         )}
                       </div>
 
+                      {upgradeInstallmentScopeSettings.phase_start && upgradeInstallmentScopeSettings.phase_end &&
+                        isInstallmentPackageSelection(upgradeSelectedPackage) && (
+                        <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                          <h4 className="font-semibold text-amber-900 mb-2">Installment scope</h4>
+                          <p className="text-sm text-amber-900">
+                            <strong>Phases:</strong> Phase {upgradeInstallmentScopeSettings.phase_start} → Phase{' '}
+                            {upgradeInstallmentScopeSettings.phase_end}
+                          </p>
+                          <p className="text-sm text-amber-900 mt-1">
+                            <strong>Downpayment invoice:</strong>{' '}
+                            {upgradeInstallmentScopeSettings.include_downpayment ? 'Included' : 'Excluded (spread into recurring installments)'}
+                          </p>
+                          {!upgradeInstallmentScopeSettings.include_downpayment &&
+                            parseFloat(upgradeSelectedPackage.downpayment_amount || 0) > 0 &&
+                            upgradeSelectedPackage.package_price && (
+                              <p className="text-sm text-amber-800 mt-2">
+                                Estimated recurring installment (profile amount): ₱
+                                {(() => {
+                                  const base = parseFloat(upgradeSelectedPackage.package_price);
+                                  const dp = parseFloat(upgradeSelectedPackage.downpayment_amount || 0);
+                                  const ps = parseInt(upgradeInstallmentScopeSettings.phase_start, 10);
+                                  const pe = parseInt(upgradeInstallmentScopeSettings.phase_end, 10);
+                                  const n = Number.isInteger(ps) && Number.isInteger(pe) ? Math.max(1, pe - ps + 1) : 1;
+                                  return (base + dp / n).toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  });
+                                })()}
+                              </p>
+                            )}
+                        </div>
+                      )}
                       {upgradeShowInstallmentSettings && upgradeInstallmentSettings.invoice_issue_date && (
                         <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                           <h4 className="font-semibold text-blue-900 mb-2">Installment Settings</h4>
@@ -15487,11 +16088,13 @@ const initializePackageMerchSelections = useCallback(
             {/* Modal Footer */}
             <div className="flex items-center justify-between space-x-3 p-6 border-t border-gray-200 flex-shrink-0">
               <div>
-                {upgradeStep === 'package-selection' && (
+                {upgradeStep === 'ack-receipt-selection' && (
                   <button
+                    type="button"
                     onClick={() => {
                       setUpgradeStep('enrollment-option');
                       setUpgradeEnrollmentOption('');
+                      setUpgradeSelectedAckReceipt(null);
                       setUpgradeSelectedPackage(null);
                     }}
                     className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
@@ -15500,11 +16103,76 @@ const initializePackageMerchSelections = useCallback(
                     Back
                   </button>
                 )}
+                {upgradeStep === 'package-selection' && (
+                  <button
+                    onClick={() => {
+                      setUpgradeStep('enrollment-option');
+                      setUpgradeEnrollmentOption('');
+                      setUpgradeSelectedPackage(null);
+                      setUpgradeSelectedAckReceipt(null);
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                    disabled={enrollSubmitting}
+                  >
+                    Back
+                  </button>
+                )}
+                {upgradeStep === 'installment-setup' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (upgradeEnrollmentOption === 'ack-receipt') {
+                        setUpgradeStep('ack-receipt-selection');
+                        setUpgradeSelectedPackage(null);
+                        setUpgradeSelectedAckReceipt(null);
+                        setUpgradeSelectedPromo(null);
+                        setUpgradeAvailablePromos([]);
+                        setUpgradeShowInstallmentSettings(false);
+                        setUpgradeInstallmentSettings({
+                          invoice_issue_date: '',
+                          billing_month: '',
+                          invoice_due_date: '',
+                          invoice_generation_date: '',
+                          frequency_months: 1,
+                        });
+                      } else {
+                        setUpgradeStep('package-selection');
+                        setUpgradeSelectedPackage(null);
+                      }
+                      setUpgradeInstallmentScopeSettings({
+                        phase_start: '',
+                        phase_end: '',
+                        include_downpayment: true,
+                      });
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                    disabled={enrollSubmitting}
+                  >
+                    Back
+                  </button>
+                )}
+                {upgradeStep === 'package-config' &&
+                  upgradeSelectedPackage &&
+                  isInstallmentPackageSelection(upgradeSelectedPackage) &&
+                  !upgradeSelectedPackage.details?.some((detail) => {
+                    const pricing = pricingLists.find((p) => p.pricinglist_id === detail.pricinglist_id);
+                    return pricing && isNewEnrolleeFullpayment(pricing);
+                  }) && (
+                    <button
+                      type="button"
+                      onClick={() => setUpgradeStep('installment-setup')}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                      disabled={enrollSubmitting}
+                    >
+                      Back
+                    </button>
+                  )}
                 {upgradeStep === 'per-phase-selection' && (
                   <button
                     onClick={() => {
                       setUpgradeStep('enrollment-option');
                       setUpgradeEnrollmentOption('');
+                      setUpgradeSelectedAckReceipt(null);
                       setUpgradePhaseNumber(null);
                       setUpgradePerPhaseAmount('');
                       setUpgradeSelectedPricingLists([]);
@@ -15520,7 +16188,7 @@ const initializePackageMerchSelections = useCallback(
                   <button
                     onClick={() => {
                       if (upgradeSelectedPackage) {
-                        setUpgradeStep('package-selection');
+                        setUpgradeStep('package-config');
                       } else {
                         setUpgradeStep('per-phase-selection');
                       }
@@ -15539,6 +16207,7 @@ const initializePackageMerchSelections = useCallback(
                     setSelectedReservationForUpgrade(null);
                     setUpgradeStep('enrollment-option');
                     setUpgradeEnrollmentOption('');
+                    setUpgradeSelectedAckReceipt(null);
                     setUpgradeSelectedPackage(null);
                     setUpgradeSelectedPricingLists([]);
                     setUpgradeSelectedMerchandise([]);
@@ -15552,12 +16221,39 @@ const initializePackageMerchSelections = useCallback(
                       frequency_months: 1,
                     });
                     setUpgradeShowInstallmentSettings(false);
+                    setUpgradeInstallmentScopeSettings({
+                      phase_start: '',
+                      phase_end: '',
+                      include_downpayment: true,
+                    });
                   }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                   disabled={enrollSubmitting}
                 >
                   Cancel
                 </button>
+                {upgradeStep === 'installment-setup' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const startPhase = parseInt(upgradeInstallmentScopeSettings.phase_start, 10);
+                      const endPhase = parseInt(upgradeInstallmentScopeSettings.phase_end, 10);
+                      if (!Number.isInteger(startPhase) || !Number.isInteger(endPhase)) {
+                        appAlert('Please select both start and end phase.');
+                        return;
+                      }
+                      if (endPhase < startPhase) {
+                        appAlert('End phase must be greater than or equal to start phase.');
+                        return;
+                      }
+                      setUpgradeStep('package-config');
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                    disabled={enrollSubmitting}
+                  >
+                    Continue
+                  </button>
+                )}
                 {upgradeStep === 'package-config' && (
                   <button
                     onClick={() => {
