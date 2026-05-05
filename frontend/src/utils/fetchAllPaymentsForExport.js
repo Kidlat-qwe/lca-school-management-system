@@ -34,6 +34,8 @@ export function buildInvoicePaymentExportFetchRequest(page, limit, opts) {
   params.set('limit', String(limit));
   params.set('page', String(page));
   params.set('status', 'Completed');
+  // Invoice payment-date exports should not include Finance-returned payments.
+  params.set('exclude_approval_status', 'Returned');
 
   if (branchId != null && String(branchId).trim() !== '') {
     params.set('branch_id', String(branchId));

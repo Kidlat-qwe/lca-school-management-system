@@ -1014,6 +1014,10 @@ const AdminPaymentLogs = () => {
       appAlert('"From" date must be on or before "To" date.');
       return;
     }
+    if (branchLogTab === 'return') {
+      appAlert('Returned payments are not included in exports. Please switch to the main tab to export.');
+      return;
+    }
     try {
       setExportLoading(true);
 
@@ -1027,12 +1031,11 @@ const AdminPaymentLogs = () => {
         if (adminBranchId) params.set('branch_id', String(adminBranchId));
         if (exportPaymentDateFrom) params.set('payment_date_from', exportPaymentDateFrom);
         if (exportPaymentDateTo) params.set('payment_date_to', exportPaymentDateTo);
-        if (branchLogTab === 'return') {
-          params.set('my_return_queue', 'true');
-        } else if (filterFinanceApproval === 'approved') {
+        // Always exclude payments returned by Finance.
+        params.set('exclude_approval_status', 'Returned');
+        if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
-          params.set('exclude_approval_status', 'Returned');
         } else if (filterFinanceApproval === 'pending') {
           params.set('status', 'Completed');
           params.set('exclude_approval_status', 'Approved,Returned');
@@ -1053,23 +1056,35 @@ const AdminPaymentLogs = () => {
       }
 
       // Prepare data for Excel
-      const excelData = allPayments.map((payment) => ({
-        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
-        'Invoice Description': payment.invoice_description || '-',
-        'Student Name': payment.student_name || 'N/A',
-        'Student Email': payment.student_email || '-',
-        'Payment Method': payment.payment_method || '-',
-        'Package/Item': payment.invoice_description || '-',
-        'Level Tag': payment.student_level_tag || '-',
-        'Amount (₱)': (Number(payment.payable_amount || 0) + Number(payment.tip_amount || 0)).toFixed(2),
-        'Status': payment.status || 'N/A',
-        'Payment Date': (payment.payment_date || payment.issue_date)
-          ? formatDate(payment.payment_date || payment.issue_date)
-          : '-',
-        'AR#': payment.invoice_ar_number || '-',
-        'Reference Number': payment.reference_number || '-',
-        'Remarks': payment.remarks || '-',
-      }));
+      const excelData = allPayments.map((payment) => {
+        const payable = parseFloat(payment.payable_amount) || 0;
+        const tip = parseFloat(payment.tip_amount) || 0;
+        const uiStatus =
+          branchLogTab === 'return'
+            ? (payment.approval_status || payment.status || 'Returned')
+            : ((payment.approval_status || 'Pending') === 'Approved' ? 'Approved' : 'Pending Approval');
+        const row = {
+          'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+          BRANCH: selectedBranchName || getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
+          DATE: (payment.payment_date || payment.issue_date)
+            ? formatDate(payment.payment_date || payment.issue_date)
+            : '-',
+          'Student Name': payment.student_name || 'N/A',
+          'PACKAGE/ITEM': payment.invoice_description || '-',
+          'LEVEL TAG': payment.student_level_tag || '-',
+          'PAYMENT METHOD': payment.payment_method || '-',
+          AMOUNT: Math.round(payable * 100) / 100,
+          'TOTAL AMOUNT': Math.round((payable + tip) * 100) / 100,
+          Status: uiStatus,
+        };
+        if (branchLogTab === 'return') {
+          row['Returned by'] = payment.returned_by_name || '—';
+        }
+        row['REFERENCE#'] = payment.reference_number || '-';
+        row['AR#'] = payment.invoice_ar_number || '—';
+        row['ISSUED BY'] = formatInvoiceIssuedBy(payment);
+        return row;
+      });
 
       // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
@@ -1077,20 +1092,25 @@ const AdminPaymentLogs = () => {
       appendPaymentLogsAmountTotalRow(ws, excelData);
 
       // Set column widths
-      ws['!cols'] = [
-        { wch: 12 }, // Invoice ID
-        { wch: 30 }, // Invoice Description
-        { wch: 25 }, // Student Name
-        { wch: 30 }, // Student Email
-        { wch: 18 }, // Payment Method
-        { wch: 18 }, // Payment Type
-        { wch: 15 }, // Amount
-        { wch: 12 }, // Status
-        { wch: 15 }, // Issue Date
-        { wch: 10 }, // AR#
-        { wch: 20 }, // Reference Number
-        { wch: 30 }, // Remarks
+      const widthList = [
+        12, // Invoice ID
+        22, // Branch
+        12, // Date
+        24, // Student Name
+        28, // Package/Item
+        14, // Level tag
+        16, // Payment method
+        14, // Amount
+        16, // Total amount
+        16, // Status
       ];
+      if (branchLogTab === 'return') widthList.push(18); // Returned by
+      widthList.push(
+        22, // Reference#
+        12, // AR#
+        22 // Issued by
+      );
+      ws['!cols'] = widthList.map((wch) => ({ wch }));
 
       // Add worksheet to workbook
       XLSX.utils.book_append_sheet(wb, ws, 'Payment Logs');

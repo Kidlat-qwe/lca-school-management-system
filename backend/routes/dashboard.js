@@ -259,11 +259,15 @@ router.get(
               0
             ) AS verified_amount,
             COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              WHERE p.status = 'Completed'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
             )::bigint AS unverified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                WHERE p.status = 'Completed'
+                  AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                  AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
               ),
               0
             ) AS unverified_amount
@@ -283,11 +287,15 @@ router.get(
               0
             ) AS verified_amount,
             COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              WHERE p.status = 'Completed'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
             )::bigint AS unverified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                WHERE p.status = 'Completed'
+                  AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                  AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
               ),
               0
             ) AS unverified_amount

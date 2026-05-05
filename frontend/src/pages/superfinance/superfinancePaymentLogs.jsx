@@ -15,6 +15,7 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 
 const SuperfinancePaymentLogs = () => {
+  const [filterMonth, setFilterMonth] = useState(''); // YYYY-MM
   const location = useLocation();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
@@ -92,6 +93,19 @@ const SuperfinancePaymentLogs = () => {
     }
     fetchPayments(1);
   }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, financeLogTab, filterPaymentMethod]);
+
+  const applyMonthFilter = (monthValue) => {
+    const month = String(monthValue || '').trim();
+    setFilterMonth(month);
+    if (!month) return;
+    const [yy, mm] = month.split('-').map((v) => parseInt(v, 10));
+    if (!Number.isInteger(yy) || !Number.isInteger(mm) || mm < 1 || mm > 12) return;
+    const first = `${month}-01`;
+    const last = new Date(yy, mm, 0).getDate();
+    const lastYmd = `${month}-${String(last).padStart(2, '0')}`;
+    setFilterIssueDateFrom(first);
+    setFilterIssueDateTo(lastYmd);
+  };
 
   useEffect(() => {
     if (financeLogTab === 'return') {
@@ -522,6 +536,10 @@ const SuperfinancePaymentLogs = () => {
       appAlert('"From" date must be on or before "To" date.');
       return;
     }
+    if (financeLogTab === 'return') {
+      appAlert('Returned payments are not included in exports. Please switch to the main tab to export.');
+      return;
+    }
     try {
       setExportLoading(true);
       
@@ -534,14 +552,11 @@ const SuperfinancePaymentLogs = () => {
         });
         if (exportPaymentDateFrom) params.set('payment_date_from', exportPaymentDateFrom);
         if (exportPaymentDateTo) params.set('payment_date_to', exportPaymentDateTo);
-        if (financeLogTab === 'return') {
-          params.set('approval_status', 'Returned');
-          return apiRequest(`/payments?${params.toString()}`);
-        }
+        // Always exclude payments returned by Finance.
+        params.set('exclude_approval_status', 'Returned');
         if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
-          params.set('exclude_approval_status', 'Returned');
           return apiRequest(`/payments?${params.toString()}`);
         }
         if (filterFinanceApproval === 'pending') {
@@ -576,47 +591,65 @@ const SuperfinancePaymentLogs = () => {
         return;
       }
 
-      // Prepare data for Excel
-      const excelData = allPayments.map(payment => ({
-        'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
-        'Invoice Description': payment.invoice_description || '-',
-        'Student Name': payment.student_name || 'N/A',
-        'Student Email': payment.student_email || '-',
-        'Issued by': formatInvoiceIssuedBy(payment),
-        'Payment Method': payment.payment_method === 'Acknowledgement Receipt' ? 'AR' : (payment.payment_method || '-'),
-        'Package/Item': payment.invoice_description || '-',
-        'Level Tag': payment.student_level_tag || '-',
-        'Amount (₱)': (Number(payment.payable_amount || 0) + Number(payment.tip_amount || 0)).toFixed(2),
-        'Status': payment.status || 'N/A',
-        'Branch': getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
-        'Payment Date': (payment.payment_date || payment.issue_date) ? formatDate(payment.payment_date || payment.issue_date) : '-',
-        'AR#': payment.invoice_ar_number || '-',
-        'Reference Number': payment.reference_number || '-',
-        'Remarks': payment.remarks || '-',
-      }));
+      // Prepare data for Excel (match Payment Logs table columns)
+      const excelData = allPayments.map((payment) => {
+        const payable = parseFloat(payment.payable_amount) || 0;
+        const tip = parseFloat(payment.tip_amount) || 0;
+        const uiStatus =
+          financeLogTab === 'return'
+            ? (payment.approval_status || payment.status || 'Returned')
+            : ((payment.approval_status || 'Pending') === 'Approved' ? 'Approved' : 'Pending Approval');
+        const row = {
+          'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
+          BRANCH: getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
+          DATE: (payment.payment_date || payment.issue_date)
+            ? formatDate(payment.payment_date || payment.issue_date)
+            : '-',
+          'Student Name': payment.student_name || 'N/A',
+          'PACKAGE/ITEM': payment.invoice_description || '-',
+          'LEVEL TAG': payment.student_level_tag || '-',
+          'PAYMENT METHOD':
+            payment.payment_method === 'Acknowledgement Receipt'
+              ? 'AR'
+              : (payment.payment_method || '-'),
+          AMOUNT: Math.round(payable * 100) / 100,
+          'TOTAL AMOUNT': Math.round((payable + tip) * 100) / 100,
+          Status: uiStatus,
+        };
+        if (financeLogTab === 'return') {
+          row['Returned by'] = payment.returned_by_name || '—';
+        }
+        row['REFERENCE#'] = payment.reference_number || '-';
+        row['AR#'] = payment.invoice_ar_number || '—';
+        row['ISSUED BY'] = formatInvoiceIssuedBy(payment);
+        return row;
+      });
 
       // Create workbook and worksheet
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(excelData);
       appendPaymentLogsAmountTotalRow(ws, excelData);
 
-      // Set column widths
-      ws['!cols'] = [
-        { wch: 12 },  // Invoice ID
-        { wch: 30 },  // Invoice Description
-        { wch: 25 },  // Student Name
-        { wch: 30 },  // Student Email
-        { wch: 22 },  // Issued by
-        { wch: 18 },  // Payment Method
-        { wch: 18 },  // Payment Type
-        { wch: 15 },  // Amount
-        { wch: 12 },  // Status
-        { wch: 25 },  // Branch
-        { wch: 15 },  // Issue Date
-        { wch: 10 },  // AR#
-        { wch: 20 },  // Reference Number
-        { wch: 30 },  // Remarks
+      // Set column widths (match Payment Logs table column order)
+      const widthList = [
+        12, // Invoice ID
+        22, // Branch
+        12, // Date
+        24, // Student Name
+        28, // Package/Item
+        14, // Level tag
+        16, // Payment method
+        14, // Amount
+        16, // Total amount
+        16, // Status
       ];
+      if (financeLogTab === 'return') widthList.push(18); // Returned by
+      widthList.push(
+        22, // Reference#
+        12, // AR#
+        22 // Issued by
+      );
+      ws['!cols'] = widthList.map((wch) => ({ wch }));
 
       // Add worksheet to workbook
       XLSX.utils.book_append_sheet(wb, ws, 'Payment Logs');
@@ -701,7 +734,10 @@ const SuperfinancePaymentLogs = () => {
               id="superfinance-payment-logs-issue-date-from"
               type="date"
               value={filterIssueDateFrom}
-              onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+              onChange={(e) => {
+                setFilterIssueDateFrom(e.target.value);
+                if (filterMonth) setFilterMonth('');
+              }}
               className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
             />
           </div>
@@ -713,17 +749,33 @@ const SuperfinancePaymentLogs = () => {
               id="superfinance-payment-logs-issue-date-to"
               type="date"
               value={filterIssueDateTo}
-              onChange={(e) => setFilterIssueDateTo(e.target.value)}
+              onChange={(e) => {
+                setFilterIssueDateTo(e.target.value);
+                if (filterMonth) setFilterMonth('');
+              }}
+              className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
+            />
+          </div>
+          <div className="flex flex-col gap-1 min-w-0">
+            <label htmlFor="superfinance-payment-logs-month" className="text-xs font-medium text-gray-600">
+              Month
+            </label>
+            <input
+              id="superfinance-payment-logs-month"
+              type="month"
+              value={filterMonth}
+              onChange={(e) => applyMonthFilter(e.target.value)}
               className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
             />
           </div>
           <div className="flex flex-wrap items-center gap-2 pb-0.5">
-            {filterIssueDateFrom || filterIssueDateTo ? (
+            {filterIssueDateFrom || filterIssueDateTo || filterMonth ? (
               <button
                 type="button"
                 onClick={() => {
                   setFilterIssueDateFrom('');
                   setFilterIssueDateTo('');
+                  setFilterMonth('');
                 }}
                 className="text-sm font-medium text-primary-600 hover:text-primary-800 px-2 py-1.5 rounded-md hover:bg-primary-50"
               >

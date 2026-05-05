@@ -538,6 +538,7 @@ router.get(
         SELECT
           COALESCE(
             SUM(CASE WHEN p.status = 'Completed'
+              AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
               THEN COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0) ELSE 0 END),
           0)::numeric AS total_revenue,
           COUNT(*) FILTER (WHERE p.status = 'Completed')::int AS completed_count,
@@ -551,11 +552,15 @@ router.get(
             0
           )::numeric AS verified_amount,
           COUNT(*) FILTER (
-            WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+            WHERE p.status = 'Completed'
+              AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
           )::int AS unverified_count,
           COALESCE(
             SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+              WHERE p.status = 'Completed'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
             ),
             0
           )::numeric AS unverified_amount
@@ -573,6 +578,7 @@ router.get(
         WHERE 1=1
         ${whereExtra}
           AND p.status = 'Completed'
+          AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
         GROUP BY p.branch_id, b.branch_nickname, b.branch_name
         ORDER BY revenue DESC NULLS LAST
         LIMIT 5
@@ -604,6 +610,7 @@ router.get(
         WHERE 1=1
         ${whereExtra}
           AND p.status = 'Completed'
+          AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
         ORDER BY p.payment_id DESC
         LIMIT 3
       `;
@@ -1449,10 +1456,14 @@ router.get(
       const total = merged.length;
       const pageData = merged.slice(offset, offset + limitNum).map(({ sort_id, ...rest }) => rest);
 
-      const filterTotalLineAmount = merged.reduce(
-        (s, r) => s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0),
-        0
-      );
+      // Financial Dashboard-style "total revenue" for the list header:
+      // - exclude Returned payments (finance returned-to-branch)
+      // - exclude unapplied AR rows (awaiting attachment), since those are tracked separately on dashboard
+      const filterTotalLineAmount = paymentRows.reduce((s, r) => {
+        const approval = String(r.approval_status ?? '').trim();
+        if (approval === 'Returned') return s;
+        return s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0);
+      }, 0);
 
       return res.json({
         success: true,

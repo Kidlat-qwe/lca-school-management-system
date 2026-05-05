@@ -18,6 +18,7 @@ const FinancialDashboardDateFilter = ({
   onPrepareOpen,
 }) => {
   const [open, setOpen] = useState(false);
+  const [draftMonth, setDraftMonth] = useState(''); // YYYY-MM
 
   const handleOpen = () => {
     onPrepareOpen?.();
@@ -39,8 +40,22 @@ const FinancialDashboardDateFilter = ({
   const handleClearClick = () => {
     onDraftFromChange('');
     onDraftToChange('');
+    setDraftMonth('');
     onClear();
     setOpen(false);
+  };
+
+  const applyMonthToDraftRange = (monthValue) => {
+    const month = String(monthValue || '').trim();
+    setDraftMonth(month);
+    if (!month) return;
+    const [yy, mm] = month.split('-').map((v) => parseInt(v, 10));
+    if (!Number.isInteger(yy) || !Number.isInteger(mm) || mm < 1 || mm > 12) return;
+    const first = `${month}-01`;
+    const last = new Date(yy, mm, 0).getDate();
+    const lastYmd = `${month}-${String(last).padStart(2, '0')}`;
+    onDraftFromChange(first);
+    onDraftToChange(lastYmd);
   };
 
   const modal =
@@ -99,7 +114,10 @@ const FinancialDashboardDateFilter = ({
                 id="fin-dash-modal-from"
                 type="date"
                 value={draftFrom}
-                onChange={(e) => onDraftFromChange(e.target.value)}
+                onChange={(e) => {
+                  onDraftFromChange(e.target.value);
+                  if (draftMonth) setDraftMonth('');
+                }}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
@@ -111,7 +129,22 @@ const FinancialDashboardDateFilter = ({
                 id="fin-dash-modal-to"
                 type="date"
                 value={draftTo}
-                onChange={(e) => onDraftToChange(e.target.value)}
+                onChange={(e) => {
+                  onDraftToChange(e.target.value);
+                  if (draftMonth) setDraftMonth('');
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              />
+            </div>
+            <div className="flex-1 min-w-[140px]">
+              <label htmlFor="fin-dash-modal-month" className="block text-xs font-medium text-gray-600 mb-1">
+                Month
+              </label>
+              <input
+                id="fin-dash-modal-month"
+                type="month"
+                value={draftMonth}
+                onChange={(e) => applyMonthToDraftRange(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               />
             </div>

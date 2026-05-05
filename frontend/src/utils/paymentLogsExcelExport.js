@@ -1,7 +1,11 @@
 import * as XLSX from 'xlsx';
 
-/** Column key for payment line amount in Payment Logs Excel exports (matches page column label). */
-export const PAYMENT_LOGS_EXPORT_AMOUNT_KEY = 'Amount (₱)';
+/**
+ * Column key for payment line amount in Payment Logs Excel exports.
+ * Prefer summing TOTAL AMOUNT (matches Payment Logs table), fallback to legacy Amount (₱).
+ */
+export const PAYMENT_LOGS_EXPORT_TOTAL_AMOUNT_KEY = 'TOTAL AMOUNT';
+export const PAYMENT_LOGS_EXPORT_LEGACY_AMOUNT_KEY = 'Amount (₱)';
 
 /**
  * Appends a final row: label in column A, sum of amount column (numeric, 2 decimals).
@@ -12,8 +16,10 @@ export function appendPaymentLogsAmountTotalRow(ws, rows) {
   if (!Array.isArray(rows) || rows.length === 0) return;
   const ref = ws['!ref'];
   if (!ref) return;
-  const amountKey = PAYMENT_LOGS_EXPORT_AMOUNT_KEY;
   const headers = Object.keys(rows[0]);
+  const amountKey = headers.includes(PAYMENT_LOGS_EXPORT_TOTAL_AMOUNT_KEY)
+    ? PAYMENT_LOGS_EXPORT_TOTAL_AMOUNT_KEY
+    : PAYMENT_LOGS_EXPORT_LEGACY_AMOUNT_KEY;
   const amountCol = headers.indexOf(amountKey);
   if (amountCol < 0) return;
 

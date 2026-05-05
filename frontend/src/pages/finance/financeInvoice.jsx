@@ -39,6 +39,20 @@ const FinanceInvoice = () => {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  const [filterMonth, setFilterMonth] = useState(''); // YYYY-MM (sets Issue Date From/To)
+
+  const applyMonthFilter = (monthValue) => {
+    const month = String(monthValue || '').trim();
+    setFilterMonth(month);
+    if (!month) return;
+    const [yy, mm] = month.split('-').map((v) => parseInt(v, 10));
+    if (!Number.isInteger(yy) || !Number.isInteger(mm) || mm < 1 || mm > 12) return;
+    const first = `${month}-01`;
+    const last = new Date(yy, mm, 0).getDate();
+    const lastYmd = `${month}-${String(last).padStart(2, '0')}`;
+    setFilterIssueDateFrom(first);
+    setFilterIssueDateTo(lastYmd);
+  };
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
@@ -1391,13 +1405,16 @@ const FinanceInvoice = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:max-w-3xl">
         <div>
           <label className="mb-1 block text-xs font-medium text-gray-600">Issue Date From</label>
           <input
             type="date"
             value={filterIssueDateFrom}
-            onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+            onChange={(e) => {
+              setFilterIssueDateFrom(e.target.value);
+              if (filterMonth) setFilterMonth('');
+            }}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           />
         </div>
@@ -1407,7 +1424,19 @@ const FinanceInvoice = () => {
             type="date"
             value={filterIssueDateTo}
             min={filterIssueDateFrom || undefined}
-            onChange={(e) => setFilterIssueDateTo(e.target.value)}
+            onChange={(e) => {
+              setFilterIssueDateTo(e.target.value);
+              if (filterMonth) setFilterMonth('');
+            }}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Month</label>
+          <input
+            type="month"
+            value={filterMonth}
+            onChange={(e) => applyMonthFilter(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           />
         </div>
