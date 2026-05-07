@@ -330,7 +330,9 @@ const SuperfinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {formatCurrency(metrics.totalRevenue)}
               </p>
-              <p className="mt-1 text-xs text-gray-500">Completed payments with payment date in range (Manila)</p>
+              <p className="mt-1 text-xs text-gray-500">
+                Completed payments (payable + tips), payment date in range (Manila)
+              </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
               <DashboardStatIcon name="currency" className="h-6 w-6 text-green-600" />
@@ -418,7 +420,9 @@ const SuperfinanceFinancialDashboard = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Verified Payments</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.verifiedPaymentsCount}</p>
-              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.verifiedPaymentsAmount)} total amount</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {formatCurrency(metrics.verifiedPaymentsAmount)} total (payable + tips)
+              </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-teal-100 flex items-center justify-center">
               <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-teal-600" />
@@ -434,7 +438,9 @@ const SuperfinanceFinancialDashboard = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Unverified Payments</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.unverifiedPaymentsCount}</p>
-              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.unverifiedPaymentsAmount)} total amount</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {formatCurrency(metrics.unverifiedPaymentsAmount)} total (payable + tips)
+              </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
               <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
@@ -455,7 +461,9 @@ const SuperfinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {metrics.arVerifiedCount}
               </p>
-              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.arVerifiedAmount)} total amount</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {formatCurrency(metrics.arVerifiedAmount)} total (payment + tips)
+              </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
               <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-emerald-600" />
@@ -473,7 +481,9 @@ const SuperfinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {metrics.arUnverifiedCount}
               </p>
-              <p className="mt-1 text-xs text-gray-500">{formatCurrency(metrics.arUnverifiedAmount)} total amount</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {formatCurrency(metrics.arUnverifiedAmount)} total (payment + tips)
+              </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
               <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />

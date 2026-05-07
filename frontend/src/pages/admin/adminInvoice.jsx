@@ -35,6 +35,10 @@ const getInvoiceDisplayAmount = (invoice) => {
   return billedAmount > 0 ? billedAmount : remainingAmount;
 };
 
+/** Header summary total: billed face + all tips on completed payments for this invoice. */
+const getInvoiceSummaryAmountIncludingTips = (invoice) =>
+  getInvoiceDisplayAmount(invoice) + (Number(invoice?.total_tip_amount) || 0);
+
 const AdminInvoice = () => {
   const navigate = useNavigate();
   const { userInfo } = useAuth();
@@ -1247,7 +1251,10 @@ const AdminInvoice = () => {
     currentPage * ITEMS_PER_PAGE
   );
   const summaryInvoiceCount = filteredInvoices.length;
-  const summaryInvoiceTotal = filteredInvoices.reduce((sum, invoice) => sum + getInvoiceDisplayAmount(invoice), 0);
+  const summaryInvoiceTotal = filteredInvoices.reduce(
+    (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
+    0
+  );
   const hasInvoiceFilters = Boolean(nameSearchTerm || studentNameSearch || filterStatus || filterMonth);
 
   const resetInvoiceFilters = () => {
@@ -1377,7 +1384,9 @@ const AdminInvoice = () => {
           </div>
           <div className="hidden h-10 w-px bg-gray-200 sm:block" />
           <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              Total amount (incl. tips)
+            </p>
             <p className="text-lg font-semibold text-emerald-700">
               ₱{summaryInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>

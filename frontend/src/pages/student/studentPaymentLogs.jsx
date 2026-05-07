@@ -187,7 +187,8 @@ const StudentPaymentLogs = () => {
   }, [payments, searchTerm, filterStatus, filterPaymentMethod, exportPaymentDateFrom, exportPaymentDateTo]);
 
   const filteredTotalAmount = filteredPayments.reduce(
-    (sum, payment) => sum + (parseFloat(payment.payable_amount) || 0),
+    (sum, payment) =>
+      sum + (parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0),
     0
   );
 
@@ -485,7 +486,10 @@ const StudentPaymentLogs = () => {
       <div className="bg-white rounded-lg shadow">
         <div className="px-6 pt-4">
           <p className="text-sm font-semibold text-gray-700">
-            Total Amount: <span className="text-emerald-700">₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            Total amount (payable + tips):{' '}
+            <span className="text-emerald-700">
+              ₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
           </p>
         </div>
         <div

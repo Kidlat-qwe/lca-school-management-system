@@ -317,7 +317,7 @@ const DailyOperationalDashboardView = ({
             value={formatCurrency(totals.daily_sales_amount)}
             iconName="currency"
             accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
-            subtitle="Recognized posted payments only"
+            subtitle="Completed payments: payable + tips"
           />
           <StatsCard
             title="Acknowledgement Receipt Sales"
@@ -353,7 +353,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_verified_count || 0)}
               iconName="currency"
               accent="bg-gradient-to-br from-cyan-500 to-teal-600"
-              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total · completed payments · ${verificationAsOfDisplay} · approval=Approved`}
+              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total (payable + tips) · completed · ${verificationAsOfDisplay} · approval=Approved`}
               onClick={() => goPaymentLogsByVerify('verified')}
               ariaLabel={`Open payment logs for approved completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
@@ -362,7 +362,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_unverified_count || 0)}
               iconName="chartBar"
               accent="bg-gradient-to-br from-slate-500 to-slate-600"
-              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total · completed · pending approval · ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total (payable + tips) · completed · pending approval · ${verificationAsOfDisplay}`}
               onClick={() => goPaymentLogsByVerify('unverified')}
               ariaLabel={`Open payment logs for not-yet-approved completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
@@ -371,7 +371,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_verified_count || 0)}
               iconName="clipboardList"
               accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
-              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package Acknowledgement Receipt · issue date ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total (payment + tips) · Package Acknowledgement Receipt · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('verified')}
               ariaLabel="Open acknowledgement receipt list filtered to verified and applied"
             />
@@ -380,7 +380,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_unverified_count || 0)}
               iconName="academicCap"
               accent="bg-gradient-to-br from-amber-500 to-orange-600"
-              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total · not verified yet · issue date ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total (payment + tips) · not verified yet · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('unverified')}
               ariaLabel="Open acknowledgement receipt list filtered to unverified statuses"
             />
@@ -389,7 +389,8 @@ const DailyOperationalDashboardView = ({
 
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
           <p className="text-xs font-medium text-indigo-800">
-            Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> sums completed rows in payments.
+            Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> sums completed payment rows (
+            <span className="font-semibold">payable + tips</span>).
             <span className="font-semibold"> Acknowledgement Receipts</span> (top row) is unapplied acknowledgement receipt float, not the same
             as verification <span className="font-semibold">Package Acknowledgement Receipt</span> (verified+), which is Package Acknowledgement Receipts in Verified or
             Applied status.

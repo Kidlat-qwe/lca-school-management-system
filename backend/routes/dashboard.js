@@ -160,20 +160,32 @@ router.get(
       const invoiceTrendQuery = branchFilter
         ? `
           SELECT
-            TO_CHAR(DATE_TRUNC('month', issue_date), 'YYYY-MM') AS month,
-            COALESCE(SUM(amount), 0) AS total
+            TO_CHAR(DATE_TRUNC('month', i.issue_date), 'YYYY-MM') AS month,
+            COALESCE(SUM(i.amount), 0) + COALESCE(SUM(COALESCE(inv_tips.tip_sum, 0)), 0) AS total
           FROM invoicestbl i
-          WHERE issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          LEFT JOIN (
+            SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
+            FROM paymenttbl
+            WHERE status = 'Completed'
+            GROUP BY invoice_id
+          ) inv_tips ON inv_tips.invoice_id = i.invoice_id
+          WHERE i.issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
             AND i.branch_id = $1
           GROUP BY 1
           ORDER BY 1
         `
         : `
           SELECT
-            TO_CHAR(DATE_TRUNC('month', issue_date), 'YYYY-MM') AS month,
-            COALESCE(SUM(amount), 0) AS total
+            TO_CHAR(DATE_TRUNC('month', i.issue_date), 'YYYY-MM') AS month,
+            COALESCE(SUM(i.amount), 0) + COALESCE(SUM(COALESCE(inv_tips.tip_sum, 0)), 0) AS total
           FROM invoicestbl i
-          WHERE issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+          LEFT JOIN (
+            SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
+            FROM paymenttbl
+            WHERE status = 'Completed'
+            GROUP BY invoice_id
+          ) inv_tips ON inv_tips.invoice_id = i.invoice_id
+          WHERE i.issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
           GROUP BY 1
           ORDER BY 1
         `;
@@ -214,22 +226,34 @@ router.get(
       const invoiceStatusQuery = branchFilter
         ? `
           SELECT
-            status,
+            i.status,
             COUNT(*) AS count,
-            COALESCE(SUM(amount), 0) AS total_amount
+            COALESCE(SUM(i.amount), 0) + COALESCE(SUM(COALESCE(inv_tips.tip_sum, 0)), 0) AS total_amount
           FROM invoicestbl i
+          LEFT JOIN (
+            SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
+            FROM paymenttbl
+            WHERE status = 'Completed'
+            GROUP BY invoice_id
+          ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           WHERE i.branch_id = $1
             ${monthStartDate ? 'AND i.issue_date >= $2::date AND i.issue_date < $3::date' : ''}
-          GROUP BY status
+          GROUP BY i.status
         `
         : `
           SELECT
-            status,
+            i.status,
             COUNT(*) AS count,
-            COALESCE(SUM(amount), 0) AS total_amount
+            COALESCE(SUM(i.amount), 0) + COALESCE(SUM(COALESCE(inv_tips.tip_sum, 0)), 0) AS total_amount
           FROM invoicestbl i
+          LEFT JOIN (
+            SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
+            FROM paymenttbl
+            WHERE status = 'Completed'
+            GROUP BY invoice_id
+          ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           ${monthStartDate ? 'WHERE i.issue_date >= $1::date AND i.issue_date < $2::date' : ''}
-          GROUP BY status
+          GROUP BY i.status
         `;
       const invoiceStatusParams = branchFilter
         ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)

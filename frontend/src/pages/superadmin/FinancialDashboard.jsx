@@ -252,18 +252,19 @@ const FinancialDashboard = () => {
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Payment verification (Finance & Superfinance)</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Completed payments only. When a <span className="font-medium text-gray-700">month</span> is selected above,
-              amounts use Manila <span className="font-medium text-gray-700">payment date</span> in that month (same rule as
-              the Finance / Superfinance Financial Dashboard). <span className="font-medium text-gray-700">Verified</span>{' '}
-              means approval status is Approved; <span className="font-medium text-gray-700">Unverified</span> includes
-              Pending, Returned, or not yet approved.
+              Completed payments only (amounts are <span className="font-medium text-gray-700">payable + tips</span>). When a{' '}
+              <span className="font-medium text-gray-700">month</span> is selected above, amounts use Manila{' '}
+              <span className="font-medium text-gray-700">payment date</span> in that month (same rule as the Finance /
+              Superfinance Financial Dashboard). <span className="font-medium text-gray-700">Verified</span> means approval
+              status is Approved; <span className="font-medium text-gray-700">Unverified</span> includes Pending, Returned,
+              or not yet approved.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
               title="Verified payments"
               value={paymentVerification.verified_count}
-              trend={`${formatPeso(paymentVerification.verified_amount)} total amount`}
+              trend={`${formatPeso(paymentVerification.verified_amount)} total (payable + tips)`}
               accent="bg-gradient-to-br from-teal-400 to-teal-600"
               iconName="shieldCheck"
               onClick={() => openPaymentLogsByVerification('verified')}
@@ -271,7 +272,7 @@ const FinancialDashboard = () => {
             <StatsCard
               title="Unverified payments"
               value={paymentVerification.unverified_count}
-              trend={`${formatPeso(paymentVerification.unverified_amount)} total amount`}
+              trend={`${formatPeso(paymentVerification.unverified_amount)} total (payable + tips)`}
               trendClassName="text-amber-800"
               accent="bg-gradient-to-br from-amber-400 to-amber-600"
               iconName="clock"
@@ -293,7 +294,7 @@ const FinancialDashboard = () => {
             <StatsCard
               title="Verified Acknowledgement Receipt"
               value={arVerification.verified_count}
-              trend={`${formatPeso(arVerification.verified_amount)} total amount`}
+              trend={`${formatPeso(arVerification.verified_amount)} total (payment + tips)`}
               accent="bg-gradient-to-br from-emerald-400 to-emerald-600"
               iconName="shieldCheck"
               onClick={() => openArByVerification('verified')}
@@ -301,7 +302,7 @@ const FinancialDashboard = () => {
             <StatsCard
               title="Unverified Acknowledgement Receipt"
               value={arVerification.unverified_count}
-              trend={`${formatPeso(arVerification.unverified_amount)} total amount`}
+              trend={`${formatPeso(arVerification.unverified_amount)} total (payment + tips)`}
               trendClassName="text-amber-800"
               accent="bg-gradient-to-br from-amber-400 to-amber-600"
               iconName="clock"
@@ -439,7 +440,10 @@ const FinancialDashboard = () => {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Monthly Invoice Revenue" subtitle="Issued amounts per month">
+          <ChartCard
+            title="Monthly Invoice Revenue"
+            subtitle="Invoice amounts plus tips from completed payments (per invoice), by issue month"
+          >
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={metrics?.invoice_trend || []}
@@ -524,7 +528,10 @@ const FinancialDashboard = () => {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Invoice Status" subtitle="Count of invoices by status">
+          <ChartCard
+            title="Invoice Status"
+            subtitle="Count by status; slice totals include invoice balance plus tips from completed payments"
+          >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie

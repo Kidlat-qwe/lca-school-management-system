@@ -198,7 +198,7 @@ const AdminFinancialDashboard = () => {
           <StatsCard
             title="Total Invoice Amount"
             value={formatCurrency(totalInvoiceAmount)}
-            subtitle="Sum of invoice totals by status"
+            subtitle="Sum by status: invoice balance plus tips from completed payments"
             accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
             iconName="creditCard"
           />
@@ -257,7 +257,10 @@ const AdminFinancialDashboard = () => {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Monthly Invoice Revenue" subtitle="Issued amounts per month (branch)">
+          <ChartCard
+            title="Monthly Invoice Revenue"
+            subtitle="Invoice amounts plus tips from completed payments (branch), by issue month"
+          >
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={invoiceTrend} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
                 <defs>
@@ -285,7 +288,10 @@ const AdminFinancialDashboard = () => {
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <ChartCard title="Invoice Status" subtitle="Count of invoices by status (branch)">
+          <ChartCard
+            title="Invoice Status"
+            subtitle="Count by status (branch); amounts include invoice balance plus tips from completed payments"
+          >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={invoiceStatus} dataKey="count" nameKey="status" innerRadius={65} outerRadius={95} paddingAngle={2}>

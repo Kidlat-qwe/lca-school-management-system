@@ -1833,6 +1833,7 @@ const initializePackageMerchSelections = useCallback(
           student_type: 'reserved',
           reservation_id: reservation.reserved_id,
           reservation_status: reservation.status,
+          reservationRecord: reservation,
           package_name: reservation.package_name,
           reservation_fee: reservation.reservation_fee,
           due_date: reservation.due_date,
@@ -2389,11 +2390,24 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
+  const canUpgradeReservationRecord = (reservation) => {
+    if (!reservation) return false;
+    const status = reservation.status;
+    if (status === 'Fee Paid' || status === 'Expired') return true;
+    if (status === 'Reserved') {
+      if (reservation.is_payment_verified === true) return true;
+      const inv = String(reservation.invoice_status || '').trim().toLowerCase();
+      if (inv === 'paid') return true;
+    }
+    return false;
+  };
+
   const handleUpgradeReservation = async (reservation) => {
-    // Allow upgrade for Fee Paid and Expired reservations
-    if (reservation.status !== 'Fee Paid' && reservation.status !== 'Expired') {
+    if (!canUpgradeReservationRecord(reservation)) {
       if (reservation.status === 'Reserved') {
-        appAlert(`Cannot upgrade reservation. The reservation fee must be paid first. Current status: ${reservation.status}`);
+        appAlert(
+          'Cannot upgrade yet. Pay the reservation fee first (invoice must be paid / verified).'
+        );
       } else {
         appAlert(`Cannot upgrade reservation. Current status: ${reservation.status}`);
       }
@@ -9626,24 +9640,33 @@ setFormData({
                                 <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
                                   {isRemovedEnrollment ? (
                                     <span className="text-sm text-gray-400">-</span>
-                                  ) : isReserved && reservationStatus === 'Fee Paid' ? (
-                                    <button
-                                      onClick={() => {
-                                        const reservation = enrollReservedStudents.find(
-                                          r => r.reserved_id === student.reservation_id
+                                  ) : isReserved ? (
+                                    (() => {
+                                      const resObj = enrollReservedStudents.find(
+                                        (r) => r.reserved_id === student.reservation_id
+                                      );
+                                      if (resObj && canUpgradeReservationRecord(resObj)) {
+                                        return (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleUpgradeReservation(resObj)}
+                                            className="text-blue-600 hover:text-blue-900"
+                                          >
+                                            Upgrade
+                                          </button>
                                         );
-                                        if (reservation) {
-                                          handleUpgradeReservation(reservation);
-                                        }
-                                      }}
-                                      className="text-blue-600 hover:text-blue-900"
-                                    >
-                                      Upgrade
-                                    </button>
-                                  ) : isReserved && reservationStatus === 'Reserved' ? (
-                                    <span className="text-xs text-gray-500">Pay fee first</span>
-                                  ) : reservationForStudent && reservationStatus === 'Fee Paid' ? (
+                                      }
+                                      if (reservationStatus === 'Reserved') {
+                                        return (
+                                          <span className="text-xs text-gray-500">Pay fee first</span>
+                                        );
+                                      }
+                                      return <span className="text-sm text-gray-400">—</span>;
+                                    })()
+                                  ) : reservationForStudent &&
+                                    canUpgradeReservationRecord(reservationForStudent) ? (
                                     <button
+                                      type="button"
                                       onClick={() => handleUpgradeReservation(reservationForStudent)}
                                       className="text-blue-600 hover:text-blue-900"
                                     >
@@ -13604,6 +13627,17 @@ setFormData({
                               const notVerifiedHighlight = !isPaymentVerified ? 'bg-amber-50/50' : '';
                               const enrolledByRaw = student.enrolled_by || '-';
                               const enrolledByShort = enrolledByRaw.length > 24 ? `${enrolledByRaw.slice(0, 22)}?` : enrolledByRaw;
+                              const reservedUpgradeEligible =
+                                isReserved &&
+                                canUpgradeReservationRecord(
+                                  student.reservationRecord || {
+                                    status: student.reservation_status,
+                                    is_payment_verified: student.is_payment_verified,
+                                    invoice_status: student.invoice_status,
+                                  }
+                                );
+                              const showViewStudentActionsMenu =
+                                (!isReserved && !isPending) || reservedUpgradeEligible;
                               return (
                                 <tr key={uniqueKey} className={`hover:bg-gray-50/50 transition-colors ${isReserved ? 'bg-amber-50/30' : ''} ${notVerifiedHighlight}`}>
                                   <td className="px-3 py-3"><span className="text-sm font-medium text-gray-900">{student.full_name}</span></td>
@@ -13645,7 +13679,7 @@ setFormData({
                                   </td>
                                   <td className="px-3 py-3 text-sm text-gray-500 max-w-[120px] truncate" title={enrolledByRaw}>{enrolledByShort}</td>
                                   <td className="px-3 py-3 whitespace-nowrap">
-                                    {!isReserved && !isPending ? (
+                                    {showViewStudentActionsMenu ? (
                                       <div className="relative view-student-action-menu-container">
                                         <button
                                           type="button"
@@ -13702,36 +13736,60 @@ setFormData({
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="py-1">
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
-              >
-                Move
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
-              >
-                Continue per phase
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeViewStudentActionMenu();
-                  openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
-                }}
-                className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
-              >
-                Update Plan
-              </button>
+              {viewStudentMenuTarget.student_type === 'reserved' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const r =
+                      viewStudentMenuTarget.reservationRecord ||
+                      enrollReservedStudents.find(
+                        (x) => x.reserved_id === viewStudentMenuTarget.reservation_id
+                      );
+                    closeViewStudentActionMenu();
+                    if (r) {
+                      handleUpgradeReservation(r);
+                    } else {
+                      appAlert('Reservation data is missing. Close the modal, refresh the class, and try again.');
+                    }
+                  }}
+                  className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                >
+                  Upgrade to enrollment
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
+                  >
+                    Move
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
+                  >
+                    Continue per phase
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeViewStudentActionMenu();
+                      openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
+                    }}
+                    className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                  >
+                    Update Plan
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </>,
@@ -14228,8 +14286,9 @@ setFormData({
                             )}
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
-                            {(reservation.status === 'Fee Paid' || reservation.status === 'Expired') && (
+                            {canUpgradeReservationRecord(reservation) && (
                               <button
+                                type="button"
                                 onClick={() => handleUpgradeReservation(reservation)}
                                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                                   reservation.status === 'Expired'
@@ -14240,7 +14299,7 @@ setFormData({
                                 {reservation.status === 'Expired' ? 'Re-upgrade' : 'Upgrade'}
                               </button>
                             )}
-                            {reservation.status === 'Reserved' && (
+                            {reservation.status === 'Reserved' && !canUpgradeReservationRecord(reservation) && (
                               <span className="text-xs text-gray-500 italic">Pay fee to upgrade</span>
                             )}
                             {reservation.status === 'Upgraded' && (
