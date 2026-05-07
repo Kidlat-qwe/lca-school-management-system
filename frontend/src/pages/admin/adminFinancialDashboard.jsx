@@ -206,14 +206,14 @@ const AdminFinancialDashboard = () => {
 
         <div className="space-y-3">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package AR)</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package Acknowledgement Receipt)</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Verified AR includes Verified/Applied statuses. Unverified AR includes Submitted/Pending statuses awaiting Finance/Superfinance action.
+              Verified Acknowledgement Receipt includes Verified/Applied statuses. Unverified Acknowledgement Receipt includes Submitted/Pending statuses awaiting Finance/Superfinance action.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
-              title="Verified AR"
+              title="Verified Acknowledgement Receipt"
               value={formatCurrency(arVerification.verified_amount)}
               subtitle={`${(arVerification.verified_count || 0).toLocaleString()} receipt(s)`}
               accent="bg-gradient-to-br from-emerald-400 to-emerald-600"
@@ -221,7 +221,7 @@ const AdminFinancialDashboard = () => {
               onClick={() => openArByVerification('verified')}
             />
             <StatsCard
-              title="Unverified AR"
+              title="Unverified Acknowledgement Receipt"
               value={formatCurrency(arVerification.unverified_amount)}
               subtitle={`${(arVerification.unverified_count || 0).toLocaleString()} receipt(s)`}
               accent="bg-gradient-to-br from-amber-400 to-amber-600"

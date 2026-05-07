@@ -227,6 +227,9 @@ router.get(
       const userType = req.user.userType || req.user.user_type;
       const userBranchId = req.user.branchId || req.user.branch_id;
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const suppressEndOfShiftNotifications = ['finance', 'superfinance'].includes(
+        String(userType || '').trim().toLowerCase()
+      );
 
       // Map user types to recipient groups (e.g., 'Student' -> 'Students', 'Teacher' -> 'Teachers')
       const recipientGroup = mapUserTypeToRecipientGroup(userType, userBranchId);
@@ -284,6 +287,17 @@ router.get(
           AND (
             a.end_date IS NULL OR a.end_date::date >= $4::date
           )
+          AND NOT (
+            $5::boolean = true
+            AND (
+              (
+                LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
+                AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
+              )
+              OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
+              OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
+            )
+          )
         ORDER BY 
           a.created_at DESC,
           CASE a.priority 
@@ -294,7 +308,7 @@ router.get(
         LIMIT 20
       `;
 
-      const params = [userId, recipientGroup, userBranchId, today];
+      const params = [userId, recipientGroup, userBranchId, today, suppressEndOfShiftNotifications];
       
       const result = await query(sql, params);
 
@@ -329,6 +343,9 @@ router.post(
       const userBranchId = req.user.branchId || req.user.branch_id;
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
       const recipientGroup = mapUserTypeToRecipientGroup(userType, userBranchId);
+      const suppressEndOfShiftNotifications = ['finance', 'superfinance'].includes(
+        String(userType || '').trim().toLowerCase()
+      );
 
       const result = await query(
         `WITH visible_announcements AS (
@@ -354,6 +371,17 @@ router.post(
              AND (
                a.end_date IS NULL OR a.end_date::date >= $4::date
              )
+             AND NOT (
+               $5::boolean = true
+               AND (
+                 (
+                   LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
+                   AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
+                 )
+                 OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
+                 OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
+               )
+             )
          )
          INSERT INTO announcement_readstbl (announcement_id, user_id)
          SELECT v.announcement_id, $1
@@ -364,7 +392,7 @@ router.post(
          WHERE ar.announcement_id IS NULL
          ON CONFLICT (announcement_id, user_id) DO NOTHING
          RETURNING announcement_id`,
-        [userId, recipientGroup, userBranchId, today]
+        [userId, recipientGroup, userBranchId, today, suppressEndOfShiftNotifications]
       );
 
       res.json({

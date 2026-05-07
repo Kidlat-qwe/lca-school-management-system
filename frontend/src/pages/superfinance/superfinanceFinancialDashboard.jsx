@@ -451,7 +451,7 @@ const SuperfinanceFinancialDashboard = () => {
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Verified AR</p>
+              <p className="text-sm font-medium text-gray-600">Verified Acknowledgement Receipt</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {metrics.arVerifiedCount}
               </p>
@@ -469,7 +469,7 @@ const SuperfinanceFinancialDashboard = () => {
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Unverified AR</p>
+              <p className="text-sm font-medium text-gray-600">Unverified Acknowledgement Receipt</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {metrics.arUnverifiedCount}
               </p>

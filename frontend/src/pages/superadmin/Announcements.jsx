@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -37,6 +38,7 @@ const formatInPHTime = (isoOrDateString, options = {}) => {
 
 const Announcements = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.user_type || userInfo?.userType;
   const canManageAnnouncements = userType === 'Superadmin';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -86,7 +88,11 @@ const Announcements = () => {
   useEffect(() => {
     fetchAnnouncements();
     fetchBranches();
-  }, [currentPage, itemsPerPage]);
+  }, [currentPage, itemsPerPage, globalBranchId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [globalBranchId]);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -262,6 +268,9 @@ const Announcements = () => {
       }
       if (filterStatus) {
         params.append('status', filterStatus);
+      }
+      if (globalBranchId) {
+        params.append('branch_id', globalBranchId);
       }
 
       const response = await apiRequest(`/announcements?${params.toString()}`);

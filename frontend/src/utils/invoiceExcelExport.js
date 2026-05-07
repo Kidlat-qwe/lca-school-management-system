@@ -34,7 +34,7 @@ export const PAYMENT_DATE_EXPORT_COL_WIDTHS = [
 export function mapCompletedPaymentsToExportRows(payments) {
   return (payments || []).map((p) => ({
     'Invoice ID': p.invoice_id ? `INV-${p.invoice_id}` : '-',
-    'AR #': p.invoice_ar_number || '-',
+    'Acknowledgement Receipt#': p.invoice_ar_number || '-',
     'Student Name(s)': p.student_name || '-',
     Branch: p.branch_name || '-',
     Status: p.approval_status || p.status || '-',

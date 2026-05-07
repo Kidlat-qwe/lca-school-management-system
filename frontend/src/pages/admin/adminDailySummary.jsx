@@ -39,6 +39,7 @@ const AdminDailySummary = () => {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterDate, setFilterDate] = useState('');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
 
   const [returnBadgeCount, setReturnBadgeCount] = useState(0);
 
@@ -115,6 +116,11 @@ const AdminDailySummary = () => {
         const endpoint = isCash ? '/cash-deposit-summaries' : '/daily-summary-sales';
         const res = await apiRequest(`${endpoint}?${params.toString()}`);
         setRecords(res.data || []);
+        const summaryForView = viewTab === VIEW_RETURN ? res.filtered_summary : res.submitted_summary;
+        setSubmittedSummary({
+          count: Number(summaryForView?.count ?? 0),
+          total_amount: Number(summaryForView?.total_amount ?? 0),
+        });
         if (res.pagination) {
           setPagination({
             page: res.pagination.page,
@@ -127,6 +133,7 @@ const AdminDailySummary = () => {
       } catch (err) {
         setError(err.message || 'Failed to load records');
         setRecords([]);
+        setSubmittedSummary({ count: 0, total_amount: 0 });
       } finally {
         setLoading(false);
       }
@@ -291,7 +298,7 @@ const AdminDailySummary = () => {
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            End of day (EOD)
+            End of shift
           </button>
           <button
             type="button"
@@ -302,19 +309,40 @@ const AdminDailySummary = () => {
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            Cash deposit (EOS)
+            Cash deposit
           </button>
         </nav>
       </div>
 
-      <BranchPaymentLogTabs
-        value={viewTab}
-        onChange={setViewTab}
-        mainLabel="Submission history"
-        returnLabel="Return"
-        ariaLabel="Daily summary views"
-        returnBadgeCount={returnBadgeCount}
-      />
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <BranchPaymentLogTabs
+          value={viewTab}
+          onChange={setViewTab}
+          mainLabel="Submission history"
+          returnLabel="Return"
+          ariaLabel="Daily summary views"
+          returnBadgeCount={returnBadgeCount}
+        />
+        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              {isCash ? 'Cash deposit' : 'End of Shift'}
+            </p>
+            <p className="text-lg font-semibold text-gray-900">
+              {Number(submittedSummary.count || 0).toLocaleString('en-US')}
+            </p>
+          </div>
+          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              {isCash ? 'Total Amount' : 'Total amount'}
+            </p>
+            <p className="text-lg font-semibold text-emerald-700">
+              {formatMoney(submittedSummary.total_amount || 0)}
+            </p>
+          </div>
+        </div>
+      </div>
 
       {viewTab === VIEW_MAIN && (
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
@@ -539,7 +567,7 @@ const AdminDailySummary = () => {
                   </span>
                 </p>
                 <p className="mt-2 text-xs text-gray-600">
-                  Only completed payments and standalone AR with{' '}
+                  Only completed payments and standalone acknowledgement receipts with{' '}
                   <strong>issue date</strong> equal to this summary date are included. Future or other dates are not part of
                   this resubmit.
                 </p>
@@ -560,7 +588,7 @@ const AdminDailySummary = () => {
                     Total: {formatMoney(eodResubmit.record?.total_amount)} · Records: {eodResubmit.record?.payment_count ?? '—'}
                   </p>
                   <p className="mt-2 text-xs text-gray-600">
-                    Click <strong>Re-calculate</strong> to load current payment and AR lines for this date. Totals and tables appear only
+                    Click <strong>Re-calculate</strong> to load current payment and acknowledgement receipt lines for this date. Totals and tables appear only
                     after that step.
                   </p>
                 </div>
@@ -590,7 +618,7 @@ const AdminDailySummary = () => {
                     </p>
                     <p className="mt-1 text-xs text-gray-600">
                       Payments: {formatMoney(eodResubmitDetail.totals.completed_total)} ({eodResubmitDetail.totals.completed_count ?? 0}{' '}
-                      row(s)) · AR: {formatMoney(eodResubmitDetail.totals.ar_total)} ({eodResubmitDetail.totals.ar_count ?? 0}{' '}
+                      row(s)) · Acknowledgement Receipt: {formatMoney(eodResubmitDetail.totals.ar_total)} ({eodResubmitDetail.totals.ar_count ?? 0}{' '}
                       receipt(s))
                     </p>
                     {eodResubmitDetail.submitted_snapshot ? (
@@ -646,7 +674,7 @@ const AdminDailySummary = () => {
 
                 {eodResubmitDetail?.totals && eodResubmitDetail?.ar_receipts?.length > 0 ? (
                   <div>
-                    <p className="text-xs font-semibold text-gray-700 mb-2">Standalone AR (same date)</p>
+                    <p className="text-xs font-semibold text-gray-700 mb-2">Standalone Acknowledgement Receipt (same date)</p>
                     <div
                       className="overflow-x-auto rounded-lg"
                       style={{

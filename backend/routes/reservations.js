@@ -656,7 +656,9 @@ router.put(
           );
           reservationFeePaid = parseFloat(reservationPaymentsResult.rows[0].total_paid) || 0;
           
-          console.log(`💰 Reservation fee paid: ${reservationFeePaid} (will be deducted from package price)`);
+          console.log(
+            `💰 Reservation fee paid: ${reservationFeePaid} (deducted from downpayment or invoice total as applicable)`
+          );
         }
       }
 
@@ -670,6 +672,8 @@ router.put(
       let installmentPricingPrice = null;
       /** Set when package_id branch loads package rows (installment profile section needs this outside that block). */
       let packageData = null;
+      /** True when upgrading with Installment package — package_price is monthly recurring, not invoice total (see classes enroll). */
+      let skipMonthlyPackageInvoice = false;
       // Optional phase range for Phase packages (used later in invoice remarks for enrollment)
       let phaseStartForRemarks = null;
       let phaseEndForRemarks = null;
@@ -785,8 +789,13 @@ router.put(
           pkgDetail.pricing_name.toLowerCase().includes('new enrollee installment')
         );
 
-        // Add package price to invoice
-        if (packageData.package_price && !isNaN(parseFloat(packageData.package_price))) {
+        const isInstallmentPackageForUpgrade =
+          packageData.package_type === 'Installment' ||
+          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment');
+        skipMonthlyPackageInvoice = enrollment_type === 'Installment' && isInstallmentPackageForUpgrade;
+
+        // Add package price to invoice (skip for Installment packages — package_price is monthly amount; downpayment is invoiced separately)
+        if (!skipMonthlyPackageInvoice && packageData.package_price && !isNaN(parseFloat(packageData.package_price))) {
           const originalPackageAmount = parseFloat(packageData.package_price);
           let packageAmountAfterPromo = originalPackageAmount;
           // Reset promo variables for this package
@@ -1172,6 +1181,32 @@ router.put(
             );
             console.log(`✅ Deducted merchandise: ${merch.merchandise_name}${merch.size ? ` (${merch.size})` : ''} - Quantity: ${merch.quantity} → ${newQuantity}`);
           }
+        }
+      }
+
+      // Installment reservation upgrade: first invoice must be downpayment (− reservation fee), not monthly × − fee.
+      // Mirrors POST /classes/:id/enroll — package_price is recurring; downpayment_amount is the billable lump sum.
+      if (
+        enrollment_type === 'Installment' &&
+        packageData &&
+        (packageData.package_type === 'Installment' ||
+          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
+      ) {
+        const downpaymentConfigured = parseFloat(packageData.downpayment_amount || 0) || 0;
+        if (downpaymentConfigured > 0 && installmentIncludeDownpayment) {
+          totalAmount = Math.max(0, downpaymentConfigured - reservationFeePaid);
+          invoiceItems = [
+            { description: `Downpayment - ${packageName || 'Enrollment'}`, amount: downpaymentConfigured },
+          ];
+          if (reservationFeePaid > 0) {
+            invoiceItems.push({
+              description: 'Discount: Reservation Fee Paid',
+              amount: -reservationFeePaid,
+            });
+          }
+          console.log(
+            `✅ Installment upgrade invoice: downpayment ${downpaymentConfigured} − reservation ${reservationFeePaid} = ${totalAmount}`
+          );
         }
       }
 

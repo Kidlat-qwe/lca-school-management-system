@@ -92,6 +92,7 @@ const AdminPaymentLogs = () => {
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+  const [showAdvancedPaymentLogFilters, setShowAdvancedPaymentLogFilters] = useState(false);
   // Removed openBranchDropdown - admin only sees their branch
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
@@ -142,14 +143,6 @@ const AdminPaymentLogs = () => {
     return manila.toISOString().split('T')[0];
   };
 
-  const addDaysToYmd = (ymd, daysToAdd) => {
-    const [y, m, d] = String(ymd || '').split('-').map(Number);
-    if (!y || !m || !d) return '';
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    dt.setUTCDate(dt.getUTCDate() + daysToAdd);
-    return dt.toISOString().slice(0, 10);
-  };
-
   const openDepositCashModal = () => {
     setDepositError('');
     setDepositData(null);
@@ -190,13 +183,17 @@ const AdminPaymentLogs = () => {
   const fetchExistingDepositRanges = async () => {
     setDepositRangesLoading(true);
     try {
-      const res = await apiRequest('/cash-deposit-summaries?limit=200');
+      const [res, defaultsRes] = await Promise.all([
+        apiRequest('/cash-deposit-summaries?limit=200'),
+        apiRequest('/cash-deposit-summaries/deposit-defaults'),
+      ]);
       const ranges = Array.isArray(res?.data) ? res.data : [];
       setDepositExistingRanges(ranges);
 
       const today = todayManila();
+      const serverDefaultStart = defaultsRes?.data?.default_start_date || '';
       const latestRange = [...ranges].sort((a, b) => String(b.end_date).localeCompare(String(a.end_date)))[0] || null;
-      const computedStart = latestRange?.end_date ? addDaysToYmd(latestRange.end_date, 1) : today;
+      const computedStart = serverDefaultStart || latestRange?.end_date || today;
       const finalStart = computedStart && computedStart <= today ? computedStart : today;
 
       setDepositStartDate(finalStart);
@@ -214,7 +211,7 @@ const AdminPaymentLogs = () => {
 
   const getOverlappingDepositRange = (startDate, endDate) =>
     depositExistingRanges.find(
-      (range) => range.start_date <= endDate && range.end_date >= startDate
+      (range) => range.start_date < endDate && range.end_date > startDate
     ) || null;
 
   const getRangeLabel = (range) =>
@@ -456,7 +453,7 @@ const AdminPaymentLogs = () => {
       `Branch: ${selectedBranchName || 'Your Branch'}`,
       `Date: ${formatDateManila(summaryDate)}`,
       `Completed Payments: ${paymentCount}`,
-      `AR Sales Receipts: ${arCount}`,
+      `Acknowledgement Receipt Sales: ${arCount}`,
       `Total Sales: ₱${totalAmount}`,
       '',
       'Your EOD has been forwarded to Superadmin and Finance for monitoring.',
@@ -965,7 +962,7 @@ const AdminPaymentLogs = () => {
     if (paymentName) return paymentName;
     if (paymentEmail) return paymentEmail;
     if (payment?.created_by) return `User #${payment.created_by}`;
-    if (!payment?.student_id) return 'Walk-in / AR';
+    if (!payment?.student_id) return 'Walk-in / Acknowledgement Receipt';
     return 'System';
   };
 
@@ -1003,6 +1000,22 @@ const AdminPaymentLogs = () => {
     }
     return filteredPayments.reduce((s, p) => s + line(p), 0);
   }, [searchTerm, filteredPayments, filterTotalLineAmount]);
+
+  const summaryPaymentLogCount = searchTerm.trim()
+    ? filteredPayments.length
+    : Number(pagination.total) || 0;
+  const hasPaymentLogFilters = Boolean(
+    searchTerm || filterPaymentMethod || filterFinanceApproval || filterIssueDateFrom || filterIssueDateTo
+  );
+
+  const resetPaymentLogFilters = () => {
+    setSearchTerm('');
+    setFilterPaymentMethod('');
+    setFilterFinanceApproval('');
+    setFilterIssueDateFrom('');
+    setFilterIssueDateTo('');
+    fetchPayments(1);
+  };
 
   const exportPaymentDateRangeInvalid =
     Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
@@ -1066,9 +1079,8 @@ const AdminPaymentLogs = () => {
         const row = {
           'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
           BRANCH: selectedBranchName || getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
-          DATE: (payment.payment_date || payment.issue_date)
-            ? formatDate(payment.payment_date || payment.issue_date)
-            : '-',
+          'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
+          'Payment Date': payment.payment_date ? formatDate(payment.payment_date) : '-',
           'Student Name': payment.student_name || 'N/A',
           'PACKAGE/ITEM': payment.invoice_description || '-',
           'LEVEL TAG': payment.student_level_tag || '-',
@@ -1081,7 +1093,7 @@ const AdminPaymentLogs = () => {
           row['Returned by'] = payment.returned_by_name || '—';
         }
         row['REFERENCE#'] = payment.reference_number || '-';
-        row['AR#'] = payment.invoice_ar_number || '—';
+        row['Acknowledgement Receipt#'] = payment.invoice_ar_number || '—';
         row['ISSUED BY'] = formatInvoiceIssuedBy(payment);
         return row;
       });
@@ -1095,7 +1107,8 @@ const AdminPaymentLogs = () => {
       const widthList = [
         12, // Invoice ID
         22, // Branch
-        12, // Date
+        12, // Issue date
+        12, // Payment date
         24, // Student Name
         28, // Package/Item
         14, // Level tag
@@ -1107,7 +1120,7 @@ const AdminPaymentLogs = () => {
       if (branchLogTab === 'return') widthList.push(18); // Returned by
       widthList.push(
         22, // Reference#
-        12, // AR#
+        24, // Acknowledgement Receipt#
         22 // Issued by
       );
       ws['!cols'] = widthList.map((wch) => ({ wch }));
@@ -1143,24 +1156,40 @@ const AdminPaymentLogs = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payment Logs</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payment Logs</h1>
           <p className="mt-1 text-sm text-gray-600 max-w-2xl">
             View and manage payment records for your branch. Use the <span className="font-medium text-gray-800">Return</span>{' '}
             tab when Finance sent a payment back for a reference or attachment fix — update the details, then resubmit for
             verification.
           </p>
         </div>
-        <div className="relative actions-dropdown-container shrink-0">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <button
+            type="button"
+            onClick={() => {
+              setExportPaymentDateFrom(filterIssueDateFrom || '');
+              setExportPaymentDateTo(filterIssueDateTo || '');
+              setShowExportModal(true);
+            }}
+            disabled={exportLoading}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16" />
+            </svg>
+            {exportLoading ? 'Exporting...' : 'Export to Excel'}
+          </button>
+          <div className="relative actions-dropdown-container shrink-0">
           <button
             type="button"
             onClick={() => setOpenActionsDropdown((prev) => !prev)}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 transition-colors"
             aria-expanded={openActionsDropdown}
             aria-haspopup="true"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
             </svg>
             Actions
@@ -1207,32 +1236,6 @@ const AdminPaymentLogs = () => {
                 role="menuitem"
                 onClick={() => {
                   setOpenActionsDropdown(false);
-                  setExportPaymentDateFrom(filterIssueDateFrom || '');
-                  setExportPaymentDateTo(filterIssueDateTo || '');
-                  setShowExportModal(true);
-                }}
-                disabled={exportLoading}
-                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 disabled:opacity-50"
-              >
-                {exportLoading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-600 border-t-transparent" />
-                    Exporting...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-5 h-5 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    Export to Excel
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpenActionsDropdown(false);
                   openDepositCashModal();
                 }}
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-sky-50 hover:text-sky-800"
@@ -1244,10 +1247,154 @@ const AdminPaymentLogs = () => {
               </button>
             </div>
           )}
+          </div>
         </div>
       </div>
 
-      <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} returnBadgeCount={returnedPaymentLogCount} />
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} returnBadgeCount={returnedPaymentLogCount} />
+        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Payment logs</p>
+            <p className="text-lg font-semibold text-gray-900">
+              {summaryPaymentLogCount.toLocaleString('en-US')}
+            </p>
+          </div>
+          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
+            <p className="text-lg font-semibold text-emerald-700">
+              ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Search Filter</p>
+            <p className="text-xs text-gray-500">
+              Filter payment logs before the table. Branch scope is limited to your assigned branch.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="xl:col-span-2">
+            <label htmlFor="admin-payment-log-search" className="mb-1 block text-xs font-medium text-gray-700">
+              Search
+            </label>
+            <input
+              id="admin-payment-log-search"
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Invoice, student, reference, acknowledgement receipt, or issued by"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="admin-payment-method-filter" className="mb-1 block text-xs font-medium text-gray-700">
+              Payment Method
+            </label>
+            <select
+              id="admin-payment-method-filter"
+              value={filterPaymentMethod}
+              onChange={(e) => setFilterPaymentMethod(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              <option value="">All methods</option>
+              {getUniquePaymentMethods().map((method) => (
+                <option key={method} value={method}>
+                  {method}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="admin-payment-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
+              Status
+            </label>
+            {branchLogTab === 'return' ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                Returned only
+              </div>
+            ) : (
+              <select
+                id="admin-payment-status-filter"
+                value={filterFinanceApproval}
+                onChange={(e) => setFilterFinanceApproval(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All statuses</option>
+                <option value="approved">Approved</option>
+                <option value="pending">Pending Approval</option>
+              </select>
+            )}
+          </div>
+        </div>
+        {showAdvancedPaymentLogFilters ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <label htmlFor="admin-payment-date-from" className="mb-1 block text-xs font-medium text-gray-700">
+                Payment date from
+              </label>
+              <input
+                id="admin-payment-date-from"
+                type="date"
+                value={filterIssueDateFrom}
+                onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="admin-payment-date-to" className="mb-1 block text-xs font-medium text-gray-700">
+                Payment date to
+              </label>
+              <input
+                id="admin-payment-date-to"
+                type="date"
+                value={filterIssueDateTo}
+                onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-gray-500">
+            Date range is inclusive on payment date. Leave both dates empty for all dates.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedPaymentLogFilters((current) => !current)}
+              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
+              aria-expanded={showAdvancedPaymentLogFilters}
+            >
+              {showAdvancedPaymentLogFilters ? 'Hide advanced filters' : 'Advanced filters'}
+              <svg className={`h-4 w-4 transition-transform ${showAdvancedPaymentLogFilters ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={resetPaymentLogFilters}
+              disabled={!hasPaymentLogFilters}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={() => fetchPayments(1)}
+              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Search
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Deposit Cash — date range summary (server-side from payment logs) */}
       {depositModalOpen && createPortal(
@@ -1263,7 +1410,7 @@ const AdminPaymentLogs = () => {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Deposit Cash</h3>
                 <p className="mt-1 text-sm text-gray-600">
-                  Sum of <strong>Cash</strong> payments by <strong>issue date</strong> for{' '}
+                  Sum of <strong>Cash</strong> payments by <strong>payment date</strong> for{' '}
                   <span className="whitespace-nowrap">{selectedBranchName}</span>. Matches your payment logs (same source as this page).
                 </p>
               </div>
@@ -1282,7 +1429,7 @@ const AdminPaymentLogs = () => {
             <div className="px-5 py-4 border-b border-gray-100 shrink-0 space-y-3">
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
                 <div className="flex-1 min-w-[140px]">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">From (issue date)</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">From (payment date)</label>
                   <input
                     type="date"
                     value={depositStartDate}
@@ -1292,7 +1439,7 @@ const AdminPaymentLogs = () => {
                   />
                 </div>
                 <div className="flex-1 min-w-[140px]">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">To (issue date)</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">To (payment date)</label>
                   <input
                     type="date"
                     value={depositEndDate}
@@ -1363,11 +1510,11 @@ const AdminPaymentLogs = () => {
                 </div>
               </div>
               <p className="text-xs text-gray-500">
-                <strong>Deposit amount</strong> uses Cash payments with status <strong>Completed</strong> only (ready to bank). The summary refreshes automatically after both dates are selected.
+                <strong>Deposit amount</strong> uses Cash payments with status <strong>Completed</strong> only (ready to bank). The selected range follows the payment date shown in payment logs. Cash rows already included in prior submitted or verified deposits are excluded.
               </p>
               {depositExistingRanges.length > 0 && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Deposited periods cannot be reused:
+                  Previous deposited periods:
                   {' '}
                   {depositExistingRanges
                     .map((range) => getRangeLabel(range))
@@ -1419,13 +1566,13 @@ const AdminPaymentLogs = () => {
                     <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '940px' }}>
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Issue date</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Payment date</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Invoice</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Student</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Payment Method</th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Amount</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">AR#</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Acknowledgement Receipt#</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Reference</th>
                         </tr>
                       </thead>
@@ -1516,7 +1663,7 @@ const AdminPaymentLogs = () => {
               Submit all today&apos;s sales for proper closure? This will submit your branch EOD for Finance/Superfinance verification, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
             </p>
             <p className="mt-1 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
-              One submission per day: totals include completed payments and standalone AR receipts with{' '}
+              One submission per day: totals include completed payments and standalone acknowledgement receipts with{' '}
               <strong>issue date today</strong> for your branch. You cannot submit again until tomorrow.
             </p>
             <p className="mt-1 text-sm font-medium text-gray-700 shrink-0">
@@ -1526,7 +1673,7 @@ const AdminPaymentLogs = () => {
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
                   Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
-                  {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone AR receipt(s))
+                  {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone acknowledgement receipt(s))
                 </p>
                 <p className="mt-1 text-xs text-gray-500 shrink-0">
                   Collected per row is payable plus tip (matches today&apos;s total). Invoice total is the invoice document amount from line items (or manual invoice amount).
@@ -1614,7 +1761,7 @@ const AdminPaymentLogs = () => {
                 {Array.isArray(endOfShiftPreview.ar_receipts) && endOfShiftPreview.ar_receipts.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-                      Standalone AR sales (issue date today)
+                      Standalone Acknowledgement Receipt sales (issue date today)
                     </p>
                     <div
                       className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto"
@@ -1718,7 +1865,7 @@ const AdminPaymentLogs = () => {
                 {Number(endOfShiftPreview.completed_payment_count ?? 0) === 0 &&
                   Number(endOfShiftPreview.ar_sales_count ?? 0) === 0 && (
                   <p className="mt-3 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    No completed payments or standalone AR for today. You can still submit to close the day with zero sales.
+                    No completed payments or standalone acknowledgement receipt for today. You can still submit to close the day with zero sales.
                   </p>
                 )}
               </>
@@ -1762,115 +1909,60 @@ const AdminPaymentLogs = () => {
             <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
           </div>
         ) : null}
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end px-3 sm:px-4 py-3 border-b border-gray-200 bg-gray-50/90">
-          <div className="flex flex-col gap-1 min-w-0">
-            <label htmlFor="admin-payment-logs-issue-date-from" className="text-xs font-medium text-gray-600">
-              From
-            </label>
-            <input
-              id="admin-payment-logs-issue-date-from"
-              type="date"
-              value={filterIssueDateFrom}
-              onChange={(e) => setFilterIssueDateFrom(e.target.value)}
-              className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
-            />
-          </div>
-          <div className="flex flex-col gap-1 min-w-0">
-            <label htmlFor="admin-payment-logs-issue-date-to" className="text-xs font-medium text-gray-600">
-              To
-            </label>
-            <input
-              id="admin-payment-logs-issue-date-to"
-              type="date"
-              value={filterIssueDateTo}
-              onChange={(e) => setFilterIssueDateTo(e.target.value)}
-              className="min-h-[40px] px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white w-full max-w-[11rem]"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2 pb-0.5">
-            {filterIssueDateFrom || filterIssueDateTo ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setFilterIssueDateFrom('');
-                  setFilterIssueDateTo('');
-                }}
-                className="text-sm font-medium text-primary-600 hover:text-primary-800 px-2 py-1.5 rounded-md hover:bg-primary-50"
-              >
-                Clear dates
-              </button>
-            ) : null}
-          </div>
-          <p className="text-xs text-gray-500 sm:ml-auto sm:pb-2 w-full sm:w-auto">
-            Inclusive range on payment date. Leave both empty for all dates.
-          </p>
-        </div>
-        <div className="mb-2 px-1">
-          <p className="text-sm font-semibold text-gray-700">
-            Total Amount:{' '}
-            <span className="text-emerald-700">
-              ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-            <span className="block sm:inline sm:ml-4 text-xs font-normal text-gray-600 mt-1 sm:mt-0">
-              Payment method filter:{' '}
-              <span className="font-semibold text-gray-900">{filterPaymentMethod || 'All'}</span>
-            </span>
-          </p>
-        </div>
-        <div className="rounded-lg overflow-x-auto">
-          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1320px' }}>
-              <colgroup>
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '13%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-              </colgroup>
+        <div
+          className="overflow-x-auto rounded-lg"
+          style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+        >
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1850px' }}>
+              {branchLogTab === 'return' ? (
+                <colgroup>
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '150px' }} />
+                  <col style={{ width: '115px' }} />
+                  <col style={{ width: '115px' }} />
+                  <col style={{ width: '200px' }} />
+                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '130px' }} />
+                  <col style={{ width: '145px' }} />
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '130px' }} />
+                  <col style={{ width: '170px' }} />
+                  <col style={{ width: '145px' }} />
+                  <col style={{ width: '160px' }} />
+                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '170px' }} />
+                </colgroup>
+              ) : (
+                <colgroup>
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '150px' }} />
+                  <col style={{ width: '115px' }} />
+                  <col style={{ width: '115px' }} />
+                  <col style={{ width: '200px' }} />
+                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '130px' }} />
+                  <col style={{ width: '145px' }} />
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '130px' }} />
+                  <col style={{ width: '170px' }} />
+                  <col style={{ width: '160px' }} />
+                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '170px' }} />
+                </colgroup>
+              )}
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    <div className="flex flex-col space-y-2 max-w-[160px]">
-                      <div className="flex items-center space-x-1 min-h-[6px]">
-                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${searchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                      </div>
-                      <div className="relative min-h-[28px]">
-                        <input
-                          type="text"
-                          value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
-                          placeholder="Search payments..."
-                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full max-w-full"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        {searchTerm && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSearchTerm('');
-                            }}
-                            className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    Invoice
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     Branch
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    Date
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Issue Date
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Payment Date
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     Student Name
@@ -1882,35 +1974,7 @@ const AdminPaymentLogs = () => {
                     LEVEL TAG
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
-                    <div className="relative payment-method-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setPaymentMethodDropdownRect(rect);
-                          setOpenPaymentMethodDropdown(!openPaymentMethodDropdown);
-                          setOpenStatusDropdown(false);
-                          setStatusDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span className="leading-tight text-left">
-                          <span className="block">Payment Method</span>
-                          {filterPaymentMethod ? (
-                            <span
-                              className="block text-[10px] font-semibold text-primary-700 normal-case tracking-normal mt-0.5 truncate max-w-[7rem]"
-                              title={filterPaymentMethod}
-                            >
-                              {filterPaymentMethod}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterPaymentMethod ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
+                    Payment Method
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     AMOUNT
@@ -1919,35 +1983,7 @@ const AdminPaymentLogs = () => {
                     TOTAL AMOUNT
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
-                    <div className="relative status-filter-dropdown">
-                      {branchLogTab === 'return' ? (
-                        <span className="inline-flex items-center space-x-1 text-gray-500">Return status</span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setStatusDropdownRect(rect);
-                            setOpenStatusDropdown(!openStatusDropdown);
-                            setOpenPaymentMethodDropdown(false);
-                            setPaymentMethodDropdownRect(null);
-                          }}
-                          className="flex items-center space-x-1 hover:text-gray-700"
-                        >
-                          <span title="Finance approval — same as Financial Dashboard verified / unverified">
-                            Status
-                          </span>
-                          <span
-                            className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterFinanceApproval ? 'bg-primary-600' : 'invisible'}`}
-                            aria-hidden
-                          />
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
+                    {branchLogTab === 'return' ? 'Return Status' : 'Status'}
                   </th>
                   {branchLogTab === 'return' ? (
                     <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1957,11 +1993,8 @@ const AdminPaymentLogs = () => {
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     Reference#
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[7%]">
-                    AR#
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    REFERENCE
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Acknowledgement Receipt#
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     ISSUED BY
@@ -1971,7 +2004,7 @@ const AdminPaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={branchLogTab === 'return' ? 14 : 13} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab === 'return' ? 15 : 14} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -1989,7 +2022,10 @@ const AdminPaymentLogs = () => {
                       <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
-                      {formatDate(payment.payment_date || payment.issue_date)}
+                      {payment.issue_date ? formatDate(payment.issue_date) : '-'}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                      {payment.payment_date ? formatDate(payment.payment_date) : '-'}
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">
@@ -1999,14 +2035,14 @@ const AdminPaymentLogs = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
-                      <span className="truncate block" title={payment.student_level_tag || '-'}>
-                        {payment.student_level_tag || '-'}
-                      </span>
-                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
                       <span className="truncate block" title={payment.invoice_description || '-'}>
                         {payment.invoice_description || '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
+                      <span className="truncate block" title={payment.student_level_tag || '-'}>
+                        {payment.student_level_tag || '-'}
                       </span>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm min-w-0">

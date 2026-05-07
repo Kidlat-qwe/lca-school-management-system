@@ -24,6 +24,11 @@ import {
 
 const router = express.Router();
 
+// Payment Logs / dashboard "payment date" uses paymenttbl.issue_date: the calendar date
+// entered when recording payment (actual client-paid date), not when the row was created.
+const PAYMENT_LOG_BUSINESS_DATE_SQL = `p.issue_date`;
+const AR_PAYMENT_BUSINESS_DATE_SQL = `ar.issue_date`;
+
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
@@ -473,7 +478,7 @@ const notifyPaymentResubmittedForVerification = async ({
 /**
  * GET /api/sms/payments/financial-dashboard-metrics
  * Single round-trip aggregates for finance/superfinance dashboards (replaces many paginated /payments calls).
- * Filters by Manila payment date: (COALESCE(approved_at, created_at) AT TIME ZONE 'Asia/Manila')::date.
+ * Filters by payment business date: paymenttbl.issue_date (client-paid date entered at recording).
  */
 router.get(
   '/financial-dashboard-metrics',
@@ -519,12 +524,12 @@ router.get(
 
       if (payFrom) {
         pc += 1;
-        whereExtra += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${pc}::date`;
+        whereExtra += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} >= $${pc}::date`;
         params.push(payFrom);
       }
       if (payTo) {
         pc += 1;
-        whereExtra += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${pc}::date`;
+        whereExtra += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} <= $${pc}::date`;
         params.push(payTo);
       }
 
@@ -593,10 +598,7 @@ router.get(
           p.payable_amount,
           COALESCE(p.tip_amount, 0) AS tip_amount,
           TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
-          TO_CHAR(
-            (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date,
-            'YYYY-MM-DD'
-          ) AS payment_date,
+          TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') AS payment_date,
           p.status,
           p.approval_status,
           p.payment_method,
@@ -736,7 +738,7 @@ router.get(
                         p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                         TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_issue_date,
-                        TO_CHAR((COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date, 'YYYY-MM-DD') as payment_date,
+                        TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -865,12 +867,12 @@ router.get(
         }
         if (payDateFrom) {
           paramCount++;
-          sql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${paramCount}::date`;
+          sql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} >= $${paramCount}::date`;
           params.push(payDateFrom);
         }
         if (payDateTo) {
           paramCount++;
-          sql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${paramCount}::date`;
+          sql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} <= $${paramCount}::date`;
           params.push(payDateTo);
         }
       }
@@ -1033,12 +1035,12 @@ router.get(
       if (usePaymentDateRange) {
         if (payDateFrom) {
           countParamCount++;
-          countSql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${countParamCount}::date`;
+          countSql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} >= $${countParamCount}::date`;
           countParams.push(payDateFrom);
         }
         if (payDateTo) {
           countParamCount++;
-          countSql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${countParamCount}::date`;
+          countSql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} <= $${countParamCount}::date`;
           countParams.push(payDateTo);
         }
       }
@@ -1217,7 +1219,7 @@ router.get(
       let paySql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
                            p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                            TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
-                           TO_CHAR((COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date, 'YYYY-MM-DD') as payment_date,
+                           TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
                            p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                            TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                            p.approval_status, p.approved_by,
@@ -1285,12 +1287,12 @@ router.get(
       if (usePaymentDateRange) {
         if (payDateFrom) {
           payPc++;
-          paySql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${payPc}::date`;
+          paySql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} >= $${payPc}::date`;
           payParams.push(payDateFrom);
         }
         if (payDateTo) {
           payPc++;
-          paySql += ` AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${payPc}::date`;
+          paySql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} <= $${payPc}::date`;
           payParams.push(payDateTo);
         }
       }
@@ -1390,12 +1392,12 @@ router.get(
       if (usePaymentDateRange) {
         if (payDateFrom) {
           arPc++;
-          arSql += ` AND (COALESCE(ar.verified_at, ar.created_at) AT TIME ZONE 'Asia/Manila')::date >= $${arPc}::date`;
+          arSql += ` AND ${AR_PAYMENT_BUSINESS_DATE_SQL} >= $${arPc}::date`;
           arParams.push(payDateFrom);
         }
         if (payDateTo) {
           arPc++;
-          arSql += ` AND (COALESCE(ar.verified_at, ar.created_at) AT TIME ZONE 'Asia/Manila')::date <= $${arPc}::date`;
+          arSql += ` AND ${AR_PAYMENT_BUSINESS_DATE_SQL} <= $${arPc}::date`;
           arParams.push(payDateTo);
         }
       }
@@ -1410,7 +1412,7 @@ router.get(
           student_id: null,
           branch_id: row.branch_id,
           payment_method: 'Acknowledgement Receipt',
-          payment_type: 'Unapplied AR',
+          payment_type: 'Unapplied Acknowledgement Receipt',
           payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
           issue_date: row.issue_date,
           status: 'Verified',
@@ -1426,7 +1428,7 @@ router.get(
           returned_at: null,
           returned_by: null,
           returned_by_name: null,
-          student_name: row.prospect_student_name || 'Walk-in / AR',
+          student_name: row.prospect_student_name || 'Walk-in / Acknowledgement Receipt',
           student_email: row.prospect_student_email || null,
           student_level_tag: row.level_tag || null,
           invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
@@ -1532,7 +1534,17 @@ router.get(
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                  WHERE LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
-                   AND p.issue_date >= $1::date AND p.issue_date <= $2::date`;
+                   AND p.issue_date >= $1::date AND p.issue_date <= $2::date
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM cash_deposit_summarytbl c
+                     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
+                     WHERE c.branch_id = p.branch_id
+                       AND c.status IN ('Submitted', 'Approved')
+                       AND deposited.payment_row ? 'payment_id'
+                       AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
+                       AND (deposited.payment_row->>'payment_id')::int = p.payment_id
+                   )`;
       const params = [start, end];
       let paramCount = 2;
 

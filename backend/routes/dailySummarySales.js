@@ -148,9 +148,72 @@ router.get(
       const countRes = await query(countSql, countParams);
       const total = parseInt(countRes.rows[0]?.total || 0, 10);
 
+      // Summary card (all-status) — all end-of-shift submissions in the same branch/date scope.
+      let submittedSql = `SELECT COUNT(*)::int AS submitted_count, COALESCE(SUM(d.total_amount), 0)::numeric AS submitted_total_amount
+        FROM daily_summary_salestbl d
+        WHERE 1=1`;
+      const submittedParams = [];
+      let sc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        sc++;
+        submittedSql += ` AND d.branch_id = $${sc}`;
+        submittedParams.push(userBranchId);
+      } else if (branch_id) {
+        sc++;
+        submittedSql += ` AND d.branch_id = $${sc}`;
+        submittedParams.push(branch_id);
+      }
+      if (summary_date) {
+        sc++;
+        submittedSql += ` AND d.summary_date = $${sc}`;
+        submittedParams.push(summary_date);
+      }
+      const submittedRes = await query(submittedSql, submittedParams);
+      const submittedSummary = submittedRes.rows[0] || { submitted_count: 0, submitted_total_amount: 0 };
+
+      // Summary card (filtered) — matches the list’s status filter (including Returned => Returned+Rejected).
+      let filteredSql = `SELECT COUNT(*)::int AS filtered_count, COALESCE(SUM(d.total_amount), 0)::numeric AS filtered_total_amount
+        FROM daily_summary_salestbl d
+        WHERE 1=1`;
+      const filteredParams = [];
+      let fc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        fc++;
+        filteredSql += ` AND d.branch_id = $${fc}`;
+        filteredParams.push(userBranchId);
+      } else if (branch_id) {
+        fc++;
+        filteredSql += ` AND d.branch_id = $${fc}`;
+        filteredParams.push(branch_id);
+      }
+      if (summary_date) {
+        fc++;
+        filteredSql += ` AND d.summary_date = $${fc}`;
+        filteredParams.push(summary_date);
+      }
+      if (status) {
+        if (status === 'Returned') {
+          filteredSql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          fc++;
+          filteredSql += ` AND d.status = $${fc}`;
+          filteredParams.push(status);
+        }
+      }
+      const filteredRes = await query(filteredSql, filteredParams);
+      const filteredSummary = filteredRes.rows[0] || { filtered_count: 0, filtered_total_amount: 0 };
+
       res.json({
         success: true,
         data: dataRows,
+        submitted_summary: {
+          count: Number(submittedSummary.submitted_count || 0),
+          total_amount: Number(submittedSummary.submitted_total_amount || 0),
+        },
+        filtered_summary: {
+          count: Number(filteredSummary.filtered_count || 0),
+          total_amount: Number(filteredSummary.filtered_total_amount || 0),
+        },
         pagination: {
           page: pageNum,
           limit: limitNum,

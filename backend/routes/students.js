@@ -141,6 +141,7 @@ router.get(
   requireRole('Superadmin', 'Admin'),
   [
     queryValidator('search').optional().isString().withMessage('Search must be a string'),
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('limit')
       .optional()
       .isInt({ min: 1, max: 1000 })
@@ -149,7 +150,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { search, limit = 1000 } = req.query;
+      const { search, branch_id, limit = 1000 } = req.query;
 
       let sql = `
         SELECT 
@@ -168,6 +169,10 @@ router.get(
         paramCount += 1;
         sql += ` AND branch_id = $${paramCount}`;
         params.push(req.user.branchId);
+      } else if (branch_id) {
+        paramCount += 1;
+        sql += ` AND branch_id = $${paramCount}`;
+        params.push(branch_id);
       }
 
       if (search && search.trim() !== '') {

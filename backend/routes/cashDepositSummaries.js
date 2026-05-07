@@ -17,8 +17,8 @@ const findOverlappingCashDepositSummary = async ({ branchId, startDate, endDate 
             status
      FROM cash_deposit_summarytbl
      WHERE branch_id = $1
-       AND start_date <= $2::date
-       AND end_date >= $3::date
+       AND start_date < $2::date
+       AND end_date > $3::date
      ORDER BY start_date ASC
      LIMIT 1`,
     [branchId, endDate, startDate]
@@ -64,6 +64,16 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
        AND LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
        AND p.issue_date >= $2::date
        AND p.issue_date <= $3::date
+       AND NOT EXISTS (
+         SELECT 1
+         FROM cash_deposit_summarytbl c
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
+         WHERE c.branch_id = p.branch_id
+           AND c.status IN ('Submitted', 'Approved')
+           AND deposited.payment_row ? 'payment_id'
+           AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
+           AND (deposited.payment_row->>'payment_id')::int = p.payment_id
+       )
      ORDER BY p.issue_date ASC, p.payment_id ASC`,
     [branchId, startDate, endDate]
   );
@@ -194,6 +204,52 @@ const createCashDepositSubmissionNotification = async ({
 };
 
 router.get(
+  '/deposit-defaults',
+  requireRole('Admin'),
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can prepare cash deposit summaries.',
+        });
+      }
+
+      const [latestDepositRes, earliestCashPaymentRes] = await Promise.all([
+        query(
+          `SELECT TO_CHAR(MAX(end_date), 'YYYY-MM-DD') AS latest_deposit_end_date
+           FROM cash_deposit_summarytbl
+           WHERE branch_id = $1`,
+          [userBranchId]
+        ),
+        query(
+          `SELECT TO_CHAR(MIN(issue_date), 'YYYY-MM-DD') AS earliest_cash_payment_date
+           FROM paymenttbl
+           WHERE branch_id = $1
+             AND LOWER(TRIM(COALESCE(payment_method, ''))) = 'cash'`,
+          [userBranchId]
+        ),
+      ]);
+
+      const latestDepositEndDate = latestDepositRes.rows[0]?.latest_deposit_end_date || null;
+      const earliestCashPaymentDate = earliestCashPaymentRes.rows[0]?.earliest_cash_payment_date || null;
+
+      res.json({
+        success: true,
+        data: {
+          default_start_date: latestDepositEndDate || earliestCashPaymentDate || null,
+          latest_deposit_end_date: latestDepositEndDate,
+          earliest_cash_payment_date: earliestCashPaymentDate,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
   '/',
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
@@ -297,9 +353,72 @@ router.get(
       const countRes = await query(countSql, countParams);
       const total = parseInt(countRes.rows[0]?.total || 0, 10);
 
+      // Summary card (all-status) — all cash deposit submissions in the same branch/date scope.
+      let submittedSql = `SELECT COUNT(*)::int AS submitted_count, COALESCE(SUM(c.total_deposit_amount), 0)::numeric AS submitted_total_amount
+        FROM cash_deposit_summarytbl c
+        WHERE 1=1`;
+      const submittedParams = [];
+      let sc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        sc++;
+        submittedSql += ` AND c.branch_id = $${sc}`;
+        submittedParams.push(userBranchId);
+      } else if (branch_id) {
+        sc++;
+        submittedSql += ` AND c.branch_id = $${sc}`;
+        submittedParams.push(branch_id);
+      }
+      if (date) {
+        sc++;
+        submittedSql += ` AND c.start_date <= $${sc}::date AND c.end_date >= $${sc}::date`;
+        submittedParams.push(date);
+      }
+      const submittedRes = await query(submittedSql, submittedParams);
+      const submittedSummary = submittedRes.rows[0] || { submitted_count: 0, submitted_total_amount: 0 };
+
+      // Summary card (filtered) — matches the list’s status filter (including Returned => Returned+Rejected).
+      let filteredSql = `SELECT COUNT(*)::int AS filtered_count, COALESCE(SUM(c.total_deposit_amount), 0)::numeric AS filtered_total_amount
+        FROM cash_deposit_summarytbl c
+        WHERE 1=1`;
+      const filteredParams = [];
+      let fc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        fc++;
+        filteredSql += ` AND c.branch_id = $${fc}`;
+        filteredParams.push(userBranchId);
+      } else if (branch_id) {
+        fc++;
+        filteredSql += ` AND c.branch_id = $${fc}`;
+        filteredParams.push(branch_id);
+      }
+      if (date) {
+        fc++;
+        filteredSql += ` AND c.start_date <= $${fc}::date AND c.end_date >= $${fc}::date`;
+        filteredParams.push(date);
+      }
+      if (status) {
+        if (status === 'Returned') {
+          filteredSql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else {
+          fc++;
+          filteredSql += ` AND c.status = $${fc}`;
+          filteredParams.push(status);
+        }
+      }
+      const filteredRes = await query(filteredSql, filteredParams);
+      const filteredSummary = filteredRes.rows[0] || { filtered_count: 0, filtered_total_amount: 0 };
+
       res.json({
         success: true,
         data: result.rows,
+        submitted_summary: {
+          count: Number(submittedSummary.submitted_count || 0),
+          total_amount: Number(submittedSummary.submitted_total_amount || 0),
+        },
+        filtered_summary: {
+          count: Number(filteredSummary.filtered_count || 0),
+          total_amount: Number(filteredSummary.filtered_total_amount || 0),
+        },
         pagination: {
           page: pageNum,
           limit: limitNum,

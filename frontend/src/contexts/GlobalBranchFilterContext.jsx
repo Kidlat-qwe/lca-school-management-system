@@ -13,6 +13,7 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'enrollment-dashboard',
   'personnel',
   'student',
+  'guardians',
   'classes',
   'package',
   'pricinglist',
@@ -27,6 +28,8 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'daily-summary-sales',
   'report',
   'calendar-schedule',
+  'announcements',
+  'holidays',
 ]);
 
 const formatBranchNameParts = (branchName) => {

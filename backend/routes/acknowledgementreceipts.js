@@ -91,7 +91,7 @@ const createArSubmissionNotification = async ({
       status === 'Verified'
         ? 'Auto-verified (Cash via Admin/Superadmin).'
         : 'Awaiting Finance/Superfinance verification.';
-    const body = `${studentName || 'Student'} - ${arType} AR (payment: ${paymentMethod || 'Cash'}) was created at ${branchName}. ${verificationState}`;
+    const body = `${studentName || 'Student'} - ${arType} Acknowledgement Receipt (payment: ${paymentMethod || 'Cash'}) was created at ${branchName}. ${verificationState}`;
 
     await query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
@@ -133,7 +133,7 @@ const notifyArReturnedToCreator = async ({
     const returnedBy = returnerRes.rows[0]?.full_name || returnerRes.rows[0]?.email || 'Finance';
     const studentLabel = studentName || 'Student';
     const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
-    const body = `AR #${ackReceiptId} (${studentLabel}) was returned by ${returnedBy} at ${branchName} for correction.${reasonText}`;
+    const body = `Acknowledgement Receipt #${ackReceiptId} (${studentLabel}) was returned by ${returnedBy} at ${branchName} for correction.${reasonText}`;
 
     if (!hasTargetUserIdColumn) {
       await query(
@@ -388,10 +388,17 @@ router.get(
 
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total, 10) || 0;
+      const sumSql = countSql.replace(
+        /SELECT COUNT\(\*\) AS total/i,
+        'SELECT COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0)::numeric AS total_line_amount'
+      );
+      const sumResult = await query(sumSql, countParams);
+      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
 
       res.json({
         success: true,
         data: result.rows.map(omitAckReceiptNumber),
+        filterTotalLineAmount,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -504,7 +511,7 @@ router.post(
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'At least one merchandise item is required for merchandise AR',
+            message: 'At least one merchandise item is required for merchandise acknowledgement receipt',
           });
         }
 
@@ -512,7 +519,7 @@ router.post(
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'Branch is required for merchandise AR',
+            message: 'Branch is required for merchandise acknowledgement receipt',
           });
         }
 
@@ -585,7 +592,7 @@ router.post(
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'Guardian name is required for package AR',
+            message: 'Guardian name is required for package acknowledgement receipt',
           });
         }
 
@@ -593,7 +600,7 @@ router.post(
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'Package ID is required for package AR',
+            message: 'Package ID is required for package acknowledgement receipt',
           });
         }
 
@@ -1068,7 +1075,7 @@ router.post(
         return res.status(400).json({
           success: false,
           message:
-            'This acknowledgement receipt has already been used. Each AR can only be applied once.',
+            'This acknowledgement receipt has already been used. Each acknowledgement receipt can only be applied once.',
         });
       }
 
@@ -1096,7 +1103,7 @@ router.post(
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached (cash AR is allowed)',
+          message: 'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached (cash acknowledgement receipt is allowed)',
         });
       }
 
@@ -2206,7 +2213,7 @@ router.put(
       if (!isSuperadmin && Number(actorId) !== Number(ack.created_by)) {
         return res.status(403).json({
           success: false,
-          message: 'Only the AR creator can resubmit this acknowledgement receipt',
+          message: 'Only the acknowledgement receipt creator can resubmit this acknowledgement receipt',
         });
       }
       if (req.user.userType === 'Admin' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {

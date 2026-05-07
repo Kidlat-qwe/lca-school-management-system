@@ -52,6 +52,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [paymentMethodFilter, setPaymentMethodFilter] = useState(initialPaymentMethod);
   const [listIssueDateFrom, setListIssueDateFrom] = useState(initialListIssueFrom);
   const [listIssueDateTo, setListIssueDateTo] = useState(initialListIssueTo);
+  const [showAdvancedAcknowledgementReceiptFilters, setShowAdvancedAcknowledgementReceiptFilters] = useState(
+    Boolean(initialListIssueFrom || initialListIssueTo)
+  );
   const [listRefreshing, setListRefreshing] = useState(false);
   const initialDataLoadedRef = useRef(false);
   const searchHydratedRef = useRef(false);
@@ -66,6 +69,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     total: 0,
     totalPages: 1,
   });
+  const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
 
   const [packages, setPackages] = useState([]);
   const [packagesLoading, setPackagesLoading] = useState(false);
@@ -230,6 +234,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       setReceipts(response.data || []);
+      if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
+        setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
+      } else {
+        setFilterTotalLineAmount(null);
+      }
       if (response.pagination) {
         setPagination({
           page: response.pagination.page,
@@ -265,6 +274,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     } catch (err) {
       console.error('Error fetching acknowledgement receipts:', err);
       setError('Failed to load acknowledgement receipts. Please try again.');
+      setFilterTotalLineAmount(null);
     } finally {
       setLoading(false);
       setListRefreshing(false);
@@ -591,14 +601,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       if (!rowsForExport.length) {
         appAlert(
           requireExportDateRange
-            ? 'No AR sales records found for the selected date range.'
+            ? 'No acknowledgement receipt sales records found for the selected date range.'
             : 'No acknowledgement receipts found for the current filters.'
         );
         return false;
       }
 
       const exportRows = rowsForExport.map((r) => ({
-        'AR ID': r.ack_receipt_id ?? '-',
+        'Acknowledgement Receipt ID': r.ack_receipt_id ?? '-',
         'Student Name': r.prospect_student_name || '-',
         'Guardian Name': r.prospect_student_contact || '-',
         'Package / Items': getArPackageOrItems(r),
@@ -1249,7 +1259,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     const promptedRemarks = !approve
       ? await appPrompt({
           title: 'Return Acknowledgement Receipt',
-          message: 'Add a note for the AR creator (required).',
+          message: 'Add a note for the acknowledgement receipt creator (required).',
           placeholder: 'Reason for return...',
           confirmLabel: 'Return',
           cancelLabel: 'Cancel',
@@ -1522,29 +1532,55 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     (arAdminTab === 'return' ||
       (currentUserId != null && Number(actionMenuReceipt.created_by) === Number(currentUserId)));
   const actionMenuWidthPx = 176;
+  const summaryAcknowledgementReceiptCount = Number(pagination.total) || 0;
+  const summaryAcknowledgementReceiptTotal =
+    filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))
+      ? Number(filterTotalLineAmount)
+      : receipts.reduce(
+          (sum, receipt) => sum + (Number(receipt.payment_amount || 0) + Number(receipt.tip_amount || 0)),
+          0
+        );
+  const hasAcknowledgementReceiptFilters = Boolean(
+    searchTerm ||
+      statusFilter ||
+      paymentMethodFilter ||
+      listIssueDateFrom ||
+      listIssueDateTo
+  );
+
+  const resetAcknowledgementReceiptFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('');
+    setPaymentMethodFilter('');
+    setListIssueDateFrom('');
+    setListIssueDateTo('');
+  };
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Acknowledgement Receipts</h1>
-          <p className="text-sm text-gray-600 mt-1">
+          <p className="mt-1 text-sm text-gray-600">
             Record upfront payments quickly and link them to invoices later.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <button
             type="button"
             onClick={handleExportExcel}
             disabled={exportLoading || loading}
-            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-md bg-green-600 text-white shadow-sm hover:bg-green-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600 transition-colors disabled:opacity-60"
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60"
           >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16" />
+            </svg>
             {exportLoading ? 'Exporting...' : 'Export to Excel'}
           </button>
           <button
             type="button"
             onClick={handleCreateClick}
-            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-md shadow-sm text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] transition-colors"
+            className="inline-flex items-center justify-center rounded-lg bg-[#F7C844] px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-[#F5B82E]"
           >
             Create Acknowledgement Receipt
           </button>
@@ -1557,8 +1593,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         title="Export Acknowledgement Receipts"
         description={
           <>
-            Select branches, then an <span className="font-medium">issue date</span> range (Manila). Exports Package AR
-            rows aligned with AR Sales on the financial dashboard. Rejected and Cancelled are excluded.
+            Select branches, then an <span className="font-medium">issue date</span> range (Manila). Exports Package Acknowledgement Receipt
+            rows aligned with Acknowledgement Receipt Sales on the financial dashboard. Rejected and Cancelled are excluded.
           </>
         }
         maxWidthClass="max-w-lg"
@@ -1635,47 +1671,68 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </div>
       </StandardExportModal>
 
-      {isAdminOrSuperadmin ? (
-        <BranchPaymentLogTabs
-          value={arAdminTab}
-          onChange={(v) => {
-            setArAdminTab(v);
-            setStatusFilter('');
-          }}
-          mainLabel="Acknowledgement receipts"
-          returnLabel="Return"
-          ariaLabel="Acknowledgement receipt views"
-          returnBadgeCount={returnedArCount}
-        />
-      ) : null}
-
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-5 space-y-4">
-        {isAdminOrSuperadmin && arAdminTab === 'return' ? (
-          <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
-            These package ARs were <span className="font-semibold">returned by Finance or Superfinance</span> for
-            correction. Use <span className="font-semibold">Resubmit</span> after you fix details.
-          </p>
+      <div className={`flex flex-col gap-3 lg:flex-row lg:items-center ${isAdminOrSuperadmin ? 'lg:justify-between' : 'lg:justify-end'}`}>
+        {isAdminOrSuperadmin ? (
+          <BranchPaymentLogTabs
+            value={arAdminTab}
+            onChange={(v) => {
+              setArAdminTab(v);
+              setStatusFilter('');
+            }}
+            mainLabel="Acknowledgement receipts"
+            returnLabel="Return"
+            ariaLabel="Acknowledgement receipt views"
+            returnBadgeCount={returnedArCount}
+          />
         ) : null}
-        <div className="flex flex-col md:flex-row gap-3 md:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Acknowledgement receipts</p>
+            <p className="text-lg font-semibold text-gray-900">
+              {summaryAcknowledgementReceiptCount.toLocaleString('en-US')}
+            </p>
+          </div>
+          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
+            <p className="text-lg font-semibold text-emerald-700">
+              ₱{summaryAcknowledgementReceiptTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Search Filter</p>
+            <p className="text-xs text-gray-500">
+              Filter acknowledgement receipts before the table. Branch scope follows the global branch selector.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="xl:col-span-2">
+            <label htmlFor="ar-search-filter" className="mb-1 block text-xs font-medium text-gray-700">Search</label>
             <input
+              id="ar-search-filter"
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="input-field text-sm"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               placeholder="Search by name, contact, or reference number"
             />
           </div>
-          <div className="w-full md:w-48">
-            <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
+          <div>
+            <label htmlFor="ar-status-filter" className="mb-1 block text-xs font-medium text-gray-700">Status</label>
             {isAdminOrSuperadmin && arAdminTab === 'return' ? (
-              <div className="input-field text-sm bg-gray-50 text-gray-800">Returned only</div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">Returned only</div>
             ) : (
               <select
+                id="ar-status-filter"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="input-field text-sm"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               >
                 <option value="">All</option>
                 <option value="Verified,Applied">Verified (Verified + Applied)</option>
@@ -1688,12 +1745,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               </select>
             )}
           </div>
-          <div className="w-full md:w-48">
-            <label className="block text-xs font-medium text-gray-700 mb-1">Payment Method</label>
+          <div>
+            <label htmlFor="ar-payment-method-filter" className="mb-1 block text-xs font-medium text-gray-700">Payment Method</label>
             <select
+              id="ar-payment-method-filter"
               value={paymentMethodFilter}
               onChange={(e) => setPaymentMethodFilter(e.target.value)}
-              className="input-field text-sm"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             >
               <option value="">All</option>
               {AR_PAYMENT_METHOD_OPTIONS.map((m) => (
@@ -1704,65 +1762,99 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             </select>
           </div>
         </div>
-
-        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="w-full sm:w-auto" style={{ minWidth: 'min(100%, 140px)' }}>
-            <label htmlFor="ar-list-issue-from" className="mb-1 block text-xs font-medium text-gray-700">
-              Issue date from
-            </label>
-            <input
-              id="ar-list-issue-from"
-              type="date"
-              value={listIssueDateFrom}
-              onChange={(e) => setListIssueDateFrom(e.target.value)}
-              className="input-field w-full text-sm"
-            />
+        {showAdvancedAcknowledgementReceiptFilters ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <label htmlFor="ar-list-issue-from" className="mb-1 block text-xs font-medium text-gray-700">
+                Issue date from
+              </label>
+              <input
+                id="ar-list-issue-from"
+                type="date"
+                value={listIssueDateFrom}
+                onChange={(e) => setListIssueDateFrom(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="ar-list-issue-to" className="mb-1 block text-xs font-medium text-gray-700">
+                Issue date to
+              </label>
+              <input
+                id="ar-list-issue-to"
+                type="date"
+                value={listIssueDateTo}
+                onChange={(e) => setListIssueDateTo(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
           </div>
-          <div className="w-full sm:w-auto" style={{ minWidth: 'min(100%, 140px)' }}>
-            <label htmlFor="ar-list-issue-to" className="mb-1 block text-xs font-medium text-gray-700">
-              Issue date to
-            </label>
-            <input
-              id="ar-list-issue-to"
-              type="date"
-              value={listIssueDateTo}
-              onChange={(e) => setListIssueDateTo(e.target.value)}
-              className="input-field w-full text-sm"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:pb-0.5">
+        ) : null}
+        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs leading-relaxed text-gray-500">
+            Date range is inclusive on acknowledgement receipt issue date (Manila). Leave both dates empty for all dates.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button
               type="button"
-              onClick={() => {
-                setListIssueDateFrom('');
-                setListIssueDateTo('');
-              }}
-              className="text-sm font-medium text-primary-600 hover:text-primary-800 hover:underline"
+              onClick={() => setShowAdvancedAcknowledgementReceiptFilters((current) => !current)}
+              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
+              aria-expanded={showAdvancedAcknowledgementReceiptFilters}
             >
-              Clear dates
+              {showAdvancedAcknowledgementReceiptFilters ? 'Hide advanced filters' : 'Advanced filters'}
+              <svg
+                className={`h-4 w-4 transition-transform ${showAdvancedAcknowledgementReceiptFilters ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={resetAcknowledgementReceiptFilters}
+              disabled={!hasAcknowledgementReceiptFilters}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={() => fetchReceipts(1)}
+              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Search
             </button>
           </div>
-          <p className="text-xs leading-relaxed text-gray-500 sm:ml-auto sm:max-w-md">
-            Inclusive range on AR issue date (Manila). Leave both empty for all dates.
-          </p>
         </div>
+      </div>
 
-        <div className="relative mt-2 min-h-[12rem]">
-          {loading && !initialDataLoadedRef.current ? (
+      {isAdminOrSuperadmin && arAdminTab === 'return' ? (
+        <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
+          These package acknowledgement receipts were <span className="font-semibold">returned by Finance or Superfinance</span> for
+          correction. Use <span className="font-semibold">Resubmit</span> after you fix details.
+        </p>
+      ) : null}
+
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+
+      <div className="relative bg-white rounded-lg shadow">
+        {loading && !initialDataLoadedRef.current ? (
+          <div
+            className="flex h-48 items-center justify-center"
+            role="status"
+          >
             <div
-              className="flex h-48 items-center justify-center rounded-lg border border-gray-100 bg-gray-50/50"
-              role="status"
-            >
-              <div
-                className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
-                aria-hidden
-              />
-              <span className="sr-only">Loading acknowledgement receipts</span>
-            </div>
-          ) : error ? (
-            <p className="text-sm text-red-600">{error}</p>
-          ) : (
-            <div className="relative rounded-lg">
+              className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+              aria-hidden
+            />
+            <span className="sr-only">Loading acknowledgement receipts</span>
+          </div>
+        ) : (
+          <div className="relative rounded-lg">
               {listRefreshing ? (
                 <div
                   className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]"
@@ -1784,21 +1876,21 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 className="min-w-full divide-y divide-gray-200 text-sm"
                 style={{ width: '100%', minWidth: '1340px' }}
               >
-                <thead className="bg-gray-50">
+                <thead className="bg-gray-50 table-header-stable">
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Student Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Guardian Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Package / Items</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Level Tag</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Total Amount</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Branch</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Payment Method</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Ref. No.</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Attachment</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Student Name</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Guardian Name</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Package / Items</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Level Tag</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Total Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Branch</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Method</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ref. No.</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Issue Date</th>
                     {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Actions</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
                     )}
                   </tr>
                 </thead>
@@ -2085,8 +2177,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             />
           </div>
         )}
-      </div>
-
       {isSuperadmin &&
         showBranchModal &&
         createPortal(
@@ -2817,7 +2907,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     )}
                     {createFormData.payment_method === 'Cash' && isAdminOrSuperadmin && (
                       <p className="text-xs text-emerald-600 mt-1">
-                        Cash AR by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
+                        Cash acknowledgement receipt by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
                       </p>
                     )}
                   </div>
@@ -3104,7 +3194,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     />
                     {isAckIssueDateLocked(editingReceiptMeta) ? (
                       <p className="mt-1 text-xs text-gray-500">
-                        Original issue date cannot be changed after Finance returned this AR (used for daily summaries and reports), including after you resubmit.
+                        Original issue date cannot be changed after Finance returned this acknowledgement receipt (used for daily summaries and reports), including after you resubmit.
                       </p>
                     ) : null}
                     {editFormErrors.issue_date && <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>}

@@ -129,10 +129,7 @@ router.get(
                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
                        TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
                        (
-                         SELECT TO_CHAR(
-                           (MAX(COALESCE(p.approved_at, p.created_at)) AT TIME ZONE 'Asia/Manila')::date,
-                           'YYYY-MM-DD'
-                         )
+                         SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
                          FROM paymenttbl p
                          WHERE p.invoice_id = i.invoice_id AND p.status = 'Completed'
                        ) AS last_payment_date,
@@ -541,10 +538,7 @@ router.get(
           total_received_amount: totalPaid + totalTip,
           last_payment_date: (
             await query(
-              `SELECT TO_CHAR(
-                 DATE_TRUNC('day', MAX(COALESCE(p.approved_at, p.created_at))),
-                 'YYYY-MM-DD'
-               ) AS last_payment_date
+              `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_date
                FROM paymenttbl p
                WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
               [id]
@@ -685,19 +679,13 @@ router.get(
          ORDER BY p.issue_date DESC`,
         [id]
       );
-      const lastPaymentTimestampResult = await query(
-        `SELECT
-           MAX(COALESCE(p.approved_at, p.created_at)) AS last_payment_ts,
-           TO_CHAR(
-             (MAX(COALESCE(p.approved_at, p.created_at)) AT TIME ZONE 'Asia/Manila')::date,
-             'YYYY-MM-DD'
-           ) AS last_payment_ymd
+      const lastPaymentDateResult = await query(
+        `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_ymd
          FROM paymenttbl p
          WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
         [id]
       );
-      const lastPaymentTs = lastPaymentTimestampResult.rows?.[0]?.last_payment_ts || null;
-      const lastPaymentYmd = lastPaymentTimestampResult.rows?.[0]?.last_payment_ymd || null;
+      const lastPaymentYmd = lastPaymentDateResult.rows?.[0]?.last_payment_ymd || null;
 
       // Prepare logo path (if exists)
       const logoPath = path.resolve(process.cwd(), '../frontend/public/LCA Icon.png');

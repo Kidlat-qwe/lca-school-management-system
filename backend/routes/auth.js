@@ -9,6 +9,31 @@ import { createFirebaseUser } from '../utils/firebaseAuthRest.js';
 const router = express.Router();
 
 /**
+ * POST /api/sms/auth/check-email
+ * Public endpoint for login UX to differentiate:
+ * - existing email (in DB) vs non-existing email
+ *
+ * NOTE: This intentionally allows account enumeration (requested by product).
+ */
+router.post(
+  '/check-email',
+  [body('email').isEmail().withMessage('Valid email is required'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Valid email is required' });
+      }
+
+      const result = await query('SELECT 1 FROM userstbl WHERE LOWER(TRIM(email)) = $1 LIMIT 1', [email]);
+      res.json({ success: true, exists: (result.rows || []).length > 0 });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/v1/auth/verify
  * Verify Firebase token and return user info
  * Updates last_login timestamp on successful verification

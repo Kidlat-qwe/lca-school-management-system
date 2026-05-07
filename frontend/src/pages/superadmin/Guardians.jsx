@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 
 const Guardians = () => {
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [guardians, setGuardians] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -32,7 +34,7 @@ const Guardians = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchDebounced]);
+  }, [searchDebounced, globalBranchId]);
 
   useEffect(() => {
     const fetchGuardians = async () => {
@@ -44,6 +46,7 @@ const Guardians = () => {
           page: String(currentPage),
         });
         if (searchDebounced.trim()) params.set('search', searchDebounced.trim());
+        if (globalBranchId) params.set('branch_id', globalBranchId);
         const response = await apiRequest(`/guardians?${params.toString()}`);
         setGuardians(response.data || []);
         const pag = response.pagination || {};
@@ -57,19 +60,21 @@ const Guardians = () => {
     };
 
     fetchGuardians();
-  }, [currentPage, itemsPerPage, searchDebounced]);
+  }, [currentPage, itemsPerPage, searchDebounced, globalBranchId]);
 
   useEffect(() => {
     const fetchStudents = async () => {
       try {
-        const response = await apiRequest('/students?limit=1000');
+        const params = new URLSearchParams({ limit: '1000' });
+        if (globalBranchId) params.set('branch_id', globalBranchId);
+        const response = await apiRequest(`/students?${params.toString()}`);
         setStudents(response.data || []);
       } catch (err) {
         console.error('Failed to load students', err);
       }
     };
     fetchStudents();
-  }, []);
+  }, [globalBranchId]);
 
   return (
     <div className="space-y-6">

@@ -71,6 +71,7 @@ const DailySummarySalesApprovalPage = () => {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterDate, setFilterDate] = useState('');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
   const [approvingId, setApprovingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, remarks: '' });
   const [detailModal, setDetailModal] = useState({ open: false, record: null });
@@ -128,6 +129,11 @@ const DailySummarySalesApprovalPage = () => {
       const res = await apiRequest(`${endpoint}?${params.toString()}`);
 
       setRecords(res.data || []);
+      const summaryForFilters = (filterStatus || '').trim() ? res.filtered_summary : res.submitted_summary;
+      setSubmittedSummary({
+        count: Number(summaryForFilters?.count ?? 0),
+        total_amount: Number(summaryForFilters?.total_amount ?? 0),
+      });
       if (res.pagination) {
         setPagination({
           page: res.pagination.page,
@@ -142,6 +148,7 @@ const DailySummarySalesApprovalPage = () => {
         err.message || (isCashDepositTab ? 'Failed to load cash deposit summaries' : 'Failed to load daily summaries')
       );
       setRecords([]);
+      setSubmittedSummary({ count: 0, total_amount: 0 });
     } finally {
       setLoading(false);
     }
@@ -294,8 +301,10 @@ const DailySummarySalesApprovalPage = () => {
         body: JSON.stringify({ approve: true }),
       });
       await fetchRecords(pagination.page);
+      return true;
     } catch (err) {
       appAlert(err.response?.data?.message || err.message || 'Failed to verify');
+      return false;
     } finally {
       setApprovingId(null);
     }
@@ -312,6 +321,7 @@ const DailySummarySalesApprovalPage = () => {
         body: JSON.stringify({ approve: false, remarks: remarks.trim() || undefined }),
       });
       setRejectModal({ open: false, id: null, remarks: '' });
+      setDetailModal({ open: false, record: null });
       await fetchRecords(pagination.page);
     } catch (err) {
       appAlert(err.response?.data?.message || err.message || 'Failed to reject');
@@ -373,6 +383,8 @@ const DailySummarySalesApprovalPage = () => {
   };
 
   const selectedRecord = records.find((record) => record[recordIdField] === openMenuId) || null;
+  const canActOnRecord = (record) =>
+    canVerifySummary && record && ['Submitted', 'Returned', 'Rejected'].includes(String(record.status || ''));
   const detailPayments = detailData?.payments || [];
   const detailArReceipts = detailData?.arReceipts || [];
   const detailTotals = detailData?.totals;
@@ -479,7 +491,7 @@ const DailySummarySalesApprovalPage = () => {
                 value: `${formatCurrency(detailTotals.completed_total)} · ${detailTotals.completed_count} row(s)`,
               },
               {
-                label: 'AR sales (standalone)',
+                label: 'Acknowledgement Receipt sales (standalone)',
                 value: `${formatCurrency(detailTotals.ar_total)} · ${detailTotals.ar_count} receipt(s)`,
               },
             ]
@@ -527,30 +539,52 @@ const DailySummarySalesApprovalPage = () => {
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      <div className="flex flex-wrap gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="input-field text-sm py-2 min-w-[140px]"
-          >
-            <option value="">All</option>
-            <option value="Submitted">Submitted</option>
-            <option value="Approved">Verified</option>
-            <option value="Returned">Returned</option>
-          </select>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-wrap gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="input-field text-sm py-2 min-w-[140px]"
+            >
+              <option value="">All</option>
+              <option value="Submitted">Submitted</option>
+              <option value="Approved">Verified</option>
+              <option value="Returned">Returned</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              {isCashDepositTab ? 'Date in Period' : 'Date'}
+            </label>
+            <input
+              type="date"
+              value={filterDate}
+              onChange={(e) => setFilterDate(e.target.value)}
+              className="input-field text-sm py-2"
+            />
+          </div>
         </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            {isCashDepositTab ? 'Date in Period' : 'Date'}
-          </label>
-          <input
-            type="date"
-            value={filterDate}
-            onChange={(e) => setFilterDate(e.target.value)}
-            className="input-field text-sm py-2"
-          />
+
+        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              {isCashDepositTab ? 'Cash deposit' : 'End of Shift'}
+            </p>
+            <p className="text-lg font-semibold text-gray-900">
+              {Number(submittedSummary.count || 0).toLocaleString('en-US')}
+            </p>
+          </div>
+          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              {isCashDepositTab ? 'Total Amount' : 'Total amount'}
+            </p>
+            <p className="text-lg font-semibold text-emerald-700">
+              ₱{Number(submittedSummary.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -673,34 +707,6 @@ const DailySummarySalesApprovalPage = () => {
               >
                 View details
               </button>
-              {canVerifySummary &&
-              selectedRecord &&
-              ['Submitted', 'Returned', 'Rejected'].includes(String(selectedRecord.status || '')) ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVerifyModal({ open: true, record: selectedRecord });
-                      setOpenMenuId(null);
-                    }}
-                    disabled={!!approvingId}
-                    className="block w-full px-3 py-2 text-sm text-green-600 hover:bg-green-50 text-left disabled:opacity-50"
-                  >
-                    Verify
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRejectModal({ open: true, id: selectedRecord[recordIdField], remarks: '' });
-                      setOpenMenuId(null);
-                    }}
-                    disabled={!!approvingId}
-                    className="block w-full px-3 py-2 text-sm text-amber-600 hover:bg-amber-50 text-left disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                </>
-              ) : null}
             </div>
           </>,
           document.body
@@ -710,8 +716,8 @@ const DailySummarySalesApprovalPage = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-            onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
+            className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={() => !approvingId && setRejectModal({ open: false, id: null, remarks: '' })}
           >
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
@@ -727,15 +733,17 @@ const DailySummarySalesApprovalPage = () => {
               <div className="flex justify-end gap-2 mt-4">
                 <button
                   onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                  disabled={!!approvingId}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleFlag}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700"
+                  disabled={!!approvingId}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50"
                 >
-                  Reject
+                  {approvingId === rejectModal.id ? 'Rejecting...' : 'Reject'}
                 </button>
               </div>
             </div>
@@ -778,7 +786,7 @@ const DailySummarySalesApprovalPage = () => {
                         verifyModal.record.total_cash_amount
                       )} (${verifyModal.record.completed_cash_count ?? 0} completed / ${verifyModal.record.payment_count ?? 0} rows at submit)`
                   : !verifyLoading && verifyTotals
-                    ? `Total: ${formatCurrency(verifyTotals.grand_total)} (${verifyTotals.grand_count} lines: ${verifyTotals.completed_count} payments + ${verifyTotals.ar_count} AR)`
+                    ? `Total: ${formatCurrency(verifyTotals.grand_total)} (${verifyTotals.grand_count} lines: ${verifyTotals.completed_count} payments + ${verifyTotals.ar_count} acknowledgement receipts)`
                     : `Total: ${formatCurrency(verifyModal.record.total_amount)} (${verifyModal.record.payment_count ?? 0} at submit)`}
               </span>
             </div>
@@ -943,7 +951,7 @@ const DailySummarySalesApprovalPage = () => {
                 </div>
 
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 mt-6">
-                  Standalone AR receipts
+                  Standalone Acknowledgement Receipts
                 </p>
                 <div
                   className="rounded-lg border border-gray-200 max-h-40 overflow-y-auto min-w-0"
@@ -953,7 +961,7 @@ const DailySummarySalesApprovalPage = () => {
                     <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '720px' }}>
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">AR #</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Acknowledgement Receipt #</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Pay date</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prospect</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Level</th>
@@ -967,7 +975,7 @@ const DailySummarySalesApprovalPage = () => {
                         {verifyArReceipts.length === 0 ? (
                           <tr>
                             <td colSpan={8} className="px-3 py-3 text-center text-gray-500">
-                              No standalone AR receipts for this date.
+                              No standalone acknowledgement receipts for this date.
                             </td>
                           </tr>
                         ) : (
@@ -1025,8 +1033,8 @@ const DailySummarySalesApprovalPage = () => {
               <button
                 type="button"
                 onClick={async () => {
-                  await handleVerify(verifyModal.record[recordIdField]);
-                  setVerifyModal({ open: false, record: null });
+                  const verified = await handleVerify(verifyModal.record[recordIdField]);
+                  if (verified) setVerifyModal({ open: false, record: null });
                 }}
                 disabled={!!approvingId}
                 className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
@@ -1045,7 +1053,7 @@ const DailySummarySalesApprovalPage = () => {
         createPortal(
           <div
             className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-            onClick={() => setDetailModal({ open: false, record: null })}
+            onClick={() => !approvingId && setDetailModal({ open: false, record: null })}
           >
           <div
             className={`bg-white rounded-xl shadow-xl w-full max-h-[92vh] flex flex-col overflow-hidden min-w-0 ${
@@ -1067,7 +1075,8 @@ const DailySummarySalesApprovalPage = () => {
               <button
                 type="button"
                 onClick={() => setDetailModal({ open: false, record: null })}
-                className="text-gray-400 hover:text-gray-600"
+                disabled={!!approvingId}
+                className="text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Close details"
               >
                 <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1237,7 +1246,7 @@ const DailySummarySalesApprovalPage = () => {
                   {Math.abs(detailPieSum - Number(detailTotals.grand_total || 0)) > 0.02
                     ? ` · segment sum ${formatCurrency(detailPieSum)}`
                     : ''}
-                  ) for this summary date (completed payments + standalone AR).
+                  ) for this summary date (completed payments + standalone acknowledgement receipts).
                 </p>
               ) : null}
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
@@ -1406,7 +1415,7 @@ const DailySummarySalesApprovalPage = () => {
                 </div>
 
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 mt-6">
-                  Standalone AR receipts (included in total; not yet posted as invoice payments)
+                  Standalone Acknowledgement Receipts (included in total; not yet posted as invoice payments)
                 </p>
                 <div
                   className="rounded-lg border border-gray-200 max-h-48 overflow-y-auto min-w-0"
@@ -1416,7 +1425,7 @@ const DailySummarySalesApprovalPage = () => {
                     <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '720px' }}>
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">AR #</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Acknowledgement Receipt #</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Pay date</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prospect / student</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Level</th>
@@ -1430,7 +1439,7 @@ const DailySummarySalesApprovalPage = () => {
                         {detailArReceipts.length === 0 ? (
                           <tr>
                             <td colSpan={8} className="px-3 py-4 text-center text-gray-500">
-                              No standalone AR receipts for this summary date.
+                              No standalone acknowledgement receipts for this summary date.
                             </td>
                           </tr>
                         ) : (
@@ -1508,14 +1517,44 @@ const DailySummarySalesApprovalPage = () => {
               </div>
             </div>
 
-            <div className="px-5 py-3 border-t border-gray-100 flex justify-end shrink-0 bg-white">
+            <div className="px-5 py-3 border-t border-gray-100 flex flex-col-reverse gap-2 bg-white shrink-0 sm:flex-row sm:items-center sm:justify-end">
               <button
                 type="button"
                 onClick={() => setDetailModal({ open: false, record: null })}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                disabled={!!approvingId}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Close
               </button>
+              {canActOnRecord(detailModal.record) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRejectModal({
+                        open: true,
+                        id: detailModal.record[recordIdField],
+                        remarks: '',
+                      })
+                    }
+                    disabled={!!approvingId}
+                    className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const verified = await handleVerify(detailModal.record[recordIdField]);
+                      if (verified) setDetailModal({ open: false, record: null });
+                    }}
+                    disabled={!!approvingId}
+                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {approvingId === detailModal.record[recordIdField] ? 'Verifying...' : 'Verify'}
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
           </div>,

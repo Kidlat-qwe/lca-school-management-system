@@ -229,7 +229,7 @@ const StudentPaymentLogs = () => {
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
         'Status': payment.status || 'N/A',
         'Payment Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
-        'AR#': payment.invoice_ar_number || '-',
+        'Acknowledgement Receipt#': payment.invoice_ar_number || '-',
         'Reference Number': payment.reference_number || '-',
       }));
 
@@ -524,7 +524,7 @@ const StudentPaymentLogs = () => {
                     Payment Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    AR#
+                    Acknowledgement Receipt#
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Reference

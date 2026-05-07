@@ -19,6 +19,7 @@ router.get(
   requireRole('Superadmin', 'Admin'),
   [
     queryValidator('student_id').optional().isInt().withMessage('Student ID must be an integer'),
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -26,7 +27,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { student_id, search, page = 1, limit = 20 } = req.query;
+      const { student_id, branch_id, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
       const params = [];
@@ -38,6 +39,10 @@ router.get(
         paramCount++;
         whereClause += ` AND u.branch_id = $${paramCount}`;
         params.push(req.user.branchId);
+      } else if (branch_id) {
+        paramCount++;
+        whereClause += ` AND u.branch_id = $${paramCount}`;
+        params.push(branch_id);
       }
 
       if (student_id) {

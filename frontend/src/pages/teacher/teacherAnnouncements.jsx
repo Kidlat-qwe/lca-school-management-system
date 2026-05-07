@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -37,6 +38,7 @@ const formatInPHTime = (isoOrDateString, options = {}) => {
 
 const TeacherAnnouncements = () => {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [searchParams, setSearchParams] = useSearchParams();
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -78,7 +80,11 @@ const TeacherAnnouncements = () => {
 
   useEffect(() => {
     fetchAnnouncements();
-  }, [currentPage, itemsPerPage]);
+  }, [currentPage, itemsPerPage, globalBranchId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [globalBranchId]);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -254,6 +260,9 @@ const TeacherAnnouncements = () => {
       }
       if (filterStatus) {
         params.append('status', filterStatus);
+      }
+      if (globalBranchId) {
+        params.append('branch_id', globalBranchId);
       }
 
       const response = await apiRequest(`/announcements?${params.toString()}`);

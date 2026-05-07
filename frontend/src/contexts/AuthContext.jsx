@@ -4,7 +4,8 @@ import {
   createUserWithEmailAndPassword,
   signOut, 
   onAuthStateChanged,
-  signInWithCustomToken
+  signInWithCustomToken,
+  fetchSignInMethodsForEmail
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { apiRequest } from '../config/api';
@@ -141,7 +142,10 @@ export const AuthProvider = ({ children }) => {
   // Login function
   const login = async (email, password) => {
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const emailTrim = String(email || '').trim();
+      const passwordValue = String(password || '');
+
+      const userCredential = await signInWithEmailAndPassword(auth, emailTrim, passwordValue);
       const token = await userCredential.user.getIdToken();
       
       // Store token
@@ -169,7 +173,46 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('Login error:', error);
-      throw error;
+
+      const code = error?.code || '';
+      if (code === 'auth/invalid-email') {
+        throw new Error('Invalid email address.');
+      }
+      if (code === 'auth/user-disabled') {
+        throw new Error('This account has been disabled. Please contact your administrator.');
+      }
+      if (code === 'auth/user-not-found') {
+        throw new Error('User does not exist.');
+      }
+      if (code === 'auth/wrong-password') {
+        throw new Error('Wrong password.');
+      }
+
+      // Newer Firebase SDKs may return `auth/invalid-credential` for wrong password OR unknown email.
+      if (code === 'auth/invalid-credential') {
+        try {
+          const methods = await fetchSignInMethodsForEmail(auth, String(email || '').trim());
+          if (!methods || methods.length === 0) {
+            // Firebase may hide existence; fall back to DB check for UX (requested).
+            try {
+              const existsRes = await apiRequest('/auth/check-email', {
+                method: 'POST',
+                body: { email: String(email || '').trim() },
+              });
+              if (existsRes?.exists) throw new Error('Wrong password.');
+              throw new Error('User does not exist.');
+            } catch (dbErr) {
+              if (dbErr instanceof Error) throw dbErr;
+            }
+          } else {
+            throw new Error('Wrong password.');
+          }
+        } catch (methodsErr) {
+          if (methodsErr instanceof Error) throw methodsErr;
+        }
+      }
+
+      throw new Error('Failed to login. Please check your credentials.');
     }
   };
 

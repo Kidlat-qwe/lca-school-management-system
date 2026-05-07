@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -17,6 +18,7 @@ const InstallmentInvoice = () => {
   const [searchParams] = useSearchParams();
   const highlightedProfileId = parseInt(searchParams.get('profile_id') || '', 10) || null;
   const highlightedStudentName = searchParams.get('student_name') || '';
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -116,8 +118,9 @@ const InstallmentInvoice = () => {
       invoice.program_name?.toLowerCase().includes(nameSearchTerm.toLowerCase());
     
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
+    const matchesBranch = !globalBranchId || invoice.branch_id?.toString() === globalBranchId;
     
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && matchesBranch;
   });
   const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
   const paginatedInvoices = filteredInvoices.slice(
@@ -127,7 +130,7 @@ const InstallmentInvoice = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [nameSearchTerm, filterStatus]);
+  }, [nameSearchTerm, filterStatus, globalBranchId]);
 
   useEffect(() => {
     setCurrentPage((prevPage) => Math.min(prevPage, totalPages));

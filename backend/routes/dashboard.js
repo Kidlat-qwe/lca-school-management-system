@@ -237,14 +237,12 @@ router.get(
       const invoiceStatusResult = await query(invoiceStatusQuery, invoiceStatusParams);
 
       // Completed payments by Finance/Superfinance approval — same logic as
-      // GET /payments/financial-dashboard-metrics (Manila payment date window; COALESCE approval_status).
+      // GET /payments/financial-dashboard-metrics (payment business date = paymenttbl.issue_date).
       const paymentDateMonthFilterBranch = monthStartDate
-        ? `AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $2::date
-            AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date < $3::date`
+        ? `AND p.issue_date >= $2::date AND p.issue_date < $3::date`
         : '';
       const paymentDateMonthFilterAll = monthStartDate
-        ? `WHERE (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date >= $1::date
-            AND (COALESCE(p.approved_at, p.created_at) AT TIME ZONE 'Asia/Manila')::date < $2::date`
+        ? `WHERE p.issue_date >= $1::date AND p.issue_date < $2::date`
         : '';
       const paymentVerificationQuery = branchFilter
         ? `
@@ -870,7 +868,7 @@ router.get(
             })),
             activity_mix: [
               { name: 'New Enrollees', value: totals.new_enrollees },
-              { name: 'AR Sales', value: totals.ar_sales_count },
+              { name: 'Acknowledgement Receipt Sales', value: totals.ar_sales_count },
               { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
               { name: 'Re-enrollment', value: totals.re_enrollment_count },
               { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },

@@ -320,7 +320,7 @@ const DailyOperationalDashboardView = ({
             subtitle="Recognized posted payments only"
           />
           <StatsCard
-            title="AR Sales"
+            title="Acknowledgement Receipt Sales"
             value={formatCurrency(totals.ar_sales_amount)}
             iconName="clipboardList"
             accent="bg-gradient-to-br from-violet-500 to-purple-600"
@@ -367,22 +367,22 @@ const DailyOperationalDashboardView = ({
               ariaLabel={`Open payment logs for not-yet-approved completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
             <StatsCard
-              title="AR (verified or applied)"
+              title="Acknowledgement Receipt (verified or applied)"
               value={formatNumber(totals.ar_verified_count || 0)}
               iconName="clipboardList"
               accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
-              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package AR · issue date ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total · Package Acknowledgement Receipt · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('verified')}
-              ariaLabel="Open AR list filtered to verified and applied"
+              ariaLabel="Open acknowledgement receipt list filtered to verified and applied"
             />
             <StatsCard
-              title="AR (not verified yet)"
+              title="Acknowledgement Receipt (not verified yet)"
               value={formatNumber(totals.ar_unverified_count || 0)}
               iconName="academicCap"
               accent="bg-gradient-to-br from-amber-500 to-orange-600"
               subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total · not verified yet · issue date ${verificationAsOfDisplay}`}
               onClick={() => goArByVerify('unverified')}
-              ariaLabel="Open AR list filtered to unverified statuses"
+              ariaLabel="Open acknowledgement receipt list filtered to unverified statuses"
             />
           </div>
         </div>
@@ -390,8 +390,8 @@ const DailyOperationalDashboardView = ({
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
           <p className="text-xs font-medium text-indigo-800">
             Sales guide: <span className="font-semibold">Daily Sales (Completed)</span> sums completed rows in payments.
-            <span className="font-semibold"> Acknowledgement Receipts</span> (top row) is unapplied AR float, not the same
-            as verification <span className="font-semibold">Package AR</span> (verified+), which is Package ARs in Verified or
+            <span className="font-semibold"> Acknowledgement Receipts</span> (top row) is unapplied acknowledgement receipt float, not the same
+            as verification <span className="font-semibold">Package Acknowledgement Receipt</span> (verified+), which is Package Acknowledgement Receipts in Verified or
             Applied status.
           </p>
         </div>
@@ -447,7 +447,7 @@ const DailyOperationalDashboardView = ({
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
               <p className="mt-1 text-sm text-gray-500">
-                All columns, including payment and package AR verification, use the same selected calendar day in Manila (
+                All columns, including payment and package acknowledgement receipt verification, use the same selected calendar day in Manila (
                 {verificationAsOfDisplay}).
               </p>
             </div>
@@ -471,7 +471,7 @@ const DailyOperationalDashboardView = ({
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Daily Sales</th>
-                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">AR (float)</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Acknowledgement Receipt (float)</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
                     <span className="block">Pay.</span>
                     <span className="block">approved</span>
@@ -481,11 +481,11 @@ const DailyOperationalDashboardView = ({
                     <span className="block">pending</span>
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
-                    <span className="block">Pkg AR</span>
+                    <span className="block">Package Acknowledgement Receipt</span>
                     <span className="block">verified+</span>
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
-                    <span className="block">Pkg AR</span>
+                    <span className="block">Package Acknowledgement Receipt</span>
                     <span className="block">unverified</span>
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merch. Qty</th>
@@ -552,7 +552,7 @@ const DailyOperationalDashboardView = ({
 
           <ChartCard
             title="Daily Sales by Branch"
-            subtitle="Completed payments and AR sales amounts recorded today."
+            subtitle="Completed payments and acknowledgement receipt sales amounts recorded today."
           >
             {activeBranchMetrics.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -563,7 +563,7 @@ const DailyOperationalDashboardView = ({
                   <Tooltip formatter={(value) => [formatCurrency(value), 'Amount']} />
                   <Legend />
                   <Bar dataKey="daily_sales_amount" name="Daily sales" fill="#4F46E5" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="ar_sales_amount" name="AR sales" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="ar_sales_amount" name="Acknowledgement Receipt sales" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

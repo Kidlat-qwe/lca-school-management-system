@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { appConfirm } from '../../utils/appAlert';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 // 1 AM–11 AM, then 12 PM–11 PM (hours 1–23)
@@ -75,6 +76,7 @@ const Holidays = () => {
   const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.user_type || userInfo?.userType;
   const isSuperadmin = userType === 'Superadmin';
   const basePath = useLocation().pathname.startsWith('/admin') ? '/admin' : '/superadmin';
@@ -109,7 +111,7 @@ const Holidays = () => {
 
   useEffect(() => {
     fetchHolidays();
-  }, [fetchRange.start, fetchRange.end]);
+  }, [fetchRange.start, fetchRange.end, globalBranchId]);
 
   useEffect(() => {
     if (isSuperadmin && modalOpen) {
@@ -130,7 +132,12 @@ const Holidays = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await apiRequest(`/holidays?start_date=${fetchRange.start}&end_date=${fetchRange.end}`);
+      const params = new URLSearchParams({
+        start_date: fetchRange.start,
+        end_date: fetchRange.end,
+      });
+      if (globalBranchId) params.set('branch_id', globalBranchId);
+      const res = await apiRequest(`/holidays?${params.toString()}`);
       setHolidays(res.data || []);
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Failed to load holidays');
@@ -255,7 +262,7 @@ const Holidays = () => {
     setFormData({
       name: '',
       holiday_date: dateKey ?? getDefaultAddDate(),
-      branch_id: '',
+      branch_id: globalBranchId || '',
       description: '',
     });
     setFormErrors({});

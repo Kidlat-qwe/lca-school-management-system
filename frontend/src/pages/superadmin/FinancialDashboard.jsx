@@ -283,15 +283,15 @@ const FinancialDashboard = () => {
         {/* Package AR verification lifecycle */}
         <div className="space-y-3">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package AR)</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package Acknowledgement Receipt)</h2>
             <p className="mt-1 text-sm text-gray-500">
-              <span className="font-medium text-gray-700">Verified AR</span> includes statuses Verified and Applied.{' '}
-              <span className="font-medium text-gray-700">Unverified AR</span> includes Submitted/Pending AR records awaiting verification.
+              <span className="font-medium text-gray-700">Verified Acknowledgement Receipt</span> includes statuses Verified and Applied.{' '}
+              <span className="font-medium text-gray-700">Unverified Acknowledgement Receipt</span> includes Submitted/Pending acknowledgement receipt records awaiting verification.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
-              title="Verified AR"
+              title="Verified Acknowledgement Receipt"
               value={arVerification.verified_count}
               trend={`${formatPeso(arVerification.verified_amount)} total amount`}
               accent="bg-gradient-to-br from-emerald-400 to-emerald-600"
@@ -299,7 +299,7 @@ const FinancialDashboard = () => {
               onClick={() => openArByVerification('verified')}
             />
             <StatsCard
-              title="Unverified AR"
+              title="Unverified Acknowledgement Receipt"
               value={arVerification.unverified_count}
               trend={`${formatPeso(arVerification.unverified_amount)} total amount`}
               trendClassName="text-amber-800"

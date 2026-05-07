@@ -10667,7 +10667,7 @@ const initializePackageMerchSelections = useCallback(
                                 </span>
                                 {selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt && (
                                   <span className="block text-xs text-amber-700 mt-1">
-                                    Paid via AR: {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')} — Amount: ₱{Number(selectedAckReceipt.payment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    Paid via Acknowledgement Receipt: {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')} — Amount: ₱{Number(selectedAckReceipt.payment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </span>
                                 )}
                               </span>
@@ -14898,7 +14898,7 @@ const initializePackageMerchSelections = useCallback(
                       </option>
                     </select>
                     <p className="mt-2 text-sm text-gray-500">
-                      Choose a package, or enroll per phase. (AR option is temporarily locked for reservation upgrades.)
+                      Choose a package, or enroll per phase. (Acknowledgement Receipt option is temporarily locked for reservation upgrades.)
                     </p>
                   </div>
                 </div>

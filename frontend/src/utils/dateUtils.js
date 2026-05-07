@@ -50,6 +50,31 @@ export const firstDayOfMonthManilaYMD = () => {
 };
 
 /**
+ * Current year-month in Asia/Manila as YYYY-MM (for type="month" inputs).
+ * @returns {string}
+ */
+export const manilaMonthYYYYMM = () => {
+  return new Date().toLocaleDateString('en-CA', { timeZone: MANILA_TZ }).slice(0, 7);
+};
+
+/**
+ * Inclusive first/last calendar days for a YYYY-MM string (last day uses JS Date month length).
+ * @param {string} yyyyMm
+ * @returns {{ from: string, to: string }} empty strings if invalid
+ */
+export const issueDateRangeFromManilaMonth = (yyyyMm) => {
+  const month = String(yyyyMm || '').trim();
+  if (!month) return { from: '', to: '' };
+  const [yStr, mStr] = month.split('-');
+  const yy = parseInt(yStr, 10);
+  const mm = parseInt(mStr, 10);
+  if (!Number.isInteger(yy) || !Number.isInteger(mm) || mm < 1 || mm > 12) return { from: '', to: '' };
+  const first = `${month}-01`;
+  const lastDay = new Date(yy, mm, 0).getDate();
+  return { from: first, to: `${month}-${String(lastDay).padStart(2, '0')}` };
+};
+
+/**
  * Format session code: p{phase}s{session}_{MMDDYY}_{HHMMam/pm}
  * Example: p1s1_020926_0100PM
  * @param {number} phaseNumber - Phase number

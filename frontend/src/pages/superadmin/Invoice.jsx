@@ -12,12 +12,20 @@ import {
   shouldIncludeInvoiceInExport,
 } from '../../utils/invoiceExcelExport.js';
 import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/fetchAllPaymentsForExport.js';
-import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
+import {
+  formatDateManila,
+  todayManilaYMD,
+  manilaMonthYYYYMM,
+  issueDateRangeFromManilaMonth,
+} from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 
 const ITEMS_PER_PAGE = 10;
+
+const DEFAULT_INVOICE_FILTER_MONTH = manilaMonthYYYYMM();
+const DEFAULT_INVOICE_FILTER_ISSUE_RANGE = issueDateRangeFromManilaMonth(DEFAULT_INVOICE_FILTER_MONTH);
 
 const getInvoiceDisplayAmount = (invoice) => {
   if (!invoice) return 0;
@@ -37,8 +45,25 @@ const Invoice = () => {
   const [studentNameSearch, setStudentNameSearch] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
-  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState(DEFAULT_INVOICE_FILTER_ISSUE_RANGE.from);
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState(DEFAULT_INVOICE_FILTER_ISSUE_RANGE.to);
+  const [filterMonth, setFilterMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
+  const [showAdvancedInvoiceFilters, setShowAdvancedInvoiceFilters] = useState(false);
+
+  const applyMonthFilter = (monthValue) => {
+    const month = String(monthValue || '').trim();
+    setFilterMonth(month);
+    if (!month) {
+      setFilterIssueDateFrom('');
+      setFilterIssueDateTo('');
+      return;
+    }
+    const { from, to } = issueDateRangeFromManilaMonth(month);
+    if (!from || !to) return;
+    setFilterIssueDateFrom(from);
+    setFilterIssueDateTo(to);
+  };
+
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
@@ -901,7 +926,7 @@ const Invoice = () => {
       errors.payable_amount = 'For partial payment, amount must be less than the remaining invoice amount.';
     }
     if (!paymentFormData.issue_date) {
-      errors.issue_date = 'Issue date is required';
+      errors.issue_date = 'Payment date is required';
     }
     if (paymentFormData.tip_amount !== '' && (Number.isNaN(tipAmount) || tipAmount < 0)) {
       errors.tip_amount = 'Tip amount must be 0 or greater';
@@ -1228,6 +1253,17 @@ const Invoice = () => {
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
+  const summaryInvoiceCount = filteredInvoices.length;
+  const summaryInvoiceTotal = filteredInvoices.reduce((sum, invoice) => sum + getInvoiceDisplayAmount(invoice), 0);
+  const hasInvoiceFilters = Boolean(nameSearchTerm || studentNameSearch || filterStatus || filterMonth);
+
+  const resetInvoiceFilters = () => {
+    setNameSearchTerm('');
+    setStudentNameSearch('');
+    setFilterStatus('');
+    applyMonthFilter('');
+    setCurrentPage(1);
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -1337,7 +1373,7 @@ const Invoice = () => {
               .join(', ');
             return {
               'Invoice ID': `INV-${invoice.invoice_id}`,
-              'AR #': invoice.invoice_ar_number || '-',
+              'Acknowledgement Receipt#': invoice.invoice_ar_number || '-',
               'Student Name(s)': studentNames || '-',
               Branch: getBranchName(invoice.branch_id) || '-',
               Status: invoice.status || '-',
@@ -1388,13 +1424,17 @@ const Invoice = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Invoices</h1>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Invoices</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            Review invoices, payments, due dates, and exported billing records.
+          </p>
+        </div>
         <button
           type="button"
           onClick={() => setShowExportModal(true)}
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
         >
           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16" />
@@ -1403,25 +1443,132 @@ const Invoice = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600">Issue Date From</label>
-          <input
-            type="date"
-            value={filterIssueDateFrom}
-            onChange={(e) => setFilterIssueDateFrom(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-          />
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Invoices</p>
+            <p className="text-lg font-semibold text-gray-900">
+              {summaryInvoiceCount.toLocaleString('en-US')}
+            </p>
+          </div>
+          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
+            <p className="text-lg font-semibold text-emerald-700">
+              ₱{summaryInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600">Issue Date To</label>
-          <input
-            type="date"
-            value={filterIssueDateTo}
-            min={filterIssueDateFrom || undefined}
-            onChange={(e) => setFilterIssueDateTo(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-          />
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Search Filter</p>
+            <p className="text-xs text-gray-500">
+              Filter invoices before the table. Branch scope follows the global branch selector.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div>
+            <label htmlFor="invoice-search" className="mb-1 block text-xs font-medium text-gray-700">
+              Invoice, Acknowledgement Receipt, or description
+            </label>
+            <input
+              id="invoice-search"
+              type="text"
+              value={nameSearchTerm}
+              onChange={(e) => setNameSearchTerm(e.target.value)}
+              placeholder="Search invoices..."
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="invoice-student-search" className="mb-1 block text-xs font-medium text-gray-700">
+              Student name
+            </label>
+            <input
+              id="invoice-student-search"
+              type="text"
+              value={studentNameSearch}
+              onChange={(e) => setStudentNameSearch(e.target.value)}
+              placeholder="Search student..."
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="invoice-month-filter" className="mb-1 block text-xs font-medium text-gray-700">
+              Invoice issue date (month)
+            </label>
+            <input
+              id="invoice-month-filter"
+              type="month"
+              value={filterMonth}
+              onChange={(e) => applyMonthFilter(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+        </div>
+        {showAdvancedInvoiceFilters ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div>
+              <label htmlFor="invoice-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
+                Status
+              </label>
+              <select
+                id="invoice-status-filter"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All statuses</option>
+                {getUniqueStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-gray-500">
+            Month filtering uses invoice issue date. Clear the month to show all invoice dates.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedInvoiceFilters((current) => !current)}
+              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
+              aria-expanded={showAdvancedInvoiceFilters}
+            >
+              {showAdvancedInvoiceFilters ? 'Hide advanced filters' : 'Advanced filters'}
+              <svg
+                className={`h-4 w-4 transition-transform ${showAdvancedInvoiceFilters ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={resetInvoiceFilters}
+              disabled={!hasInvoiceFilters}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage(1)}
+              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Search
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1453,91 +1600,19 @@ const Invoice = () => {
               <thead className="bg-white table-header-stable">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
-                    <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1 min-h-[6px]">
-                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${nameSearchTerm ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                      </div>
-                      <div className="relative min-h-[28px]">
-                        <input
-                          type="text"
-                          value={nameSearchTerm}
-                          onChange={(e) => setNameSearchTerm(e.target.value)}
-                          placeholder="Search invoice or student..."
-                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        {nameSearchTerm && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setNameSearchTerm('');
-                            }}
-                            className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    Invoice
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    AR#
+                    Acknowledgement Receipt#
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
-                    <div className="flex flex-col space-y-2">
-                      <div className="flex items-center space-x-1 min-h-[6px]">
-                        <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${studentNameSearch ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                      </div>
-                      <div className="relative min-h-[28px]">
-                        <input
-                          type="text"
-                          value={studentNameSearch}
-                          onChange={(e) => setStudentNameSearch(e.target.value)}
-                          placeholder="Search student..."
-                          className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        {studentNameSearch && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setStudentNameSearch('');
-                            }}
-                            className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    Student Name
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     <span>Branch</span>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
-                    <div className="relative status-filter-dropdown">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setStatusDropdownRect(rect);
-                          setOpenStatusDropdown(!openStatusDropdown);
-                          setOpenBranchDropdown(false);
-                          setBranchDropdownRect(null);
-                        }}
-                        className="flex items-center space-x-1 hover:text-gray-700"
-                      >
-                        <span>Status</span>
-                        <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterStatus ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
+                    Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '110px', minWidth: '110px' }}>
                     Amount
@@ -1813,7 +1888,7 @@ const Invoice = () => {
                       }}
                       className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      <span>Download AR</span>
+                      <span>Download Acknowledgement Receipt</span>
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
@@ -3043,9 +3118,9 @@ const Invoice = () => {
                     )}
                   </div>
 
-                  <div>
+                  <div className="col-span-full">
                     <label className="label-field text-xs">
-                      Issue Date <span className="text-red-500">*</span>
+                      Payment date <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="date"
@@ -3058,6 +3133,11 @@ const Invoice = () => {
                     {paymentFormErrors.issue_date && (
                       <p className="text-xs text-red-500 mt-1">{paymentFormErrors.issue_date}</p>
                     )}
+                    <p className="text-xs text-gray-500 mt-1">
+                      When the client actually paid (e.g. bank or e-wallet transfer date). Defaults to today if payment was today.
+                      This date is stored as the payment record date and shown as <span className="font-medium">Payment Date</span>{' '}
+                      in Payment Logs.
+                    </p>
                   </div>
                 </div>
 
