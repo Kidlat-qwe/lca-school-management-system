@@ -163,11 +163,11 @@ export const sendInvoiceEmail = async ({
             
             <p>If you have any questions or concerns regarding this invoice, please don't hesitate to contact us through our Facebook Page: <a href="https://www.facebook.com/littlechampionsacademy">https://www.facebook.com/littlechampionsacademy</a></p>
             
-            <p>Thank you for choosing Little Champions Academy. We appreciate your trust and support!</p>
-            
-            <p>Best regards,<br>
-            <strong>Little Champions Academy, Inc.</strong><br>
-            Play. Learn. Succeed.</p>
+            <p>Thank you for your continued support and commitment to your child&rsquo;s education. We look forward to another great month of learning and growth together.</p>
+
+            <p>With appreciation,<br>
+            <strong>Little Champions Academy Inc.</strong><br>
+            Play. Learn. Succeed</p>
           </div>
           <div class="footer">
             <p>This is an automated email. Please do not reply to this message.</p>

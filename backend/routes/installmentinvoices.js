@@ -970,13 +970,15 @@ router.post(
 
 /**
  * GET /api/sms/installment-invoices/invoices
- * Get all generated installment invoices
+ * List installment schedule rows (one per profile after deduplication), with optional filters:
+ *   profile_id, student_id, status, pagination.
  * Access: All authenticated users
  */
 router.get(
   '/invoices',
   [
     queryValidator('profile_id').optional().isInt().withMessage('Profile ID must be an integer'),
+    queryValidator('student_id').optional().isInt().withMessage('Student ID must be an integer'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 500 }).withMessage('Limit must be between 1 and 500'),
@@ -984,7 +986,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { profile_id, status } = req.query;
+      const { profile_id, status, student_id } = req.query;
       const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limitNum = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 20));
       const offset = (pageNum - 1) * limitNum;
@@ -1004,6 +1006,12 @@ router.get(
         fp++;
         filterFragments.push(`ii.installmentinvoiceprofiles_id = $${fp}`);
         filterParams.push(profile_id);
+      }
+
+      if (student_id) {
+        fp++;
+        filterFragments.push(`ip.student_id = $${fp}`);
+        filterParams.push(parseInt(student_id, 10));
       }
 
       if (status) {

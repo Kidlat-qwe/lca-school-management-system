@@ -15,6 +15,36 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
+/**
+ * Short, business-facing description for each Acknowledgement Receipt
+ * status. Surfaced as a hover tooltip on a small info icon next to the
+ * status pill in every AR row, so end-users (Admin, Superadmin, Finance,
+ * Superfinance) can quickly tell what each pill means.
+ */
+const AR_STATUS_LEGENDS = {
+  Pending:
+    'Initial state for newly created receipts that are still being processed (e.g. merchandise sale finishing up).',
+  Submitted:
+    'Non-cash receipt awaiting Finance/Superfinance verification before it can be applied to enrollment.',
+  Verified:
+    'Approved by Finance/Superfinance (or auto-verified for cash). Ready to be applied to an invoice/enrollment.',
+  Returned:
+    'Sent back by Finance for correction. Update the details and resubmit so it can be re-verified.',
+  Applied:
+    'Already used: this receipt was applied to an invoice and the corresponding payment was recorded.',
+  Paid:
+    'Fully paid receipt — typically a merchandise sale that completes the payment in one step.',
+  Enrolled:
+    'Receipt was used for student enrollment; the student is now enrolled in the package/class.',
+  Rejected:
+    'Permanently rejected by Finance. Cannot be re-used for enrollment.',
+  Cancelled:
+    'Manually cancelled. No longer active and cannot be applied to an invoice/enrollment.',
+};
+
+const getArStatusLegend = (status) =>
+  AR_STATUS_LEGENDS[status] || 'No description available for this status.';
+
 const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
@@ -619,6 +649,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         'Payment Method': r.payment_method || '-',
         'Reference Number': r.reference_number || '-',
         'Issue Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
+        'Payment Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
       }));
       const rangeTag =
         issueDateFrom || issueDateTo
@@ -1276,13 +1307,59 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     try {
       await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
-        body: JSON.stringify({ approve, remarks: remarks || undefined }),
+        body: JSON.stringify({
+          action: approve ? 'verify' : 'return',
+          remarks: remarks || undefined,
+        }),
       });
       appAlert(approve ? 'Acknowledgement receipt verified.' : 'Acknowledgement receipt returned.');
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
       console.error('AR verify/return error:', err);
       appAlert(err?.message || `Failed to ${approve ? 'verify' : 'return'} acknowledgement receipt.`);
+    } finally {
+      setVerifyLoadingId(null);
+    }
+  };
+
+  const handleRejectReceipt = async (receipt) => {
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    const confirmed = await appConfirm({
+      title: 'Reject Acknowledgement Receipt',
+      message:
+        'Rejecting will permanently close this acknowledgement receipt. The branch admin will need to create and submit a NEW acknowledgement receipt to continue. Proceed?',
+      confirmLabel: 'Reject',
+      cancelLabel: 'Cancel',
+      variant: 'error',
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    const promptedRemarks = await appPrompt({
+      title: 'Reject Acknowledgement Receipt',
+      message:
+        'Add a reason for rejection (required). The branch admin will be notified to recreate the acknowledgement receipt.',
+      placeholder: 'Reason for rejection...',
+      confirmLabel: 'Reject',
+      cancelLabel: 'Cancel',
+      variant: 'error',
+      required: true,
+    });
+    if (promptedRemarks === null) return;
+    const remarks = (promptedRemarks || '').trim();
+    if (!remarks) return;
+
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'reject', remarks }),
+      });
+      appAlert('Acknowledgement receipt rejected. The branch admin must create a new one.');
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR reject error:', err);
+      appAlert(err?.message || 'Failed to reject acknowledgement receipt.');
     } finally {
       setVerifyLoadingId(null);
     }
@@ -1877,7 +1954,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1340px' }}
+                style={{ width: '100%', minWidth: '1460px' }}
               >
                 <thead className="bg-gray-50 table-header-stable">
                   <tr>
@@ -1892,6 +1969,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ref. No.</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Issue Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Date</th>
                     {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                       <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
                     )}
@@ -1900,7 +1978,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 12 : 11} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 13 : 12} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
@@ -1965,19 +2043,41 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         {r.branch_name || '-'}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
-                              ? 'bg-green-100 text-green-800'
-                              : r.status === 'Returned'
-                              ? 'bg-red-100 text-red-800'
-                              : r.status === 'Rejected' || r.status === 'Cancelled'
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}
-                        >
-                          {r.status}
-                        </span>
+                        <div className="inline-flex items-center gap-1.5">
+                          <span
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                              r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
+                                ? 'bg-green-100 text-green-800'
+                                : r.status === 'Returned'
+                                ? 'bg-red-100 text-red-800'
+                                : r.status === 'Rejected' || r.status === 'Cancelled'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}
+                          >
+                            {r.status}
+                          </span>
+                          <span className="relative group inline-flex">
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              aria-label={`Status info: ${r.status || 'Unknown'}`}
+                              title={`${r.status || 'Unknown'}: ${getArStatusLegend(r.status)}`}
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            >
+                              i
+                            </button>
+                            <span
+                              role="tooltip"
+                              className="pointer-events-none invisible absolute left-1/2 top-full z-50 mt-1.5 w-56 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-2 text-[11px] leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
+                            >
+                              <span className="block font-semibold mb-0.5">{r.status || 'Unknown'}</span>
+                              <span className="block text-gray-200">
+                                {getArStatusLegend(r.status)}
+                              </span>
+                            </span>
+                          </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-gray-700">
                         {r.payment_method || <span className="text-gray-300">?</span>}
@@ -2009,54 +2109,47 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <td className="px-4 py-3 text-gray-900">
                         {r.issue_date ? formatDateManila(r.issue_date) : '-'}
                       </td>
+                      <td className="px-4 py-3 text-gray-900">
+                        {r.issue_date ? formatDateManila(r.issue_date) : '-'}
+                      </td>
                       {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                         <td className="px-4 py-3">
-                          {isFinanceOrSuperfinance && r.ar_type === 'Package' && (r.status === 'Submitted' || r.status === 'Paid') ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleVerifyReceipt(r, true)}
-                                disabled={verifyLoadingId === r.ack_receipt_id}
-                                className="px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 hover:bg-green-200 disabled:opacity-50"
-                              >
-                                Verify
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleVerifyReceipt(r, false)}
-                                disabled={verifyLoadingId === r.ack_receipt_id}
-                                className="px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 hover:bg-red-200 disabled:opacity-50"
-                              >
-                                Return
-                              </button>
-                            </div>
-                          ) : isAdminOrSuperadmin ? (
-                            <div className="relative inline-block text-left">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const id = r.ack_receipt_id;
-                                  if (openActionMenuId === id) {
-                                    setOpenActionMenuId(null);
-                                    setActionMenuRect(null);
-                                  } else {
-                                    setOpenActionMenuId(id);
-                                    setActionMenuRect(e.currentTarget.getBoundingClientRect());
-                                  }
-                                }}
-                                className="ar-action-menu-trigger inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
-                                aria-label={`Open actions for acknowledgement receipt ${r.ack_receipt_id}`}
-                                aria-expanded={openActionMenuId === r.ack_receipt_id}
-                              >
-                                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                  <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 5.5A1.5 1.5 0 1010 8.5a1.5 1.5 0 000 3zm0 5.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
-                                </svg>
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">-</span>
-                          )}
+                          {(() => {
+                            const financeCanAct =
+                              isFinanceOrSuperfinance &&
+                              r.ar_type === 'Package' &&
+                              (r.status === 'Submitted' || r.status === 'Paid');
+                            const showEllipsis = financeCanAct || isAdminOrSuperadmin;
+                            if (!showEllipsis) {
+                              return <span className="text-xs text-gray-400">-</span>;
+                            }
+                            return (
+                              <div className="relative inline-block text-left">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const id = r.ack_receipt_id;
+                                    if (openActionMenuId === id) {
+                                      setOpenActionMenuId(null);
+                                      setActionMenuRect(null);
+                                    } else {
+                                      setOpenActionMenuId(id);
+                                      setActionMenuRect(e.currentTarget.getBoundingClientRect());
+                                    }
+                                  }}
+                                  disabled={verifyLoadingId === r.ack_receipt_id}
+                                  className="ar-action-menu-trigger inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                                  aria-label={`Open actions for acknowledgement receipt ${r.ack_receipt_id}`}
+                                  aria-expanded={openActionMenuId === r.ack_receipt_id}
+                                >
+                                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 5.5A1.5 1.5 0 1010 8.5a1.5 1.5 0 000 3zm0 5.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                                  </svg>
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </td>
                       )}
                     </tr>
@@ -2071,16 +2164,21 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
         <PaymentAttachmentViewerModal open={viewerOpen} url={viewerUrl} onClose={closeAttachmentViewer} />
 
-        {openActionMenuId && actionMenuRect && actionMenuReceipt && isAdminOrSuperadmin
+        {openActionMenuId && actionMenuRect && actionMenuReceipt && (isAdminOrSuperadmin || isFinanceOrSuperfinance)
           ? createPortal(
               (() => {
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
                 const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-                const itemCount =
-                  arAdminTab === 'return'
+                const financeCanActOnRow =
+                  isFinanceOrSuperfinance &&
+                  actionMenuReceipt.ar_type === 'Package' &&
+                  (actionMenuReceipt.status === 'Submitted' || actionMenuReceipt.status === 'Paid');
+                const itemCount = isFinanceOrSuperfinance
+                  ? (financeCanActOnRow ? 3 : 0)
+                  : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
-                const approxH = Math.min(200, itemCount * 40 + 8);
+                const approxH = Math.min(220, itemCount * 40 + 8);
                 const pad = 4;
                 let top = actionMenuRect.bottom + pad;
                 if (top + approxH > h - 8) {
@@ -2093,7 +2191,53 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     style={{ top, left }}
                     role="menu"
                   >
-                    {arAdminTab === 'return' ? (
+                    {isFinanceOrSuperfinance ? (
+                      financeCanActOnRow ? (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleVerifyReceipt(actionMenuReceipt, true);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
+                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
+                          >
+                            Verify
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleVerifyReceipt(actionMenuReceipt, false);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
+                            className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                          >
+                            Return
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleRejectReceipt(actionMenuReceipt);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
+                            className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : (
+                        <span className="block px-3 py-2 text-xs text-gray-400">No actions available</span>
+                      )
+                    ) : arAdminTab === 'return' ? (
                       <>
                         <button
                           type="button"
@@ -2911,9 +3055,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     {createFormErrors.payment_method && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
                     )}
-                    {createFormData.payment_method === 'Cash' && isAdminOrSuperadmin && (
+                    {createFormData.payment_method === 'Cash' ? (
                       <p className="text-xs text-emerald-600 mt-1">
-                        Cash acknowledgement receipt by Admin/Superadmin is auto-verified and can be used immediately for enrollment.
+                        Cash acknowledgement receipts are auto-verified and can be used immediately for enrollment &mdash; no Finance/Superfinance verification needed.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Non-cash acknowledgement receipts must be verified by Finance/Superfinance before they can be applied to enrollment.
                       </p>
                     )}
                   </div>

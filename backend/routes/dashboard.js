@@ -627,13 +627,16 @@ router.get(
               GROUP BY p.branch_id
             ),
             ar_sales AS (
+              -- Only count acknowledgement receipts that have already cleared
+              -- finance verification. Submitted, Pending, Returned and Rejected
+              -- acknowledgement receipts must NOT contribute to dashboard totals.
               SELECT
                 ar.branch_id,
                 COUNT(*)::bigint AS ar_sales_count,
                 COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_sales_amount
               FROM acknowledgement_receiptstbl ar
               WHERE ar.issue_date = $${branchParams.length + 1}::date
-                AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+                AND COALESCE(ar.status, 'Submitted') IN ('Verified', 'Paid')
                 AND ar.payment_id IS NULL
                 AND ar.invoice_id IS NULL
               GROUP BY ar.branch_id

@@ -89,7 +89,7 @@ const createArSubmissionNotification = async ({
     const title = 'Acknowledgement Receipt submitted';
     const verificationState =
       status === 'Verified'
-        ? 'Auto-verified (Cash via Admin/Superadmin).'
+        ? 'Auto-verified (Cash payment).'
         : 'Awaiting Finance/Superfinance verification.';
     const body = `${studentName || 'Student'} - ${arType} Acknowledgement Receipt (payment: ${paymentMethod || 'Cash'}) was created at ${branchName}. ${verificationState}`;
 
@@ -168,6 +168,66 @@ const notifyArReturnedToCreator = async ({
     );
   } catch (err) {
     console.error('notifyArReturnedToCreator:', err?.message || err);
+  }
+};
+
+const notifyArRejectedToCreator = async ({
+  ackReceiptId,
+  branchId,
+  rejectedByUserId,
+  creatorUserId,
+  studentName,
+  reason,
+}) => {
+  try {
+    if (!branchId || !creatorUserId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
+    const [branchRes, rejecterRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+        [branchId]
+      ),
+      query(`SELECT full_name, email FROM userstbl WHERE user_id = $1`, [rejectedByUserId]),
+    ]);
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const rejectedBy = rejecterRes.rows[0]?.full_name || rejecterRes.rows[0]?.email || 'Finance';
+    const studentLabel = studentName || 'Student';
+    const reasonText = reason && String(reason).trim() ? ` Reason: ${String(reason).trim()}.` : '';
+    const body = `Acknowledgement Receipt #${ackReceiptId} (${studentLabel}) was rejected by ${rejectedBy} at ${branchName}.${reasonText} Please create and submit a new acknowledgement receipt to continue.`;
+
+    if (!hasTargetUserIdColumn) {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
+        [
+          'Acknowledgement Receipt rejected — please recreate',
+          body,
+          ['Admin'],
+          branchId,
+          rejectedByUserId,
+          'acknowledgement-receipts',
+          'status=Rejected&page=1',
+        ]
+      );
+      return;
+    }
+
+    await query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+      [
+        'Acknowledgement Receipt rejected — please recreate',
+        body,
+        ['All'],
+        branchId,
+        rejectedByUserId,
+        creatorUserId,
+        'acknowledgement-receipts',
+        'status=Rejected&page=1',
+      ]
+    );
+  } catch (err) {
+    console.error('notifyArRejectedToCreator:', err?.message || err);
   }
 };
 
@@ -665,11 +725,19 @@ router.post(
       }
 
       const createdBy = req.user.userId || null;
-      const autoVerifyCashPackageByAdmin =
-        !isMerchandise &&
-        normalizedPaymentMethod === 'Cash' &&
-        ['Superadmin', 'Admin'].includes(req.user?.userType);
-      const initialPackageStatus = autoVerifyCashPackageByAdmin ? 'Verified' : 'Submitted';
+      // Business rule (Package AR):
+      //   * Cash payment method  -> auto-verified at creation time. No
+      //     separate Finance/Superfinance verification step is needed,
+      //     regardless of who creates the AR (Admin, Superadmin, Finance,
+      //     or Superfinance).
+      //   * Any other method (Online Banking, Credit Card, E-wallets) ->
+      //     status = 'Submitted'. Finance/Superfinance must verify via
+      //     PUT /:id/verify before the AR can be applied to an invoice.
+      // Merchandise ARs follow a separate auto-paid flow below and are
+      // unaffected by this rule.
+      const autoVerifyCashAr =
+        !isMerchandise && normalizedPaymentMethod === 'Cash';
+      const initialPackageStatus = autoVerifyCashAr ? 'Verified' : 'Submitted';
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
 
       const arVerifiedByOnCreate =
@@ -2041,7 +2109,11 @@ router.put(
   '/:id/verify',
   [
     param('id').isInt().withMessage('ID must be an integer'),
-    body('approve').isBoolean().withMessage('approve must be boolean'),
+    body('approve').optional({ nullable: true }).isBoolean().withMessage('approve must be boolean'),
+    body('action')
+      .optional({ nullable: true })
+      .isIn(['verify', 'return', 'reject'])
+      .withMessage("action must be 'verify', 'return' or 'reject'"),
     body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
     handleValidationErrors,
   ],
@@ -2049,7 +2121,20 @@ router.put(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const approve = req.body.approve === true;
+
+      // Resolve the action: prefer explicit `action`, fall back to legacy `approve`.
+      let action = (req.body?.action || '').toString().toLowerCase();
+      if (!action) {
+        if (req.body?.approve === true) action = 'verify';
+        else if (req.body?.approve === false) action = 'return';
+      }
+      if (!['verify', 'return', 'reject'].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: "action must be 'verify', 'return' or 'reject'",
+        });
+      }
+
       const remarks = String(req.body?.remarks || '').trim() || null;
 
       const ackResult = await query(
@@ -2071,14 +2156,14 @@ router.put(
       if (ack.ar_type !== 'Package') {
         return res.status(400).json({
           success: false,
-          message: 'Only Package acknowledgement receipts can be verified/returned in this flow',
+          message: 'Only Package acknowledgement receipts can be verified/returned/rejected in this flow',
         });
       }
 
       if (req.user.userType === 'Finance' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
         return res.status(403).json({
           success: false,
-          message: 'You can only verify acknowledgement receipts from your assigned branch',
+          message: 'You can only act on acknowledgement receipts from your assigned branch',
         });
       }
 
@@ -2092,31 +2177,40 @@ router.put(
       if (ack.status === 'Cancelled') {
         return res.status(400).json({
           success: false,
-          message: 'Cancelled acknowledgement receipts cannot be verified',
+          message: 'Cancelled acknowledgement receipts cannot be acted on',
         });
       }
 
-      if (!approve && ack.status === 'Returned') {
+      if (ack.status === 'Rejected') {
+        return res.status(400).json({
+          success: false,
+          message: 'This acknowledgement receipt is already rejected. Please ask the branch admin to create a new one.',
+        });
+      }
+
+      if (action === 'return' && ack.status === 'Returned') {
         return res.status(400).json({
           success: false,
           message: 'This acknowledgement receipt is already returned',
         });
       }
-      if (!approve && !remarks) {
+      if ((action === 'return' || action === 'reject') && !remarks) {
         return res.status(400).json({
           success: false,
-          message: 'Return note is required',
+          message: action === 'return' ? 'Return note is required' : 'Rejection reason is required',
         });
       }
 
-      const nextStatus = approve ? 'Verified' : 'Returned';
+      const nextStatus =
+        action === 'verify' ? 'Verified' : action === 'reject' ? 'Rejected' : 'Returned';
       const updatedNotes = remarks
         ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${nextStatus}] ${remarks}`
         : ack.prospect_student_notes;
 
       const verifierUserId = req.user.userId || req.user.user_id || null;
-      const verifiedByOnUpdate = approve ? verifierUserId : null;
-      const verifiedAtOnUpdate = approve ? new Date() : null;
+      // Track verifier_by/verified_at only on actual verification.
+      const verifiedByOnUpdate = action === 'verify' ? verifierUserId : null;
+      const verifiedAtOnUpdate = action === 'verify' ? new Date() : null;
 
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
       const updateRes = hasVerifierCols
@@ -2139,7 +2233,7 @@ router.put(
             [nextStatus, updatedNotes, id]
           );
 
-      if (!approve) {
+      if (action === 'return') {
         const returnedByUserId = req.user.userId || req.user.user_id || null;
         await notifyArReturnedToCreator({
           ackReceiptId: ack.ack_receipt_id,
@@ -2149,13 +2243,28 @@ router.put(
           studentName: ack.prospect_student_name,
           reason: remarks,
         });
+      } else if (action === 'reject') {
+        const rejectedByUserId = req.user.userId || req.user.user_id || null;
+        await notifyArRejectedToCreator({
+          ackReceiptId: ack.ack_receipt_id,
+          branchId: ack.branch_id,
+          rejectedByUserId,
+          creatorUserId: ack.created_by,
+          studentName: ack.prospect_student_name,
+          reason: remarks,
+        });
       }
+
+      const successMessage =
+        action === 'verify'
+          ? 'Acknowledgement receipt verified successfully'
+          : action === 'reject'
+            ? 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
+            : 'Acknowledgement receipt returned successfully';
 
       return res.json({
         success: true,
-        message: approve
-          ? 'Acknowledgement receipt verified successfully'
-          : 'Acknowledgement receipt returned successfully',
+        message: successMessage,
         data: omitAckReceiptNumber(updateRes.rows[0]),
       });
     } catch (err) {

@@ -56,6 +56,7 @@ export function downloadAcknowledgementReceiptsXlsx(rows, filename = 'Acknowledg
     { wch: 18 }, // Payment Method
     { wch: 22 }, // Reference Number
     { wch: 14 }, // Issue Date
+    { wch: 14 }, // Payment Date
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'Acknowledgement Receipts');

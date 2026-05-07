@@ -6,6 +6,7 @@ import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import StudentHistoryModal from '../../components/student/StudentHistoryModal';
 
 const AdminStudent = () => {
   const { signup, userInfo } = useAuth();
@@ -50,6 +51,8 @@ const AdminStudent = () => {
   const [existingGuardian, setExistingGuardian] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyStudent, setHistoryStudent] = useState(null);
 
   useEffect(() => {
     fetchStudents();
@@ -291,6 +294,17 @@ const AdminStudent = () => {
     setEditingStudent(null);
     setExistingGuardian(null);
     setFormErrors({});
+  };
+
+  const openHistoryModal = (student) => {
+    if (student.branch_id !== adminBranchId) {
+      appAlert('You can only view students from your branch.');
+      return;
+    }
+    setOpenMenuId(null);
+    setMenuPosition({ top: 0, right: 0 });
+    setHistoryStudent(student);
+    setIsHistoryModalOpen(true);
   };
 
   const handleInputChange = (e) => {
@@ -710,16 +724,12 @@ const AdminStudent = () => {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  const selectedStudent = filteredStudents.find(s => s.user_id === openMenuId);
-                  if (selectedStudent) {
-                    setOpenMenuId(null);
-                    setMenuPosition({ top: 0, right: 0 });
-                    openEditModal(selectedStudent);
-                  }
+                  const selectedStudent = filteredStudents.find((s) => s.user_id === openMenuId);
+                  if (selectedStudent) openHistoryModal(selectedStudent);
                 }}
                 className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
               >
-                Edit
+                View Student History
               </button>
               <button
                 type="button"
@@ -1193,6 +1203,16 @@ const AdminStudent = () => {
         </div>,
         document.body
       )}
+
+      <StudentHistoryModal
+        isOpen={isHistoryModalOpen}
+        student={historyStudent}
+        onClose={() => {
+          setIsHistoryModalOpen(false);
+          setHistoryStudent(null);
+        }}
+        onUpdated={fetchStudents}
+      />
     </div>
   );
 };

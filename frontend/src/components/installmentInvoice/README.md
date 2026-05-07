@@ -8,15 +8,34 @@
 
   | File | Purpose |
   | ---- | ------- |
-  | `InstallmentInvoicePhasesModal.jsx` | Read-only "View Details" modal that lists every phase of an installment plan (paid, unpaid, or not yet generated), the optional downpayment with its payment date, and the running totals (Total Outstanding Balance + Total Paid). |
+  | `InstallmentPlanDetails.jsx`         | Self-contained, read-only **presentational** component that fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Reused inline by other dialogs. |
+  | `InstallmentInvoicePhasesModal.jsx`  | Modal shell around `InstallmentPlanDetails` for the "View Details" action on the Installment Invoice Logs pages. |
+
+  ## `InstallmentPlanDetails`
+
+  Renders a single installment plan inline. Used both inside
+  `InstallmentInvoicePhasesModal` (modal context) and inside
+  `components/student/StudentHistoryModal.jsx` › Invoices tab
+  (rendered once per plan, with the plan's program label as a
+  section header).
+
+  ### Props
+
+  | Prop | Type | Default | Description |
+  | ---- | ---- | ------- | ----------- |
+  | `profileId` | `number \| string` | — | `installmentinvoiceprofiles_id` to load. |
+  | `showStudentName` | `boolean` | `true` | When `false`, the **Student Name** field is omitted (used by Student history because the student is already in the dialog header). |
+  | `className` | `string` | `''` | Optional class names on the wrapper. |
 
   ## `InstallmentInvoicePhasesModal`
 
-  Full-screen-on-mobile, centered-on-desktop modal that loads its data
-  from a single backend endpoint and renders:
+  Full-screen-on-mobile, centered-on-desktop modal that hosts
+  `InstallmentPlanDetails`. Renders:
 
   1. Plan header — student name, program/package, frequency,
-     generated/total phase count, branch, and active flag.
+     **phase progress** (paid count / total · generated count / total
+     plus a payment progress bar that turns green when the plan is
+     complete), branch, and active flag.
   2. Downpayment card — AR number, amount, paid amount, **payment
      date**, and current status (when the profile has a downpayment
      invoice).

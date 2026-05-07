@@ -588,6 +588,7 @@ router.get(
       // Fetch invoice
       const invoiceResult = await query(
         `SELECT invoice_id, invoice_ar_number, invoice_description, branch_id, amount, status, remarks,
+                installmentinvoiceprofiles_id,
                 TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
                 TO_CHAR(due_date, 'YYYY-MM-DD') as due_date
          FROM invoicestbl
@@ -730,7 +731,7 @@ router.get(
       const totalPayments = paymentsResult.rows.reduce((sum, p) => sum + (Number(p.payable_amount) || 0), 0);
       const amountDue = grandTotal - totalPayments;
 
-      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isSoa || isAr ? 'landscape' : 'portrait' });
+      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isAr ? 'landscape' : 'portrait' });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename=${isAr ? 'acknowledgement-receipt' : isSoa ? 'soa' : 'invoice'}-${id}.pdf`);
 
@@ -946,179 +947,523 @@ router.get(
       }
 
       if (isSoa) {
+        // ----------------------------------------------------------------
+        // Statement of Account (portrait, branded)
+        //
+        // Layout follows the design reference provided by the school:
+        // header band -> "Statement of Account" + academy info -> billed-to
+        // summary -> program/SY label -> phases table (INSTALLMENT,
+        // REG. FEE, MONTHLY FEE, TOTAL PAID) -> total balance/total paid
+        // band -> payable-to grid -> terms & conditions footer.
+        //
+        // When the invoice is part of an installment plan we render
+        // EVERY phase in the curriculum (paid + unpaid + not-yet-
+        // generated) so the statement reflects the full schedule. For
+        // standalone (one-off) invoices we degrade gracefully to a
+        // single-row table seeded from invoice items.
+        // ----------------------------------------------------------------
         const pageWidth = doc.page.width;
         const pageHeight = doc.page.height;
         const left = 40;
         const right = pageWidth - 40;
-        let y = 40;
         const contentWidth = right - left;
         const currency = (v) => `PHP ${(Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        const issueDateLabel = formatDate(invoice.issue_date) || '-';
-        const dueDateLabel = formatDate(invoice.due_date) || '-';
-        const studentNames = studentsResult.rows.length > 0
-          ? studentsResult.rows.map((s) => s.full_name || 'Student').join(', ')
-          : 'No student linked';
-        const studentEmails = studentsResult.rows.length > 0
-          ? studentsResult.rows.map((s) => s.email).filter(Boolean).join(', ') || '-'
-          : '-';
-        const studentPhones = studentsResult.rows.length > 0
-          ? studentsResult.rows.map((s) => s.phone_number).filter(Boolean).join(', ') || '-'
-          : '-';
+        const ordinal = (n) => {
+          const num = Math.max(0, Number(n) || 0);
+          const s = ['th', 'st', 'nd', 'rd'];
+          const v = num % 100;
+          return `${num}${s[(v - 20) % 10] || s[v] || s[0]}`;
+        };
 
-        // Header band
+        // ---- Resolve installment plan (if any) -----------------------
+        let installmentProfile = null;
+        let phases = [];
+        let downpaymentRow = null;
+        let totalPaid = 0;
+        let totalOutstanding = 0;
+        let levelTag = null;
+        let programName = null;
+        let schoolYearLabel = '';
+
+        const profileId = invoice.installmentinvoiceprofiles_id != null
+          ? Number(invoice.installmentinvoiceprofiles_id)
+          : null;
+
+        if (profileId) {
+          try {
+            const profileRes = await query(
+              `SELECT ip.*,
+                      u.full_name AS student_name,
+                      u.email AS student_email,
+                      p.program_name,
+                      c.level_tag,
+                      pkg.package_name AS package_description
+               FROM installmentinvoiceprofilestbl ip
+               LEFT JOIN userstbl u ON ip.student_id = u.user_id
+               LEFT JOIN classestbl c ON ip.class_id = c.class_id
+               LEFT JOIN programstbl p ON c.program_id = p.program_id
+               LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
+               WHERE ip.installmentinvoiceprofiles_id = $1`,
+              [profileId]
+            );
+            if (profileRes.rows.length > 0) {
+              installmentProfile = profileRes.rows[0];
+              levelTag = installmentProfile.level_tag || null;
+              programName = installmentProfile.program_name || null;
+
+              const downpaymentInvoiceId = installmentProfile.downpayment_invoice_id != null
+                ? Number(installmentProfile.downpayment_invoice_id)
+                : null;
+
+              // Pull every invoice linked to this profile so we can
+              // build per-phase paid totals (chain-aware: balance/
+              // re-billed invoices share a chain with their root).
+              const phaseInvoicesRes = await query(
+                `SELECT i.invoice_id,
+                        i.invoice_description,
+                        i.amount,
+                        i.status,
+                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
+                        TO_CHAR(i.due_date, 'YYYY-MM-DD')   AS due_date,
+                        COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
+                        COALESCE((
+                          SELECT SUM(p.payable_amount)
+                          FROM paymenttbl p
+                          WHERE p.invoice_id = i.invoice_id
+                            AND p.status = 'Completed'
+                        ), 0)::numeric AS paid_total_for_invoice
+                 FROM invoicestbl i
+                 WHERE i.installmentinvoiceprofiles_id = $1
+                 ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC`,
+                [profileId]
+              );
+
+              const chains = new Map();
+              for (const inv of phaseInvoicesRes.rows) {
+                const chainRoot = Number(inv.chain_root_id);
+                if (!chains.has(chainRoot)) {
+                  chains.set(chainRoot, {
+                    chain_root_id: chainRoot,
+                    representative: inv,
+                    paid_amount: 0,
+                  });
+                }
+                const chain = chains.get(chainRoot);
+                chain.paid_amount += Number(inv.paid_total_for_invoice || 0);
+                const currentRep = chain.representative;
+                if (
+                  (inv.issue_date || '') > (currentRep.issue_date || '') ||
+                  ((inv.issue_date || '') === (currentRep.issue_date || '') &&
+                    Number(inv.invoice_id) > Number(currentRep.invoice_id))
+                ) {
+                  chain.representative = inv;
+                }
+              }
+
+              let downpaymentChain = null;
+              const phaseChains = [];
+              for (const chain of chains.values()) {
+                if (downpaymentInvoiceId && chain.chain_root_id === downpaymentInvoiceId) {
+                  downpaymentChain = chain;
+                } else {
+                  phaseChains.push(chain);
+                }
+              }
+              phaseChains.sort((a, b) => {
+                const da = a.representative.issue_date || '';
+                const db = b.representative.issue_date || '';
+                if (da !== db) return da < db ? -1 : 1;
+                return Number(a.chain_root_id) - Number(b.chain_root_id);
+              });
+
+              const profilePhaseAmount = installmentProfile.amount != null
+                ? Number(installmentProfile.amount)
+                : 0;
+              const totalPhases = installmentProfile.total_phases != null
+                ? Math.max(0, Number(installmentProfile.total_phases))
+                : phaseChains.length;
+              const phaseRowCount = Math.max(totalPhases, phaseChains.length);
+
+              for (let i = 0; i < phaseRowCount; i += 1) {
+                const chain = phaseChains[i] || null;
+                if (!chain) {
+                  phases.push({
+                    phase_number: i + 1,
+                    amount: profilePhaseAmount,
+                    paid_amount: 0,
+                    is_generated: false,
+                  });
+                } else {
+                  const rep = chain.representative;
+                  phases.push({
+                    phase_number: i + 1,
+                    amount: rep.amount != null ? Number(rep.amount) : profilePhaseAmount,
+                    paid_amount: Number(chain.paid_amount || 0),
+                    is_generated: true,
+                  });
+                }
+              }
+
+              if (downpaymentChain) {
+                const rep = downpaymentChain.representative;
+                downpaymentRow = {
+                  amount: rep.amount != null ? Number(rep.amount) : 0,
+                  paid_amount: Number(downpaymentChain.paid_amount || 0),
+                };
+              }
+
+              const totalPaidPhases = phases.reduce(
+                (sum, p) => sum + Number(p.paid_amount || 0),
+                0
+              );
+              const totalPaidDownpayment = downpaymentRow
+                ? Number(downpaymentRow.paid_amount || 0)
+                : 0;
+              totalPaid = totalPaidPhases + totalPaidDownpayment;
+
+              const outstandingGenerated = phases.reduce((sum, p) => {
+                if (!p.is_generated) return sum;
+                return sum + Math.max(0, Number(p.amount || 0) - Number(p.paid_amount || 0));
+              }, 0);
+              const outstandingNotGenerated = phases.reduce(
+                (sum, p) => sum + (p.is_generated ? 0 : profilePhaseAmount),
+                0
+              );
+              const outstandingDownpayment = downpaymentRow
+                ? Math.max(
+                    0,
+                    Number(downpaymentRow.amount || 0) - Number(downpaymentRow.paid_amount || 0)
+                  )
+                : 0;
+              totalOutstanding = outstandingGenerated + outstandingNotGenerated + outstandingDownpayment;
+            }
+          } catch (planErr) {
+            console.error('SOA: failed to load installment plan', planErr);
+          }
+        }
+
+        // For non-installment SOAs, surface a single phase row built
+        // from the invoice itself so the template still renders.
+        if (phases.length === 0 && !downpaymentRow) {
+          phases.push({
+            phase_number: 1,
+            amount: grandTotal,
+            paid_amount: totalPayments,
+            is_generated: true,
+          });
+          totalPaid = totalPayments;
+          totalOutstanding = Math.max(0, grandTotal - totalPayments);
+        }
+
+        // ---- School Year ---------------------------------------------
+        // Manila school year typically runs June -> May the following
+        // year. Anchor on the earliest issue_date of the plan if
+        // available, otherwise fall back to the invoice issue_date /
+        // current date.
+        const computeSchoolYear = (anchorYmd) => {
+          const ref = (() => {
+            if (anchorYmd) {
+              const d = new Date(anchorYmd);
+              if (!Number.isNaN(d.getTime())) return d;
+            }
+            return new Date();
+          })();
+          const month = ref.getUTCMonth() + 1;
+          const year = ref.getUTCFullYear();
+          if (month >= 6) return `${year}-${year + 1}`;
+          return `${year - 1}-${year}`;
+        };
+        const planAnchor = (() => {
+          if (phases.length > 0 && installmentProfile) {
+            // Earliest issue date among generated phases, if any.
+            // (Not stored on phases array; fall back to invoice.)
+          }
+          return invoice.issue_date || null;
+        })();
+        schoolYearLabel = computeSchoolYear(planAnchor);
+
+        // ---- Billed-to ------------------------------------------------
+        const billedToName = (() => {
+          if (installmentProfile?.student_name) return installmentProfile.student_name;
+          if (studentsResult.rows.length > 0) {
+            return studentsResult.rows.map((s) => s.full_name || 'Student').join(', ');
+          }
+          return 'No student linked';
+        })();
+        const billedToEmail = (() => {
+          if (installmentProfile?.student_email) return installmentProfile.student_email;
+          if (studentsResult.rows.length > 0) {
+            const emails = studentsResult.rows.map((s) => s.email).filter(Boolean);
+            if (emails.length > 0) return emails.join(', ');
+          }
+          return '';
+        })();
+        const programLabel = (() => {
+          const lvl = (levelTag || '').trim();
+          const prog = (programName || '').trim();
+          const head = lvl || prog || (installmentProfile?.package_description || '').trim() || 'Program';
+          return `${head} Program S.Y. ${schoolYearLabel}`;
+        })();
+
+        // ---- Brand colors --------------------------------------------
+        const colorBrand = '#f5b800'; // warm gold accent (top/bottom band, table header bg)
+        const colorBrandSoft = '#fde9a3';
+        const colorTotalsBand = '#f6a623';
+        const colorTextPrimary = '#1f2937';
+        const colorTextMuted = '#4b5563';
+
+        // ===== Top brand band =========================================
+        let y = 0;
         doc.save();
-        doc.rect(left, y, contentWidth, 74).fill('#f8fafc');
+        doc.rect(0, 0, pageWidth, 22).fill(colorBrand);
         doc.restore();
+        y = 32;
+
+        // ===== Header (title + logo) ==================================
+        // Logo on right, branding on left.
         if (hasLogo) {
-          doc.image(logoPath, left + 12, y + 12, { width: 46, height: 46 });
+          try {
+            doc.image(logoPath, right - 70, y - 4, { width: 70, height: 70 });
+          } catch {
+            // ignore logo render errors
+          }
         }
-        doc.font('Helvetica-Bold').fontSize(17).fillColor('#111827')
-          .text('LITTLE CHAMPIONS ACADEMY INC.', hasLogo ? left + 70 : left + 12, y + 14);
-        doc.font('Helvetica').fontSize(9).fillColor('#4b5563')
-          .text(branchInfo?.branch_address || (branchInfo?.branch_name || ''), hasLogo ? left + 70 : left + 12, y + 36, {
-            width: 360,
+        doc.font('Times-Italic').fontSize(28).fillColor(colorTextPrimary)
+          .text('Statement of Account', left, y, { width: contentWidth - 90 });
+        y += 36;
+        doc.font('Helvetica-Bold').fontSize(15).fillColor(colorTextPrimary)
+          .text('LITTLE CHAMPIONS ACADEMY INC.', left, y, { width: contentWidth - 90 });
+        y += 18;
+        doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
+          .text(branchInfo?.branch_address || '4th Level, Vista Mall Malolos, Bulacan', left, y, {
+            width: contentWidth - 90,
           });
-        doc.font('Helvetica-Bold').fontSize(22).fillColor('#111827')
-          .text('Statement of Account', right - 280, y + 20, { width: 260, align: 'right' });
-        y += 92;
+        y += 12;
+        doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
+          .text('www.little-champions.com', left, y, { width: contentWidth - 90 });
+        y += 28;
 
-        // Summary strip
-        const summaryWidth = (contentWidth - 24) / 4;
-        const summaryItems = [
-          { label: 'Invoice Number', value: `INV-${invoice.invoice_id}` },
-          { label: 'Issue Date', value: issueDateLabel },
-          { label: 'Due Date', value: dueDateLabel },
-          { label: 'Current Status', value: invoice.status || '-' },
-        ];
-        summaryItems.forEach((item, idx) => {
-          const x = left + idx * (summaryWidth + 8);
-          doc.save();
-          doc.roundedRect(x, y, summaryWidth, 48, 4).fill('#eef2ff');
-          doc.restore();
-          doc.font('Helvetica').fontSize(8).fillColor('#4338ca').text(item.label, x + 10, y + 10);
-          doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827').text(item.value, x + 10, y + 24, {
-            width: summaryWidth - 20,
-          });
+        // ===== Billed To strip ========================================
+        const billedBoxY = y;
+        const billedBoxH = 40;
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(colorTextMuted)
+          .text('Billed To :', right - 240, billedBoxY, { width: 240, align: 'left' });
+        doc.font('Helvetica-Bold').fontSize(13).fillColor(colorTextPrimary)
+          .text(billedToName, right - 240, billedBoxY + 12, { width: 240 });
+        if (billedToEmail) {
+          doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
+            .text(billedToEmail, right - 240, billedBoxY + 28, { width: 240 });
+        }
+        y = billedBoxY + billedBoxH + 14;
+
+        // ===== Program / SY label =====================================
+        doc.font('Helvetica-Bold').fontSize(13).fillColor(colorTextPrimary)
+          .text(programLabel, left, y, { width: contentWidth });
+        y += 22;
+
+        // ===== Phases Table ===========================================
+        const tableLeft = left;
+        const tableRight = right;
+        const tableWidth = tableRight - tableLeft;
+        // Column widths chosen so the most important number (Total Paid)
+        // and the description fit comfortably.
+        const colInstallmentW = Math.round(tableWidth * 0.32);
+        const colRegFeeW = Math.round(tableWidth * 0.18);
+        const colMonthlyW = Math.round(tableWidth * 0.25);
+        const colTotalPaidW = tableWidth - colInstallmentW - colRegFeeW - colMonthlyW;
+        const colXInstallment = tableLeft;
+        const colXRegFee = tableLeft + colInstallmentW;
+        const colXMonthly = colXRegFee + colRegFeeW;
+        const colXTotalPaid = colXMonthly + colMonthlyW;
+        const tableHeaderH = 30;
+        const tableRowH = 22;
+
+        // Header
+        doc.save();
+        doc.roundedRect(tableLeft, y, tableWidth, tableHeaderH, 4).fill(colorBrand);
+        doc.restore();
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#ffffff');
+        const headerTextY = y + tableHeaderH / 2 - 4;
+        doc.text('INSTALLMENT', colXInstallment + 10, headerTextY, {
+          width: colInstallmentW - 20,
         });
-        y += 62;
+        doc.text('REG. FEE', colXRegFee, headerTextY, {
+          width: colRegFeeW,
+          align: 'center',
+        });
+        doc.text('MONTHLY FEE', colXMonthly, headerTextY, {
+          width: colMonthlyW,
+          align: 'center',
+        });
+        doc.text('TOTAL PAID', colXTotalPaid, headerTextY, {
+          width: colTotalPaidW - 10,
+          align: 'right',
+        });
+        y += tableHeaderH;
 
-        // Account information
-        doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827').text('Account Information', left, y);
-        y += 16;
-        doc.font('Helvetica').fontSize(9).fillColor('#374151')
-          .text(`Student Name(s): ${studentNames}`, left, y, { width: contentWidth });
-        y += 12;
-        doc.text(`Email: ${studentEmails}`, left, y, { width: contentWidth });
-        y += 12;
-        doc.text(`Phone: ${studentPhones}`, left, y, { width: contentWidth });
-        y += 16;
+        // Body rows: optional downpayment first, then 1st..Nth phase.
+        const drawRow = (label, regFee, monthly, paid, opts = {}) => {
+          if (y + tableRowH > pageHeight - 220) {
+            // Page break (preserve enough room for totals + payable-to
+            // band on a new page).
+            doc.addPage({ size: 'A4', margin: 40 });
+            y = 60;
+          }
+          if (opts.zebra) {
+            doc.save();
+            doc.rect(tableLeft, y, tableWidth, tableRowH).fill('#fff8e1');
+            doc.restore();
+          }
+          doc.strokeColor('#e5d68a').lineWidth(0.5);
+          doc.moveTo(tableLeft, y + tableRowH).lineTo(tableLeft + tableWidth, y + tableRowH).stroke();
 
-        // Itemized charges table
-        const cDesc = left + 8;
-        const colBaseW = 80;
-        const colDiscountW = 80;
-        const colPenaltyW = 70;
-        const colTaxW = 70;
-        const colNetW = 70;
-        const colGap = 12;
-        const cNet = right - colNetW;
-        const cTax = cNet - colGap - colTaxW;
-        const cPenalty = cTax - colGap - colPenaltyW;
-        const cDiscount = cPenalty - colGap - colDiscountW;
-        const cBase = cDiscount - colGap - colBaseW;
-        const descW = Math.max(220, cBase - cDesc - colGap);
+          const textY = y + tableRowH / 2 - 4;
+          doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).fillColor(
+            opts.muted ? colorTextMuted : colorTextPrimary
+          );
+          doc.text(label, colXInstallment + 10, textY, { width: colInstallmentW - 20 });
+          doc.text(
+            regFee == null ? '-' : (typeof regFee === 'string' ? regFee : currency(regFee)),
+            colXRegFee,
+            textY,
+            { width: colRegFeeW, align: 'center' }
+          );
+          doc.text(
+            monthly == null ? '-' : (typeof monthly === 'string' ? monthly : currency(monthly)),
+            colXMonthly,
+            textY,
+            { width: colMonthlyW, align: 'center' }
+          );
+          doc.text(
+            paid == null ? '-' : (typeof paid === 'string' ? paid : currency(paid)),
+            colXTotalPaid,
+            textY,
+            { width: colTotalPaidW - 10, align: 'right' }
+          );
+          y += tableRowH;
+        };
 
-        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Itemized Charges', left, y);
-        y += 14;
-        doc.save();
-        doc.rect(left, y, contentWidth, 22).fill('#f3f4f6');
-        doc.restore();
-        doc.font('Helvetica-Bold').fontSize(8).fillColor('#111827');
-        doc.text('Description', cDesc, y + 7, { width: descW });
-        doc.text('Base', cBase, y + 7, { width: colBaseW, align: 'right' });
-        doc.text('Discount', cDiscount, y + 7, { width: colDiscountW, align: 'right' });
-        doc.text('Penalty', cPenalty, y + 7, { width: colPenaltyW, align: 'right' });
-        doc.text('Tax', cTax, y + 7, { width: colTaxW, align: 'right' });
-        doc.text('Net', cNet, y + 7, { width: colNetW, align: 'right' });
-        y += 24;
-
-        if (items.length === 0) {
-          doc.font('Helvetica').fontSize(9).fillColor('#6b7280').text('No itemized charges available.', left + 8, y + 6);
-          y += 24;
-        } else {
-          items.forEach((item, index) => {
-            const amt = Number(item.amount) || 0;
-            const discount = Number(item.discount_amount) || 0;
-            const penalty = Number(item.penalty_amount) || 0;
-            const taxPct = Number(item.tax_percentage) || 0;
-            const taxableBase = amt - discount + penalty;
-            const tax = taxableBase * (taxPct / 100);
-            const netAmount = taxableBase + tax;
-
-            if (y + 18 > pageHeight - 130) {
-              doc.addPage({ size: 'A4', layout: 'landscape', margin: 40 });
-              y = 40;
-            }
-
-            if (index % 2 === 0) {
-              doc.save();
-              doc.rect(left, y, contentWidth, 18).fill('#fafafa');
-              doc.restore();
-            }
-            doc.font('Helvetica').fontSize(8).fillColor('#111827');
-            doc.text(item.description || '-', cDesc, y + 5, { width: descW, ellipsis: true });
-            doc.text(currency(amt), cBase, y + 5, { width: colBaseW, align: 'right' });
-            doc.text(currency(discount), cDiscount, y + 5, { width: colDiscountW, align: 'right' });
-            doc.text(currency(penalty), cPenalty, y + 5, { width: colPenaltyW, align: 'right' });
-            doc.text(currency(tax), cTax, y + 5, { width: colTaxW, align: 'right' });
-            doc.text(currency(netAmount), cNet, y + 5, { width: colNetW, align: 'right' });
-            y += 18;
-          });
+        if (downpaymentRow) {
+          drawRow(
+            'Downpayment',
+            '0',
+            Number(downpaymentRow.amount || 0),
+            Number(downpaymentRow.paid_amount || 0),
+            { zebra: true, bold: true }
+          );
         }
+        phases.forEach((phase, idx) => {
+          const label = `${ordinal(phase.phase_number)} Phase`;
+          drawRow(
+            label,
+            '0',
+            Number(phase.amount || 0),
+            Number(phase.paid_amount || 0),
+            {
+              zebra: (idx + (downpaymentRow ? 1 : 0)) % 2 === 1,
+              muted: !phase.is_generated,
+            }
+          );
+        });
 
-        y += 10;
+        y += 8;
 
-        // Payment history + totals
-        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Payment History', left, y);
-        y += 14;
-        if (paymentsResult.rows.length === 0) {
-          doc.font('Helvetica').fontSize(9).fillColor('#6b7280').text('No completed payments recorded yet.', left + 8, y);
-          y += 14;
-        } else {
-          paymentsResult.rows.forEach((payment) => {
-            const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '-';
-            const method = payment.payment_method || 'Payment';
-            const paymentType = payment.payment_type || 'Payment';
-            const ref = payment.reference_number ? ` • Ref: ${payment.reference_number}` : '';
-            doc.font('Helvetica').fontSize(8.5).fillColor('#374151')
-              .text(`${paymentDate} • ${paymentType} via ${method}${ref}`, left + 8, y, { width: cNet - left - 16 });
-            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
-              .text(currency(payment.payable_amount), cNet, y, { width: 70, align: 'right' });
-            y += 12;
-          });
+        // ===== Totals band ============================================
+        const totalsBandH = 38;
+        if (y + totalsBandH > pageHeight - 180) {
+          doc.addPage({ size: 'A4', margin: 40 });
+          y = 60;
         }
-
-        // Totals panel
-        const panelW = 260;
-        const panelX = right - panelW;
-        const panelY = Math.min(y + 10, pageHeight - 115);
         doc.save();
-        doc.roundedRect(panelX, panelY, panelW, 98, 6).fill('#ecfeff');
+        doc.roundedRect(tableLeft, y, tableWidth, totalsBandH, 4).fill(colorTotalsBand);
         doc.restore();
-        doc.font('Helvetica-Bold').fontSize(10).fillColor('#0f172a').text('Account Summary', panelX + 12, panelY + 10);
-        doc.font('Helvetica').fontSize(9).fillColor('#0f172a');
-        doc.text(`Total Charges: ${currency(grandTotal)}`, panelX + 12, panelY + 30);
-        doc.text(`Total Paid: ${currency(totalPayments)}`, panelX + 12, panelY + 46);
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(amountDue > 0 ? '#991b1b' : '#166534');
-        doc.text(`Outstanding Balance: ${currency(amountDue)}`, panelX + 12, panelY + 66);
+        const halfW = tableWidth / 2;
+        const labelY = y + 8;
+        const valueY = y + 21;
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#ffffff')
+          .text('TOTAL BALANCE DUE:', tableLeft + 14, labelY, { width: halfW - 14 });
+        doc.font('Helvetica-Bold').fontSize(13).fillColor('#ffffff')
+          .text(currency(totalOutstanding), tableLeft + 14, valueY, { width: halfW - 14 });
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#ffffff')
+          .text('TOTAL PAID:', tableLeft + halfW, labelY, { width: halfW - 14, align: 'right' });
+        doc.font('Helvetica-Bold').fontSize(13).fillColor('#ffffff')
+          .text(currency(totalPaid), tableLeft + halfW, valueY, {
+            width: halfW - 14,
+            align: 'right',
+          });
+        y += totalsBandH + 18;
 
-        // Footer note
-        doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text(
-          'Generated by Little Champions Academy billing system. Please keep this Statement of Account for your records.',
-          left,
-          pageHeight - 36,
-          { width: contentWidth, align: 'center' }
-        );
+        // ===== Payable To grid ========================================
+        if (y + 110 > pageHeight - 60) {
+          doc.addPage({ size: 'A4', margin: 40 });
+          y = 60;
+        }
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(colorTextPrimary)
+          .text('PAYABLE TO:', left, y, { width: contentWidth, align: 'right' });
+        y += 16;
+
+        const payableToOptions = [
+          {
+            label: 'UNIONBANK',
+            account: 'RISING HOPE EDUTECH CORPORATION',
+            number: '0026 - 4001 - 0150',
+          },
+          {
+            label: 'AUB ACCOUNT',
+            account: 'RISING HOPE EDUTECH CORPORATION',
+            number: '072-01-001-3081',
+          },
+          {
+            label: 'GCASH',
+            account: 'RISING HOPE EDUTECH CORPORATION',
+            number: '',
+          },
+          {
+            label: 'PAYMAYA',
+            account: 'LITTLE CHAMPIONS GUIGUINTO BULACAN',
+            number: '',
+          },
+        ];
+        const cellW = (contentWidth - 12) / 2;
+        const cellH = 56;
+        payableToOptions.forEach((opt, idx) => {
+          const col = idx % 2;
+          const row = Math.floor(idx / 2);
+          const cx = left + col * (cellW + 12);
+          const cy = y + row * (cellH + 10);
+          doc.save();
+          doc.roundedRect(cx, cy, cellW, cellH, 6).fillAndStroke(colorBrandSoft, '#caa64f');
+          doc.restore();
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(colorTextPrimary)
+            .text(opt.label, cx + 12, cy + 8, { width: cellW - 24 });
+          doc.font('Helvetica').fontSize(8.5).fillColor(colorTextPrimary)
+            .text(opt.account, cx + 12, cy + 24, { width: cellW - 24 });
+          if (opt.number) {
+            doc.font('Helvetica').fontSize(8.5).fillColor(colorTextMuted)
+              .text(opt.number, cx + 12, cy + 38, { width: cellW - 24 });
+          }
+        });
+        y += cellH * 2 + 10 + 14;
+
+        // ===== Terms ==================================================
+        if (y + 30 > pageHeight - 28) {
+          doc.addPage({ size: 'A4', margin: 40 });
+          y = 60;
+        }
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#a16207')
+          .text('Terms and Conditions', left, y, { width: contentWidth, align: 'center' });
+        y += 14;
+        doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
+          .text('All fees are non-refundable and non-transferable.', left, y, {
+            width: contentWidth,
+            align: 'center',
+          });
+
+        // ===== Bottom brand band ======================================
+        doc.save();
+        doc.rect(0, pageHeight - 22, pageWidth, 22).fill(colorBrand);
+        doc.restore();
+
         doc.end();
         return;
       }
