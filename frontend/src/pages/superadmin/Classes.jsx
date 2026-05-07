@@ -5992,21 +5992,21 @@ const initializePackageMerchSelections = useCallback(
             : '';
 
     return (
-      <div className="space-y-6">
+      <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
             <button
               onClick={handleBackToList}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              className="shrink-0 p-2 rounded-lg hover:bg-gray-100 transition-colors"
             >
               <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Class Details</h1>
-              <p className="text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900">Class Details</h1>
+              <p className="text-xs sm:text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-2">
                 {selectedClassForDetails.program_name} - {selectedClassForDetails.class_name || selectedClassForDetails.level_tag}
                 {(() => {
                   const firstSessionCode = classSessions?.[0]?.class_code;
@@ -8199,10 +8199,10 @@ const initializePackageMerchSelections = useCallback(
 
   // List View
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Classes</h1>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900">Classes</h1>
         <button 
           onClick={openCreateModal}
           className="btn-primary flex items-center justify-center space-x-2 w-full sm:w-auto"
@@ -8215,34 +8215,36 @@ const initializePackageMerchSelections = useCallback(
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white rounded-lg shadow p-4 mb-4">
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1">
+      <div className="bg-white rounded-lg shadow p-3 sm:p-4 mb-4">
+        <div className="flex flex-col gap-3 md:flex-row md:gap-4">
+          <div className="min-w-0 flex-1">
             <input
               type="text"
               value={nameSearchTerm}
               onChange={(e) => setNameSearchTerm(e.target.value)}
               placeholder="Search class..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-3 py-2.5 sm:px-4 sm:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-base sm:text-sm max-h-[48px] sm:max-h-none"
             />
           </div>
-          <div className="flex gap-4">
-            <div className="relative program-filter-dropdown">
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-4 min-w-0 w-full md:w-auto">
+            <div className="relative program-filter-dropdown w-full sm:w-auto">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   setOpenProgramDropdown(!openProgramDropdown);
                 }}
-                className="flex items-center space-x-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="flex w-full sm:w-auto items-center justify-between gap-2 px-4 py-2.5 sm:py-2 border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
-                <span>Program</span>
-                <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterProgram ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span className="flex items-center gap-2">
+                  <span>Program</span>
+                  <span className={`inline-flex items-center justify-center w-1.5 h-1.5 rounded-full flex-shrink-0 ${filterProgram ? 'bg-primary-600' : 'invisible'}`} aria-hidden />
+                </span>
+                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
               {openProgramDropdown && (
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200 max-h-60 overflow-y-auto">
+                <div className="absolute left-0 right-0 z-50 mt-2 max-h-60 min-w-[12rem] overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg sm:right-0 sm:left-auto sm:w-48">
                   <div className="py-1">
                     <button
                       onClick={(e) => {
@@ -8290,28 +8292,28 @@ const initializePackageMerchSelections = useCallback(
               <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px' }}>
               <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     PROGRAM CODE
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     CLASS NAME
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     ROOM
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     LEVEL TAG
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     TEACHER
                   </th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     ENROLLED / MAX
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     START DATE & END DATE
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     ACTIONS
                   </th>
                 </tr>
@@ -8319,7 +8321,7 @@ const initializePackageMerchSelections = useCallback(
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredClasses.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
+                    <td colSpan={8} className="px-4 py-10 text-center sm:px-6 sm:py-12">
                       <p className="text-gray-500">
                         {nameSearchTerm || filterBranch || filterProgram
                           ? 'No matching classes. Try adjusting your search or filters.'
@@ -8362,7 +8364,7 @@ const initializePackageMerchSelections = useCallback(
 
                   return (
                     <tr key={classItem.class_id} className={hasInactivatedSchedule ? 'bg-yellow-50' : ''}>
-                      <td className="px-6 py-4 max-w-[100px]">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[100px]">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="text-sm font-medium text-gray-900 truncate" title={classItem.program_code || classItem.program_name || ''}>
                             {classItem.program_code || classItem.program_name || '-'}
@@ -8385,22 +8387,22 @@ const initializePackageMerchSelections = useCallback(
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 max-w-[220px]">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[220px]">
                         <div className="text-sm text-gray-900 truncate" title={classItem.class_name || ''}>
                           {classItem.class_name || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 max-w-[140px]">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[140px]">
                         <div className="text-sm text-gray-900 truncate" title={classItem.room_name || ''}>
                           {classItem.room_name || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 max-w-[100px]">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[100px]">
                         <div className="text-sm text-gray-900 truncate" title={classItem.level_tag || ''}>
                           {classItem.level_tag || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 max-w-[180px]">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[180px]">
                         <div className="text-sm text-gray-900 min-w-0">
                           {(() => {
                             // Check if we have teachers array first
@@ -8448,7 +8450,7 @@ const initializePackageMerchSelections = useCallback(
                           })()}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 whitespace-nowrap">
                         <div className="flex justify-center text-sm text-gray-900">
                           {(() => {
                             const enrolled = Number(classItem.enrolled_students ?? 0);
@@ -8459,7 +8461,7 @@ const initializePackageMerchSelections = useCallback(
                           })()}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4">
                         <div className="text-sm text-gray-900">
                           {classItem.start_date || classItem.end_date ? (
                             <div className="space-y-1">
@@ -8475,7 +8477,7 @@ const initializePackageMerchSelections = useCallback(
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="relative action-menu-container">
                           <button
                             onClick={(e) => handleMenuClick(classItem.class_id, e)}

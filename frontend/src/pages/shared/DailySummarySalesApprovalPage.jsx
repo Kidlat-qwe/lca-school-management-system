@@ -352,8 +352,13 @@ const DailySummarySalesApprovalPage = () => {
   const openMenuForRecord = (event, id) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
+    const menuWidth = 176; // w-44
     const top = rect.bottom + 4;
-    const right = viewportWidth - rect.right;
+    let right = viewportWidth - rect.right;
+    if (right < 8) right = 8;
+    if (right > viewportWidth - menuWidth - 8) {
+      right = Math.max(8, viewportWidth - rect.left - menuWidth);
+    }
     setMenuPosition({ top, right });
     setOpenMenuId((prev) => (prev === id ? null : id));
   };
@@ -499,21 +504,25 @@ const DailySummarySalesApprovalPage = () => {
       ];
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
           Branch admin submissions appear here as Submitted. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
           Cash deposit: Finance or Superfinance can verify or reject.
         </p>
       </div>
 
-      <div className="border-b border-gray-200">
-        <nav className="flex flex-wrap gap-4" aria-label="Summary type tabs">
+      <div className="border-b border-gray-200 -mx-1 px-1 sm:mx-0 sm:px-0">
+        <nav
+          className="flex gap-2 overflow-x-auto pb-px [-webkit-overflow-scrolling:touch] sm:flex-wrap sm:gap-4 sm:overflow-visible sm:pb-0"
+          aria-label="Summary type tabs"
+          style={{ scrollbarWidth: 'thin' }}
+        >
           <button
             type="button"
             onClick={() => setActiveTab(TAB_END_OF_SHIFT)}
-            className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === TAB_END_OF_SHIFT
                 ? 'border-primary-600 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -524,7 +533,7 @@ const DailySummarySalesApprovalPage = () => {
           <button
             type="button"
             onClick={() => setActiveTab(TAB_CASH_DEPOSIT)}
-            className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
               activeTab === TAB_CASH_DEPOSIT
                 ? 'border-primary-600 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -539,14 +548,14 @@ const DailySummarySalesApprovalPage = () => {
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div className="flex flex-wrap gap-3">
-          <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-3 min-w-0 w-full sm:flex-row sm:flex-wrap sm:items-end sm:gap-3 sm:w-auto">
+          <div className="min-w-0 w-full sm:w-auto">
             <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input-field text-sm py-2 min-w-[140px]"
+              className="input-field text-sm py-2 w-full sm:w-auto sm:min-w-[140px]"
             >
               <option value="">All</option>
               <option value="Submitted">Submitted</option>
@@ -554,7 +563,7 @@ const DailySummarySalesApprovalPage = () => {
               <option value="Returned">Returned</option>
             </select>
           </div>
-          <div>
+          <div className="min-w-0 w-full sm:w-auto">
             <label className="block text-xs font-medium text-gray-500 mb-1">
               {isCashDepositTab ? 'Date in Period' : 'Date'}
             </label>
@@ -562,26 +571,26 @@ const DailySummarySalesApprovalPage = () => {
               type="date"
               value={filterDate}
               onChange={(e) => setFilterDate(e.target.value)}
-              className="input-field text-sm py-2"
+              className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
         </div>
 
-        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+        <div className="inline-flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm w-full min-w-0 sm:w-auto sm:max-w-full sm:px-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-tight">
               {isCashDepositTab ? 'Cash deposit' : 'End of Shift'}
             </p>
-            <p className="text-lg font-semibold text-gray-900">
+            <p className="text-base sm:text-lg font-semibold text-gray-900 leading-tight">
               {Number(submittedSummary.count || 0).toLocaleString('en-US')}
             </p>
           </div>
-          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+          <div className="hidden h-8 w-px bg-gray-200 sm:block" />
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-tight">
               {isCashDepositTab ? 'Total Amount' : 'Total amount'}
             </p>
-            <p className="text-lg font-semibold text-emerald-700">
+            <p className="text-base sm:text-lg font-semibold text-emerald-700 leading-tight whitespace-nowrap">
               ₱{Number(submittedSummary.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
           </div>
@@ -716,10 +725,13 @@ const DailySummarySalesApprovalPage = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            className="fixed inset-0 z-[10000] flex items-stretch justify-center backdrop-blur-sm bg-black/5 p-2 sm:items-center sm:p-4"
             onClick={() => !approvingId && setRejectModal({ open: false, id: null, remarks: '' })}
           >
-            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-md w-full max-h-[min(92dvh,90vh)] overflow-y-auto p-4 sm:p-6 my-auto sm:my-0"
+              onClick={(e) => e.stopPropagation()}
+            >
               <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
               <p className="mt-2 text-sm text-gray-600">
                 Optional: Add a reason so the branch admin understands why this submission was rejected.
@@ -730,18 +742,18 @@ const DailySummarySalesApprovalPage = () => {
                 className="input-field mt-2 w-full min-h-[80px]"
                 placeholder="Reason (optional)"
               />
-              <div className="flex justify-end gap-2 mt-4">
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <button
                   onClick={() => setRejectModal({ open: false, id: null, remarks: '' })}
                   disabled={!!approvingId}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                  className="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 sm:w-auto"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleFlag}
                   disabled={!!approvingId}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                  className="w-full px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50 sm:w-auto"
                 >
                   {approvingId === rejectModal.id ? 'Rejecting...' : 'Reject'}
                 </button>
@@ -756,11 +768,11 @@ const DailySummarySalesApprovalPage = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            className="fixed inset-0 z-[9999] flex items-stretch justify-center backdrop-blur-sm bg-black/5 p-2 sm:items-center sm:p-4"
             onClick={() => !approvingId && setVerifyModal({ open: false, record: null })}
           >
           <div
-            className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] flex flex-col p-6 min-w-0 ${
+            className={`bg-white rounded-t-xl sm:rounded-lg shadow-xl w-full max-h-[min(92dvh,90vh)] flex flex-col p-4 sm:p-6 min-w-0 my-auto sm:my-0 ${
               isCashDepositTab ? 'max-w-4xl' : 'max-w-[min(1440px,calc(100vw-2rem))]'
             }`}
             onClick={(e) => e.stopPropagation()}
@@ -1021,12 +1033,12 @@ const DailySummarySalesApprovalPage = () => {
                 </>
               )}
             </div>
-            <div className="mt-6 flex justify-end gap-2 shrink-0">
+            <div className="mt-6 flex flex-col-reverse gap-2 shrink-0 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => !approvingId && setVerifyModal({ open: false, record: null })}
                 disabled={!!approvingId}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                className="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 sm:w-auto"
               >
                 Cancel
               </button>
@@ -1037,7 +1049,7 @@ const DailySummarySalesApprovalPage = () => {
                   if (verified) setVerifyModal({ open: false, record: null });
                 }}
                 disabled={!!approvingId}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                className="w-full px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 sm:w-auto"
               >
                 {approvingId === verifyModal.record[recordIdField] ? 'Verifying...' : 'Verify'}
               </button>
@@ -1052,17 +1064,17 @@ const DailySummarySalesApprovalPage = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            className="fixed inset-0 z-[9999] flex items-stretch justify-center backdrop-blur-sm bg-black/5 p-2 sm:items-center sm:p-4"
             onClick={() => !approvingId && setDetailModal({ open: false, record: null })}
           >
           <div
-            className={`bg-white rounded-xl shadow-xl w-full max-h-[92vh] flex flex-col overflow-hidden min-w-0 ${
+            className={`bg-white rounded-t-xl sm:rounded-xl shadow-xl w-full max-h-[min(92dvh,92vh)] flex flex-col overflow-hidden min-w-0 my-auto sm:my-0 ${
               isCashDepositTab ? 'max-w-5xl' : 'max-w-[min(1440px,calc(100vw-2rem))]'
             }`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 shrink-0">
-              <div className="min-w-0">
+            <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 shrink-0 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-5 sm:py-4">
+              <div className="min-w-0 order-2 sm:order-1">
                 <h3 className="text-lg font-semibold text-gray-900">
                   {isCashDepositTab ? 'Cash Deposit Summary Details' : 'Daily Summary Details'}
                 </h3>
@@ -1076,7 +1088,7 @@ const DailySummarySalesApprovalPage = () => {
                 type="button"
                 onClick={() => setDetailModal({ open: false, record: null })}
                 disabled={!!approvingId}
-                className="text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
+                className="self-end text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto order-1 sm:order-2"
                 aria-label="Close details"
               >
                 <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1089,7 +1101,7 @@ const DailySummarySalesApprovalPage = () => {
               </button>
             </div>
 
-            <div className="px-5 py-4 overflow-y-auto min-h-0">
+            <div className="px-4 py-3 overflow-y-auto min-h-0 sm:px-5 sm:py-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 text-sm">
                 <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
                   <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Branch</p>
@@ -1517,12 +1529,12 @@ const DailySummarySalesApprovalPage = () => {
               </div>
             </div>
 
-            <div className="px-5 py-3 border-t border-gray-100 flex flex-col-reverse gap-2 bg-white shrink-0 sm:flex-row sm:items-center sm:justify-end">
+            <div className="px-4 py-3 border-t border-gray-100 flex flex-col-reverse gap-2 bg-white shrink-0 sm:px-5 sm:flex-row sm:items-center sm:justify-end">
               <button
                 type="button"
                 onClick={() => setDetailModal({ open: false, record: null })}
                 disabled={!!approvingId}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
               >
                 Close
               </button>
@@ -1538,7 +1550,7 @@ const DailySummarySalesApprovalPage = () => {
                       })
                     }
                     disabled={!!approvingId}
-                    className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
                     Reject
                   </button>
@@ -1549,7 +1561,7 @@ const DailySummarySalesApprovalPage = () => {
                       if (verified) setDetailModal({ open: false, record: null });
                     }}
                     disabled={!!approvingId}
-                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
                     {approvingId === detailModal.record[recordIdField] ? 'Verifying...' : 'Verify'}
                   </button>
@@ -1569,11 +1581,11 @@ const DailySummarySalesApprovalPage = () => {
 
       {attachmentPreviewUrl && (
         <div
-          className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/60 p-4"
+          className="fixed inset-0 z-[10000] flex items-stretch justify-center backdrop-blur-sm bg-black/60 p-2 sm:items-center sm:p-4"
           onClick={() => setAttachmentPreviewUrl('')}
         >
           <div
-            className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-4xl w-full max-h-[min(92dvh,90vh)] flex flex-col overflow-hidden my-auto sm:my-0"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">

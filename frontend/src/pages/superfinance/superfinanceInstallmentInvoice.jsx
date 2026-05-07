@@ -11,6 +11,7 @@ import {
   canGenerateInstallmentInvoice,
   installmentGenerateBlockedReason,
 } from '../../utils/installmentInvoiceCanGenerate';
+import InstallmentInvoicePhasesModal from '../../components/installmentInvoice/InstallmentInvoicePhasesModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -45,6 +46,7 @@ const SuperfinanceInstallmentInvoice = () => {
   const [generating, setGenerating] = useState(false);
   const [branches, setBranches] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [phasesModalProfileId, setPhasesModalProfileId] = useState(null);
 
   const getFrequencyMonths = (frequency) => {
     const match = String(frequency || '1 month(s)').match(/(\d+)/);
@@ -167,10 +169,14 @@ const SuperfinanceInstallmentInvoice = () => {
   }, [filteredInvoices, highlightedProfileId]);
 
   const handleViewEdit = (invoice) => {
-    console.log('View/Edit invoice:', invoice);
     setOpenActionMenu(null);
     setActionMenuPosition(null);
-    // TODO: Implement view/edit functionality
+    const profileId = invoice?.installmentinvoiceprofiles_id;
+    if (!profileId) {
+      appAlert('No installment plan found for this record.');
+      return;
+    }
+    setPhasesModalProfileId(profileId);
   };
 
   const handleGenerateInvoice = (invoice) => {
@@ -632,7 +638,7 @@ const SuperfinanceInstallmentInvoice = () => {
                       }}
                       className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      View and Edit
+                      View Details
                     </button>
                     <button
                       type="button"
@@ -673,6 +679,12 @@ const SuperfinanceInstallmentInvoice = () => {
         </>,
         document.body
       )}
+
+      <InstallmentInvoicePhasesModal
+        open={phasesModalProfileId != null}
+        profileId={phasesModalProfileId}
+        onClose={() => setPhasesModalProfileId(null)}
+      />
 
       {/* Generate Invoice Modal */}
       {isGenerateModalOpen && selectedInvoiceForGeneration && createPortal(

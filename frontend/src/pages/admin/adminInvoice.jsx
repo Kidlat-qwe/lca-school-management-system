@@ -5,11 +5,15 @@ import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   downloadInvoiceExportXlsx,
+  fetchUnpaidInvoicesForPaymentDateExport,
   getInvoiceExportCollectedAmount,
   INVOICE_EXPORT_COL_WIDTHS,
+  INVOICE_EXPORT_DEFAULT_STATUSES,
   mapCompletedPaymentsToExportRows,
+  mapUnpaidInvoiceToPaymentExportRow,
   PAYMENT_DATE_EXPORT_COL_WIDTHS,
-  shouldIncludeInvoiceInExport,
+  shouldIncludeInvoiceByStatuses,
+  shouldIncludePaymentByInvoiceStatuses,
 } from '../../utils/invoiceExcelExport.js';
 import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/fetchAllPaymentsForExport.js';
 import {
@@ -127,7 +131,9 @@ const AdminInvoice = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
   const [exportDateTo, setExportDateTo] = useState('');
-  const [exportIncludeUnpaid, setExportIncludeUnpaid] = useState(true);
+  const [exportSelectedStatuses, setExportSelectedStatuses] = useState(
+    INVOICE_EXPORT_DEFAULT_STATUSES
+  );
   const [exportLoading, setExportLoading] = useState(false);
 
   // Fetch branch name if not in userInfo
@@ -1225,7 +1231,11 @@ const AdminInvoice = () => {
   const getUniqueStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
   const normalizeYmd = (value) => (value ? String(value).slice(0, 10) : '');
 
-  const filteredInvoices = invoices.filter((invoice) => {
+  // Two-pass filtering: first apply every filter EXCEPT the status filter
+  // so we can derive accurate per-status counts (used by the dropdown
+  // options and the active-Unpaid filter chip) for the user's current
+  // scope (search / student / issue date range / month).
+  const matchesNonStatusFilters = (invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
     const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
     const matchesSearch = !nameSearchTerm ||
@@ -1236,15 +1246,22 @@ const AdminInvoice = () => {
       studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStudentName = !studentNameSearch ||
       (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
-    // Show all invoices by default, including Paid (needed for PDF download)
-    const matchesStatus = filterStatus
-      ? invoice.status === filterStatus
-      : true;
     const issueYmd = normalizeYmd(invoice.issue_date);
     const matchesIssueDateFrom = !filterIssueDateFrom || (issueYmd && issueYmd >= filterIssueDateFrom);
     const matchesIssueDateTo = !filterIssueDateTo || (issueYmd && issueYmd <= filterIssueDateTo);
-    return matchesSearch && matchesStudentName && matchesStatus && matchesIssueDateFrom && matchesIssueDateTo;
-  });
+    return matchesSearch && matchesStudentName && matchesIssueDateFrom && matchesIssueDateTo;
+  };
+  const invoicesInScope = invoices.filter(matchesNonStatusFilters);
+  const invoiceStatusCounts = invoicesInScope.reduce((acc, inv) => {
+    const s = String(inv?.status || '').trim();
+    if (!s) return acc;
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
+  const unpaidInvoiceCount = invoiceStatusCounts['Unpaid'] || 0;
+  const filteredInvoices = invoicesInScope.filter((invoice) =>
+    filterStatus ? invoice.status === filterStatus : true
+  );
   const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
   const paginatedInvoices = filteredInvoices.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -1297,20 +1314,44 @@ const AdminInvoice = () => {
       let emptyMessage;
 
       if (usePaymentDateExport) {
+        const fromTrim = exportDateFrom?.trim() || '';
+        const toTrim = exportDateTo?.trim() || '';
         const payments = await fetchAllPaymentsForExport(apiRequest, {
           branchId: adminBranchId || null,
-          paymentDateFrom: exportDateFrom?.trim() || '',
-          paymentDateTo: exportDateTo?.trim() || '',
+          paymentDateFrom: fromTrim,
+          paymentDateTo: toTrim,
           align: PaymentExportAlignMode.ADMIN,
         });
-        exportRows = mapCompletedPaymentsToExportRows(payments);
+        const filteredPayments = (payments || []).filter((p) =>
+          shouldIncludePaymentByInvoiceStatuses(p, exportSelectedStatuses)
+        );
+        const paymentRows = mapCompletedPaymentsToExportRows(filteredPayments);
+
+        // Merge unpaid invoices issued in the same date window when
+        // "Unpaid" is checked — keeps the export reconciled to AR.
+        let unpaidRows = [];
+        if (exportSelectedStatuses.includes('Unpaid')) {
+          const unpaid = await fetchUnpaidInvoicesForPaymentDateExport(apiRequest, {
+            branchIds: adminBranchId ? [adminBranchId] : [],
+            issueDateFrom: fromTrim,
+            issueDateTo: toTrim,
+          });
+          unpaidRows = unpaid.map((inv) =>
+            mapUnpaidInvoiceToPaymentExportRow({
+              ...inv,
+              branch_name: selectedBranchName || inv.branch_name || 'Your Branch',
+            })
+          );
+        }
+
+        exportRows = [...paymentRows, ...unpaidRows];
         colWidths = PAYMENT_DATE_EXPORT_COL_WIDTHS;
         emptyMessage =
-          'No payments found for the selected payment date range (same scope as Payment Logs — main list for your branch).';
+          'No payments or unpaid invoices found for the selected date range.';
       } else {
         exportRows = filteredInvoices
           .filter((invoice) => {
-            if (!shouldIncludeInvoiceInExport(invoice, exportIncludeUnpaid)) return false;
+            if (!shouldIncludeInvoiceByStatuses(invoice, exportSelectedStatuses)) return false;
             return true;
           })
           .map((invoice) => ({
@@ -1336,6 +1377,7 @@ const AdminInvoice = () => {
         colWidths,
       });
       setShowExportModal(false);
+      setExportSelectedStatuses(INVOICE_EXPORT_DEFAULT_STATUSES);
       appAlert('Invoice export completed successfully.');
     } catch (err) {
       console.error('Error exporting invoices:', err);
@@ -1455,10 +1497,10 @@ const AdminInvoice = () => {
                 onChange={(e) => setFilterStatus(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               >
-                <option value="">All statuses</option>
+                <option value="">All statuses ({invoicesInScope.length})</option>
                 {getUniqueStatuses.map((status) => (
                   <option key={status} value={status}>
-                    {status}
+                    {status} ({invoiceStatusCounts[status] || 0})
                   </option>
                 ))}
               </select>
@@ -1466,9 +1508,28 @@ const AdminInvoice = () => {
           </div>
         ) : null}
         <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-gray-500">
-            Month filtering uses invoice issue date. Clear the month to show all invoice dates.
-          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <p className="text-xs text-gray-500">
+              Month filtering uses invoice issue date. Clear the month to show all invoice dates.
+            </p>
+            {filterStatus === 'Unpaid' && (
+              <button
+                type="button"
+                onClick={() => setFilterStatus('')}
+                aria-pressed={true}
+                title="Clear unpaid filter"
+                className="relative inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 transition-colors hover:bg-red-200"
+              >
+                <span>Unpaid</span>
+                <sup
+                  className="ml-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white"
+                  aria-label={`${unpaidInvoiceCount} unpaid invoices`}
+                >
+                  {unpaidInvoiceCount > 99 ? '99+' : unpaidInvoiceCount}
+                </sup>
+              </button>
+            )}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button
               type="button"
@@ -1972,6 +2033,7 @@ const AdminInvoice = () => {
         }
         exportLoading={exportLoading}
         onExport={handleExportToExcel}
+        exportDisabled={exportSelectedStatuses.length === 0}
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
@@ -1993,20 +2055,63 @@ const AdminInvoice = () => {
             />
           </div>
         </div>
-        {!(exportDateFrom?.trim() || exportDateTo?.trim()) ? (
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={exportIncludeUnpaid}
-              onChange={(e) => setExportIncludeUnpaid(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            <span>
-              <span className="font-medium">Include unpaid invoices</span>
-              <span className="block text-xs text-gray-500">Only applies when no payment date range is set.</span>
-            </span>
-          </label>
-        ) : null}
+        {(() => {
+          const hasDateRange = Boolean(exportDateFrom?.trim() || exportDateTo?.trim());
+          return (
+            <div>
+              <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <label className="text-sm font-medium text-gray-700">
+                  Statuses to include
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExportSelectedStatuses(
+                      exportSelectedStatuses.length === INVOICE_EXPORT_DEFAULT_STATUSES.length
+                        ? []
+                        : INVOICE_EXPORT_DEFAULT_STATUSES
+                    )
+                  }
+                  className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-start"
+                >
+                  {exportSelectedStatuses.length === INVOICE_EXPORT_DEFAULT_STATUSES.length
+                    ? 'Clear All'
+                    : 'Select All'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-3">
+                {INVOICE_EXPORT_DEFAULT_STATUSES.map((status) => {
+                  const checked = exportSelectedStatuses.includes(status);
+                  return (
+                    <label
+                      key={status}
+                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setExportSelectedStatuses((prev) =>
+                            prev.includes(status)
+                              ? prev.filter((s) => s !== status)
+                              : [...prev, status]
+                          )
+                        }
+                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-gray-700">{status}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {hasDateRange
+                  ? 'Filters payments by their parent invoice status. Default: all statuses.'
+                  : 'Filters invoice rows by status. Default: all statuses.'}
+              </p>
+            </div>
+          );
+        })()}
       </StandardExportModal>
 
       {/* Create/Edit Invoice Modal */}

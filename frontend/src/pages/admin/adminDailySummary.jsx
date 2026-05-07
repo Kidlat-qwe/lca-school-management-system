@@ -279,20 +279,24 @@ const AdminDailySummary = () => {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Daily summary</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily summary</h1>
+        <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
           Submission history and returned items for <span className="font-semibold text-gray-800">{branchName}</span>.
         </p>
       </div>
 
-      <div className="border-b border-gray-200">
-        <nav className="flex flex-wrap gap-4" aria-label="Summary type">
+      <div className="border-b border-gray-200 -mx-1 px-1 sm:mx-0 sm:px-0">
+        <nav
+          className="flex gap-2 overflow-x-auto pb-px [-webkit-overflow-scrolling:touch] sm:flex-wrap sm:gap-4 sm:overflow-visible sm:pb-0"
+          aria-label="Summary type"
+          style={{ scrollbarWidth: 'thin' }}
+        >
           <button
             type="button"
             onClick={() => setSummaryKind(TAB_EOD)}
-            className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors ${
               summaryKind === TAB_EOD
                 ? 'border-primary-600 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -303,7 +307,7 @@ const AdminDailySummary = () => {
           <button
             type="button"
             onClick={() => setSummaryKind(TAB_CASH)}
-            className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
               summaryKind === TAB_CASH
                 ? 'border-primary-600 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -314,30 +318,32 @@ const AdminDailySummary = () => {
         </nav>
       </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <BranchPaymentLogTabs
-          value={viewTab}
-          onChange={setViewTab}
-          mainLabel="Submission history"
-          returnLabel="Return"
-          ariaLabel="Daily summary views"
-          returnBadgeCount={returnBadgeCount}
-        />
-        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+      <div className="flex flex-col gap-3 min-w-0 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0 w-full xl:flex-1 xl:max-w-xl">
+          <BranchPaymentLogTabs
+            value={viewTab}
+            onChange={setViewTab}
+            mainLabel="Submission history"
+            returnLabel="Return"
+            ariaLabel="Daily summary views"
+            returnBadgeCount={returnBadgeCount}
+          />
+        </div>
+        <div className="inline-flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm w-full min-w-0 sm:w-auto sm:max-w-full sm:px-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-tight">
               {isCash ? 'Cash deposit' : 'End of Shift'}
             </p>
-            <p className="text-lg font-semibold text-gray-900">
+            <p className="text-base sm:text-lg font-semibold text-gray-900 leading-tight">
               {Number(submittedSummary.count || 0).toLocaleString('en-US')}
             </p>
           </div>
-          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+          <div className="hidden h-8 w-px bg-gray-200 sm:block" />
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-tight">
               {isCash ? 'Total Amount' : 'Total amount'}
             </p>
-            <p className="text-lg font-semibold text-emerald-700">
+            <p className="text-base sm:text-lg font-semibold text-emerald-700 leading-tight whitespace-nowrap">
               {formatMoney(submittedSummary.total_amount || 0)}
             </p>
           </div>
@@ -345,13 +351,13 @@ const AdminDailySummary = () => {
       </div>
 
       {viewTab === VIEW_MAIN && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-          <div>
+        <div className="flex flex-col gap-3 min-w-0 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="min-w-0 w-full sm:w-auto">
             <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input-field text-sm min-w-[160px]"
+              className="input-field text-sm w-full sm:w-auto sm:min-w-[160px]"
             >
               {statusOptions.map((o) => (
                 <option key={o.value || 'all'} value={o.value}>
@@ -360,7 +366,7 @@ const AdminDailySummary = () => {
               ))}
             </select>
           </div>
-          <div>
+          <div className="min-w-0 w-full sm:w-auto">
             <label className="block text-xs font-medium text-gray-600 mb-1">
               {isCash ? 'Date in period' : 'Summary date'}
             </label>
@@ -368,7 +374,7 @@ const AdminDailySummary = () => {
               type="date"
               value={filterDate}
               onChange={(e) => setFilterDate(e.target.value)}
-              className="input-field text-sm"
+              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
           {(filterStatus || filterDate) && (
@@ -547,7 +553,7 @@ const AdminDailySummary = () => {
       {eodResubmit.open &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4"
+            className="fixed inset-0 z-[9999] flex items-stretch justify-center bg-black/40 p-2 sm:items-center sm:p-4"
             onClick={() => {
               if (eodResubmitLoading || eodResubmitRecalcLoading) return;
               setEodResubmit({ open: false, record: null });
@@ -555,7 +561,7 @@ const AdminDailySummary = () => {
             }}
           >
             <div
-              className="flex max-h-[min(90vh,calc(100dvh-2rem))] w-full max-w-[min(56rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+              className="flex max-h-[min(92dvh,calc(100dvh-2rem))] w-full max-w-[min(56rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-t-xl bg-white shadow-xl my-auto sm:my-0 sm:rounded-lg"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="shrink-0 border-b border-gray-200 px-5 py-4">
@@ -717,10 +723,10 @@ const AdminDailySummary = () => {
                   <p className="text-sm text-gray-600">No payment rows for this date after filters. You may still resubmit to refresh totals.</p>
                 ) : null}
               </div>
-              <div className="flex shrink-0 justify-end gap-2 border-t border-gray-200 px-5 py-4">
+              <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-200 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
                 <button
                   type="button"
-                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
                   disabled={eodResubmitLoading || eodResubmitRecalcLoading}
                   onClick={() => {
                     setEodResubmit({ open: false, record: null });
@@ -731,7 +737,7 @@ const AdminDailySummary = () => {
                 </button>
                 <button
                   type="button"
-                  className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                  className="w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50 sm:w-auto"
                   disabled={
                     eodResubmitLoading ||
                     eodResubmitRecalcLoading ||
@@ -753,11 +759,11 @@ const AdminDailySummary = () => {
       {cashResubmit.open &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4"
+            className="fixed inset-0 z-[9999] flex items-stretch justify-center bg-black/40 p-2 sm:items-center sm:p-4"
             onClick={() => !cashResubmitLoading && setCashResubmit({ open: false, record: null })}
           >
             <div
-              className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-lg bg-white shadow-xl"
+              className="w-full max-w-lg max-h-[min(92dvh,90vh)] overflow-y-auto rounded-t-xl bg-white shadow-xl my-auto sm:my-0 sm:rounded-lg"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="border-b border-gray-200 px-5 py-4">
@@ -831,10 +837,10 @@ const AdminDailySummary = () => {
                   </div>
                 ) : null}
               </div>
-              <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
+              <div className="flex flex-col-reverse gap-2 border-t border-gray-200 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
                 <button
                   type="button"
-                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
                   disabled={cashResubmitLoading}
                   onClick={() => setCashResubmit({ open: false, record: null })}
                 >
@@ -842,7 +848,7 @@ const AdminDailySummary = () => {
                 </button>
                 <button
                   type="button"
-                  className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                  className="w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50 sm:w-auto"
                   disabled={cashResubmitLoading || cashUploading}
                   onClick={submitCashResubmit}
                 >

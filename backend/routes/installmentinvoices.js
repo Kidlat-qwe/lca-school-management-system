@@ -221,6 +221,316 @@ router.get(
 );
 
 /**
+ * GET /api/sms/installment-invoices/profiles/:id/phases
+ *
+ * Detailed view used by the "View and Edit" modal on the Installment
+ * Invoice Logs page. Returns the profile, the downpayment summary,
+ * one row per phase (1..total_phases) with its underlying invoice
+ * (if generated yet), payment totals, and an aggregated total paid.
+ *
+ * Phase numbering rule: invoices linked to the profile (excluding the
+ * downpayment) are grouped by chain root (so a re-billed/balance
+ * invoice is counted once per chain), ordered by issue_date ASC, then
+ * assigned phase numbers 1..N. Phases beyond N up to total_phases are
+ * returned as "Not Generated" placeholders so the UI can show the
+ * complete schedule at a glance.
+ *
+ * Access: any authenticated user with branch access (already enforced
+ * by router.use(verifyFirebaseToken) + requireBranchAccess above).
+ */
+router.get(
+  '/profiles/:id/phases',
+  [
+    param('id').isInt().withMessage('Profile ID must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const profileResult = await query(
+        `SELECT ip.*,
+                u.full_name AS student_name,
+                u.email AS student_email,
+                p.program_name,
+                pkg.package_name AS package_description,
+                pkg.package_type,
+                b.branch_name
+         FROM installmentinvoiceprofilestbl ip
+         LEFT JOIN userstbl u ON ip.student_id = u.user_id
+         LEFT JOIN classestbl c ON ip.class_id = c.class_id
+         LEFT JOIN programstbl p ON c.program_id = p.program_id
+         LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
+         LEFT JOIN branchestbl b ON ip.branch_id = b.branch_id
+         WHERE ip.installmentinvoiceprofiles_id = $1`,
+        [id]
+      );
+
+      if (profileResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Installment invoice profile not found',
+        });
+      }
+
+      const profile = profileResult.rows[0];
+
+      // Branch isolation for non-Superadmin: refuse if the profile belongs
+      // to another branch.
+      if (
+        req.user?.userType !== 'Superadmin' &&
+        req.user?.branchId &&
+        profile.branch_id != null &&
+        Number(profile.branch_id) !== Number(req.user.branchId)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have access to this installment profile.',
+        });
+      }
+
+      const downpaymentInvoiceId =
+        profile.downpayment_invoice_id != null ? Number(profile.downpayment_invoice_id) : null;
+
+      // Pull every invoice linked to this profile, plus its completed
+      // payment total and the latest completed payment date. We
+      // compute paid_amount and latest_payment_date per chain root
+      // afterwards in JS so we can keep the SQL straightforward.
+      const invoicesResult = await query(
+        `SELECT i.invoice_id,
+                i.invoice_description,
+                i.invoice_ar_number,
+                i.amount,
+                i.status,
+                TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
+                TO_CHAR(i.due_date, 'YYYY-MM-DD')   AS due_date,
+                COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
+                i.invoice_chain_root_id,
+                i.parent_invoice_id,
+                i.balance_invoice_id,
+                COALESCE((
+                  SELECT SUM(p.payable_amount)
+                  FROM paymenttbl p
+                  WHERE p.invoice_id = i.invoice_id
+                    AND p.status = 'Completed'
+                ), 0)::numeric AS paid_total_for_invoice,
+                (
+                  SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
+                  FROM paymenttbl p
+                  WHERE p.invoice_id = i.invoice_id
+                    AND p.status = 'Completed'
+                ) AS latest_payment_date_for_invoice
+         FROM invoicestbl i
+         WHERE i.installmentinvoiceprofiles_id = $1
+         ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC`,
+        [id]
+      );
+
+      const allInvoices = invoicesResult.rows;
+
+      // Group by chain root: each chain represents ONE phase (or the
+      // downpayment). For each chain, prefer the most recently issued
+      // invoice as the representative (balance/re-billed invoice
+      // supersedes the original) but sum payments across the chain.
+      const chains = new Map();
+      for (const inv of allInvoices) {
+        const chainRoot = Number(inv.chain_root_id);
+        if (!chains.has(chainRoot)) {
+          chains.set(chainRoot, {
+            chain_root_id: chainRoot,
+            representative: inv,
+            paid_amount: 0,
+            latest_payment_date: null,
+            invoices: [],
+          });
+        }
+        const chain = chains.get(chainRoot);
+        chain.invoices.push(inv);
+        chain.paid_amount += Number(inv.paid_total_for_invoice || 0);
+        const invLatestPay = inv.latest_payment_date_for_invoice || null;
+        if (invLatestPay && (!chain.latest_payment_date || invLatestPay > chain.latest_payment_date)) {
+          chain.latest_payment_date = invLatestPay;
+        }
+        // Pick the latest invoice in the chain as representative for
+        // status/dates/amount (e.g. balance invoice vs. original).
+        const currentRep = chain.representative;
+        if (
+          (inv.issue_date || '') > (currentRep.issue_date || '') ||
+          ((inv.issue_date || '') === (currentRep.issue_date || '') &&
+            Number(inv.invoice_id) > Number(currentRep.invoice_id))
+        ) {
+          chain.representative = inv;
+        }
+      }
+
+      // Split the downpayment chain off from the phase chains.
+      let downpaymentChain = null;
+      const phaseChains = [];
+      for (const chain of chains.values()) {
+        if (downpaymentInvoiceId && chain.chain_root_id === downpaymentInvoiceId) {
+          downpaymentChain = chain;
+        } else {
+          phaseChains.push(chain);
+        }
+      }
+      phaseChains.sort((a, b) => {
+        const da = a.representative.issue_date || '';
+        const db = b.representative.issue_date || '';
+        if (da !== db) return da < db ? -1 : 1;
+        return Number(a.chain_root_id) - Number(b.chain_root_id);
+      });
+
+      const todayYmd = (() => {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      })();
+
+      const computeStatus = (invoiceStatus, dueDate) => {
+        const raw = String(invoiceStatus || '').trim();
+        if (raw.toLowerCase() === 'paid') return 'Paid';
+        if (raw.toLowerCase() === 'cancelled' || raw.toLowerCase() === 'canceled') return 'Cancelled';
+        if (dueDate && dueDate < todayYmd) return 'Overdue';
+        return raw || 'Pending';
+      };
+
+      const buildPhaseRow = (phaseNumber, chain) => {
+        if (!chain) {
+          return {
+            phase_number: phaseNumber,
+            invoice_id: null,
+            invoice_ar_number: null,
+            invoice_description: null,
+            issue_date: null,
+            due_date: null,
+            payment_date: null,
+            amount: profile.amount != null ? Number(profile.amount) : null,
+            paid_amount: 0,
+            status: 'Not Generated',
+            is_generated: false,
+          };
+        }
+        const rep = chain.representative;
+        const amount = rep.amount != null ? Number(rep.amount) : null;
+        return {
+          phase_number: phaseNumber,
+          invoice_id: Number(rep.invoice_id),
+          invoice_ar_number: rep.invoice_ar_number || null,
+          invoice_description: rep.invoice_description || null,
+          issue_date: rep.issue_date || null,
+          due_date: rep.due_date || null,
+          payment_date: chain.latest_payment_date || null,
+          amount,
+          paid_amount: Number(chain.paid_amount || 0),
+          status: computeStatus(rep.status, rep.due_date),
+          is_generated: true,
+        };
+      };
+
+      const totalPhases =
+        profile.total_phases != null ? Math.max(0, Number(profile.total_phases)) : phaseChains.length;
+      const phases = [];
+      for (let i = 0; i < Math.max(totalPhases, phaseChains.length); i += 1) {
+        phases.push(buildPhaseRow(i + 1, phaseChains[i] || null));
+      }
+
+      const downpaymentRep = downpaymentChain?.representative || null;
+      const downpayment = downpaymentRep
+        ? {
+            invoice_id: Number(downpaymentRep.invoice_id),
+            invoice_ar_number: downpaymentRep.invoice_ar_number || null,
+            invoice_description: downpaymentRep.invoice_description || null,
+            issue_date: downpaymentRep.issue_date || null,
+            due_date: downpaymentRep.due_date || null,
+            payment_date: downpaymentChain.latest_payment_date || null,
+            amount:
+              downpaymentRep.amount != null ? Number(downpaymentRep.amount) : null,
+            paid_amount: Number(downpaymentChain.paid_amount || 0),
+            status: computeStatus(downpaymentRep.status, downpaymentRep.due_date),
+            is_generated: true,
+          }
+        : null;
+
+      const totalPaidPhases = phases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
+      const totalPaidDownpayment = downpayment ? Number(downpayment.paid_amount || 0) : 0;
+      const totalPaid = totalPaidPhases + totalPaidDownpayment;
+
+      // Total Billed = lifetime expected amount across the whole plan.
+      // For generated phases use the actual invoice amount; for phases
+      // not yet generated fall back to the profile's per-phase amount.
+      // Include the downpayment when present.
+      const profilePhaseAmount =
+        profile.amount != null ? Number(profile.amount) : 0;
+      const totalBilledPhases = phases.reduce((sum, p) => {
+        if (p.is_generated && p.amount != null) return sum + Number(p.amount);
+        if (!p.is_generated) return sum + profilePhaseAmount;
+        return sum;
+      }, 0);
+      const totalBilled =
+        totalBilledPhases + (downpayment?.amount != null ? Number(downpayment.amount) : 0);
+
+      // Outstanding per generated phase: amount minus paid (floored at
+      // 0). Per ungenerated phase: full profile per-phase amount.
+      // Plus any unpaid portion of the downpayment.
+      const outstandingGenerated = phases.reduce((sum, p) => {
+        if (!p.is_generated || p.amount == null) return sum;
+        return sum + Math.max(0, Number(p.amount) - Number(p.paid_amount || 0));
+      }, 0);
+      const outstandingNotGenerated = phases.reduce(
+        (sum, p) => sum + (p.is_generated ? 0 : profilePhaseAmount),
+        0
+      );
+      const outstandingDownpayment =
+        downpayment && downpayment.amount != null
+          ? Math.max(0, Number(downpayment.amount) - Number(downpayment.paid_amount || 0))
+          : 0;
+      const totalOutstanding =
+        outstandingGenerated + outstandingNotGenerated + outstandingDownpayment;
+
+      res.json({
+        success: true,
+        data: {
+          profile: {
+            installmentinvoiceprofiles_id: Number(profile.installmentinvoiceprofiles_id),
+            student_id: profile.student_id != null ? Number(profile.student_id) : null,
+            student_name: profile.student_name || null,
+            student_email: profile.student_email || null,
+            program_name: profile.program_name || null,
+            package_id: profile.package_id != null ? Number(profile.package_id) : null,
+            package_description: profile.package_description || null,
+            package_type: profile.package_type || null,
+            branch_id: profile.branch_id != null ? Number(profile.branch_id) : null,
+            branch_name: profile.branch_name || null,
+            amount: profile.amount != null ? Number(profile.amount) : null,
+            frequency: profile.frequency || null,
+            total_phases: profile.total_phases != null ? Number(profile.total_phases) : null,
+            generated_count:
+              profile.generated_count != null ? Number(profile.generated_count) : 0,
+            phase_start: profile.phase_start != null ? Number(profile.phase_start) : null,
+            is_active: profile.is_active === true,
+            downpayment_invoice_id: downpaymentInvoiceId,
+            downpayment_paid: profile.downpayment_paid === true,
+          },
+          downpayment,
+          phases,
+          totals: {
+            total_paid: totalPaid,
+            total_paid_phases: totalPaidPhases,
+            total_paid_downpayment: totalPaidDownpayment,
+            total_billed: totalBilled,
+            total_outstanding: totalOutstanding,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/sms/installment-invoices/profiles
  * Create new installment invoice profile
  * Access: Superadmin, Admin

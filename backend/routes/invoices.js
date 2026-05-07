@@ -824,10 +824,18 @@ router.get(
         // Use the pre-formatted YMD string to avoid timezone day shifts.
         const arDate = formatDate(lastPaymentYmd || invoice.issue_date) || '-';
         const amountPaid = Math.max(0, totalPayments || 0);
+        // MONTH column = the **billing month** (period this invoice covers),
+        // not the date the invoice was issued. We anchor on `due_date`
+        // because for tuition installments the due date falls within the
+        // school month being billed (e.g., May 5 → "May 2026"), and we
+        // gracefully fall back to `issue_date` if a one-off invoice has
+        // no due date set. Both columns arrive pre-formatted as 'YYYY-MM-DD'
+        // so UTC parsing avoids timezone day shifts.
         const monthLabel = (() => {
-          if (!invoice.due_date) return '';
+          const anchor = invoice.due_date || invoice.issue_date;
+          if (!anchor) return '';
           try {
-            const d = new Date(invoice.due_date);
+            const d = new Date(anchor);
             if (Number.isNaN(d.getTime())) return '';
             return d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
           } catch {

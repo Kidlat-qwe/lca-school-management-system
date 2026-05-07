@@ -593,14 +593,27 @@ router.get(
               FROM branchestbl b
               ${branchWhereClause}
             ),
-            new_enrollees AS (
-              SELECT
+            daily_enrolled_students AS (
+              SELECT DISTINCT
                 c.branch_id,
-                COUNT(DISTINCT cs.student_id) AS new_enrollees
+                cs.student_id
               FROM classstudentstbl cs
               INNER JOIN classestbl c ON cs.class_id = c.class_id
               WHERE TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
-              GROUP BY c.branch_id
+            ),
+            new_enrollees AS (
+              SELECT
+                des.branch_id,
+                COUNT(*)::bigint AS new_enrollees
+              FROM daily_enrolled_students des
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM paymenttbl p_hist
+                WHERE p_hist.student_id = des.student_id
+                  AND p_hist.status = 'Completed'
+                  AND p_hist.issue_date < $${branchParams.length + 1}::date
+              )
+              GROUP BY des.branch_id
             ),
             daily_sales AS (
               SELECT
@@ -646,20 +659,17 @@ router.get(
             ),
             re_enrollment AS (
               SELECT
-                p.branch_id,
-                COUNT(DISTINCT p.student_id) AS re_enrollment_count
-              FROM paymenttbl p
-              INNER JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-              INNER JOIN installmentinvoiceprofilestbl ip
-                ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
-              WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 1}::date
-                AND i.installmentinvoiceprofiles_id IS NOT NULL
-                AND (
-                  ip.downpayment_invoice_id IS NULL OR
-                  COALESCE(i.invoice_chain_root_id, i.invoice_id) != ip.downpayment_invoice_id::INTEGER
-                )
-              GROUP BY p.branch_id
+                des.branch_id,
+                COUNT(*)::bigint AS re_enrollment_count
+              FROM daily_enrolled_students des
+              WHERE EXISTS (
+                SELECT 1
+                FROM paymenttbl p_hist
+                WHERE p_hist.student_id = des.student_id
+                  AND p_hist.status = 'Completed'
+                  AND p_hist.issue_date < $${branchParams.length + 1}::date
+              )
+              GROUP BY des.branch_id
             ),
             dropped_unenrolled AS (
               SELECT

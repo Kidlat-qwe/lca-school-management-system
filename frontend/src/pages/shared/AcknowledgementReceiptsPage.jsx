@@ -1111,8 +1111,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       errors.branch_id = 'Branch is required';
     }
 
+    if (!(createFormData.issue_date || '').trim()) {
+      errors.issue_date = isMerch ? 'Payment date is required' : 'Issue date is required';
+    }
+
     if (isMerch) {
-      // Issue/payment date is always today (Manila) — no user validation needed
       const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
       if (merchandiseSelections.length === 0 || configuredCount === 0) {
         errors.merchandise = 'Select at least one merchandise item and configure size';
@@ -1190,7 +1193,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           tip_amount:
             createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
           payment_method: createFormData.payment_method || 'Cash',
-          issue_date: todayManilaYMD(),
+          issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           branch_id: branchId,
         };
         if (!payload.reference_number) delete payload.reference_number;
@@ -1212,7 +1215,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           tip_amount:
             createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
           payment_method: createFormData.payment_method || 'Cash',
-          issue_date: todayManilaYMD(),
+          issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
           level_tag: (createFormData.level_tag || '').trim() || undefined,
           reference_number: (createFormData.reference_number || '').trim() || undefined,
@@ -2570,13 +2573,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <input
                         type="date"
                         name="issue_date"
-                        readOnly
-                        tabIndex={-1}
-                        value={todayManilaYMD()}
-                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                        aria-readonly="true"
+                        value={createFormData.issue_date}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                        required
+                        disabled={creating}
                       />
-                      <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time).</p>
+                      {createFormErrors.issue_date && (
+                        <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
+                      )}
+                      <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
                     </div>
                     <div>
                       <label className="label-field text-xs">Amount</label>
@@ -2920,13 +2926,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     </label>
                     <input
                       type="date"
-                      readOnly
-                      tabIndex={-1}
-                      value={todayManilaYMD()}
-                      className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                      aria-readonly="true"
+                      name="issue_date"
+                      value={createFormData.issue_date}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                      required
+                      disabled={creating}
                     />
-                    <p className="mt-1 text-xs text-gray-500">Always set to today (Manila time).</p>
+                    {createFormErrors.issue_date && (
+                      <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
                   </div>
                 )}
 

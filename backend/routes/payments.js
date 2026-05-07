@@ -750,6 +750,7 @@ router.get(
                         returner.full_name as returned_by_name,
                         u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                         i.invoice_description, i.amount as invoice_amount,
+                        i.status AS invoice_status,
                         COALESCE(i.amount, 0) + COALESCE((
                           SELECT SUM(COALESCE(px.tip_amount, 0))
                           FROM paymenttbl px
