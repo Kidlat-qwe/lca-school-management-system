@@ -119,6 +119,7 @@ const AdminInvoice = () => {
     payment_type: '',
     payable_amount: '',
     tip_amount: '',
+    discount_amount: '',
     issue_date: todayManilaYMD(),
     reference_number: '',
     remarks: '',
@@ -765,6 +766,7 @@ const AdminInvoice = () => {
         payment_type: '',
         payable_amount: invoiceData.amount || '',
         tip_amount: '',
+        discount_amount: '',
         issue_date: todayManilaYMD(),
         reference_number: '',
         remarks: '',
@@ -832,6 +834,7 @@ const AdminInvoice = () => {
       payment_type: '',
       payable_amount: '',
       tip_amount: '',
+      discount_amount: '',
       issue_date: todayManilaYMD(),
       reference_number: '',
       remarks: '',
@@ -976,6 +979,13 @@ const AdminInvoice = () => {
     if (paymentFormData.tip_amount !== '' && (Number.isNaN(tipAmount) || tipAmount < 0)) {
       errors.tip_amount = 'Tip amount must be 0 or greater';
     }
+    const discountAmount = parseFloat(paymentFormData.discount_amount || 0);
+    if (paymentFormData.discount_amount !== '' && (Number.isNaN(discountAmount) || discountAmount < 0)) {
+      errors.discount_amount = 'Discount amount must be 0 or greater';
+    }
+    if (paymentFormData.discount_amount !== '' && discountAmount >= payableAmount) {
+      errors.discount_amount = 'Discount amount must be less than payable amount';
+    }
     const refNum = (paymentFormData.reference_number || '').trim();
     if (!refNum) {
       errors.reference_number = 'Reference number is required';
@@ -999,19 +1009,35 @@ const AdminInvoice = () => {
     setSubmittingPayment(true);
     
     try {
+      // Net cash to record = Payable Amount minus optional Discount Amount.
+      // Discount applied at point of payment is deducted from the recorded amount;
+      // it is preserved in the remarks for audit traceability since the backend
+      // does not yet have a dedicated discount-on-payment column.
+      const grossPayable = parseFloat(paymentFormData.payable_amount) || 0;
+      const discountApplied = paymentFormData.discount_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(paymentFormData.discount_amount) || 0);
+      const netPayable = Math.max(0, grossPayable - discountApplied);
+
       const payload = {
         invoice_id: selectedInvoiceForPayment.invoice_id,
         student_id: parseInt(paymentFormData.student_id, 10),
         payment_method: paymentFormData.payment_method,
         payment_type: paymentFormData.payment_type,
-        payable_amount: parseFloat(paymentFormData.payable_amount),
+        payable_amount: netPayable,
         tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
         issue_date: paymentFormData.issue_date,
         reference_number: (paymentFormData.reference_number || '').trim(),
       };
 
-      if (paymentFormData.remarks && paymentFormData.remarks.trim() !== '') {
-        payload.remarks = paymentFormData.remarks.trim();
+      const userRemarks = (paymentFormData.remarks || '').trim();
+      const remarkParts = [];
+      if (userRemarks) remarkParts.push(userRemarks);
+      if (discountApplied > 0) {
+        remarkParts.push(`Discount applied at payment: ₱${discountApplied.toFixed(2)} (Original payable: ₱${grossPayable.toFixed(2)})`);
+      }
+      if (remarkParts.length > 0) {
+        payload.remarks = remarkParts.join(' | ');
       }
       if (paymentFormData.attachment_url && paymentFormData.attachment_url.trim() !== '') {
         payload.attachment_url = paymentFormData.attachment_url.trim();
@@ -3050,6 +3076,33 @@ const AdminInvoice = () => {
                   </div>
 
                   <div className="col-span-full">
+                    <label className="label-field text-xs">Discount Amount (Optional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max={
+                        parseFloat(paymentFormData.payable_amount || 0) > 0
+                          ? Math.max(0, parseFloat(paymentFormData.payable_amount || 0) - 0.01).toFixed(2)
+                          : undefined
+                      }
+                      name="discount_amount"
+                      value={paymentFormData.discount_amount}
+                      onChange={handlePaymentInputChange}
+                      className={`input-field text-sm ${paymentFormErrors.discount_amount ? 'border-red-500' : ''}`}
+                      placeholder="0.00"
+                    />
+                    {paymentFormErrors.discount_amount ? (
+                      <p className="text-xs text-red-500 mt-1">{paymentFormErrors.discount_amount}</p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Optional. When provided, this is deducted from what the student needs to pay (e.g. promo,
+                        early-bird, scholarship). The amount is logged in the payment remarks for audit.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="col-span-full">
                     <label className="label-field text-xs">
                       Payment date <span className="text-red-500">*</span>
                     </label>
@@ -3146,7 +3199,11 @@ const AdminInvoice = () => {
                 {(() => {
                   const breakdown = getInvoiceBreakdown(selectedInvoiceForPayment);
                   const enteredAmount = parseFloat(paymentFormData.payable_amount || 0) || 0;
-                  const payableToApply = Math.max(0, Math.min(enteredAmount, breakdown.remaining));
+                  const discountAtPayment = paymentFormData.discount_amount === ''
+                    ? 0
+                    : Math.max(0, parseFloat(paymentFormData.discount_amount) || 0);
+                  const netEntered = Math.max(0, enteredAmount - discountAtPayment);
+                  const payableToApply = Math.max(0, Math.min(netEntered, breakdown.remaining));
                   const projectedRemaining = Math.max(0, breakdown.remaining - payableToApply);
                   const projectedTotalPaid = breakdown.paidAmount + payableToApply;
                   return (
@@ -3199,6 +3256,18 @@ const AdminInvoice = () => {
                           <span className="text-gray-600">Total Paid</span>
                           <span className="text-emerald-700">₱{breakdown.paidAmount.toFixed(2)}</span>
                         </div>
+                        {discountAtPayment > 0 && (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Payable Entered</span>
+                              <span className="text-gray-900">₱{enteredAmount.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Discount (at payment)</span>
+                              <span className="text-rose-600">- ₱{discountAtPayment.toFixed(2)}</span>
+                            </div>
+                          </>
+                        )}
                         <div className="flex justify-between">
                           <span className="text-gray-600">Payment to Record</span>
                           <span className="text-gray-900">₱{payableToApply.toFixed(2)}</span>

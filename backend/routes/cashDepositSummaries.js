@@ -61,7 +61,6 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
      LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
      LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
      WHERE p.branch_id = $1
-       AND LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
        AND p.issue_date >= $2::date
        AND p.issue_date <= $3::date
        AND NOT EXISTS (
@@ -216,31 +215,41 @@ router.get(
         });
       }
 
-      const [latestDepositRes, earliestCashPaymentRes] = await Promise.all([
+      // Note: this endpoint historically queried "cash" payments only. It now
+      // returns the earliest payment date across ALL payment methods because
+      // the deposit summary itself was widened to include every method type.
+      const [latestDepositRes, earliestPaymentRes] = await Promise.all([
         query(
-          `SELECT TO_CHAR(MAX(end_date), 'YYYY-MM-DD') AS latest_deposit_end_date
+          `SELECT TO_CHAR(MAX(end_date), 'YYYY-MM-DD') AS latest_deposit_end_date,
+                  TO_CHAR(MAX(end_date) + INTERVAL '1 day', 'YYYY-MM-DD') AS next_uncovered_start_date
            FROM cash_deposit_summarytbl
            WHERE branch_id = $1`,
           [userBranchId]
         ),
         query(
-          `SELECT TO_CHAR(MIN(issue_date), 'YYYY-MM-DD') AS earliest_cash_payment_date
+          `SELECT TO_CHAR(MIN(issue_date), 'YYYY-MM-DD') AS earliest_payment_date
            FROM paymenttbl
-           WHERE branch_id = $1
-             AND LOWER(TRIM(COALESCE(payment_method, ''))) = 'cash'`,
+           WHERE branch_id = $1`,
           [userBranchId]
         ),
       ]);
 
       const latestDepositEndDate = latestDepositRes.rows[0]?.latest_deposit_end_date || null;
-      const earliestCashPaymentDate = earliestCashPaymentRes.rows[0]?.earliest_cash_payment_date || null;
+      const nextUncoveredStartDate = latestDepositRes.rows[0]?.next_uncovered_start_date || null;
+      const earliestPaymentDate = earliestPaymentRes.rows[0]?.earliest_payment_date || null;
 
       res.json({
         success: true,
         data: {
-          default_start_date: latestDepositEndDate || earliestCashPaymentDate || null,
+          // Default the next deposit window to the day AFTER the previous
+          // deposit's end_date so the same payment date is never reconciled
+          // twice. Falls back to the earliest payment on record (any method),
+          // or null if no payments exist yet.
+          default_start_date: nextUncoveredStartDate || earliestPaymentDate || null,
           latest_deposit_end_date: latestDepositEndDate,
-          earliest_cash_payment_date: earliestCashPaymentDate,
+          // Kept for backward-compatibility; now reflects the earliest
+          // payment of any method (not just Cash).
+          earliest_cash_payment_date: earliestPaymentDate,
         },
       });
     } catch (error) {
@@ -259,7 +268,12 @@ router.get(
       .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
       .withMessage('status must be Submitted, Approved, Rejected, or Returned'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be positive'),
-    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit 1-100'),
+    // Cap raised from 100 -> 500 because the branch admin's "Deposit Cash"
+    // modal requests `limit=200` to load the FULL list of prior deposit
+    // ranges (used purely for client-side overlap detection / next-day
+    // default computation). 500 keeps a safe upper bound while not breaking
+    // older payloads.
+    queryValidator('limit').optional().isInt({ min: 1, max: 500 }).withMessage('limit 1-500'),
     handleValidationErrors,
   ],
   async (req, res, next) => {

@@ -907,6 +907,7 @@ const Merchandise = () => {
                             <option value="Medium">Medium</option>
                             <option value="Large">Large</option>
                             <option value="Extra Large">Extra Large</option>
+                            <option value="2XL">2XL</option>
                           </select>
                         </div>
                       )}

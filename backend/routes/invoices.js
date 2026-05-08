@@ -825,24 +825,6 @@ router.get(
         // Use the pre-formatted YMD string to avoid timezone day shifts.
         const arDate = formatDate(lastPaymentYmd || invoice.issue_date) || '-';
         const amountPaid = Math.max(0, totalPayments || 0);
-        // MONTH column = the **billing month** (period this invoice covers),
-        // not the date the invoice was issued. We anchor on `due_date`
-        // because for tuition installments the due date falls within the
-        // school month being billed (e.g., May 5 → "May 2026"), and we
-        // gracefully fall back to `issue_date` if a one-off invoice has
-        // no due date set. Both columns arrive pre-formatted as 'YYYY-MM-DD'
-        // so UTC parsing avoids timezone day shifts.
-        const monthLabel = (() => {
-          const anchor = invoice.due_date || invoice.issue_date;
-          if (!anchor) return '';
-          try {
-            const d = new Date(anchor);
-            if (Number.isNaN(d.getTime())) return '';
-            return d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-          } catch {
-            return '';
-          }
-        })();
 
         // Header
         doc.font('Helvetica-Bold').fontSize(19).fillColor('#111827')
@@ -882,22 +864,20 @@ router.get(
         const detailRows = 5;
         const footerRows = 1;
         const totalRows = detailRows + footerRows;
-        const descW = tWidth * 0.48;
-        const monthW = tWidth * 0.18;
-        const rateW = tWidth * 0.17;
-        const amountW = tWidth - descW - monthW - rateW;
+        // Layout (post-MONTH-removal): DESCRIPTION 50% | RATE 25% | AMOUNT 25%
+        const descW = tWidth * 0.50;
+        const rateW = tWidth * 0.25;
+        const amountW = tWidth - descW - rateW;
         const xDesc = tLeft + 8;
-        const xMonth = tLeft + descW + 8;
-        const xRate = tLeft + descW + monthW + 8;
-        const xAmount = tLeft + descW + monthW + rateW + 8;
+        const xRate = tLeft + descW + 8;
+        const xAmount = tLeft + descW + rateW + 8;
 
         doc.save();
         doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
         doc.restore();
         doc.rect(tLeft, y, tWidth, headerH + rowH * totalRows).lineWidth(1).strokeColor('#111827').stroke();
         doc.moveTo(tLeft + descW, y).lineTo(tLeft + descW, y + headerH + rowH * totalRows).stroke();
-        doc.moveTo(tLeft + descW + monthW, y).lineTo(tLeft + descW + monthW, y + headerH + rowH * totalRows).stroke();
-        doc.moveTo(tLeft + descW + monthW + rateW, y).lineTo(tLeft + descW + monthW + rateW, y + headerH + rowH * totalRows).stroke();
+        doc.moveTo(tLeft + descW + rateW, y).lineTo(tLeft + descW + rateW, y + headerH + rowH * totalRows).stroke();
 
         for (let i = 1; i <= totalRows; i += 1) {
           const yLine = y + headerH + rowH * i;
@@ -906,7 +886,6 @@ router.get(
 
         doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
         doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
-        doc.text('MONTH', xMonth, y + 8, { width: monthW - 16, align: 'center' });
         doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
         doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
 
@@ -923,7 +902,6 @@ router.get(
           || `Invoice INV-${invoice.invoice_id}`;
         doc.font('Helvetica').fontSize(9).fillColor('#111827');
         doc.text(firstLineDescription, xDesc, y + headerH + 8, { width: descW - 16 });
-        doc.text(monthLabel || '-', xMonth, y + headerH + 8, { width: monthW - 16, align: 'center' });
         doc.text(formatCurrency(amountPaid), xRate, y + headerH + 8, { width: rateW - 16, align: 'right' });
         doc.text(formatCurrency(amountPaid), xAmount, y + headerH + 8, { width: amountW - 16, align: 'right' });
 

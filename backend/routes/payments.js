@@ -1492,8 +1492,13 @@ router.get(
 
 /**
  * GET /api/sms/payments/cash-deposit-summary
- * All Cash-method payments in an issue_date range (inclusive), for bank deposit reconciliation.
- * Non-superadmin users are limited to their branch. Totals use Completed payments only for "deposit" amount.
+ * All payments (any method) in an issue_date range (inclusive) used by the
+ * branch admin's "Deposit Cash" submission flow. Originally restricted to
+ * payment_method = 'cash' but widened to every method type per business
+ * requirement; the route name and response field names are preserved for
+ * backward compatibility (e.g. `total_cash_deposit_amount`).
+ * Non-superadmin users are limited to their branch. Totals use Completed
+ * payments only for the "deposit" amount.
  */
 router.get(
   '/cash-deposit-summary',
@@ -1539,8 +1544,7 @@ router.get(
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
-                 WHERE LOWER(TRIM(COALESCE(p.payment_method, ''))) = 'cash'
-                   AND p.issue_date >= $1::date AND p.issue_date <= $2::date
+                 WHERE p.issue_date >= $1::date AND p.issue_date <= $2::date
                    AND NOT EXISTS (
                      SELECT 1
                      FROM cash_deposit_summarytbl c

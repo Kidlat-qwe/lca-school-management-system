@@ -183,21 +183,66 @@ const AdminPaymentLogs = () => {
   const fetchExistingDepositRanges = async () => {
     setDepositRangesLoading(true);
     try {
-      const [res, defaultsRes] = await Promise.all([
+      // Use Promise.allSettled so one failing call (e.g. the listing call
+      // returning a validation 4xx) does NOT void the other call's result.
+      // Previously a Promise.all here meant any single failure would dump us
+      // into the catch block and force the From date to today, which masked
+      // the next-day default coming from /deposit-defaults.
+      const [rangesSettled, defaultsSettled] = await Promise.allSettled([
         apiRequest('/cash-deposit-summaries?limit=200'),
         apiRequest('/cash-deposit-summaries/deposit-defaults'),
       ]);
-      const ranges = Array.isArray(res?.data) ? res.data : [];
+
+      const ranges =
+        rangesSettled.status === 'fulfilled' && Array.isArray(rangesSettled.value?.data)
+          ? rangesSettled.value.data
+          : [];
       setDepositExistingRanges(ranges);
 
+      if (rangesSettled.status === 'rejected') {
+        console.warn('Deposit ranges list failed; continuing with defaults only.', rangesSettled.reason);
+      }
+      if (defaultsSettled.status === 'rejected') {
+        console.warn('Deposit defaults endpoint failed.', defaultsSettled.reason);
+      }
+
       const today = todayManila();
-      const serverDefaultStart = defaultsRes?.data?.default_start_date || '';
+
+      // Returns YYYY-MM-DD shifted by `days`. Pure-string arithmetic via UTC
+      // to dodge browser timezone surprises.
+      const shiftYmd = (ymd, days) => {
+        if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+        const [y, m, d] = ymd.split('-').map((n) => parseInt(n, 10));
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        dt.setUTCDate(dt.getUTCDate() + days);
+        return dt.toISOString().slice(0, 10);
+      };
+
+      // The server returns `default_start_date = previous_end_date + 1 day`
+      // (or the earliest payment date on record). When the server response is
+      // unavailable we fall back to the latest range we just listed and shift
+      // it forward one day so the previous deposit's end_date is never
+      // re-counted.
+      const serverDefaultStart =
+        defaultsSettled.status === 'fulfilled'
+          ? defaultsSettled.value?.data?.default_start_date || ''
+          : '';
       const latestRange = [...ranges].sort((a, b) => String(b.end_date).localeCompare(String(a.end_date)))[0] || null;
-      const computedStart = serverDefaultStart || latestRange?.end_date || today;
+      const fallbackStart = latestRange?.end_date ? shiftYmd(latestRange.end_date, 1) : today;
+      const computedStart = serverDefaultStart || fallbackStart;
       const finalStart = computedStart && computedStart <= today ? computedStart : today;
 
       setDepositStartDate(finalStart);
       setDepositEndDate(today);
+
+      // If both upstream calls failed we still want a usable UI, but the
+      // admin should know we couldn't honor the "next-day after last deposit"
+      // contract.
+      if (rangesSettled.status === 'rejected' && defaultsSettled.status === 'rejected') {
+        showDepositAlert(
+          'Could not load previous deposit history. Defaulting to today; please retry to ensure the From date follows your last submission.'
+        );
+      }
     } catch (err) {
       console.error('Error fetching cash deposit ranges:', err);
       setDepositExistingRanges([]);
@@ -306,7 +351,7 @@ const AdminPaymentLogs = () => {
     depositThresholdAlertRef.current = rangeKey;
 
     appAlert(
-      `Alert: Your branch is now holding ${formatCurrency(totalDepositAmount)} in cash for deposit, which is at/above the ₱${CASH_DEPOSIT_WARNING_THRESHOLD.toLocaleString('en-US')} threshold. Please process bank deposit submission promptly.`
+      `Alert: Your branch is now holding ${formatCurrency(totalDepositAmount)} in payments awaiting deposit (across all payment methods), which is at/above the ₱${CASH_DEPOSIT_WARNING_THRESHOLD.toLocaleString('en-US')} threshold. Please process the bank deposit submission promptly.`
     );
   }, [depositModalOpen, depositData]);
 
@@ -1409,7 +1454,7 @@ const AdminPaymentLogs = () => {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Deposit Cash</h3>
                 <p className="mt-1 text-sm text-gray-600">
-                  Sum of <strong>Cash</strong> payments by <strong>payment date</strong> for{' '}
+                  Sum of payments across <strong>all payment methods</strong> by <strong>payment date</strong> for{' '}
                   <span className="whitespace-nowrap">{selectedBranchName}</span>. Matches your payment logs (same source as this page).
                 </p>
               </div>
@@ -1509,7 +1554,7 @@ const AdminPaymentLogs = () => {
                 </div>
               </div>
               <p className="text-xs text-gray-500">
-                <strong>Deposit amount</strong> uses Cash payments with status <strong>Completed</strong> only (ready to bank). The selected range follows the payment date shown in payment logs. Cash rows already included in prior submitted or verified deposits are excluded.
+                <strong>Deposit amount</strong> uses payments with status <strong>Completed</strong> only across <strong>all payment methods</strong> (Cash, Online Banking, Credit Card, E-wallets). The selected range follows the payment date shown in payment logs. Rows already included in prior submitted or verified deposits are excluded.
               </p>
               {depositExistingRanges.length > 0 && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -1527,23 +1572,23 @@ const AdminPaymentLogs = () => {
                 <>
                   {Number(depositData.total_cash_deposit_amount || 0) >= CASH_DEPOSIT_WARNING_THRESHOLD && (
                     <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-                      <p className="text-sm font-semibold text-red-800">Cash Deposit Threshold Alert</p>
+                      <p className="text-sm font-semibold text-red-800">Deposit Threshold Alert</p>
                       <p className="text-xs text-red-700 mt-1">
-                        This branch is currently holding {formatCurrency(depositData.total_cash_deposit_amount)} in cash for deposit
+                        This branch is currently holding {formatCurrency(depositData.total_cash_deposit_amount)} in payments awaiting deposit
                         (threshold: ₱{CASH_DEPOSIT_WARNING_THRESHOLD.toLocaleString('en-US')}). Please submit the deposit promptly.
                       </p>
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                     <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
-                      <p className="text-xs font-medium text-sky-800 uppercase tracking-wide">Cash to deposit</p>
+                      <p className="text-xs font-medium text-sky-800 uppercase tracking-wide">Total to deposit</p>
                       <p className="text-xl font-bold text-sky-900 mt-1">
                         {formatCurrency(depositData.total_cash_deposit_amount)}
                       </p>
                       <p className="text-xs text-sky-700 mt-1">{depositData.completed_cash_count ?? 0} completed payment(s)</p>
                     </div>
                     <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                      <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">All Cash (in range)</p>
+                      <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">All payments (in range)</p>
                       <p className="text-xl font-bold text-gray-900 mt-1">
                         {formatCurrency(depositData.total_cash_all_amount)}
                       </p>
@@ -1557,7 +1602,7 @@ const AdminPaymentLogs = () => {
                     </div>
                   </div>
 
-                  <p className="text-sm font-medium text-gray-800 mb-2">Payment lines (Cash only)</p>
+                  <p className="text-sm font-medium text-gray-800 mb-2">Payment lines (all payment methods)</p>
                   <div
                     className="overflow-x-auto rounded-lg border border-gray-200"
                     style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
@@ -1579,7 +1624,7 @@ const AdminPaymentLogs = () => {
                         {(depositData.payments || []).length === 0 ? (
                           <tr>
                             <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                              No Cash payments in this date range.
+                              No payments in this date range.
                             </td>
                           </tr>
                         ) : (
