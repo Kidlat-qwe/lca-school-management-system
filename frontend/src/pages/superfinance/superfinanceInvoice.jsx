@@ -1479,26 +1479,6 @@ const SuperfinanceInvoice = () => {
         </button>
       </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
-        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Invoices</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {summaryInvoiceCount.toLocaleString('en-US')}
-            </p>
-          </div>
-          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
-              Total amount (incl. tips)
-            </p>
-            <p className="text-lg font-semibold text-emerald-700">
-              ₱{summaryInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </p>
-          </div>
-        </div>
-      </div>
-
       <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1624,6 +1604,21 @@ const SuperfinanceInvoice = () => {
         </div>
       </div>
 
+      {/* Summary line — sits between the filter container and the table */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+        <span>
+          <span className="font-semibold text-gray-900">Invoices:</span>{' '}
+          <span className="font-medium text-gray-900">{summaryInvoiceCount.toLocaleString('en-US')}</span>
+        </span>
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-900">Total amount (incl. tips):</span>{' '}
+          <span className="font-semibold text-emerald-700">
+            ₱{summaryInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
       {/* Error Message */}
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
@@ -1635,10 +1630,10 @@ const SuperfinanceInvoice = () => {
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1250px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1280px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '170px' }} />
-                <col style={{ width: '120px' }} />
+                <col style={{ width: '150px' }} />
                 <col style={{ width: '170px' }} />
                 <col style={{ width: '130px' }} />
                 <col style={{ width: '100px' }} />
@@ -1654,8 +1649,9 @@ const SuperfinanceInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
                     Invoice
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    Acknowledgement Receipt#
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
+                    <span className="block">Acknowledgement</span>
+                    <span className="block">Receipt#</span>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
                     Student Name

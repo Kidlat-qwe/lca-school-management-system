@@ -36,7 +36,7 @@ const InstallmentInvoicePhasesModal = ({ open, profileId, onClose }) => {
       aria-labelledby="installment-phases-modal-title"
     >
       <div
-        className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-4xl w-full max-h-[95vh] sm:max-h-[90vh] my-auto sm:my-0 flex flex-col overflow-hidden"
+        className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-5xl w-full max-h-[95vh] sm:max-h-[90vh] my-auto sm:my-0 flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 p-4 sm:p-6 border-b border-gray-200 flex-shrink-0">

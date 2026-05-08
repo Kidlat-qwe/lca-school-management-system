@@ -171,32 +171,37 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
   paymentIssueDate,
 }) => {
   const paymentDateYmd = paymentIssueDate || formatYmdLocal(new Date());
+
+  // -----------------------------------------------------------------
+  // IMPORTANT — DESIGN DECISION (mid-year enrollments)
+  //
+  // Previously this helper called buildPhaseInstallmentSchedule, which
+  // derived the first generation date from the EARLIEST class session
+  // of the current phase. For mid-year enrollments (e.g. enrolling in
+  // Phase 6 of a 10-phase plan) that anchor falls many months in the
+  // future, so the very first invoice was issued with a future date
+  // and disappeared from the current invoice page filter.
+  //
+  // The product requirement is: when downpayment is paid TODAY, the
+  // first phase invoice must be visible on TODAY's invoice page.
+  // We therefore anchor the schedule to the payment date. The cron
+  // (processDueInstallmentInvoices) will then generate the subsequent
+  // phases monthly from today.
+  //
+  // Non-phase-aware profiles (no phase_start) keep the original due
+  // date behaviour (linked to class session 1 if class is set).
+  // -----------------------------------------------------------------
   const nonPhaseFirstDueYmd =
     profile.class_id && (profile.phase_start === null || profile.phase_start === undefined)
       ? await getPhaseDueDateYmd(client, profile.class_id, 1)
       : null;
-  const phaseSchedule = profile.phase_start != null
-    ? await buildPhaseInstallmentSchedule({
-        db: client,
-        profile: {
-          class_id: profile.class_id,
-          phase_start: profile.phase_start,
-          total_phases: profile.total_phases,
-          generated_count: profile.generated_count || 0,
-        },
-        generatedCountOverride: profile.generated_count || 0,
-        issueDateOverride: paymentDateYmd,
-      })
-    : null;
 
-  const firstGenerationYmd = phaseSchedule?.current_generation_date
-    || (profile.first_generation_date ? formatYmdLocal(new Date(profile.first_generation_date)) : paymentDateYmd);
-  const currentInvoiceMonthYmd = phaseSchedule?.current_invoice_month
-    || (profile.next_invoice_due_date ? formatYmdLocal(new Date(profile.next_invoice_due_date)) : paymentDateYmd);
-  const scheduledDateYmd = phaseSchedule?.current_due_date
-    || nonPhaseFirstDueYmd
+  const firstGenerationYmd = paymentDateYmd;
+  const currentInvoiceMonthYmd = paymentDateYmd;
+  const scheduledDateYmd =
+    nonPhaseFirstDueYmd
     || profile.bill_invoice_due_date
-    || (profile.next_invoice_due_date ? formatYmdLocal(new Date(profile.next_invoice_due_date)) : paymentDateYmd);
+    || paymentDateYmd;
 
   const firstInvoiceRecordResult = await client.query(
     `INSERT INTO installmentinvoicestbl 
@@ -220,7 +225,7 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
 
   return {
     firstInvoiceRecord: firstInvoiceRecordResult.rows[0],
-    phaseSchedule,
+    phaseSchedule: null,
   };
 };
 
@@ -3190,6 +3195,10 @@ router.put(
       .optional({ nullable: true })
       .isString()
       .withMessage('finance_verified_reference_number must be a string'),
+    body('payment_date')
+      .optional({ nullable: true })
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage('payment_date must be YYYY-MM-DD'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -3199,6 +3208,13 @@ router.put(
       const financeVerifiedReferenceNumber = String(
         req.body?.finance_verified_reference_number || ''
       ).trim();
+      // Optional updated payment date (stored in paymenttbl.issue_date, which is
+      // the source column aliased as payment_date everywhere in payment logs).
+      const rawPaymentDate = req.body?.payment_date;
+      const paymentDateUpdate =
+        typeof rawPaymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawPaymentDate.trim())
+          ? rawPaymentDate.trim()
+          : null;
       const userId = req.user.userId;
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
@@ -3277,29 +3293,54 @@ router.put(
 
       // Superadmin and Superfinance can approve any payment (no branch restriction)
 
-      // Update approval status
-      const updateSql = approve
-        ? `UPDATE paymenttbl 
-           SET approval_status = 'Approved',
-               approved_by = $1,
-               approved_at = CURRENT_TIMESTAMP,
-               finance_verified_reference_number = $2
-           WHERE payment_id = $3
-           RETURNING payment_id, approval_status, approved_by, 
-                     TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
-                     finance_verified_reference_number`
-        : `UPDATE paymenttbl 
+      // Update approval status. When approving, optionally also update issue_date
+      // so the corrected payment date is reflected wherever payment_date is shown
+      // (payment_date in queries is a SQL alias for paymenttbl.issue_date).
+      let updateSql;
+      let updateParams;
+      if (approve) {
+        if (paymentDateUpdate) {
+          updateSql = `UPDATE paymenttbl
+             SET approval_status = 'Approved',
+                 approved_by = $1,
+                 approved_at = CURRENT_TIMESTAMP,
+                 finance_verified_reference_number = $2,
+                 issue_date = $3::date
+             WHERE payment_id = $4
+             RETURNING payment_id, approval_status, approved_by,
+                       TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
+                       finance_verified_reference_number,
+                       TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
+                       TO_CHAR(issue_date, 'YYYY-MM-DD') as payment_date`;
+          updateParams = [userId, financeVerifiedReferenceNumber, paymentDateUpdate, id];
+        } else {
+          updateSql = `UPDATE paymenttbl
+             SET approval_status = 'Approved',
+                 approved_by = $1,
+                 approved_at = CURRENT_TIMESTAMP,
+                 finance_verified_reference_number = $2
+             WHERE payment_id = $3
+             RETURNING payment_id, approval_status, approved_by,
+                       TO_CHAR(approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
+                       finance_verified_reference_number,
+                       TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
+                       TO_CHAR(issue_date, 'YYYY-MM-DD') as payment_date`;
+          updateParams = [userId, financeVerifiedReferenceNumber, id];
+        }
+      } else {
+        updateSql = `UPDATE paymenttbl
            SET approval_status = 'Pending',
                approved_by = NULL,
                approved_at = NULL,
                finance_verified_reference_number = NULL
            WHERE payment_id = $1
-           RETURNING payment_id, approval_status, approved_by, approved_at, finance_verified_reference_number`;
+           RETURNING payment_id, approval_status, approved_by, approved_at, finance_verified_reference_number,
+                     TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
+                     TO_CHAR(issue_date, 'YYYY-MM-DD') as payment_date`;
+        updateParams = [id];
+      }
 
-      const result = await query(
-        updateSql,
-        approve ? [userId, financeVerifiedReferenceNumber, id] : [id]
-      );
+      const result = await query(updateSql, updateParams);
 
       res.json({
         success: true,

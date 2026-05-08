@@ -245,6 +245,11 @@ const Classes = () => {
   const [upgradeAvailablePromos, setUpgradeAvailablePromos] = useState([]);
   const [upgradeSelectedPromo, setUpgradeSelectedPromo] = useState(null);
   const [loadingUpgradePromos, setLoadingUpgradePromos] = useState(false);
+  const [upgradePromoCodeInput, setUpgradePromoCodeInput] = useState('');
+  const [upgradeValidatedPromoFromCode, setUpgradeValidatedPromoFromCode] = useState(null);
+  const [validatingUpgradePromoCode, setValidatingUpgradePromoCode] = useState(false);
+  const [upgradePromoCodeError, setUpgradePromoCodeError] = useState('');
+  const [upgradePromoCodeValidationTimeout, setUpgradePromoCodeValidationTimeout] = useState(null);
   const [upgradeSelectedPricingLists, setUpgradeSelectedPricingLists] = useState([]);
   const [upgradeSelectedMerchandise, setUpgradeSelectedMerchandise] = useState([]);
   const [upgradePerPhaseAmount, setUpgradePerPhaseAmount] = useState('');
@@ -393,14 +398,30 @@ const initializePackageMerchSelections = useCallback(
     }
   }, [selectedPackage?.package_id]);
 
+  useEffect(() => {
+    setUpgradeValidatedPromoFromCode(null);
+    setUpgradePromoCodeInput('');
+    setUpgradePromoCodeError('');
+    if (upgradeSelectedPromo?.promo_code) {
+      setUpgradeSelectedPromo(null);
+    }
+    if (upgradePromoCodeValidationTimeout) {
+      clearTimeout(upgradePromoCodeValidationTimeout);
+      setUpgradePromoCodeValidationTimeout(null);
+    }
+  }, [upgradeSelectedPackage?.package_id]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (promoCodeValidationTimeout) {
         clearTimeout(promoCodeValidationTimeout);
       }
+      if (upgradePromoCodeValidationTimeout) {
+        clearTimeout(upgradePromoCodeValidationTimeout);
+      }
     };
-  }, [promoCodeValidationTimeout]);
+  }, [promoCodeValidationTimeout, upgradePromoCodeValidationTimeout]);
 
   const fetchPackages = async (branchId) => {
     try {
@@ -596,14 +617,87 @@ const initializePackageMerchSelections = useCallback(
       }
       const response = await apiRequest(url);
       const promos = response.data || [];
-      console.log(`Fetched ${promos.length} promos for upgrade package ${packageId}${studentId ? ` and student ${studentId}` : ''}:`, promos);
-      setUpgradeAvailablePromos(promos);
+      const autoApplyPromos = promos.filter((promo) => {
+        const promoCode = promo.promo_code;
+        return !promoCode || (typeof promoCode === 'string' && promoCode.trim() === '');
+      });
+      console.log(`Fetched ${promos.length} promos for upgrade package ${packageId}${studentId ? ` and student ${studentId}` : ''}, showing ${autoApplyPromos.length} auto-apply promos:`, promos);
+      setUpgradeAvailablePromos(autoApplyPromos);
     } catch (err) {
       console.error('Error fetching available promos for upgrade:', err);
       console.error('Error details:', err.response?.data || err.message);
       setUpgradeAvailablePromos([]);
     } finally {
       setLoadingUpgradePromos(false);
+    }
+  };
+
+  const validateUpgradePromoCode = async (code, packageId, studentId = null) => {
+    if (!code || !code.trim()) {
+      setUpgradeValidatedPromoFromCode(null);
+      setUpgradePromoCodeError('');
+      return;
+    }
+
+    try {
+      setValidatingUpgradePromoCode(true);
+      setUpgradePromoCodeError('');
+
+      const payload = {
+        promo_code: code.trim().toUpperCase(),
+        package_id: packageId,
+      };
+
+      if (studentId) {
+        payload.student_id = studentId;
+      }
+
+      const response = await apiRequest('/promos/validate-code', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (response.success && response.data) {
+        const promo = response.data;
+        const baseAmount = (upgradeSelectedPackage?.package_type === 'Installment' ||
+          (upgradeSelectedPackage?.package_type === 'Phase' && upgradeSelectedPackage?.payment_option === 'Installment')) &&
+          upgradeSelectedPackage?.downpayment_amount != null &&
+          parseFloat(upgradeSelectedPackage.downpayment_amount) > 0
+            ? parseFloat(upgradeSelectedPackage.downpayment_amount)
+            : parseFloat(upgradeSelectedPackage?.package_price || 0);
+        let discountAmount = 0;
+
+        if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
+          discountAmount = (baseAmount * promo.discount_percentage) / 100;
+        } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
+          discountAmount = Math.min(parseFloat(promo.discount_amount), baseAmount);
+        } else if (promo.promo_type === 'combined') {
+          if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
+            discountAmount = (baseAmount * promo.discount_percentage) / 100;
+          } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
+            discountAmount = Math.min(parseFloat(promo.discount_amount), baseAmount);
+          }
+        }
+
+        const validatedPromo = {
+          ...promo,
+          calculated_discount: discountAmount,
+          final_price: Math.max(0, baseAmount - discountAmount),
+        };
+
+        setUpgradeValidatedPromoFromCode(validatedPromo);
+        setUpgradeSelectedPromo(validatedPromo);
+        setUpgradePromoCodeError('');
+      } else {
+        setUpgradeValidatedPromoFromCode(null);
+        setUpgradePromoCodeError(response.message || 'Invalid promo code');
+      }
+    } catch (err) {
+      console.error('Error validating upgrade promo code:', err);
+      setUpgradeValidatedPromoFromCode(null);
+      setUpgradePromoCodeError(err.message || 'Failed to validate promo code');
+    } finally {
+      setValidatingUpgradePromoCode(false);
     }
   };
 
@@ -2640,6 +2734,11 @@ const initializePackageMerchSelections = useCallback(
     setUpgradeSelectedPackage(null);
     setUpgradeSelectedPricingLists([]);
     setUpgradeSelectedMerchandise([]);
+    setUpgradeAvailablePromos([]);
+    setUpgradeSelectedPromo(null);
+    setUpgradePromoCodeInput('');
+    setUpgradeValidatedPromoFromCode(null);
+    setUpgradePromoCodeError('');
     setUpgradePerPhaseAmount('');
     setUpgradePhaseNumber(null);
     
@@ -2723,7 +2822,12 @@ const initializePackageMerchSelections = useCallback(
           enrollment_type: enrollmentType,
           package_id: upgradeSelectedPackage.package_id,
           ...(selectedMerchandise.length > 0 ? { selected_merchandise: selectedMerchandise } : {}),
-          ...(upgradeSelectedPromo ? { promo_id: upgradeSelectedPromo.promo_id } : {}),
+          ...(upgradeSelectedPromo
+            ? {
+                promo_id: upgradeSelectedPromo.promo_id,
+                ...(upgradeSelectedPromo.promo_code ? { promo_code: upgradeSelectedPromo.promo_code } : {}),
+              }
+            : {}),
           // Installment settings apply only to standard Installment packages (not Phase per-phase)
           ...(!isPhasePerPhase &&
           (upgradeSelectedPackage.package_type === 'Installment' || (upgradeSelectedPackage.package_type === 'Phase' && upgradeSelectedPackage.payment_option === 'Installment')) &&
@@ -2811,6 +2915,9 @@ const initializePackageMerchSelections = useCallback(
       setUpgradeUniformCategoryFilters({});
       setUpgradeAvailablePromos([]);
       setUpgradeSelectedPromo(null);
+      setUpgradePromoCodeInput('');
+      setUpgradeValidatedPromoFromCode(null);
+      setUpgradePromoCodeError('');
       setUpgradeInstallmentSettings({
         invoice_issue_date: '',
         billing_month: '',
@@ -15346,6 +15453,190 @@ const initializePackageMerchSelections = useCallback(
                         </svg>
                       </button>
                     </div>
+
+                  {/* Available Promos — directly under Selected Package */}
+                  {upgradeSelectedPackage && (
+                    <div className="space-y-3">
+                      <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg">
+                        <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
+                          <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                          </svg>
+                          Available Promos
+                        </h4>
+
+                        <div className="mb-4">
+                          <label htmlFor="upgrade_promo_code_input" className="block text-sm font-medium text-gray-700 mb-2">
+                            Enter Promo Code (Optional)
+                          </label>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              id="upgrade_promo_code_input"
+                              value={upgradePromoCodeInput}
+                              onChange={(e) => {
+                                const value = e.target.value.toUpperCase().replace(/\s/g, '').replace(/[^A-Z0-9-]/g, '');
+                                setUpgradePromoCodeInput(value);
+
+                                if (upgradePromoCodeValidationTimeout) {
+                                  clearTimeout(upgradePromoCodeValidationTimeout);
+                                }
+
+                                if (value.length === 0) {
+                                  setUpgradeValidatedPromoFromCode(null);
+                                  setUpgradePromoCodeError('');
+                                  setUpgradePromoCodeValidationTimeout(null);
+                                  if (upgradeSelectedPromo?.promo_code) {
+                                    setUpgradeSelectedPromo(null);
+                                  }
+                                } else {
+                                  const timeout = setTimeout(() => {
+                                    if (value.length >= 4) {
+                                      validateUpgradePromoCode(value, upgradeSelectedPackage?.package_id, selectedReservationForUpgrade?.student_id || null);
+                                    }
+                                  }, 800);
+                                  setUpgradePromoCodeValidationTimeout(timeout);
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const value = e.target.value.trim();
+                                if (value.length >= 4) {
+                                  if (upgradePromoCodeValidationTimeout) {
+                                    clearTimeout(upgradePromoCodeValidationTimeout);
+                                    setUpgradePromoCodeValidationTimeout(null);
+                                  }
+                                  validateUpgradePromoCode(value, upgradeSelectedPackage?.package_id, selectedReservationForUpgrade?.student_id || null);
+                                }
+                              }}
+                              placeholder="e.g., SUMMER2024"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                              maxLength={20}
+                              disabled={!upgradeSelectedPackage || validatingUpgradePromoCode}
+                            />
+                            {validatingUpgradePromoCode && (
+                              <div className="flex items-center justify-center px-3 py-2">
+                                <svg className="animate-spin h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                              </div>
+                            )}
+                          </div>
+                          {upgradePromoCodeError && (
+                            <p className="mt-1 text-sm text-red-600">{upgradePromoCodeError}</p>
+                          )}
+                          {upgradeValidatedPromoFromCode && !upgradePromoCodeError && (
+                            <p className="mt-1 text-sm text-green-600">Valid promo code found.</p>
+                          )}
+                        </div>
+
+                        {loadingUpgradePromos ? (
+                          <div className="flex items-center justify-center py-4">
+                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <button
+                              type="button"
+                              onClick={() => setUpgradeSelectedPromo(null)}
+                              className={`w-full p-3 text-left rounded-lg border-2 transition-all ${
+                                upgradeSelectedPromo === null
+                                  ? 'border-blue-500 bg-blue-100'
+                                  : 'border-gray-200 bg-white hover:border-gray-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium text-gray-900">No Promo</span>
+                                {upgradeSelectedPromo === null && (
+                                  <svg className="w-5 h-5 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                              </div>
+                            </button>
+                            {upgradeValidatedPromoFromCode && (
+                              <button
+                                type="button"
+                                onClick={() => setUpgradeSelectedPromo(upgradeValidatedPromoFromCode)}
+                                className={`w-full p-3 text-left rounded-lg border-2 transition-all ${
+                                  upgradeSelectedPromo?.promo_id === upgradeValidatedPromoFromCode.promo_id
+                                    ? 'border-blue-500 bg-blue-100'
+                                    : 'border-green-300 bg-white hover:border-green-400'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-semibold text-gray-900">{upgradeValidatedPromoFromCode.promo_name}</span>
+                                      <span className="text-xs font-mono bg-green-100 text-green-800 px-2 py-0.5 rounded">
+                                        {upgradeValidatedPromoFromCode.promo_code}
+                                      </span>
+                                    </div>
+                                    {upgradeValidatedPromoFromCode.description && (
+                                      <p className="text-xs text-gray-600 mt-1">{upgradeValidatedPromoFromCode.description}</p>
+                                    )}
+                                  </div>
+                                  {upgradeSelectedPromo?.promo_id === upgradeValidatedPromoFromCode.promo_id && (
+                                    <svg className="w-5 h-5 text-blue-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                    </svg>
+                                  )}
+                                </div>
+                              </button>
+                            )}
+                            {upgradeAvailablePromos.map((promo) => (
+                              <button
+                                key={promo.promo_id}
+                                type="button"
+                                onClick={() => setUpgradeSelectedPromo(promo)}
+                                className={`w-full p-3 text-left rounded-lg border-2 transition-all ${
+                                  upgradeSelectedPromo?.promo_id === promo.promo_id
+                                    ? 'border-blue-500 bg-blue-100'
+                                    : 'border-gray-200 bg-white hover:border-gray-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-semibold text-gray-900">{promo.promo_name}</span>
+                                      {promo.promo_type === 'percentage_discount' && promo.discount_percentage && (
+                                        <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                                          {promo.discount_percentage}% OFF
+                                        </span>
+                                      )}
+                                      {promo.promo_type === 'fixed_discount' && promo.discount_amount && (
+                                        <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                                          ₱{parseFloat(promo.discount_amount).toFixed(2)} OFF
+                                        </span>
+                                      )}
+                                      {promo.promo_type === 'combined' && (
+                                        <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
+                                          Combined
+                                        </span>
+                                      )}
+                                      {promo.promo_type === 'free_merchandise' && (
+                                        <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                                          Free Merchandise
+                                        </span>
+                                      )}
+                                    </div>
+                                    {promo.description && (
+                                      <p className="text-xs text-gray-600 mt-1">{promo.description}</p>
+                                    )}
+                                  </div>
+                                  {upgradeSelectedPromo?.promo_id === promo.promo_id && (
+                                    <svg className="w-5 h-5 text-blue-600 flex-shrink-0 ml-2" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                    </svg>
+                                  )}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                     
                     {/* Collapsible Package Details */}
                     {upgradeShowPackageDetails && (
@@ -15555,94 +15846,6 @@ const initializePackageMerchSelections = useCallback(
                       </div>
                     )}
                   </div>
-
-                  {/* Available Promos Section */}
-                  {upgradeAvailablePromos.length > 0 && (
-                    <div className="space-y-3">
-                      <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg">
-                        <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-                          <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-                          </svg>
-                          Available Promos
-                        </h4>
-                        {loadingUpgradePromos ? (
-                          <div className="flex items-center justify-center py-4">
-                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <button
-                              type="button"
-                              onClick={() => setUpgradeSelectedPromo(null)}
-                              className={`w-full p-3 text-left rounded-lg border-2 transition-all ${
-                                upgradeSelectedPromo === null
-                                  ? 'border-blue-500 bg-blue-100'
-                                  : 'border-gray-200 bg-white hover:border-gray-300'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium text-gray-900">No Promo</span>
-                                {upgradeSelectedPromo === null && (
-                                  <svg className="w-5 h-5 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                  </svg>
-                                )}
-                              </div>
-                            </button>
-                            {upgradeAvailablePromos.map((promo) => (
-                              <button
-                                key={promo.promo_id}
-                                type="button"
-                                onClick={() => setUpgradeSelectedPromo(promo)}
-                                className={`w-full p-3 text-left rounded-lg border-2 transition-all ${
-                                  upgradeSelectedPromo?.promo_id === promo.promo_id
-                                    ? 'border-blue-500 bg-blue-100'
-                                    : 'border-gray-200 bg-white hover:border-gray-300'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex-1">
-                                    <div className="flex items-center space-x-2">
-                                      <span className="font-semibold text-gray-900">{promo.promo_name}</span>
-                                      {promo.promo_type === 'percentage_discount' && promo.discount_percentage && (
-                                        <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
-                                          {promo.discount_percentage}% OFF
-                                        </span>
-                                      )}
-                                      {promo.promo_type === 'fixed_discount' && promo.discount_amount && (
-                                        <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
-                                          ₱{parseFloat(promo.discount_amount).toFixed(2)} OFF
-                                        </span>
-                                      )}
-                                      {promo.promo_type === 'combined' && (
-                                        <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
-                                          Combined
-                                        </span>
-                                      )}
-                                      {promo.promo_type === 'free_merchandise' && (
-                                        <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
-                                          Free Merchandise
-                                        </span>
-                                      )}
-                                    </div>
-                                    {promo.description && (
-                                      <p className="text-xs text-gray-600 mt-1">{promo.description}</p>
-                                    )}
-                                  </div>
-                                  {upgradeSelectedPromo?.promo_id === promo.promo_id && (
-                                    <svg className="w-5 h-5 text-blue-600 flex-shrink-0 ml-2" fill="currentColor" viewBox="0 0 20 20">
-                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                    </svg>
-                                  )}
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                   {/* Installment Settings Toggle - Show for Installment packages */}
                   {(() => {

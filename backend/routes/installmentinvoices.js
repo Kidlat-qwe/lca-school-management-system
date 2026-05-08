@@ -3,7 +3,11 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
-import { calculateNextGenerationDate, calculateNextInvoiceMonth } from '../utils/installmentInvoiceGenerator.js';
+import {
+  calculateNextGenerationDate,
+  calculateNextInvoiceMonth,
+  parseFrequency,
+} from '../utils/installmentInvoiceGenerator.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
@@ -45,6 +49,17 @@ const enrichInstallmentInvoiceRow = async (row) => {
     displayPhaseProgress >= totalPhases;
   const canGenerateInstallment = row.profile_is_active !== false && !phaseProgressComplete;
 
+  // Absolute phase numbering: when a profile starts at a later phase
+  // (e.g. enrolled mid-school-year for phases 6..10), the dashboard's
+  // Phase Progress column should reflect those absolute phase numbers
+  // (e.g. 6 / 10) instead of the relative profile-local numbers (1 / 5).
+  // For profiles starting at phase 1 (or with no phase_start) the absolute
+  // numbers equal the relative numbers, so the display is unchanged.
+  const phaseStartOffset = Math.max(0, (phaseStart || 1) - 1);
+  const phaseProgressNumerator = displayPhaseProgress + phaseStartOffset;
+  const phaseProgressDenominator =
+    totalPhases != null ? totalPhases + phaseStartOffset : null;
+
   if (!isPhaseInstallmentProfile(profile)) {
     return {
       ...row,
@@ -52,6 +67,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,
       can_generate_installment: canGenerateInstallment,
+      phase_progress_numerator: phaseProgressNumerator,
+      phase_progress_denominator: phaseProgressDenominator,
     };
   }
 
@@ -69,6 +86,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,
       can_generate_installment: canGenerateInstallment,
+      phase_progress_numerator: phaseProgressNumerator,
+      phase_progress_denominator: phaseProgressDenominator,
       current_phase_number: schedule.current_phase_number,
       current_phase_start_date: schedule.current_phase_start_date,
       current_issue_date: schedule.current_issue_date,
@@ -90,6 +109,8 @@ const enrichInstallmentInvoiceRow = async (row) => {
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,
       can_generate_installment: canGenerateInstallment,
+      phase_progress_numerator: phaseProgressNumerator,
+      phase_progress_denominator: phaseProgressDenominator,
       phase_schedule_error: error.message,
     };
   }
@@ -255,7 +276,10 @@ router.get(
                 p.program_name,
                 pkg.package_name AS package_description,
                 pkg.package_type,
-                b.branch_name
+                b.branch_name,
+                c.class_id AS class_id,
+                c.class_name AS class_name,
+                c.level_tag AS level_tag
          FROM installmentinvoiceprofilestbl ip
          LEFT JOIN userstbl u ON ip.student_id = u.user_id
          LEFT JOIN classestbl c ON ip.class_id = c.class_id
@@ -373,12 +397,12 @@ router.get(
           phaseChains.push(chain);
         }
       }
-      phaseChains.sort((a, b) => {
-        const da = a.representative.issue_date || '';
-        const db = b.representative.issue_date || '';
-        if (da !== db) return da < db ? -1 : 1;
-        return Number(a.chain_root_id) - Number(b.chain_root_id);
-      });
+      // Sort phase chains by the chain root invoice_id (creation order).
+      // We deliberately avoid sorting by issue_date because advance-paid
+      // invoices are created today (earlier date) while auto-generated
+      // invoices carry future scheduled dates, which would swap phases.
+      // The invoice_id sequence always matches the generation order.
+      phaseChains.sort((a, b) => Number(a.chain_root_id) - Number(b.chain_root_id));
 
       const todayYmd = (() => {
         const now = new Date();
@@ -503,6 +527,9 @@ router.get(
             package_type: profile.package_type || null,
             branch_id: profile.branch_id != null ? Number(profile.branch_id) : null,
             branch_name: profile.branch_name || null,
+            class_id: profile.class_id != null ? Number(profile.class_id) : null,
+            class_name: profile.class_name || null,
+            level_tag: profile.level_tag || null,
             amount: profile.amount != null ? Number(profile.amount) : null,
             frequency: profile.frequency || null,
             total_phases: profile.total_phases != null ? Number(profile.total_phases) : null,
@@ -909,12 +936,11 @@ router.post(
       let firstRecord = firstRecordResult.rows[0];
 
       if (!firstRecord) {
-        const nextDue = profile.next_invoice_due_date
-          ? new Date(profile.next_invoice_due_date)
-          : new Date();
-        const firstGen = profile.first_generation_date
-          ? new Date(profile.first_generation_date)
-          : new Date();
+        // Anchor the first phase to TODAY so it issues for the current
+        // invoice cycle (visible on the current month's invoice page).
+        // See payments.js → createFirstInstallmentRecordAfterDownpayment
+        // for the full design rationale on mid-year enrollments.
+        const todayYmd = formatYmdLocal(new Date());
         const insertResult = await client.query(
           `INSERT INTO installmentinvoicestbl
            (installmentinvoiceprofiles_id, scheduled_date, status, student_name,
@@ -924,17 +950,36 @@ router.post(
            RETURNING *`,
           [
             id,
-            profile.bill_invoice_due_date || formatYmdLocal(nextDue),
+            profile.bill_invoice_due_date || todayYmd,
             'Pending',
             profile.student_name || 'Student',
             profile.amount,
             profile.amount,
             profile.frequency || '1 month(s)',
-            formatYmdLocal(firstGen),
-            formatYmdLocal(nextDue),
+            todayYmd,
+            todayYmd,
           ]
         );
         firstRecord = insertResult.rows[0];
+      } else {
+        // firstRecord already exists from a previous (failed) attempt or a
+        // prior reservation upgrade. If it was anchored to a future date
+        // (typical for mid-year enrollments), realign it to TODAY so the
+        // about-to-be-generated invoice lands in the current cycle.
+        const todayYmd = formatYmdLocal(new Date());
+        const existingNextGen = firstRecord.next_generation_date
+          ? formatYmdLocal(new Date(firstRecord.next_generation_date))
+          : null;
+        if (!existingNextGen || existingNextGen > todayYmd) {
+          await client.query(
+            `UPDATE installmentinvoicestbl
+             SET next_generation_date = $1, next_invoice_month = $2
+             WHERE installmentinvoicedtl_id = $3`,
+            [todayYmd, todayYmd, firstRecord.installmentinvoicedtl_id]
+          );
+          firstRecord.next_generation_date = todayYmd;
+          firstRecord.next_invoice_month = todayYmd;
+        }
       }
 
       await client.query('COMMIT');
@@ -1717,6 +1762,299 @@ router.post(
     } catch (error) {
       await client.query('ROLLBACK');
       next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/installment-invoices/profiles/:id/advance-pay
+ *
+ * Record an advance payment for a "Not Generated" phase so the student can
+ * pay ahead of schedule. The endpoint:
+ *   1. Creates an invoice in invoicestbl (status = 'Paid').
+ *   2. Creates a Completed payment in paymenttbl.
+ *   3. Increments generated_count on the profile.
+ *   4. Advances next_generation_date on installmentinvoicestbl by the
+ *      number of months being skipped (so the auto-generator skips the
+ *      already-paid phase and moves to the next one).
+ *   5. Enrolls the student in classstudentstbl for the absolute phase
+ *      (if class_id is present and the row doesn't yet exist).
+ *
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.post(
+  '/profiles/:id/advance-pay',
+  [
+    param('id').isInt().withMessage('Profile ID must be an integer'),
+    body('phase_index')
+      .isInt({ min: 1 })
+      .withMessage('phase_index must be a positive integer (1-based profile-local phase)'),
+    body('payment_method').notEmpty().isString().withMessage('payment_method is required'),
+    body('reference_number').optional({ nullable: true }).isString(),
+    body('payment_date').optional({ nullable: true }).isISO8601().withMessage('payment_date must be a valid date'),
+    body('remarks').optional({ nullable: true }).isString(),
+    body('attachment_url').optional({ nullable: true }).isString(),
+    body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('tip_amount must be a non-negative number'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const { id } = req.params;
+      const { phase_index, payment_method, reference_number, payment_date, remarks, attachment_url, tip_amount } = req.body;
+
+      // Fetch profile + the linked installment schedule row (for next_generation_date).
+      const profileRes = await client.query(
+        `SELECT ip.*,
+                ii.installmentinvoicedtl_id,
+                ii.next_generation_date      AS sched_next_gen_date,
+                ii.next_invoice_month        AS sched_next_inv_month,
+                ii.frequency                 AS ii_frequency,
+                ii.total_amount_including_tax,
+                ii.total_amount_excluding_tax
+         FROM installmentinvoiceprofilestbl ip
+         LEFT JOIN installmentinvoicestbl ii
+           ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         WHERE ip.installmentinvoiceprofiles_id = $1
+         ORDER BY ii.installmentinvoicedtl_id DESC
+         LIMIT 1`,
+        [id]
+      );
+
+      if (profileRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Installment profile not found' });
+      }
+
+      const profile = profileRes.rows[0];
+
+      // Branch isolation.
+      if (
+        req.user?.userType !== 'Superadmin' &&
+        req.user?.branchId &&
+        profile.branch_id != null &&
+        Number(profile.branch_id) !== Number(req.user.branchId)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, message: 'Access denied for this branch' });
+      }
+
+      const generatedCount = parseInt(profile.generated_count || 0, 10);
+      const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
+      const phaseIdx = parseInt(phase_index, 10);
+
+      if (phaseIdx <= generatedCount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Phase ${phaseIdx} has already been generated. Only unpaid future phases can be advance-paid.`,
+        });
+      }
+
+      if (totalPhases !== null && phaseIdx > totalPhases) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Phase ${phaseIdx} exceeds the total phase count (${totalPhases}).`,
+        });
+      }
+
+      // ---- Compute dates for this phase --------------------------------
+      const frequency = profile.ii_frequency || profile.frequency || '1 month(s)';
+      const freqMonths = parseFrequency(frequency);
+
+      // The schedule row's next_generation_date is the anchor for phase
+      // (generated_count + 1). For later phases we add extra months.
+      const nextGenRaw = profile.sched_next_gen_date || new Date();
+      const nextGenBase =
+        typeof nextGenRaw === 'string'
+          ? (() => {
+              const [y, m, d] = nextGenRaw.slice(0, 10).split('-').map(Number);
+              return new Date(y, m - 1, d, 12, 0, 0, 0);
+            })()
+          : new Date(nextGenRaw);
+
+      // extraMonths = how many frequency cycles ahead of the "next" phase
+      const extraMonths = (phaseIdx - (generatedCount + 1)) * freqMonths;
+      const phaseAnchor = new Date(nextGenBase);
+      phaseAnchor.setMonth(phaseAnchor.getMonth() + extraMonths);
+      phaseAnchor.setDate(25); // fixed generation day
+
+      // Build the invoice due date from the anchor (5th of the following month).
+      const dueDate = new Date(phaseAnchor);
+      dueDate.setMonth(dueDate.getMonth() + 1);
+      dueDate.setDate(5);
+
+      const issueDateYmd = payment_date
+        ? String(payment_date).slice(0, 10)
+        : formatYmdLocal(new Date()); // today server time
+      const dueDateYmd = formatYmdLocal(dueDate);
+
+      const invoiceAmount = Number(profile.amount || 0);
+      const phaseStart = parseInt(profile.phase_start || 1, 10);
+      const absolutePhaseNumber = phaseStart + (phaseIdx - 1);
+      const creatorUserId = req.user.userId || req.user.user_id || null;
+
+      // ---- Create invoice ----------------------------------------------
+      // NOTE: invoice_ar_number is appended by insertInvoiceWithArNumber as
+      // the last bind parameter — it must be the trailing column / placeholder.
+      const newInvoice = await insertInvoiceWithArNumber(
+        client,
+        `INSERT INTO invoicestbl
+           (invoice_description, branch_id, amount, status, remarks, issue_date, due_date,
+            created_by, installmentinvoiceprofiles_id, invoice_ar_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          'TEMP',
+          profile.branch_id || null,
+          invoiceAmount,
+          'Paid',
+          `Advance payment — Phase ${absolutePhaseNumber} (profile #${id})`,
+          issueDateYmd,
+          dueDateYmd,
+          creatorUserId,
+          parseInt(id, 10),
+        ]
+      );
+
+      await client.query(
+        'UPDATE invoicestbl SET invoice_description = $1 WHERE invoice_id = $2',
+        [`INV-${newInvoice.invoice_id}`, newInvoice.invoice_id]
+      );
+
+      // Invoice item.
+      await client.query(
+        `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+         VALUES ($1, $2, $3)`,
+        [
+          newInvoice.invoice_id,
+          `Installment Phase ${absolutePhaseNumber} — advance payment`,
+          invoiceAmount,
+        ]
+      );
+
+      // Link student to invoice.
+      await client.query(
+        'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
+        [newInvoice.invoice_id, profile.student_id]
+      );
+
+      // ---- Create payment record ---------------------------------------
+      // Advance payments are NEVER auto-approved (regardless of method,
+      // including Cash). Finance/Superfinance must verify them via the
+      // standard payment approval flow so they don't bypass review.
+      const tipValue = tip_amount != null ? parseFloat(tip_amount) : 0;
+      await client.query(
+        `INSERT INTO paymenttbl
+           (invoice_id, student_id, branch_id, payment_method, payment_type,
+            payable_amount, tip_amount, issue_date, status, approval_status,
+            reference_number, remarks, payment_attachment_url, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          newInvoice.invoice_id,
+          profile.student_id,
+          profile.branch_id || null,
+          payment_method,
+          'Full',
+          invoiceAmount,
+          tipValue || 0,
+          issueDateYmd,
+          'Completed',
+          'Pending',
+          reference_number || null,
+          remarks || null,
+          attachment_url || null,
+          creatorUserId,
+        ]
+      );
+
+      // ---- Advance the auto-generation schedule ------------------------
+      // Push next_generation_date forward by (phasesToAdvance × freqMonths)
+      // so the auto-generator skips the advance-paid phase(s) and targets
+      // the next unpaid one.
+      //
+      // next_invoice_month is derived from next_generation_date using the
+      // same rule as buildFixedInstallmentCycleDates:
+      //   generation anchor → 25th of month M
+      //   invoice month     → 1st of month M+1
+      //
+      // We intentionally do NOT parse sched_next_inv_month from the DB
+      // because the pg driver returns date columns as JS Date objects;
+      // treating them as strings would produce an Invalid Date and write
+      // NULL back to the DB (the original bug that caused "Next Month: -").
+      const phasesToAdvance = phaseIdx - generatedCount; // e.g. paying phase 2 when gen=1 → 1
+      if (profile.installmentinvoicedtl_id) {
+        // New generation anchor: current anchor + phasesToAdvance months, pinned to 25th.
+        const newNextGen = new Date(nextGenBase);
+        newNextGen.setMonth(newNextGen.getMonth() + phasesToAdvance * freqMonths);
+        newNextGen.setDate(25);
+
+        // Invoice month = 1st of the month following the generation anchor.
+        const newNextInvMonth = new Date(newNextGen);
+        newNextInvMonth.setDate(1);
+        newNextInvMonth.setMonth(newNextInvMonth.getMonth() + 1);
+
+        await client.query(
+          `UPDATE installmentinvoicestbl
+           SET next_generation_date = $1, next_invoice_month = $2
+           WHERE installmentinvoicedtl_id = $3`,
+          [formatYmdLocal(newNextGen), formatYmdLocal(newNextInvMonth), profile.installmentinvoicedtl_id]
+        );
+      }
+
+      // ---- Increment generated_count on the profile --------------------
+      const newGeneratedCount = generatedCount + 1;
+      const isLastPhase = totalPhases !== null && newGeneratedCount >= totalPhases;
+
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET generated_count = $1 ${isLastPhase ? ', is_active = false' : ''}
+         WHERE installmentinvoiceprofiles_id = $2`,
+        [newGeneratedCount, id]
+      );
+
+      // ---- Enroll student in class for this phase ---------------------
+      if (profile.class_id && profile.student_id) {
+        const existsRes = await client.query(
+          `SELECT 1 FROM classstudentstbl
+           WHERE student_id = $1 AND class_id = $2 AND phase_number = $3`,
+          [profile.student_id, profile.class_id, absolutePhaseNumber]
+        );
+        if (existsRes.rows.length === 0) {
+          await client.query(
+            `INSERT INTO classstudentstbl (student_id, class_id, phase_number, enrolled_at, enrollment_status, enrolled_by)
+             VALUES ($1, $2, $3, NOW(), 'Active', $4)`,
+            [profile.student_id, profile.class_id, absolutePhaseNumber, String(creatorUserId || 'system')]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+
+      return res.json({
+        success: true,
+        message: `Advance payment recorded for Phase ${absolutePhaseNumber}.`,
+        data: {
+          invoice_id: newInvoice.invoice_id,
+          invoice_ar_number: newInvoice.invoice_ar_number || null,
+          phase_index: phaseIdx,
+          absolute_phase_number: absolutePhaseNumber,
+          amount: invoiceAmount,
+          issue_date: issueDateYmd,
+          due_date: dueDateYmd,
+          new_generated_count: newGeneratedCount,
+          is_last_phase: isLastPhase,
+        },
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      return next(err);
     } finally {
       client.release();
     }

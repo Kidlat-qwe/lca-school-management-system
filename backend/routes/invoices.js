@@ -1279,9 +1279,9 @@ router.get(
         const tableRowH = 22;
 
         // Header
-        doc.save();
+          doc.save();
         doc.roundedRect(tableLeft, y, tableWidth, tableHeaderH, 4).fill(colorBrand);
-        doc.restore();
+          doc.restore();
         doc.font('Helvetica-Bold').fontSize(10).fillColor('#ffffff');
         const headerTextY = y + tableHeaderH / 2 - 4;
         doc.text('INSTALLMENT', colXInstallment + 10, headerTextY, {
@@ -1352,8 +1352,21 @@ router.get(
             { zebra: true, bold: true }
           );
         }
+        // Use absolute phase numbering so a profile that starts at phase 6
+        // displays "6th Phase ... 10th Phase" instead of "1st Phase ... 5th
+        // Phase". Profiles with no phase_start (or starting at 1) are
+        // unchanged.
+        const soaPhaseStartRaw =
+          installmentProfile && installmentProfile.phase_start != null
+            ? Number(installmentProfile.phase_start)
+            : 1;
+        const soaPhaseStartOffset = Math.max(
+          0,
+          (Number.isFinite(soaPhaseStartRaw) ? soaPhaseStartRaw : 1) - 1
+        );
         phases.forEach((phase, idx) => {
-          const label = `${ordinal(phase.phase_number)} Phase`;
+          const absolutePhaseNumber = Number(phase.phase_number) + soaPhaseStartOffset;
+          const label = `${ordinal(absolutePhaseNumber)} Phase`;
           drawRow(
             label,
             '0',
@@ -1431,9 +1444,9 @@ router.get(
           const row = Math.floor(idx / 2);
           const cx = left + col * (cellW + 12);
           const cy = y + row * (cellH + 10);
-          doc.save();
+              doc.save();
           doc.roundedRect(cx, cy, cellW, cellH, 6).fillAndStroke(colorBrandSoft, '#caa64f');
-          doc.restore();
+              doc.restore();
           doc.font('Helvetica-Bold').fontSize(10).fillColor(colorTextPrimary)
             .text(opt.label, cx + 12, cy + 8, { width: cellW - 24 });
           doc.font('Helvetica').fontSize(8.5).fillColor(colorTextPrimary)

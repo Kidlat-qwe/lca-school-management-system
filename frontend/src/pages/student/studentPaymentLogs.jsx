@@ -482,16 +482,22 @@ const StudentPaymentLogs = () => {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+        <span>
+          <span className="font-semibold text-gray-900">Payments:</span>{' '}
+          <span className="font-medium text-gray-900">{filteredPayments.length.toLocaleString('en-US')}</span>
+        </span>
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-900">Total amount (payable + tips):</span>{' '}
+          <span className="font-semibold text-emerald-700">
+            ₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
       {/* Payment Logs List */}
       <div className="bg-white rounded-lg shadow">
-        <div className="px-6 pt-4">
-          <p className="text-sm font-semibold text-gray-700">
-            Total amount (payable + tips):{' '}
-            <span className="text-emerald-700">
-              ₱{filteredTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-          </p>
-        </div>
         <div
             className="overflow-x-auto rounded-lg"
             style={{
@@ -502,8 +508,19 @@ const StudentPaymentLogs = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '1280px' }}
+              style={{ width: '100%', minWidth: '1250px', tableLayout: 'fixed' }}
             >
+              <colgroup>
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '200px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '150px' }} />
+                <col style={{ width: '140px' }} />
+              </colgroup>
               <thead className="bg-white">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -528,7 +545,8 @@ const StudentPaymentLogs = () => {
                     Payment Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Acknowledgement Receipt#
+                    <span className="block">Acknowledgement</span>
+                    <span className="block">Receipt#</span>
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Reference

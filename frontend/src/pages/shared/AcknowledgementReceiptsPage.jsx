@@ -1751,8 +1751,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </div>
       </StandardExportModal>
 
-      <div className={`flex flex-col gap-3 lg:flex-row lg:items-center ${isAdminOrSuperadmin ? 'lg:justify-between' : 'lg:justify-end'}`}>
-        {isAdminOrSuperadmin ? (
+      {isAdminOrSuperadmin ? (
+        <div className="w-full">
           <BranchPaymentLogTabs
             value={arAdminTab}
             onChange={(v) => {
@@ -1764,23 +1764,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             ariaLabel="Acknowledgement receipt views"
             returnBadgeCount={returnedArCount}
           />
-        ) : null}
-        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Acknowledgement receipts</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {summaryAcknowledgementReceiptCount.toLocaleString('en-US')}
-            </p>
-          </div>
-          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
-            <p className="text-lg font-semibold text-emerald-700">
-              ₱{summaryAcknowledgementReceiptTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </p>
-          </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -1910,6 +1895,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+        <span>
+          <span className="font-semibold text-gray-900">Acknowledgement receipts:</span>{' '}
+          <span className="font-medium text-gray-900">{summaryAcknowledgementReceiptCount.toLocaleString('en-US')}</span>
+        </span>
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-900">Total amount:</span>{' '}
+          <span className="font-semibold text-emerald-700">
+            ₱{summaryAcknowledgementReceiptTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
       {isAdminOrSuperadmin && arAdminTab === 'return' ? (
         <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
           These package acknowledgement receipts were <span className="font-semibold">returned by Finance or Superfinance</span> for
@@ -1954,7 +1953,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1460px' }}
+                style={{ width: '100%', minWidth: '1520px' }}
               >
                 <thead className="bg-gray-50 table-header-stable">
                   <tr>
@@ -1966,7 +1965,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Branch</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Method</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ref. No.</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap overflow-hidden">
+                      Ref. No.
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Issue Date</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Date</th>

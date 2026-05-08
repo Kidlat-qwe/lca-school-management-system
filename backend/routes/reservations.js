@@ -685,6 +685,176 @@ router.put(
       let promoDiscount = 0;
       let promoApplied = null;
 
+      const applyReservationUpgradePromoForAmount = async (originalAmount) => {
+        const baseAmount = parseFloat(originalAmount || 0) || 0;
+        if (!promo_id || baseAmount <= 0) {
+          return {
+            amountAfterPromo: baseAmount,
+            discount: 0,
+            promo: null,
+            freeMerchandiseItems: [],
+          };
+        }
+
+        try {
+          const promoResult = await client.query(
+            `SELECT p.*, pkg.package_price
+             FROM promostbl p
+             LEFT JOIN packagestbl pkg ON p.package_id = pkg.package_id
+             WHERE p.promo_id = $1 AND p.status = 'Active'`,
+            [promo_id]
+          );
+
+          if (promoResult.rows.length === 0) {
+            return {
+              amountAfterPromo: baseAmount,
+              discount: 0,
+              promo: null,
+              freeMerchandiseItems: [],
+            };
+          }
+
+          const promo = promoResult.rows[0];
+
+          if (promo.promo_code) {
+            if (!promo_code || promo_code.trim().toUpperCase() !== promo.promo_code.toUpperCase()) {
+              console.warn(`Promo ${promo_id} requires promo code but invalid or missing code provided`);
+              throw new Error('Invalid or missing promo code');
+            }
+          }
+
+          const promoPackagesResult = await client.query(
+            'SELECT package_id FROM promopackagestbl WHERE promo_id = $1',
+            [promo_id]
+          );
+          const promoPackageIds = promoPackagesResult.rows.map((row) => Number(row.package_id));
+
+          if (promoPackageIds.length === 0 && promo.package_id) {
+            promoPackageIds.push(Number(promo.package_id));
+          }
+
+          promo.package_ids = promoPackageIds;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const startDate = promo.start_date ? new Date(promo.start_date) : null;
+          const endDate = promo.end_date ? new Date(promo.end_date) : null;
+          const isDateValid = (!startDate || startDate <= today) && (!endDate || endDate >= today);
+          const isUsageValid = !promo.max_uses || (promo.current_uses || 0) < promo.max_uses;
+
+          const usageCheck = await client.query(
+            'SELECT promousage_id FROM promousagetbl WHERE promo_id = $1 AND student_id = $2',
+            [promo_id, reservation.student_id]
+          );
+          const hasAlreadyUsed = usageCheck.rows.length > 0;
+
+          let isEligible = false;
+          if (!hasAlreadyUsed) {
+            const enrollmentCheck = await client.query(
+              'SELECT COUNT(*) as count FROM classstudentstbl WHERE student_id = $1',
+              [reservation.student_id]
+            );
+            const enrollmentCount = parseInt(enrollmentCheck.rows[0]?.count || 0);
+            const isNewStudent = enrollmentCount === 0;
+            const isExistingStudent = enrollmentCount > 0;
+
+            const referralCheck = await client.query(
+              'SELECT referral_id, status FROM referralstbl WHERE referred_student_id = $1',
+              [reservation.student_id]
+            );
+            const hasReferral = referralCheck.rows.length > 0 && referralCheck.rows[0].status === 'Verified';
+
+            switch (promo.eligibility_type) {
+              case 'all':
+                isEligible = true;
+                break;
+              case 'new_students_only':
+                isEligible = isNewStudent;
+                break;
+              case 'existing_students_only':
+                isEligible = isExistingStudent;
+                break;
+              case 'referral_only':
+                isEligible = hasReferral;
+                break;
+              default:
+                isEligible = true;
+            }
+          }
+
+          const meetsMinPayment = !promo.min_payment_amount || baseAmount >= parseFloat(promo.min_payment_amount);
+          const packageMatches =
+            promo.package_ids.length === 0 ||
+            (package_id && promo.package_ids.includes(Number(package_id)));
+
+          if (!isDateValid || !isUsageValid || !packageMatches || hasAlreadyUsed || !isEligible || !meetsMinPayment) {
+            const reasons = [];
+            if (!isDateValid) reasons.push('promo is not within valid date range');
+            if (!isUsageValid) reasons.push('promo has reached maximum uses');
+            if (!packageMatches) reasons.push('promo does not match selected package');
+            if (hasAlreadyUsed) reasons.push('student has already used this promo');
+            if (!isEligible) reasons.push('student does not meet eligibility requirements');
+            if (!meetsMinPayment) {
+              reasons.push(`base amount (PHP ${baseAmount.toFixed(2)}) is less than minimum payment (PHP ${parseFloat(promo.min_payment_amount).toFixed(2)})`);
+            }
+            console.warn(`Promo ${promo_id} could not be applied during reservation upgrade: ${reasons.join(', ')}`);
+            return {
+              amountAfterPromo: baseAmount,
+              discount: 0,
+              promo: null,
+              freeMerchandiseItems: [],
+            };
+          }
+
+          let calculatedDiscount = 0;
+          if (promo.promo_type === 'percentage_discount' && promo.discount_percentage) {
+            calculatedDiscount = (baseAmount * parseFloat(promo.discount_percentage)) / 100;
+          } else if (promo.promo_type === 'fixed_discount' && promo.discount_amount) {
+            calculatedDiscount = parseFloat(promo.discount_amount);
+          } else if (promo.promo_type === 'combined') {
+            if (promo.discount_percentage && parseFloat(promo.discount_percentage) > 0) {
+              calculatedDiscount = (baseAmount * parseFloat(promo.discount_percentage)) / 100;
+            } else if (promo.discount_amount && parseFloat(promo.discount_amount) > 0) {
+              calculatedDiscount = parseFloat(promo.discount_amount);
+            }
+          }
+
+          calculatedDiscount = Math.min(calculatedDiscount, baseAmount);
+
+          const promoMerchResult = await client.query(
+            `SELECT pm.*, m.merchandise_name, m.price
+             FROM promomerchandisetbl pm
+             LEFT JOIN merchandisestbl m ON pm.merchandise_id = m.merchandise_id
+             WHERE pm.promo_id = $1`,
+            [promo_id]
+          );
+
+          const freeMerchandiseItems = [];
+          for (const promoMerch of promoMerchResult.rows) {
+            for (let i = 0; i < (promoMerch.quantity || 1); i++) {
+              freeMerchandiseItems.push({
+                description: `Free: ${promoMerch.merchandise_name} (Promo: ${promo.promo_name})`,
+                amount: 0,
+              });
+            }
+          }
+
+          return {
+            amountAfterPromo: Math.max(0, baseAmount - calculatedDiscount),
+            discount: calculatedDiscount,
+            promo,
+            freeMerchandiseItems,
+          };
+        } catch (promoError) {
+          console.error('Error applying promo during reservation upgrade:', promoError);
+          return {
+            amountAfterPromo: baseAmount,
+            discount: 0,
+            promo: null,
+            freeMerchandiseItems: [],
+          };
+        }
+      };
+
       // Process per-phase enrollment if enrollment_type is 'Per-Phase'
       if (enrollment_type === 'Per-Phase') {
         // Add per-phase amount if provided
@@ -1194,10 +1364,36 @@ router.put(
       ) {
         const downpaymentConfigured = parseFloat(packageData.downpayment_amount || 0) || 0;
         if (downpaymentConfigured > 0 && installmentIncludeDownpayment) {
-          totalAmount = Math.max(0, downpaymentConfigured - reservationFeePaid);
+          const promoResult = await applyReservationUpgradePromoForAmount(downpaymentConfigured);
+          if (promoResult.promo) {
+            promoApplied = promoResult.promo;
+            promoDiscount = promoResult.discount;
+          }
+
+          totalAmount = Math.max(0, promoResult.amountAfterPromo - reservationFeePaid);
           invoiceItems = [
             { description: `Downpayment - ${packageName || 'Enrollment'}`, amount: downpaymentConfigured },
           ];
+          if (promoResult.discount > 0 && promoResult.promo) {
+            let discountDescription = `Promo Discount (${promoResult.promo.promo_name}): `;
+            if (promoResult.promo.promo_type === 'percentage_discount' && promoResult.promo.discount_percentage) {
+              discountDescription += `${promoResult.promo.discount_percentage}%`;
+            } else if (promoResult.promo.promo_type === 'fixed_discount' && promoResult.promo.discount_amount) {
+              discountDescription += `PHP ${parseFloat(promoResult.promo.discount_amount).toFixed(2)}`;
+            } else if (promoResult.promo.promo_type === 'combined') {
+              if (promoResult.promo.discount_percentage && parseFloat(promoResult.promo.discount_percentage) > 0) {
+                discountDescription += `${promoResult.promo.discount_percentage}%`;
+              } else if (promoResult.promo.discount_amount && parseFloat(promoResult.promo.discount_amount) > 0) {
+                discountDescription += `PHP ${parseFloat(promoResult.promo.discount_amount).toFixed(2)}`;
+              }
+            }
+
+            invoiceItems.push({
+              description: discountDescription,
+              amount: -promoResult.discount,
+            });
+          }
+          invoiceItems.push(...promoResult.freeMerchandiseItems);
           if (reservationFeePaid > 0) {
             invoiceItems.push({
               description: 'Discount: Reservation Fee Paid',
@@ -1205,7 +1401,7 @@ router.put(
             });
           }
           console.log(
-            `✅ Installment upgrade invoice: downpayment ${downpaymentConfigured} − reservation ${reservationFeePaid} = ${totalAmount}`
+            `✅ Installment upgrade invoice: downpayment ${downpaymentConfigured} − promo ${promoResult.discount} − reservation ${reservationFeePaid} = ${totalAmount}`
           );
         }
       }

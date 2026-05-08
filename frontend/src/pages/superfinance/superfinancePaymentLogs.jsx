@@ -54,6 +54,7 @@ const SuperfinancePaymentLogs = () => {
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
   const [referenceModalInput, setReferenceModalInput] = useState('');
+  const [paymentDateInput, setPaymentDateInput] = useState('');
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
@@ -248,6 +249,12 @@ const SuperfinancePaymentLogs = () => {
     setSelectedPaymentForReference(payment);
     setReferenceModalInput('');
     setReturnReasonInput('');
+    // Pre-fill the editable Payment Date with the payment's current date.
+    // The list query exposes the same column under both payment_date and
+    // issue_date aliases; prefer payment_date and fall back to issue_date.
+    const initialDate =
+      (payment?.payment_date || payment?.issue_date || '').toString().slice(0, 10);
+    setPaymentDateInput(initialDate);
     setShowReferenceModal(true);
   };
 
@@ -256,6 +263,7 @@ const SuperfinancePaymentLogs = () => {
     setSelectedPaymentForReference(null);
     setReferenceModalInput('');
     setReturnReasonInput('');
+    setPaymentDateInput('');
   };
 
   const openReturnModal = () => {
@@ -325,19 +333,37 @@ const SuperfinancePaymentLogs = () => {
       return;
     }
 
+    // Validate the optional updated payment date.
+    const trimmedDate = (paymentDateInput || '').trim();
+    if (trimmedDate && !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      appAlert('Payment date must be a valid date (YYYY-MM-DD).');
+      return;
+    }
+
     const paymentId = selectedPaymentForReference.payment_id;
     setReferenceModalUpdating(true);
     try {
+      const requestBody = {
+        approve: true,
+        finance_verified_reference_number: enteredRef,
+      };
+      if (trimmedDate) requestBody.payment_date = trimmedDate;
+
       await apiRequest(`/payments/${paymentId}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({
-          approve: true,
-          finance_verified_reference_number: enteredRef,
-        }),
+        body: JSON.stringify(requestBody),
       });
       setPayments((prev) =>
         prev.map((p) =>
-          p.payment_id === paymentId ? { ...p, approval_status: 'Approved' } : p
+          p.payment_id === paymentId
+            ? {
+                ...p,
+                approval_status: 'Approved',
+                ...(trimmedDate
+                  ? { payment_date: trimmedDate, issue_date: trimmedDate }
+                  : {}),
+              }
+            : p
         )
       );
       closeReferenceModal();
@@ -725,23 +751,8 @@ const SuperfinancePaymentLogs = () => {
         </button>
       </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="w-full">
         <BranchPaymentLogTabs value={financeLogTab} onChange={setFinanceLogTab} returnBadgeCount={returnedPaymentLogCount} />
-        <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-end sm:gap-4 lg:text-right">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Payment logs</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {summaryPaymentLogCount.toLocaleString('en-US')}
-            </p>
-          </div>
-          <div className="hidden h-10 w-px bg-gray-200 sm:block" />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total amount</p>
-            <p className="text-lg font-semibold text-emerald-700">
-              ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </p>
-          </div>
-        </div>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
@@ -825,6 +836,20 @@ const SuperfinancePaymentLogs = () => {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+        <span>
+          <span className="font-semibold text-gray-900">Payment logs:</span>{' '}
+          <span className="font-medium text-gray-900">{summaryPaymentLogCount.toLocaleString('en-US')}</span>
+        </span>
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-900">Total amount:</span>{' '}
+          <span className="font-semibold text-emerald-700">
+            ₱{summaryLineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
       {/* Error Message */}
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
@@ -845,7 +870,7 @@ const SuperfinancePaymentLogs = () => {
           className="overflow-x-auto rounded-lg"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
         >
-          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1850px' }}>
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1820px' }}>
               {financeLogTab === 'return' ? (
                 <colgroup>
                   <col style={{ width: '120px' }} />
@@ -861,7 +886,7 @@ const SuperfinancePaymentLogs = () => {
                   <col style={{ width: '170px' }} />
                   <col style={{ width: '145px' }} />
                   <col style={{ width: '160px' }} />
-                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '150px' }} />
                   <col style={{ width: '170px' }} />
                 </colgroup>
               ) : (
@@ -878,7 +903,7 @@ const SuperfinancePaymentLogs = () => {
                   <col style={{ width: '130px' }} />
                   <col style={{ width: '170px' }} />
                   <col style={{ width: '160px' }} />
-                  <col style={{ width: '180px' }} />
+                  <col style={{ width: '150px' }} />
                   <col style={{ width: '170px' }} />
                 </colgroup>
               )}
@@ -926,7 +951,8 @@ const SuperfinancePaymentLogs = () => {
                     Reference#
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Acknowledgement Receipt#
+                    <span className="block">Acknowledgement</span>
+                    <span className="block">Receipt#</span>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Issued By
@@ -1256,6 +1282,21 @@ const SuperfinancePaymentLogs = () => {
                 </div>
               )}
               <form onSubmit={handleUpdateReferenceNumber}>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Payment Date
+                  </label>
+                  <input
+                    type="date"
+                    value={paymentDateInput}
+                    onChange={(e) => setPaymentDateInput(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    disabled={referenceModalUpdating || returnActionLoading}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Adjust the date if needed. Saving will update the payment date everywhere it is shown.
+                  </p>
+                </div>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Finance/Superfinance Reference Number

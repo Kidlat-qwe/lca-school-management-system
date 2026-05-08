@@ -74,6 +74,85 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     min: 1,
     max: 12,
   },
+
+  // --- Templates (notification / email / EOD / cash deposit / payment / reminder) ---
+  // Stored as JSON with a consistent shape:
+  //   { title, subject, body, enabled }
+  // Variables referenced in the body (e.g. {studentName}) are placeholders for a
+  // future rendering phase; this phase only manages the stored content.
+  template_general_notification: {
+    key: 'template_general_notification',
+    type: 'json',
+    category: 'templates',
+    description:
+      'Generic in-app notification template used for system-wide announcements.',
+    defaultValue: {
+      title: 'System Notification',
+      subject: '',
+      body: 'Hello {recipientName}, this is a notification from {schoolName} ({branchName}).',
+      enabled: true,
+    },
+  },
+  template_general_email: {
+    key: 'template_general_email',
+    type: 'json',
+    category: 'templates',
+    description: 'Generic email template used for ad-hoc school-to-parent emails.',
+    defaultValue: {
+      title: '',
+      subject: 'Update from {schoolName}',
+      body: 'Hello {recipientName},\n\nThis is an update from {schoolName} ({branchName}) on {date}.\n\nThank you,\n{schoolName}',
+      enabled: true,
+    },
+  },
+  template_eod_summary: {
+    key: 'template_eod_summary',
+    type: 'json',
+    category: 'templates',
+    description: 'End-of-day summary email/notification template.',
+    defaultValue: {
+      title: 'End of Day - {summaryDate}',
+      subject: '[PSMS] End of Day - {branchName} - {summaryDate}',
+      body: 'EOD summary for {branchName} on {summaryDate}.\n\nTotal: {totalAmount}\nPayments: {paymentCount}\nSubmitted by: {submittedBy}',
+      enabled: true,
+    },
+  },
+  template_cash_deposit: {
+    key: 'template_cash_deposit',
+    type: 'json',
+    category: 'templates',
+    description: 'Cash deposit submission notification template (for Finance/Superadmin).',
+    defaultValue: {
+      title: 'Cash Deposit Submitted - {branchName}',
+      subject: '',
+      body: 'A cash deposit was submitted for {branchName} on {depositDate}.\nCash total: {cashTotal}\nSubmitted by: {submittedBy}',
+      enabled: true,
+    },
+  },
+  template_payment_confirmation: {
+    key: 'template_payment_confirmation',
+    type: 'json',
+    category: 'templates',
+    description: 'Payment confirmation email sent to the student/guardian after a payment is recorded.',
+    defaultValue: {
+      title: 'Payment Received',
+      subject: 'Payment Received - {invoiceNumber}',
+      body: 'Hello {recipientName},\n\nWe have received your payment of {amountPaid} for {studentName} (Invoice {invoiceNumber}) on {paymentDate}.\n\nThank you,\n{schoolName}',
+      enabled: true,
+    },
+  },
+  template_payment_reminder: {
+    key: 'template_payment_reminder',
+    type: 'json',
+    category: 'templates',
+    description: 'Overdue payment reminder template sent to the student/guardian.',
+    defaultValue: {
+      title: 'Payment Reminder - {invoiceNumber}',
+      subject: 'Payment Reminder - {invoiceNumber}',
+      body: 'Hello {recipientName},\n\nThis is a reminder that invoice {invoiceNumber} for {studentName} is {daysOverdue} day(s) past due.\nAmount due: {amountDue}\nDue date: {dueDate}\n\nThank you,\n{schoolName}',
+      enabled: true,
+    },
+  },
 });
 
 export const SETTINGS_KEYS = Object.freeze(Object.keys(SETTINGS_DEFINITIONS));
@@ -103,6 +182,7 @@ function parseByType(rawValue, type, fallbackValue) {
   }
 
   if (type === 'json') {
+    if (rawValue && typeof rawValue === 'object') return rawValue;
     try {
       return JSON.parse(String(rawValue));
     } catch {

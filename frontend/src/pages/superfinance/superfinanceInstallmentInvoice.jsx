@@ -507,30 +507,51 @@ const SuperfinanceInstallmentInvoice = () => {
                       </div>
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
-                      {invoice.total_phases !== null && invoice.total_phases !== undefined ? (
-                        <div className="flex flex-col">
-                          <div className="text-sm text-gray-900 font-medium">
-                            {(invoice.display_phase_progress || 0)} / {invoice.total_phases}
+                      {(() => {
+                        const numerator =
+                          invoice.phase_progress_numerator != null
+                            ? Number(invoice.phase_progress_numerator)
+                            : Number(invoice.display_phase_progress || 0);
+                        const denominator =
+                          invoice.phase_progress_denominator != null
+                            ? Number(invoice.phase_progress_denominator)
+                            : invoice.total_phases != null
+                              ? Number(invoice.total_phases)
+                              : null;
+                        if (denominator === null || denominator === undefined) {
+                          return <span className="text-sm text-gray-400">-</span>;
+                        }
+                        const isComplete = numerator >= denominator;
+                        // Bar fill reflects the relative paid-vs-billed
+                        // progress for THIS plan profile (e.g. 1 of 5
+                        // phases paid = 20%), not the absolute calendar
+                        // position (6/10 = 60%). Keeps the bar visually
+                        // honest about how much of the plan has been paid.
+                        const relativePaid = Number(invoice.display_phase_progress || 0);
+                        const relativeTotal =
+                          invoice.total_phases != null ? Number(invoice.total_phases) : 0;
+                        const percent = relativeTotal > 0
+                          ? Math.min((relativePaid / relativeTotal) * 100, 100)
+                          : 0;
+                        return (
+                          <div className="flex flex-col">
+                            <div className="text-sm text-gray-900 font-medium">
+                              {numerator} / {denominator}
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                              <div
+                                className={`h-2 rounded-full ${
+                                  isComplete ? 'bg-green-500' : 'bg-blue-500'
+                                }`}
+                                style={{ width: `${percent}%` }}
+                              ></div>
+                            </div>
+                            {isComplete && (
+                              <span className="text-xs text-green-600 font-medium mt-1">Completed</span>
+                            )}
                           </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                            <div 
-                              className={`h-2 rounded-full ${
-                                (invoice.display_phase_progress || 0) >= invoice.total_phases 
-                                  ? 'bg-green-500' 
-                                  : 'bg-blue-500'
-                              }`}
-                              style={{ 
-                                width: `${Math.min(((invoice.display_phase_progress || 0) / invoice.total_phases) * 100, 100)}%` 
-                              }}
-                            ></div>
-                          </div>
-                          {(invoice.display_phase_progress || 0) >= invoice.total_phases && (
-                            <span className="text-xs text-green-600 font-medium mt-1">Completed</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-gray-400">-</span>
-                      )}
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap text-center">
                       <div className="relative action-menu-dropdown">
