@@ -13,7 +13,7 @@ router.use(requireBranchAccess);
  * GET /api/sms/reports/students
  * Report: list students with enrollment status (active = enrolled, inactive = registered but not enrolled).
  * Access: Superadmin, Admin.
- * Query: status=all|active|inactive, branch_id (optional, Superadmin only), page, limit.
+ * Query: status=all|active|inactive, branch_id (optional, Superadmin only), search, page, limit.
  */
 router.get(
   '/students',
@@ -24,13 +24,14 @@ router.get(
       .isIn(['all', 'active', 'inactive'])
       .withMessage('status must be all, active, or inactive'),
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
+    queryValidator('search').optional().isString().withMessage('search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit must be between 1 and 100'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { status = 'all', branch_id, page = 1, limit = 50 } = req.query;
+      const { status = 'all', branch_id, search, page = 1, limit = 50 } = req.query;
       const pageNum = parseInt(page) || 1;
       const limitNum = parseInt(limit) || 50;
       const offset = (pageNum - 1) * limitNum;
@@ -97,6 +98,19 @@ router.get(
           WHERE cs.student_id = u.user_id
             AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
         )`;
+      }
+
+      const searchTerm = search ? String(search).trim() : '';
+      if (searchTerm) {
+        paramCount++;
+        sql += ` AND (
+          COALESCE(u.full_name, '') ILIKE $${paramCount}
+          OR COALESCE(u.email, '') ILIKE $${paramCount}
+          OR COALESCE(u.phone_number, '') ILIKE $${paramCount}
+          OR COALESCE(u.level_tag, '') ILIKE $${paramCount}
+          OR COALESCE(b.branch_nickname, b.branch_name, '') ILIKE $${paramCount}
+        )`;
+        params.push(`%${searchTerm}%`);
       }
 
       const orderBy = ' ORDER BY u.full_name ASC';

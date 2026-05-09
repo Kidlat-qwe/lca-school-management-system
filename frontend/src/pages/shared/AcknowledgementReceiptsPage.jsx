@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
+import { issueDateFilterUtil, DATE_FILTER_MODES } from '../../utils/dateFilterModes';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
@@ -11,6 +12,8 @@ import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAt
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import { downloadAcknowledgementReceiptsXlsx } from '../../utils/acknowledgementReceiptsExcelExport';
 import StandardExportModal from '../../components/export/StandardExportModal';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -74,23 +77,42 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const initialListIssueToRaw = (searchParams.get('issue_date_to') || '').trim().slice(0, 10);
   const initialListIssueFrom = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueFromRaw) ? initialListIssueFromRaw : '';
   const initialListIssueTo = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueToRaw) ? initialListIssueToRaw : '';
+  const initialCreatedFromRaw = (searchParams.get('created_date_from') || '').trim().slice(0, 10);
+  const initialCreatedToRaw = (searchParams.get('created_date_to') || '').trim().slice(0, 10);
+  const initialCreatedFrom = /^\d{4}-\d{2}-\d{2}$/.test(initialCreatedFromRaw) ? initialCreatedFromRaw : '';
+  const initialCreatedTo = /^\d{4}-\d{2}-\d{2}$/.test(initialCreatedToRaw) ? initialCreatedToRaw : '';
+  // Hydrate the date-filter mode from the URL: created_date_* wins over
+  // issue_date_*; if neither is present we boot with the default Month mode
+  // pre-applied to the current Manila month.
+  const initialDateFilterMode = (initialCreatedFrom || initialCreatedTo)
+    ? DATE_FILTER_MODES.CREATED_DATE
+    : (initialListIssueFrom || initialListIssueTo)
+      ? DATE_FILTER_MODES.PRIMARY
+      : issueDateFilterUtil.DEFAULT_MODE;
+  // Always boot the Month picker with the current Manila month, even when
+  // the URL is hydrating one of the other modes — the user may swap modes
+  // afterwards and we want the Month picker pre-populated.
+  const initialIssueMonth = issueDateFilterUtil.defaultMonth();
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [paymentMethodFilter, setPaymentMethodFilter] = useState(initialPaymentMethod);
+  // Date filter mode switcher (Month | Issue date | Date created).
+  // Default mode = MONTH, default month = current Manila month.
+  const [dateFilterMode, setDateFilterMode] = useState(initialDateFilterMode);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(initialIssueMonth);
   const [listIssueDateFrom, setListIssueDateFrom] = useState(initialListIssueFrom);
   const [listIssueDateTo, setListIssueDateTo] = useState(initialListIssueTo);
-  const [showAdvancedAcknowledgementReceiptFilters, setShowAdvancedAcknowledgementReceiptFilters] = useState(
-    Boolean(initialListIssueFrom || initialListIssueTo)
-  );
+  const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState(initialCreatedFrom);
+  const [filterCreatedDateTo, setFilterCreatedDateTo] = useState(initialCreatedTo);
   const [listRefreshing, setListRefreshing] = useState(false);
   const initialDataLoadedRef = useRef(false);
   const searchHydratedRef = useRef(false);
   const statusHydratedRef = useRef(false);
   const paymentMethodHydratedRef = useRef(false);
-  const listIssueDateHydratedRef = useRef(false);
+  const dateFilterHydratedRef = useRef(false);
   const [arAdminTab, setArAdminTab] = useState(initialArAdminTab);
   const arAdminTabHydratedRef = useRef(false);
   const [pagination, setPagination] = useState({
@@ -100,6 +122,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     totalPages: 1,
   });
   const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
+  const [sortConfig, setSortConfig] = useState(null);
 
   const [packages, setPackages] = useState([]);
   const [packagesLoading, setPackagesLoading] = useState(false);
@@ -258,8 +281,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       const params = buildReceiptQueryParams({
         page,
         limit: effectiveLimit,
-        issueDateFrom: listIssueDateFrom,
-        issueDateTo: listIssueDateTo,
       });
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
@@ -293,10 +314,23 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         else next.delete('search');
         if (paymentMethodFilter) next.set('payment_method', paymentMethodFilter);
         else next.delete('payment_method');
-        if (listIssueDateFrom) next.set('issue_date_from', listIssueDateFrom);
+        // Sync the URL to whichever date params the active mode emits.
+        const activeDateParams = issueDateFilterUtil.buildParams({
+          mode: dateFilterMode,
+          month: filterIssueMonth,
+          primaryFrom: listIssueDateFrom,
+          primaryTo: listIssueDateTo,
+          createdFrom: filterCreatedDateFrom,
+          createdTo: filterCreatedDateTo,
+        });
+        if (activeDateParams.issue_date_from) next.set('issue_date_from', activeDateParams.issue_date_from);
         else next.delete('issue_date_from');
-        if (listIssueDateTo) next.set('issue_date_to', listIssueDateTo);
+        if (activeDateParams.issue_date_to) next.set('issue_date_to', activeDateParams.issue_date_to);
         else next.delete('issue_date_to');
+        if (activeDateParams.created_date_from) next.set('created_date_from', activeDateParams.created_date_from);
+        else next.delete('created_date_from');
+        if (activeDateParams.created_date_to) next.set('created_date_to', activeDateParams.created_date_to);
+        else next.delete('created_date_to');
         next.set('page', String(page));
         next.set('limit', String(effectiveLimit));
         return next;
@@ -389,13 +423,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   }, [paymentMethodFilter]);
 
   useEffect(() => {
-    if (!listIssueDateHydratedRef.current) {
-      listIssueDateHydratedRef.current = true;
+    if (!dateFilterHydratedRef.current) {
+      dateFilterHydratedRef.current = true;
       return;
     }
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listIssueDateFrom, listIssueDateTo]);
+  }, [
+    dateFilterMode,
+    filterIssueMonth,
+    listIssueDateFrom,
+    listIssueDateTo,
+    filterCreatedDateFrom,
+    filterCreatedDateTo,
+  ]);
 
   useEffect(() => {
     if (!isAdminOrSuperadmin) return;
@@ -480,7 +521,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setViewerUrl('');
   };
 
-  const buildReceiptQueryParams = ({ page, limit, issueDateFrom = '', issueDateTo = '', forceBranchId = undefined }) => {
+  /**
+   * Build the AR list query params.
+   *
+   * - If `dateOverride` is provided, those date params (already a plain
+   *   object like {issue_date_from, issue_date_to, created_date_from,
+   *   created_date_to}) are used verbatim. Used by the export modal path,
+   *   which lets the user pick an explicit range.
+   * - Otherwise we derive the date params from the active date-filter mode
+   *   (Month / Issue date / Date created) via `issueDateFilterUtil`.
+   */
+  const buildReceiptQueryParams = ({ page, limit, dateOverride = null, forceBranchId = undefined }) => {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(limit));
@@ -499,8 +550,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     } else if (canApplyGlobalBranchFilter && selectedBranchId) {
       params.set('branch_id', selectedBranchId);
     }
-    if (issueDateFrom) params.set('issue_date_from', issueDateFrom);
-    if (issueDateTo) params.set('issue_date_to', issueDateTo);
+    const dateParamPairs = dateOverride || issueDateFilterUtil.buildParams({
+      mode: dateFilterMode,
+      month: filterIssueMonth,
+      primaryFrom: listIssueDateFrom,
+      primaryTo: listIssueDateTo,
+      createdFrom: filterCreatedDateFrom,
+      createdTo: filterCreatedDateTo,
+    });
+    Object.entries(dateParamPairs).forEach(([k, v]) => {
+      if (v) params.set(k, v);
+    });
     return params;
   };
 
@@ -567,7 +627,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       .join(', ');
   };
 
-  const fetchAllReceiptsForExport = async ({ issueDateFrom = '', issueDateTo = '', branchIds = null } = {}) => {
+  const fetchAllReceiptsForExport = async ({ dateOverride = null, branchIds = null } = {}) => {
     const pageSize = 100;
 
     const fetchPagesForBranch = async (forceBranchId) => {
@@ -578,8 +638,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         const params = buildReceiptQueryParams({
           page,
           limit: pageSize,
-          issueDateFrom,
-          issueDateTo,
+          dateOverride,
           forceBranchId,
         });
         const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
@@ -609,13 +668,22 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const executeExportExcel = async ({
-    issueDateFrom = listIssueDateFrom,
-    issueDateTo = listIssueDateTo,
+    issueDateFrom = '',
+    issueDateTo = '',
     branchIds = null,
   } = {}) => {
     try {
       setExportLoading(true);
-      const rows = await fetchAllReceiptsForExport({ issueDateFrom, issueDateTo, branchIds });
+      // If the caller passed an explicit issue-date range (modal path),
+      // honor it. Otherwise let `fetchAllReceiptsForExport` derive params
+      // from the active list date-filter mode.
+      const dateOverride = (issueDateFrom || issueDateTo)
+        ? {
+            ...(issueDateFrom ? { issue_date_from: issueDateFrom } : {}),
+            ...(issueDateTo ? { issue_date_to: issueDateTo } : {}),
+          }
+        : null;
+      const rows = await fetchAllReceiptsForExport({ dateOverride, branchIds });
       if (!rows.length) {
         appAlert('No acknowledgement receipts found for the current filters.');
         return false;
@@ -1604,6 +1672,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     return Array.from(set);
   };
 
+  const sortedReceipts = sortRows(receipts, sortConfig, {
+    branch: { accessor: 'branch_name', type: 'string' },
+    status: { accessor: 'status', type: 'string' },
+    issue_date: { accessor: 'issue_date', type: 'date' },
+    payment_date: { accessor: 'issue_date', type: 'date' },
+  });
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+  };
+
   const actionMenuReceipt = receipts.find((x) => x.ack_receipt_id === openActionMenuId);
   const canResubmitFromActionMenu =
     actionMenuReceipt &&
@@ -1620,20 +1699,31 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           (sum, receipt) => sum + (Number(receipt.payment_amount || 0) + Number(receipt.tip_amount || 0)),
           0
         );
+  const dateFilterArgs = {
+    mode: dateFilterMode,
+    month: filterIssueMonth,
+    primaryFrom: listIssueDateFrom,
+    primaryTo: listIssueDateTo,
+    createdFrom: filterCreatedDateFrom,
+    createdTo: filterCreatedDateTo,
+  };
   const hasAcknowledgementReceiptFilters = Boolean(
     searchTerm ||
       statusFilter ||
       paymentMethodFilter ||
-      listIssueDateFrom ||
-      listIssueDateTo
+      issueDateFilterUtil.hasActiveFilter(dateFilterArgs)
   );
 
   const resetAcknowledgementReceiptFilters = () => {
     setSearchTerm('');
     setStatusFilter('');
     setPaymentMethodFilter('');
+    setDateFilterMode(issueDateFilterUtil.DEFAULT_MODE);
+    setFilterIssueMonth(issueDateFilterUtil.defaultMonth());
     setListIssueDateFrom('');
     setListIssueDateTo('');
+    setFilterCreatedDateFrom('');
+    setFilterCreatedDateTo('');
   };
 
   return (
@@ -1777,7 +1867,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="xl:col-span-2">
+          <div>
             <label htmlFor="ar-search-filter" className="mb-1 block text-xs font-medium text-gray-700">Search</label>
             <input
               id="ar-search-filter"
@@ -1785,8 +1875,25 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              placeholder="Search by name, contact, or reference number"
+              placeholder="Name, contact, reference..."
+              title="Search by name, contact, or reference number"
             />
+          </div>
+          <div>
+            <label htmlFor="ar-payment-method-filter" className="mb-1 block text-xs font-medium text-gray-700">Payment Method</label>
+            <select
+              id="ar-payment-method-filter"
+              value={paymentMethodFilter}
+              onChange={(e) => setPaymentMethodFilter(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              <option value="">All</option>
+              {AR_PAYMENT_METHOD_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label htmlFor="ar-status-filter" className="mb-1 block text-xs font-medium text-gray-700">Status</label>
@@ -1810,72 +1917,105 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               </select>
             )}
           </div>
-          <div>
-            <label htmlFor="ar-payment-method-filter" className="mb-1 block text-xs font-medium text-gray-700">Payment Method</label>
-            <select
-              id="ar-payment-method-filter"
-              value={paymentMethodFilter}
-              onChange={(e) => setPaymentMethodFilter(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-gray-700">Date filter</span>
+            <div
+              role="tablist"
+              aria-label="Acknowledgement receipt date filter mode"
+              className="inline-flex flex-wrap gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5"
             >
-              <option value="">All</option>
-              {AR_PAYMENT_METHOD_OPTIONS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
+              {[
+                { mode: DATE_FILTER_MODES.MONTH, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
+                { mode: DATE_FILTER_MODES.PRIMARY, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PRIMARY] },
+                { mode: DATE_FILTER_MODES.CREATED_DATE, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.CREATED_DATE] },
+              ].map(({ mode, label }) => {
+                const isActive = dateFilterMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => setDateFilterMode(mode)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      isActive
+                        ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {dateFilterMode === DATE_FILTER_MODES.MONTH && (
+              <input
+                type="month"
+                aria-label="Issue month"
+                value={filterIssueMonth}
+                onChange={(e) => setFilterIssueMonth(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.PRIMARY && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="ar-list-issue-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="ar-list-issue-from"
+                    type="date"
+                    value={listIssueDateFrom}
+                    onChange={(e) => setListIssueDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="ar-list-issue-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="ar-list-issue-to"
+                    type="date"
+                    value={listIssueDateTo}
+                    onChange={(e) => setListIssueDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.CREATED_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="ar-list-created-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="ar-list-created-from"
+                    type="date"
+                    value={filterCreatedDateFrom}
+                    onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="ar-list-created-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="ar-list-created-to"
+                    type="date"
+                    value={filterCreatedDateTo}
+                    onChange={(e) => setFilterCreatedDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
-        {showAdvancedAcknowledgementReceiptFilters ? (
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <label htmlFor="ar-list-issue-from" className="mb-1 block text-xs font-medium text-gray-700">
-                Issue date from
-              </label>
-              <input
-                id="ar-list-issue-from"
-                type="date"
-                value={listIssueDateFrom}
-                onChange={(e) => setListIssueDateFrom(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              />
-            </div>
-            <div>
-              <label htmlFor="ar-list-issue-to" className="mb-1 block text-xs font-medium text-gray-700">
-                Issue date to
-              </label>
-              <input
-                id="ar-list-issue-to"
-                type="date"
-                value={listIssueDateTo}
-                onChange={(e) => setListIssueDateTo(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              />
-            </div>
-          </div>
-        ) : null}
         <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs leading-relaxed text-gray-500">
-            Date range is inclusive on acknowledgement receipt issue date (Manila). Leave both dates empty for all dates.
+            {dateFilterMode === DATE_FILTER_MODES.MONTH
+              ? 'Filtering by acknowledgement receipt issue date (month). Clear to show all dates.'
+              : dateFilterMode === DATE_FILTER_MODES.PRIMARY
+                ? 'Filtering by acknowledgement receipt issue date (range). Inclusive on both ends.'
+                : 'Filtering by record-created date (range). Inclusive on both ends.'}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <button
-              type="button"
-              onClick={() => setShowAdvancedAcknowledgementReceiptFilters((current) => !current)}
-              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
-              aria-expanded={showAdvancedAcknowledgementReceiptFilters}
-            >
-              {showAdvancedAcknowledgementReceiptFilters ? 'Hide advanced filters' : 'Advanced filters'}
-              <svg
-                className={`h-4 w-4 transition-transform ${showAdvancedAcknowledgementReceiptFilters ? 'rotate-180' : ''}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
             <button
               type="button"
               onClick={resetAcknowledgementReceiptFilters}
@@ -1897,7 +2037,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
         <span>
-          <span className="font-semibold text-gray-900">Acknowledgement receipts:</span>{' '}
+          <span className="font-semibold text-gray-900">Total Acknowledgement Receipts:</span>{' '}
           <span className="font-medium text-gray-900">{summaryAcknowledgementReceiptCount.toLocaleString('en-US')}</span>
         </span>
         <span className="text-gray-300">·</span>
@@ -1962,15 +2102,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Package / Items</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Level Tag</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Total Amount</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Branch</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
+                    <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Method</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap overflow-hidden">
                       Ref. No.
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Issue Date</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Date</th>
+                    <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
                     {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                       <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
                     )}
@@ -1984,7 +2124,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       </td>
                     </tr>
                   ) : (
-                    receipts.map((r) => (
+                    sortedReceipts.map((r) => (
                     <tr
                       key={r.ack_receipt_id}
                       className={r.status === 'Returned' ? 'bg-red-50/70' : ''}

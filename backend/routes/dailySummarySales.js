@@ -19,6 +19,15 @@ const router = express.Router();
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
+/** Comma-separated extra recipients for the EOD "management" digest (merged with Superadmin emails from userstbl). */
+const parseEodStakeholderEmailsFromEnv = () =>
+  normalizeNotificationRecipients(
+    String(process.env.EOD_STAKEHOLDER_EMAILS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+
 /**
  * GET /api/sms/daily-summary-sales
  * List daily summaries with filters.
@@ -29,6 +38,17 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('summary_date').optional().isISO8601().withMessage('summary_date must be YYYY-MM-DD'),
+    // Range filter (preferred over single-day `summary_date`). Either bound is
+    // optional; if both omitted, no date filter is applied. If `summary_date`
+    // is also sent, the range params take precedence so old callers still work.
+    queryValidator('summary_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('summary_date_from must be YYYY-MM-DD'),
+    queryValidator('summary_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('summary_date_to must be YYYY-MM-DD'),
     queryValidator('status')
       .optional()
       .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
@@ -39,12 +59,26 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { branch_id, summary_date, status, page = 1, limit = 50 } = req.query;
+      const {
+        branch_id,
+        summary_date,
+        summary_date_from,
+        summary_date_to,
+        status,
+        page = 1,
+        limit = 50,
+      } = req.query;
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
       const limitNum = parseInt(limit) || 50;
       const pageNum = parseInt(page) || 1;
       const offset = (pageNum - 1) * limitNum;
+
+      // Range params take precedence; fall back to legacy single-day filter.
+      const dateFrom = summary_date_from || null;
+      const dateTo = summary_date_to || null;
+      const useRange = Boolean(dateFrom || dateTo);
+      const legacyDate = !useRange && summary_date ? summary_date : null;
 
       let sql = `
         SELECT d.daily_summary_id, d.branch_id, d.summary_date, d.total_amount, d.payment_count,
@@ -71,10 +105,21 @@ router.get(
         params.push(branch_id);
       }
 
-      if (summary_date) {
+      if (useRange) {
+        if (dateFrom) {
+          pc++;
+          sql += ` AND d.summary_date >= $${pc}::date`;
+          params.push(dateFrom);
+        }
+        if (dateTo) {
+          pc++;
+          sql += ` AND d.summary_date <= $${pc}::date`;
+          params.push(dateTo);
+        }
+      } else if (legacyDate) {
         pc++;
         sql += ` AND d.summary_date = $${pc}`;
-        params.push(summary_date);
+        params.push(legacyDate);
       }
       if (status) {
         if (status === 'Returned') {
@@ -131,10 +176,21 @@ router.get(
         countSql += ` AND d.branch_id = $${cc}`;
         countParams.push(branch_id);
       }
-      if (summary_date) {
+      if (useRange) {
+        if (dateFrom) {
+          cc++;
+          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countParams.push(dateFrom);
+        }
+        if (dateTo) {
+          cc++;
+          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countParams.push(dateTo);
+        }
+      } else if (legacyDate) {
         cc++;
         countSql += ` AND d.summary_date = $${cc}`;
-        countParams.push(summary_date);
+        countParams.push(legacyDate);
       }
       if (status) {
         if (status === 'Returned') {
@@ -163,10 +219,21 @@ router.get(
         submittedSql += ` AND d.branch_id = $${sc}`;
         submittedParams.push(branch_id);
       }
-      if (summary_date) {
+      if (useRange) {
+        if (dateFrom) {
+          sc++;
+          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedParams.push(dateFrom);
+        }
+        if (dateTo) {
+          sc++;
+          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedParams.push(dateTo);
+        }
+      } else if (legacyDate) {
         sc++;
         submittedSql += ` AND d.summary_date = $${sc}`;
-        submittedParams.push(summary_date);
+        submittedParams.push(legacyDate);
       }
       const submittedRes = await query(submittedSql, submittedParams);
       const submittedSummary = submittedRes.rows[0] || { submitted_count: 0, submitted_total_amount: 0 };
@@ -186,10 +253,21 @@ router.get(
         filteredSql += ` AND d.branch_id = $${fc}`;
         filteredParams.push(branch_id);
       }
-      if (summary_date) {
+      if (useRange) {
+        if (dateFrom) {
+          fc++;
+          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredParams.push(dateFrom);
+        }
+        if (dateTo) {
+          fc++;
+          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredParams.push(dateTo);
+        }
+      } else if (legacyDate) {
         fc++;
         filteredSql += ` AND d.summary_date = $${fc}`;
-        filteredParams.push(summary_date);
+        filteredParams.push(legacyDate);
       }
       if (status) {
         if (status === 'Returned') {
@@ -312,7 +390,12 @@ const summaryDateToYmd = (value) => {
 };
 
 const buildEodPaymentWhere = (branchId, summaryDate, submittedAfter = null) => {
-  const whereParts = ['p.branch_id = $1', 'p.issue_date = $2::date', "p.status = 'Completed'"];
+  const whereParts = [
+    'p.branch_id = $1',
+    'p.issue_date = $2::date',
+    "p.status = 'Completed'",
+    "COALESCE(p.approval_status, 'Pending') <> 'Rejected'",
+  ];
   const params = [branchId, summaryDate];
   let pc = 2;
   if (submittedAfter) {
@@ -615,10 +698,14 @@ const sendEodEmailNotifications = async ({
          WHERE user_id = $1`,
         [submittedByUserId]
       ),
+      // Stakeholder digest: Superadmin only (by userstbl), plus optional EOD_STAKEHOLDER_EMAILS in .env.
+      // Per product rules, Finance/Superfinance no longer receive an EOD
+      // notification when a Branch Admin submits End of Shift (bell + email).
+      // The Cash Deposit submission flow is separate and still notifies Finance.
       query(
         `SELECT DISTINCT TRIM(email) AS email
          FROM userstbl
-         WHERE LOWER(TRIM(user_type)) IN ('superadmin', 'finance')
+         WHERE LOWER(REGEXP_REPLACE(TRIM(COALESCE(user_type, '')), '[[:space:]]+', '', 'g')) = 'superadmin'
            AND COALESCE(TRIM(email), '') <> ''`
       ),
       query(
@@ -651,9 +738,10 @@ const sendEodEmailNotifications = async ({
     const submitterName = submitterResult.rows[0]?.full_name || submitterEmail || 'Branch Admin';
     const submittedBranchName = branchResult.rows[0]?.branch_name || `Branch ${submittedBranchId}`;
 
-    const uniqueStakeholderEmails = normalizeNotificationRecipients(
-      (stakeholderRecipientsResult.rows || []).map((row) => row.email)
-    );
+    const uniqueStakeholderEmails = normalizeNotificationRecipients([
+      ...(stakeholderRecipientsResult.rows || []).map((row) => row.email),
+      ...parseEodStakeholderEmailsFromEnv(),
+    ]);
 
     const branchAdminEmails = normalizeNotificationRecipients(
       (branchAdminsResult.rows || []).map((row) => row.email)
@@ -763,7 +851,8 @@ const sendEodEmailNotifications = async ({
             </p>`;
     const submitterHtml = wrapEodNotificationHtml(submitterInner);
 
-    // 1) Superadmin + Finance: one email each (whole-branch submitted / not submitted lists)
+    // 1) Superadmin only: one email each (whole-branch submitted / not submitted lists).
+    //    Finance / Superfinance are intentionally excluded from EOD notifications.
     try {
       if (uniqueStakeholderEmails.length > 0) {
         const summary = await sendSystemNotificationEmailToEach({
@@ -777,9 +866,14 @@ const sendEodEmailNotifications = async ({
           failed: summary.failed,
           ...(summary.errors?.length ? { errors: summary.errors } : {}),
         });
+        if (summary.failed > 0) {
+          console.warn(
+            '[EOD email] Stakeholder digest had SMTP/recipient failures. Verify production .env SMTP_* and that recipient inboxes are valid.'
+          );
+        }
       } else {
         console.warn(
-          '[EOD email] No stakeholder recipients: ensure Superadmin/Finance users have a valid email in Personnel / userstbl.'
+          '[EOD email] No stakeholder recipients: add non-empty userstbl.email for Superadmin users, and/or set EOD_STAKEHOLDER_EMAILS in server .env (comma-separated). Also confirm SMTP_HOST, SMTP_USER, SMTP_PASSWORD on this server.'
         );
       }
     } catch (err) {

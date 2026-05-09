@@ -4,6 +4,8 @@ import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -21,6 +23,7 @@ const StudentInvoice = () => {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [packageDetails, setPackageDetails] = useState({});
   const [currentPage, setCurrentPage] = useState(1);
+  const [sortConfig, setSortConfig] = useState(null);
 
   const studentId = userInfo?.userId || userInfo?.user_id;
 
@@ -272,11 +275,20 @@ const StudentInvoice = () => {
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
-  const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
-  const paginatedInvoices = filteredInvoices.slice(
+  const sortedInvoices = sortRows(filteredInvoices, sortConfig, {
+    status: { accessor: 'status', type: 'string' },
+    issue_date: { accessor: 'issue_date', type: 'date' },
+  });
+  const totalPages = Math.max(Math.ceil(sortedInvoices.length / ITEMS_PER_PAGE), 1);
+  const paginatedInvoices = sortedInvoices.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+    setCurrentPage(1);
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -422,12 +434,8 @@ const StudentInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Issue Date
-                  </th>
+                  <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Due Date
                   </th>

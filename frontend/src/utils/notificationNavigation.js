@@ -57,6 +57,9 @@ function inferNotificationNavigation(notification) {
   if (title.includes('payment returned')) {
     return { navigationKey: 'payment-logs', navigationQuery: 'notificationTab=return' };
   }
+  if (title.includes('payment rejected')) {
+    return { navigationKey: 'payment-logs', navigationQuery: 'notificationTab=rejected' };
+  }
   if (title.includes('payment resubmitted')) {
     return { navigationKey: 'payment-logs', navigationQuery: 'notificationTab=main' };
   }

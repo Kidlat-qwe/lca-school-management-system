@@ -1,0 +1,104 @@
+/**
+ * Shared helpers for the Payment Logs date-filter mode switcher.
+ *
+ * The Payment Logs pages (admin / superadmin / finance / superfinance) all
+ * expose three mutually-exclusive date filter modes:
+ *
+ *   - "month"        → single YYYY-MM picker (defaults to current Manila month).
+ *                      Translated to payment_date_from / payment_date_to.
+ *   - "paymentDate"  → explicit From / To range on payment_date (p.issue_date).
+ *   - "createdDate"  → explicit From / To range on the record-created date
+ *                      (p.created_at, served by the new `created_date_from/to`
+ *                      backend params).
+ *
+ * Keeping the mode <-> param translation in one place avoids drift between
+ * the four pages and the export-paths.
+ */
+
+import { issueDateRangeFromManilaMonth, manilaMonthYYYYMM } from './dateUtils';
+
+export const PAYMENT_LOG_DATE_MODES = Object.freeze({
+  MONTH: 'month',
+  PAYMENT_DATE: 'paymentDate',
+  CREATED_DATE: 'createdDate',
+});
+
+export const PAYMENT_LOG_DATE_MODE_LABELS = Object.freeze({
+  [PAYMENT_LOG_DATE_MODES.MONTH]: 'Month',
+  [PAYMENT_LOG_DATE_MODES.PAYMENT_DATE]: 'Payment date',
+  [PAYMENT_LOG_DATE_MODES.CREATED_DATE]: 'Date created',
+});
+
+/**
+ * Default mode the page boots with.
+ */
+export const DEFAULT_PAYMENT_LOG_DATE_MODE = PAYMENT_LOG_DATE_MODES.MONTH;
+
+/**
+ * Default month (current Manila YYYY-MM) used when boot-loading "month" mode.
+ */
+export const defaultPaymentLogFilterMonth = () => manilaMonthYYYYMM();
+
+/**
+ * Build the date-related URL params for a Payment Logs request based on the
+ * active mode and its inputs. Returns an object with at most:
+ *   { payment_date_from, payment_date_to, created_date_from, created_date_to }
+ *
+ * Empty/blank inputs are simply omitted so callers can spread the result into
+ * a URLSearchParams without setting empty params.
+ *
+ * @param {object} args
+ * @param {'month'|'paymentDate'|'createdDate'} args.mode
+ * @param {string} [args.month]           - YYYY-MM (used when mode === 'month')
+ * @param {string} [args.paymentFrom]     - YYYY-MM-DD
+ * @param {string} [args.paymentTo]       - YYYY-MM-DD
+ * @param {string} [args.createdFrom]     - YYYY-MM-DD
+ * @param {string} [args.createdTo]       - YYYY-MM-DD
+ * @returns {Record<string, string>}
+ */
+export const buildPaymentLogDateParams = ({
+  mode,
+  month = '',
+  paymentFrom = '',
+  paymentTo = '',
+  createdFrom = '',
+  createdTo = '',
+} = {}) => {
+  const out = {};
+  if (mode === PAYMENT_LOG_DATE_MODES.MONTH) {
+    const range = issueDateRangeFromManilaMonth(month);
+    if (range.from) out.payment_date_from = range.from;
+    if (range.to) out.payment_date_to = range.to;
+    return out;
+  }
+  if (mode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE) {
+    if (paymentFrom) out.payment_date_from = paymentFrom;
+    if (paymentTo) out.payment_date_to = paymentTo;
+    return out;
+  }
+  if (mode === PAYMENT_LOG_DATE_MODES.CREATED_DATE) {
+    if (createdFrom) out.created_date_from = createdFrom;
+    if (createdTo) out.created_date_to = createdTo;
+    return out;
+  }
+  return out;
+};
+
+/**
+ * Convenience: returns true when the active mode currently has any non-empty
+ * date input. Used to decide whether to highlight a "Date filter active"
+ * indicator and whether Reset should re-fetch.
+ */
+export const hasActivePaymentLogDateFilter = ({
+  mode,
+  month = '',
+  paymentFrom = '',
+  paymentTo = '',
+  createdFrom = '',
+  createdTo = '',
+} = {}) => {
+  if (mode === PAYMENT_LOG_DATE_MODES.MONTH) return Boolean(month);
+  if (mode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE) return Boolean(paymentFrom || paymentTo);
+  if (mode === PAYMENT_LOG_DATE_MODES.CREATED_DATE) return Boolean(createdFrom || createdTo);
+  return false;
+};

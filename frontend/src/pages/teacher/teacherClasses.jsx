@@ -1,18 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { appAlert } from '../../utils/appAlert';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 
 const TeacherClasses = () => {
   const ITEMS_PER_PAGE = 10;
   const { userInfo } = useAuth();
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  // After the first fetch, refresh in the background instead of swapping the
+  // table for a full-page spinner so typing in the search input feels live.
+  const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  // Debounced search value sent to the API (avoids one request per keystroke).
+  const debouncedNameSearchTerm = useDebouncedValue(nameSearchTerm, 300);
   const [filterProgram, setFilterProgram] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: undefined, bottom: undefined, right: undefined, left: undefined });
@@ -60,6 +66,12 @@ const TeacherClasses = () => {
     }
   }, [teacherId, teacherBranchId]);
 
+  useEffect(() => {
+    if (teacherId && teacherBranchId) {
+      fetchClasses();
+    }
+  }, [teacherId, teacherBranchId, debouncedNameSearchTerm, filterProgram]);
+
   // Fetch branch name if not available
   const fetchBranchName = async () => {
     if (teacherBranchId && !userInfo?.branch_name) {
@@ -76,9 +88,14 @@ const TeacherClasses = () => {
 
   const fetchClasses = async () => {
     try {
-      setLoading(true);
-      // Fetch classes for teacher's branch (backend auto-filters by branch for non-superadmin)
-      const response = await apiRequest(`/classes?branch_id=${teacherBranchId}&limit=100`);
+      if (!hasLoadedOnceRef.current) setLoading(true);
+      const params = new URLSearchParams({
+        branch_id: String(teacherBranchId),
+        limit: '100',
+      });
+      if (filterProgram) params.set('program_id', filterProgram);
+      if (debouncedNameSearchTerm.trim()) params.set('search', debouncedNameSearchTerm.trim());
+      const response = await apiRequest(`/classes?${params.toString()}`);
       const allClasses = response.data || [];
       
       // Filter to only show classes where this teacher is assigned
@@ -100,7 +117,10 @@ const TeacherClasses = () => {
       setError(err.message || 'Failed to fetch classes');
       console.error('Error fetching classes:', err);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(false);
+        hasLoadedOnceRef.current = true;
+      }
     }
   };
 

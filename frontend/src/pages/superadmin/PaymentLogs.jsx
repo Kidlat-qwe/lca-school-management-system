@@ -1,19 +1,30 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import * as XLSX from 'xlsx';
 import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
+import {
+  PAYMENT_LOG_DATE_MODES,
+  PAYMENT_LOG_DATE_MODE_LABELS,
+  DEFAULT_PAYMENT_LOG_DATE_MODE,
+  defaultPaymentLogFilterMonth,
+  buildPaymentLogDateParams,
+  hasActivePaymentLogDateFilter,
+} from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 /** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
 const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
@@ -57,13 +68,16 @@ const getInvoiceBreakdownForReturnFix = (invoice) => {
 
 const PaymentLogs = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   /** main = all except Returned; return = finance sent back for reference/attachment fix */
   const [branchLogTab, setBranchLogTab] = useState(() => {
     const params = new URLSearchParams(location.search);
-    return params.get('notificationTab') === 'return' ? 'return' : 'main';
+    const notificationTab = params.get('notificationTab');
+    return notificationTab === 'return' || notificationTab === 'rejected' ? notificationTab : 'main';
   });
+  const [selectedRejectedPayment, setSelectedRejectedPayment] = useState(null);
   const [returnFixPayment, setReturnFixPayment] = useState(null);
   const [returnFixRef, setReturnFixRef] = useState('');
   const [returnFixAttachment, setReturnFixAttachment] = useState('');
@@ -81,14 +95,25 @@ const PaymentLogs = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  // Debounced search value sent to the API. The visible input updates instantly
+  // while the network request is held back, so typing doesn't fire a request
+  // (or the perceived "page refresh") on every keystroke.
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterBranch, setFilterBranch] = useState('');
+  const [sortConfig, setSortConfig] = useState(null);
   /** Finance approval filter — matches the Approval column and dashboard "verified" (Approved) vs pending */
   const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
   /** YYYY-MM-DD Manila payment-date range (API: payment_date_from / payment_date_to) */
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  // Date-filter mode switcher (Month / Payment date / Date created).
+  // Default mode is "month" pre-loaded with the current Manila month so the
+  // page boots with a reasonable, narrow range.
+  const [dateFilterMode, setDateFilterMode] = useState(DEFAULT_PAYMENT_LOG_DATE_MODE);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(() => defaultPaymentLogFilterMonth());
+  const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState('');
+  const [filterCreatedDateTo, setFilterCreatedDateTo] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
-  const [showAdvancedPaymentLogFilters, setShowAdvancedPaymentLogFilters] = useState(false);
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openPaymentMethodDropdown, setOpenPaymentMethodDropdown] = useState(false);
@@ -127,7 +152,7 @@ const PaymentLogs = () => {
     const params = new URLSearchParams(location.search);
     const notificationTab = params.get('notificationTab');
     const financeApproval = params.get('financeApproval');
-    if (notificationTab === 'main' || notificationTab === 'return') {
+    if (notificationTab === 'main' || notificationTab === 'return' || notificationTab === 'rejected') {
       setBranchLogTab(notificationTab);
     }
     if (financeApproval === 'approved' || financeApproval === 'pending') {
@@ -137,13 +162,18 @@ const PaymentLogs = () => {
     }
     const payFrom = (params.get('payment_date_from') || params.get('issue_date_from') || '').trim().slice(0, 10);
     const payTo = (params.get('payment_date_to') || params.get('issue_date_to') || '').trim().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(payFrom)) {
+    const hasUrlPayFrom = /^\d{4}-\d{2}-\d{2}$/.test(payFrom);
+    const hasUrlPayTo = /^\d{4}-\d{2}-\d{2}$/.test(payTo);
+    if (hasUrlPayFrom) {
       setFilterIssueDateFrom(payFrom);
-      setShowAdvancedPaymentLogFilters(true);
     }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(payTo)) {
+    if (hasUrlPayTo) {
       setFilterIssueDateTo(payTo);
-      setShowAdvancedPaymentLogFilters(true);
+    }
+    // Deep-link compatibility: when an explicit date range is supplied via the
+    // URL, switch into Payment-date mode so the inputs reflect what filters.
+    if (hasUrlPayFrom || hasUrlPayTo) {
+      setDateFilterMode(PAYMENT_LOG_DATE_MODES.PAYMENT_DATE);
     }
   }, [location.search]);
 
@@ -154,7 +184,7 @@ const PaymentLogs = () => {
   }, [globalBranchId]);
 
   useEffect(() => {
-    if (branchLogTab === 'return') {
+    if (branchLogTab !== 'main') {
       setOpenStatusDropdown(false);
       setStatusDropdownRect(null);
     }
@@ -164,8 +194,15 @@ const PaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
+      const dateParams = buildPaymentLogDateParams({
+        mode: dateFilterMode,
+        month: filterIssueMonth,
+        paymentFrom: filterIssueDateFrom,
+        paymentTo: filterIssueDateTo,
+        createdFrom: filterCreatedDateFrom,
+        createdTo: filterCreatedDateTo,
+      });
+      Object.entries(dateParams).forEach(([k, v]) => params.set(k, v));
       params.set('approval_status', 'Returned');
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const response = await apiRequest(`/payments?${params.toString()}`);
@@ -181,7 +218,17 @@ const PaymentLogs = () => {
   useEffect(() => {
     fetchReturnedPaymentLogCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterBranch, filterIssueDateFrom, filterIssueDateTo, filterPaymentMethod]);
+  }, [
+    filterBranch,
+    filterPaymentMethod,
+    dateFilterMode,
+    filterIssueMonth,
+    filterIssueDateFrom,
+    filterIssueDateTo,
+    filterCreatedDateFrom,
+    filterCreatedDateTo,
+    debouncedSearchTerm,
+  ]);
 
   // Refetch when branch or status filter changes (server-side filter), reset to page 1
   const isInitialMount = useRef(true);
@@ -191,7 +238,18 @@ const PaymentLogs = () => {
       return;
     }
     fetchPayments(1);
-  }, [filterBranch, filterFinanceApproval, filterIssueDateFrom, filterIssueDateTo, branchLogTab, filterPaymentMethod]);
+  }, [
+    filterBranch,
+    filterFinanceApproval,
+    branchLogTab,
+    filterPaymentMethod,
+    dateFilterMode,
+    filterIssueMonth,
+    filterIssueDateFrom,
+    filterIssueDateTo,
+    filterCreatedDateFrom,
+    filterCreatedDateTo,
+  ]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -232,19 +290,31 @@ const PaymentLogs = () => {
       const limit = 10;
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
-      if (filterIssueDateFrom) params.set('payment_date_from', filterIssueDateFrom);
-      if (filterIssueDateTo) params.set('payment_date_to', filterIssueDateTo);
+      if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
+      const dateParams = buildPaymentLogDateParams({
+        mode: dateFilterMode,
+        month: filterIssueMonth,
+        paymentFrom: filterIssueDateFrom,
+        paymentTo: filterIssueDateTo,
+        createdFrom: filterCreatedDateFrom,
+        createdTo: filterCreatedDateTo,
+      });
+      Object.entries(dateParams).forEach(([k, v]) => params.set(k, v));
       if (branchLogTab === 'return') {
         params.set('approval_status', 'Returned');
+      } else if (branchLogTab === 'rejected') {
+        params.set('status', 'Rejected');
+        params.set('approval_status', 'Rejected');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
         params.set('approval_status', 'Approved');
-        params.set('exclude_approval_status', 'Returned');
+        params.set('exclude_approval_status', 'Returned,Rejected');
       } else if (filterFinanceApproval === 'pending') {
         params.set('status', 'Completed');
-        params.set('exclude_approval_status', 'Approved,Returned');
+        params.set('exclude_approval_status', 'Approved,Returned,Rejected');
       } else {
         params.set('status', 'Completed');
+        params.set('exclude_approval_status', 'Rejected');
       }
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const response = await apiRequest(`/payments?${params.toString()}`);
@@ -687,63 +757,84 @@ const PaymentLogs = () => {
   };
 
   const filteredPayments = payments.filter((payment) => {
-    const matchesSearch = !searchTerm || 
-      payment.invoice_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.student_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.invoice_issued_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.invoice_issued_by_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.returned_by_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.invoice_ar_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.payment_id?.toString().includes(searchTerm);
-    
     const matchesBranch = !filterBranch || payment.branch_id?.toString() === filterBranch;
     const matchesFinanceApproval =
       branchLogTab === 'return' ||
+      branchLogTab === 'rejected' ||
       !filterFinanceApproval ||
       (filterFinanceApproval === 'approved' &&
         (payment.approval_status || 'Pending') === 'Approved') ||
       (filterFinanceApproval === 'pending' &&
         (payment.approval_status || 'Pending') !== 'Approved');
-    return matchesSearch && matchesBranch && matchesFinanceApproval;
+    return matchesBranch && matchesFinanceApproval;
+  });
+  const sortedPayments = sortRows(filteredPayments, sortConfig, {
+    branch: { accessor: (payment) => getBranchName(payment.branch_id) || payment.branch_name || '', type: 'string' },
+    issue_date: { accessor: 'issue_date', type: 'date' },
+    payment_date: { accessor: 'payment_date', type: 'date' },
+    status: { accessor: (payment) => (payment.approval_status || payment.status || 'Pending'), type: 'string' },
+    issued_by: { accessor: (payment) => formatInvoiceIssuedBy(payment), type: 'string' },
   });
 
   const summaryLineTotal = useMemo(() => {
     const line = (p) => (parseFloat(p.payable_amount) || 0) + (parseFloat(p.tip_amount) || 0);
-    if (searchTerm.trim()) {
-      return filteredPayments.reduce((s, p) => s + line(p), 0);
-    }
     if (filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))) {
       return Number(filterTotalLineAmount);
     }
     return filteredPayments.reduce((s, p) => s + line(p), 0);
-  }, [searchTerm, filteredPayments, filterTotalLineAmount]);
+  }, [filteredPayments, filterTotalLineAmount]);
 
-  const summaryPaymentLogCount = searchTerm.trim()
-    ? filteredPayments.length
-    : Number(pagination.total) || 0;
+  const summaryPaymentLogCount = Number(pagination.total) || 0;
   const hasPaymentLogFilters = Boolean(
     searchTerm ||
       filterFinanceApproval ||
-      filterIssueDateFrom ||
-      filterIssueDateTo ||
-      filterPaymentMethod
+      filterPaymentMethod ||
+      hasActivePaymentLogDateFilter({
+        mode: dateFilterMode,
+        month: filterIssueMonth,
+        paymentFrom: filterIssueDateFrom,
+        paymentTo: filterIssueDateTo,
+        createdFrom: filterCreatedDateFrom,
+        createdTo: filterCreatedDateTo,
+      })
   );
 
+  // Reset returns the page to its boot state: month-mode pre-loaded with the
+  // current Manila month. We deliberately do NOT clear back to a fully empty
+  // date filter so the page never accidentally fetches the entire history.
   const resetPaymentLogFilters = () => {
     setSearchTerm('');
     setFilterFinanceApproval('');
+    setDateFilterMode(DEFAULT_PAYMENT_LOG_DATE_MODE);
+    setFilterIssueMonth(defaultPaymentLogFilterMonth());
     setFilterIssueDateFrom('');
     setFilterIssueDateTo('');
+    setFilterCreatedDateFrom('');
+    setFilterCreatedDateTo('');
     setFilterPaymentMethod('');
+  };
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
   };
 
   const exportPaymentDateRangeInvalid =
     Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
 
   const handleExportClick = () => {
-    setExportPaymentDateFrom(filterIssueDateFrom || '');
-    setExportPaymentDateTo(filterIssueDateTo || '');
+    // Seed export modal with the resolved payment-date range of the active
+    // mode. Created-date mode resolves to empty payment-date params here on
+    // purpose — export only filters on payment date.
+    const seedDateParams = buildPaymentLogDateParams({
+      mode: dateFilterMode,
+      month: filterIssueMonth,
+      paymentFrom: filterIssueDateFrom,
+      paymentTo: filterIssueDateTo,
+      createdFrom: filterCreatedDateFrom,
+      createdTo: filterCreatedDateTo,
+    });
+    setExportPaymentDateFrom(seedDateParams.payment_date_from || '');
+    setExportPaymentDateTo(seedDateParams.payment_date_to || '');
     setSelectedExportBranches([]);
     setShowExportModal(true);
   };
@@ -772,8 +863,8 @@ const PaymentLogs = () => {
       appAlert('"From" date must be on or before "To" date.');
       return;
     }
-    if (branchLogTab === 'return') {
-      appAlert('Returned payments are not included in exports. Please switch to the main tab to export.');
+    if (branchLogTab === 'return' || branchLogTab === 'rejected') {
+      appAlert('Returned and rejected payments are not included in exports. Please switch to the main tab to export.');
       return;
     }
     try {
@@ -791,14 +882,14 @@ const PaymentLogs = () => {
         if (branchId) params.set('branch_id', String(branchId));
         if (exportPaymentDateFrom) params.set('payment_date_from', exportPaymentDateFrom);
         if (exportPaymentDateTo) params.set('payment_date_to', exportPaymentDateTo);
-        // Always exclude payments returned by Finance.
-        params.set('exclude_approval_status', 'Returned');
+        // Always exclude payments returned/rejected by Finance.
+        params.set('exclude_approval_status', 'Returned,Rejected');
         if (filterFinanceApproval === 'approved') {
           params.set('status', 'Completed');
           params.set('approval_status', 'Approved');
         } else if (filterFinanceApproval === 'pending') {
           params.set('status', 'Completed');
-          params.set('exclude_approval_status', 'Approved,Returned'); // keep existing behavior
+          params.set('exclude_approval_status', 'Approved,Returned,Rejected'); // keep existing behavior
         } else {
           params.set('status', 'Completed');
         }
@@ -835,8 +926,8 @@ const PaymentLogs = () => {
         const payable = parseFloat(payment.payable_amount) || 0;
         const tip = parseFloat(payment.tip_amount) || 0;
         const uiStatus =
-          branchLogTab === 'return'
-            ? (payment.approval_status || payment.status || 'Returned')
+          branchLogTab === 'return' || branchLogTab === 'rejected'
+            ? (payment.approval_status || payment.status || (branchLogTab === 'rejected' ? 'Rejected' : 'Returned'))
             : ((payment.approval_status || 'Pending') === 'Approved' ? 'Approved' : 'Pending Approval');
         const row = {
           'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
@@ -853,6 +944,8 @@ const PaymentLogs = () => {
         };
         if (branchLogTab === 'return') {
           row['Returned by'] = payment.returned_by_name || '—';
+        } else if (branchLogTab === 'rejected') {
+          row['Rejected by'] = payment.rejected_by_name || '—';
         }
         row['REFERENCE#'] = payment.reference_number || '-';
         row['Acknowledgement Receipt#'] = payment.invoice_ar_number || '—';
@@ -881,6 +974,7 @@ const PaymentLogs = () => {
         16, // Status
       ];
       if (branchLogTab === 'return') widthList.push(18); // Returned by
+      if (branchLogTab === 'rejected') widthList.push(18); // Rejected by
       widthList.push(
         22, // Reference#
         24, // Acknowledgement Receipt#
@@ -943,7 +1037,12 @@ const PaymentLogs = () => {
       </div>
 
       <div className="w-full">
-        <BranchPaymentLogTabs value={branchLogTab} onChange={setBranchLogTab} returnBadgeCount={returnedPaymentLogCount} />
+        <BranchPaymentLogTabs
+          value={branchLogTab}
+          onChange={setBranchLogTab}
+          returnBadgeCount={returnedPaymentLogCount}
+          showRejected
+        />
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
@@ -956,7 +1055,7 @@ const PaymentLogs = () => {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="xl:col-span-2">
+          <div>
             <label htmlFor="payment-log-search" className="mb-1 block text-xs font-medium text-gray-700">
               Search
             </label>
@@ -965,7 +1064,8 @@ const PaymentLogs = () => {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Invoice, student, reference, acknowledgement receipt, or issued by"
+              placeholder="Invoice, student, reference, AR..."
+              title="Invoice, student, reference, acknowledgement receipt, or issued by"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
@@ -991,9 +1091,9 @@ const PaymentLogs = () => {
             <label htmlFor="payment-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
               Status
             </label>
-            {branchLogTab === 'return' ? (
+            {branchLogTab !== 'main' ? (
               <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
-                Returned only
+                {branchLogTab === 'rejected' ? 'Rejected only' : 'Returned only'}
               </div>
             ) : (
               <select
@@ -1008,56 +1108,136 @@ const PaymentLogs = () => {
               </select>
             )}
           </div>
-        </div>
-        {showAdvancedPaymentLogFilters ? (
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <label htmlFor="payment-date-from" className="mb-1 block text-xs font-medium text-gray-700">
-                Payment date from
-              </label>
+          {/*
+            Date filter cell — column 4 (aligned next to Status).
+            Mode tabs render at the top; the conditional input(s) render
+            directly underneath in the same column. See
+            utils/paymentLogDateFilters.js for mode → API param mapping.
+          */}
+          <div className="space-y-2">
+            <span className="mb-1 block text-xs font-medium text-gray-700">Date filter</span>
+            <div
+              role="tablist"
+              aria-label="Date filter mode"
+              className="inline-flex flex-wrap rounded-lg border border-gray-300 bg-gray-50 p-0.5"
+            >
+              {Object.values(PAYMENT_LOG_DATE_MODES).map((modeKey) => {
+                const active = dateFilterMode === modeKey;
+                return (
+                  <button
+                    key={modeKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setDateFilterMode(modeKey)}
+                    className={
+                      'rounded-md px-2.5 py-1 text-xs font-medium transition-colors ' +
+                      (active
+                        ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
+                        : 'text-gray-600 hover:text-gray-900')
+                    }
+                  >
+                    {PAYMENT_LOG_DATE_MODE_LABELS[modeKey]}
+                  </button>
+                );
+              })}
+            </div>
+
+            {dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH ? (
               <input
-                id="payment-date-from"
-                type="date"
-                value={filterIssueDateFrom}
-                onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                id="superadmin-payment-month"
+                type="month"
+                aria-label="Month"
+                value={filterIssueMonth}
+                onChange={(e) => setFilterIssueMonth(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               />
-            </div>
-            <div>
-              <label htmlFor="payment-date-to" className="mb-1 block text-xs font-medium text-gray-700">
-                Payment date to
-              </label>
-              <input
-                id="payment-date-to"
-                type="date"
-                value={filterIssueDateTo}
-                onChange={(e) => setFilterIssueDateTo(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              />
-            </div>
+            ) : null}
+
+            {dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label
+                    htmlFor="payment-date-from"
+                    className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                  >
+                    From
+                  </label>
+                  <input
+                    id="payment-date-from"
+                    type="date"
+                    title="Payment date from"
+                    value={filterIssueDateFrom}
+                    onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="payment-date-to"
+                    className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                  >
+                    To
+                  </label>
+                  <input
+                    id="payment-date-to"
+                    type="date"
+                    title="Payment date to"
+                    value={filterIssueDateTo}
+                    onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {dateFilterMode === PAYMENT_LOG_DATE_MODES.CREATED_DATE ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label
+                    htmlFor="superadmin-created-date-from"
+                    className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                  >
+                    From
+                  </label>
+                  <input
+                    id="superadmin-created-date-from"
+                    type="date"
+                    title="Date created from"
+                    value={filterCreatedDateFrom}
+                    onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="superadmin-created-date-to"
+                    className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                  >
+                    To
+                  </label>
+                  <input
+                    id="superadmin-created-date-to"
+                    type="date"
+                    title="Date created to"
+                    value={filterCreatedDateTo}
+                    onChange={(e) => setFilterCreatedDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
         <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-gray-500">
-            Date range is inclusive on payment date. Leave both dates empty for all dates.
+            {dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
+              ? 'Month filter uses payment date. Clear the month to show all dates.'
+              : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
+              ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
+              : 'Date range is inclusive on the record-created date (when the payment row was logged). Leave both empty for all dates.'}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <button
-              type="button"
-              onClick={() => setShowAdvancedPaymentLogFilters((current) => !current)}
-              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
-              aria-expanded={showAdvancedPaymentLogFilters}
-            >
-              {showAdvancedPaymentLogFilters ? 'Hide advanced filters' : 'Advanced filters'}
-              <svg
-                className={`h-4 w-4 transition-transform ${showAdvancedPaymentLogFilters ? 'rotate-180' : ''}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
             <button
               type="button"
               onClick={resetPaymentLogFilters}
@@ -1079,7 +1259,7 @@ const PaymentLogs = () => {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
         <span>
-          <span className="font-semibold text-gray-900">Payment logs:</span>{' '}
+          <span className="font-semibold text-gray-900">Total Payment Logs:</span>{' '}
           <span className="font-medium text-gray-900">{summaryPaymentLogCount.toLocaleString('en-US')}</span>
         </span>
         <span className="text-gray-300">·</span>
@@ -1112,7 +1292,7 @@ const PaymentLogs = () => {
             style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
           >
             <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1820px' }}>
-              {branchLogTab === 'return' ? (
+              {branchLogTab !== 'main' ? (
                 <colgroup>
                   <col style={{ width: '120px' }} />
                   <col style={{ width: '150px' }} />
@@ -1153,15 +1333,9 @@ const PaymentLogs = () => {
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
                     Invoice
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Branch
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Issue Date
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Payment Date
-                  </th>
+                  <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
+                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
                     Student Name
                   </th>
@@ -1180,12 +1354,10 @@ const PaymentLogs = () => {
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
                     TOTAL AMOUNT
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]">
-                    {branchLogTab === 'return' ? 'Return Status' : 'Status'}
-                  </th>
-                  {branchLogTab === 'return' ? (
+                  <SortableHeader label={branchLogTab === 'return' ? 'Return Status' : branchLogTab === 'rejected' ? 'Rejected Status' : 'Status'} sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]" />
+                  {branchLogTab !== 'main' ? (
                     <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Returned by
+                      {branchLogTab === 'rejected' ? 'Rejected by' : 'Returned by'}
                     </th>
                   ) : null}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
@@ -1195,15 +1367,13 @@ const PaymentLogs = () => {
                     <span className="block">Acknowledgement</span>
                     <span className="block">Receipt#</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Issued By
-                  </th>
+                  <SortableHeader label="Issued By" sortKey="issued_by" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={branchLogTab === 'return' ? 15 : 14} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab !== 'main' ? 15 : 14} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterBranch || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -1212,7 +1382,7 @@ const PaymentLogs = () => {
                     </td>
                   </tr>
                 ) : (
-                filteredPayments.map((payment) => (
+                sortedPayments.map((payment) => (
                   <tr key={payment.payment_id} className="hover:bg-gray-50/80">
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
@@ -1280,6 +1450,19 @@ const PaymentLogs = () => {
                               Update reference and resubmit
                             </button>
                           </div>
+                        ) : branchLogTab === 'rejected' ? (
+                          <div className="space-y-1">
+                            <span className="inline-flex rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
+                              Rejected
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRejectedPayment(payment)}
+                              className="block text-xs font-semibold text-primary-700 hover:text-primary-900 underline"
+                            >
+                              View details
+                            </button>
+                          </div>
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
@@ -1327,10 +1510,10 @@ const PaymentLogs = () => {
                         })()}
                       </div>
                     </td>
-                    {branchLogTab === 'return' ? (
+                    {branchLogTab !== 'main' ? (
                       <td className="px-3 py-2.5 text-sm text-gray-800 align-top min-w-0">
-                        <span className="truncate block" title={payment.returned_by_name || ''}>
-                          {payment.returned_by_name || '—'}
+                        <span className="truncate block" title={(branchLogTab === 'rejected' ? payment.rejected_by_name : payment.returned_by_name) || ''}>
+                          {(branchLogTab === 'rejected' ? payment.rejected_by_name : payment.returned_by_name) || '—'}
                         </span>
                       </td>
                     ) : null}
@@ -1980,6 +2163,55 @@ const PaymentLogs = () => {
               {branch.branch_nickname || branch.branch_name}
             </button>
           ))}
+        </div>,
+        document.body
+      )}
+
+      {selectedRejectedPayment && createPortal(
+        <div className="fixed inset-0 z-[10050] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white shadow-2xl">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-gray-900">Rejected payment details</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Review the rejected payment, then go to the invoice to record a new payment.
+              </p>
+            </div>
+            <div className="grid gap-3 px-6 py-5 text-sm sm:grid-cols-2">
+              <div><span className="font-medium text-gray-700">Invoice:</span> INV-{selectedRejectedPayment.invoice_id || '-'}</div>
+              <div><span className="font-medium text-gray-700">Student:</span> {selectedRejectedPayment.student_name || '-'}</div>
+              <div><span className="font-medium text-gray-700">Amount:</span> {formatCurrency(selectedRejectedPayment.payable_amount)}</div>
+              <div><span className="font-medium text-gray-700">Payment method:</span> {selectedRejectedPayment.payment_method || '-'}</div>
+              <div><span className="font-medium text-gray-700">Payment date:</span> {selectedRejectedPayment.payment_date ? formatDate(selectedRejectedPayment.payment_date) : '-'}</div>
+              <div><span className="font-medium text-gray-700">Reference#:</span> {selectedRejectedPayment.reference_number || '-'}</div>
+              <div><span className="font-medium text-gray-700">Rejected by:</span> {selectedRejectedPayment.rejected_by_name || '-'}</div>
+              <div><span className="font-medium text-gray-700">Rejected at:</span> {selectedRejectedPayment.rejected_at ? formatDateTimeManila(selectedRejectedPayment.rejected_at) : '-'}</div>
+              <div className="sm:col-span-2">
+                <span className="font-medium text-gray-700">Package/Item:</span> {selectedRejectedPayment.invoice_description || '-'}
+              </div>
+              <div className="sm:col-span-2">
+                <span className="font-medium text-gray-700">Reason:</span>
+                <p className="mt-1 rounded-lg bg-red-50 p-3 text-red-800">
+                  {selectedRejectedPayment.reject_reason || 'No reason provided.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-3 border-t border-gray-200 px-6 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedRejectedPayment(null)}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/superadmin/invoice', { state: { focusInvoiceId: selectedRejectedPayment.invoice_id } })}
+                className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+              >
+                Go to invoice
+              </button>
+            </div>
+          </div>
         </div>,
         document.body
       )}

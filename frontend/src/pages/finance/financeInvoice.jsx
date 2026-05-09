@@ -19,17 +19,17 @@ import { fetchAllPaymentsForExport, PaymentExportAlignMode } from '../../utils/f
 import {
   formatDateManila,
   todayManilaYMD,
-  manilaMonthYYYYMM,
-  issueDateRangeFromManilaMonth,
 } from '../../utils/dateUtils';
+import { issueDateFilterUtil, DATE_FILTER_MODES } from '../../utils/dateFilterModes';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const ITEMS_PER_PAGE = 10;
 
-const DEFAULT_INVOICE_FILTER_MONTH = manilaMonthYYYYMM();
-const DEFAULT_INVOICE_FILTER_ISSUE_RANGE = issueDateRangeFromManilaMonth(DEFAULT_INVOICE_FILTER_MONTH);
+const DEFAULT_INVOICE_FILTER_MONTH = issueDateFilterUtil.defaultMonth();
 
 const getInvoiceDisplayAmount = (invoice) => {
   if (!invoice) return 0;
@@ -53,24 +53,15 @@ const FinanceInvoice = () => {
   const [studentNameSearch, setStudentNameSearch] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState(DEFAULT_INVOICE_FILTER_ISSUE_RANGE.from);
-  const [filterIssueDateTo, setFilterIssueDateTo] = useState(DEFAULT_INVOICE_FILTER_ISSUE_RANGE.to);
-  const [filterMonth, setFilterMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
-  const [showAdvancedInvoiceFilters, setShowAdvancedInvoiceFilters] = useState(false);
-
-  const applyMonthFilter = (monthValue) => {
-    const month = String(monthValue || '').trim();
-    setFilterMonth(month);
-    if (!month) {
-      setFilterIssueDateFrom('');
-      setFilterIssueDateTo('');
-      return;
-    }
-    const { from, to } = issueDateRangeFromManilaMonth(month);
-    if (!from || !to) return;
-    setFilterIssueDateFrom(from);
-    setFilterIssueDateTo(to);
-  };
+  // Date filter mode switcher (Month | Issue date | Date created).
+  // Default mode = MONTH, default month = current Manila month.
+  const [dateFilterMode, setDateFilterMode] = useState(issueDateFilterUtil.DEFAULT_MODE);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState('');
+  const [filterCreatedDateTo, setFilterCreatedDateTo] = useState('');
+  const [sortConfig, setSortConfig] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
@@ -137,10 +128,25 @@ const FinanceInvoice = () => {
   const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
-    fetchInvoices();
     fetchBranches();
     fetchStudents();
   }, []);
+
+  // Server-side filter re-fetch: refires whenever the active branch or any
+  // of the date-filter mode inputs change. Search/student/status are still
+  // applied client-side (so we keep the dropdown's per-status counts).
+  useEffect(() => {
+    fetchInvoices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    filterBranch,
+    dateFilterMode,
+    filterIssueMonth,
+    filterIssueDateFrom,
+    filterIssueDateTo,
+    filterCreatedDateFrom,
+    filterCreatedDateTo,
+  ]);
 
   // Fetch package details by package name
   const fetchPackageDetails = async (packageName) => {
@@ -283,7 +289,21 @@ const FinanceInvoice = () => {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await apiRequest('/invoices?limit=100');
+      const params = new URLSearchParams();
+      if (filterBranch) params.set('branch_id', String(filterBranch));
+      params.set('limit', '100');
+      const dateParams = issueDateFilterUtil.buildParams({
+        mode: dateFilterMode,
+        month: filterIssueMonth,
+        primaryFrom: filterIssueDateFrom,
+        primaryTo: filterIssueDateTo,
+        createdFrom: filterCreatedDateFrom,
+        createdTo: filterCreatedDateTo,
+      });
+      Object.entries(dateParams).forEach(([k, v]) => {
+        if (v) params.set(k, v);
+      });
+      const response = await apiRequest(`/invoices?${params.toString()}`);
       setInvoices(response.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch invoices');
@@ -973,8 +993,8 @@ const FinanceInvoice = () => {
     try {
       // Net cash to record = Payable Amount minus optional Discount Amount.
       // Discount applied at point of payment is deducted from the recorded amount;
-      // it is preserved in the remarks for audit traceability since the backend
-      // does not yet have a dedicated discount-on-payment column.
+      // it is also sent separately so the backend can close the invoice without
+      // counting the discount as revenue.
       const grossPayable = parseFloat(paymentFormData.payable_amount) || 0;
       const discountApplied = paymentFormData.discount_amount === ''
         ? 0
@@ -987,6 +1007,7 @@ const FinanceInvoice = () => {
         payment_method: paymentFormData.payment_method,
         payment_type: paymentFormData.payment_type,
         payable_amount: netPayable,
+        discount_amount: discountApplied,
         tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
         issue_date: paymentFormData.issue_date,
         reference_number: (paymentFormData.reference_number || '').trim(),
@@ -1255,7 +1276,8 @@ const FinanceInvoice = () => {
   // Two-pass filtering: first apply every filter EXCEPT the status filter
   // so we can derive accurate per-status counts (used by the dropdown
   // options and the active-Unpaid filter chip) for the user's current
-  // scope (search / student / branch / issue date range / month).
+  // scope. Date narrowing and branch scoping are applied server-side via
+  // the date-filter mode switcher, so they don't appear here.
   const matchesNonStatusFilters = (invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
     const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
@@ -1268,11 +1290,7 @@ const FinanceInvoice = () => {
       studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStudentName = !studentNameSearch ||
       (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
-    const matchesBranch = !filterBranch || invoice.branch_id?.toString() === filterBranch;
-    const issueYmd = normalizeYmd(invoice.issue_date);
-    const matchesIssueDateFrom = !filterIssueDateFrom || (issueYmd && issueYmd >= filterIssueDateFrom);
-    const matchesIssueDateTo = !filterIssueDateTo || (issueYmd && issueYmd <= filterIssueDateTo);
-    return matchesSearch && matchesStudentName && matchesBranch && matchesIssueDateFrom && matchesIssueDateTo;
+    return matchesSearch && matchesStudentName;
   };
   const invoicesInScope = invoices.filter(matchesNonStatusFilters);
   const invoiceStatusCounts = invoicesInScope.reduce((acc, inv) => {
@@ -1285,8 +1303,14 @@ const FinanceInvoice = () => {
   const filteredInvoices = invoicesInScope.filter((invoice) =>
     filterStatus ? invoice.status === filterStatus : true
   );
-  const totalPages = Math.max(Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE), 1);
-  const paginatedInvoices = filteredInvoices.slice(
+  const sortedInvoices = sortRows(filteredInvoices, sortConfig, {
+    branch: { accessor: (invoice) => getBranchName(invoice.branch_id) || invoice.branch_name || '', type: 'string' },
+    status: { accessor: 'status', type: 'string' },
+    issue_date: { accessor: 'issue_date', type: 'date' },
+    payment_date: { accessor: 'payment_date', type: 'date' },
+  });
+  const totalPages = Math.max(Math.ceil(sortedInvoices.length / ITEMS_PER_PAGE), 1);
+  const paginatedInvoices = sortedInvoices.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
@@ -1295,19 +1319,53 @@ const FinanceInvoice = () => {
     (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
     0
   );
-  const hasInvoiceFilters = Boolean(nameSearchTerm || studentNameSearch || filterStatus || filterMonth);
+  const dateFilterArgs = {
+    mode: dateFilterMode,
+    month: filterIssueMonth,
+    primaryFrom: filterIssueDateFrom,
+    primaryTo: filterIssueDateTo,
+    createdFrom: filterCreatedDateFrom,
+    createdTo: filterCreatedDateTo,
+  };
+  const hasInvoiceFilters = Boolean(
+    nameSearchTerm ||
+    studentNameSearch ||
+    filterStatus ||
+    issueDateFilterUtil.hasActiveFilter(dateFilterArgs)
+  );
 
   const resetInvoiceFilters = () => {
     setNameSearchTerm('');
     setStudentNameSearch('');
     setFilterStatus('');
-    applyMonthFilter('');
+    setDateFilterMode(issueDateFilterUtil.DEFAULT_MODE);
+    setFilterIssueMonth(DEFAULT_INVOICE_FILTER_MONTH);
+    setFilterIssueDateFrom('');
+    setFilterIssueDateTo('');
+    setFilterCreatedDateFrom('');
+    setFilterCreatedDateTo('');
+    setCurrentPage(1);
+  };
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
     setCurrentPage(1);
   };
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [nameSearchTerm, studentNameSearch, filterBranch, filterStatus, filterIssueDateFrom, filterIssueDateTo]);
+  }, [
+    nameSearchTerm,
+    studentNameSearch,
+    filterBranch,
+    filterStatus,
+    dateFilterMode,
+    filterIssueMonth,
+    filterIssueDateFrom,
+    filterIssueDateTo,
+    filterCreatedDateFrom,
+    filterCreatedDateTo,
+  ]);
 
   useEffect(() => {
     setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
@@ -1508,17 +1566,18 @@ const FinanceInvoice = () => {
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div>
             <label htmlFor="finance-invoice-search" className="mb-1 block text-xs font-medium text-gray-700">
-              Invoice, Acknowledgement Receipt, or description
+              Invoice, AR, or description
             </label>
             <input
               id="finance-invoice-search"
               type="text"
               value={nameSearchTerm}
               onChange={(e) => setNameSearchTerm(e.target.value)}
-              placeholder="Search invoices..."
+              placeholder="Invoice, AR, description..."
+              title="Search by invoice ID, acknowledgement receipt #, branch, or description"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
@@ -1536,44 +1595,121 @@ const FinanceInvoice = () => {
             />
           </div>
           <div>
-            <label htmlFor="finance-invoice-month-filter" className="mb-1 block text-xs font-medium text-gray-700">
-              Invoice issue date (month)
+            <label htmlFor="finance-invoice-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
+              Status
             </label>
-            <input
-              id="finance-invoice-month-filter"
-              type="month"
-              value={filterMonth}
-              onChange={(e) => applyMonthFilter(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-            />
+            <select
+              id="finance-invoice-status-filter"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              <option value="">All statuses ({invoicesInScope.length})</option>
+              {getUniqueStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {status} ({invoiceStatusCounts[status] || 0})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-gray-700">Date filter</span>
+            <div
+              role="tablist"
+              aria-label="Invoice date filter mode"
+              className="inline-flex flex-wrap gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5"
+            >
+              {[
+                { mode: DATE_FILTER_MODES.MONTH, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
+                { mode: DATE_FILTER_MODES.PRIMARY, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PRIMARY] },
+                { mode: DATE_FILTER_MODES.CREATED_DATE, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.CREATED_DATE] },
+              ].map(({ mode, label }) => {
+                const isActive = dateFilterMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => setDateFilterMode(mode)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      isActive
+                        ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {dateFilterMode === DATE_FILTER_MODES.MONTH && (
+              <input
+                type="month"
+                aria-label="Issue month"
+                value={filterIssueMonth}
+                onChange={(e) => setFilterIssueMonth(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.PRIMARY && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="finance-invoice-issue-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="finance-invoice-issue-from"
+                    type="date"
+                    value={filterIssueDateFrom}
+                    onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="finance-invoice-issue-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="finance-invoice-issue-to"
+                    type="date"
+                    value={filterIssueDateTo}
+                    onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.CREATED_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="finance-invoice-created-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="finance-invoice-created-from"
+                    type="date"
+                    value={filterCreatedDateFrom}
+                    onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="finance-invoice-created-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="finance-invoice-created-to"
+                    type="date"
+                    value={filterCreatedDateTo}
+                    onChange={(e) => setFilterCreatedDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
-        {showAdvancedInvoiceFilters ? (
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <div>
-              <label htmlFor="finance-invoice-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
-                Status
-              </label>
-              <select
-                id="finance-invoice-status-filter"
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              >
-                <option value="">All statuses ({invoicesInScope.length})</option>
-                {getUniqueStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {status} ({invoiceStatusCounts[status] || 0})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        ) : null}
         <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <p className="text-xs text-gray-500">
-              Month filtering uses invoice issue date. Clear the month to show all invoice dates.
+              {dateFilterMode === DATE_FILTER_MODES.MONTH
+                ? 'Filtering by invoice issue date (month). Clear to show all dates.'
+                : dateFilterMode === DATE_FILTER_MODES.PRIMARY
+                  ? 'Filtering by invoice issue date (range). Inclusive on both ends.'
+                  : 'Filtering by record-created date (range). Inclusive on both ends.'}
             </p>
             {filterStatus === 'Unpaid' && (
               <button
@@ -1596,17 +1732,6 @@ const FinanceInvoice = () => {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button
               type="button"
-              onClick={() => setShowAdvancedInvoiceFilters((current) => !current)}
-              className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-50"
-              aria-expanded={showAdvancedInvoiceFilters}
-            >
-              {showAdvancedInvoiceFilters ? 'Hide advanced filters' : 'Advanced filters'}
-              <svg className={`h-4 w-4 transition-transform ${showAdvancedInvoiceFilters ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            <button
-              type="button"
               onClick={resetInvoiceFilters}
               disabled={!hasInvoiceFilters}
               className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1627,7 +1752,7 @@ const FinanceInvoice = () => {
       {/* Summary line — sits between the filter container and the table */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
         <span>
-          <span className="font-semibold text-gray-900">Invoices:</span>{' '}
+          <span className="font-semibold text-gray-900">Total Invoice:</span>{' '}
           <span className="font-medium text-gray-900">{summaryInvoiceCount.toLocaleString('en-US')}</span>
         </span>
         <span className="text-gray-300">·</span>
@@ -1676,24 +1801,16 @@ const FinanceInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '170px', minWidth: '170px' }}>
                     Student Name
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
-                    Branch
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
-                    Status
-                  </th>
+                  <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }} />
+                  <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }} />
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '110px', minWidth: '110px' }}>
                     Amount
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Total Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    Issue Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
-                    Payment Date
-                  </th>
+                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }} />
+                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }} />
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Due Date
                   </th>
@@ -3254,7 +3371,7 @@ const FinanceInvoice = () => {
                     ) : (
                       <p className="text-xs text-gray-500 mt-1">
                         Optional. When provided, this is deducted from what the student needs to pay (e.g. promo,
-                        early-bird, scholarship). The amount is logged in the payment remarks for audit.
+                        early-bird, scholarship). The discount closes the invoice balance but is not counted as revenue.
                       </p>
                     )}
                   </div>
@@ -3359,8 +3476,7 @@ const FinanceInvoice = () => {
                   const discountAtPayment = paymentFormData.discount_amount === ''
                     ? 0
                     : Math.max(0, parseFloat(paymentFormData.discount_amount) || 0);
-                  const netEntered = Math.max(0, enteredAmount - discountAtPayment);
-                  const payableToApply = Math.max(0, Math.min(netEntered, breakdown.remaining));
+                  const payableToApply = Math.max(0, Math.min(enteredAmount, breakdown.remaining));
                   const projectedRemaining = Math.max(0, breakdown.remaining - payableToApply);
                   const projectedTotalPaid = breakdown.paidAmount + payableToApply;
                   return (

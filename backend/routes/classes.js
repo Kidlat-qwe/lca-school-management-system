@@ -235,11 +235,12 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
       [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
     ),
     client.query(
-      `SELECT COALESCE(SUM(p.payable_amount), 0) AS total_paid
+      `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.discount_amount, 0)), 0) AS total_paid
        FROM paymenttbl p
        INNER JOIN invoicestbl i ON i.invoice_id = p.invoice_id
        WHERE i.installmentinvoiceprofiles_id = $1
-         AND p.status = 'Completed'`,
+         AND p.status = 'Completed'
+         AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
       [currentProfile.installmentinvoiceprofiles_id]
     ),
     client.query(
@@ -249,6 +250,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
        WHERE i.installmentinvoiceprofiles_id = $1
          AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
          AND p.status = 'Completed'
+         AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
          AND COALESCE(i.status, '') <> 'Paid'`,
       [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
     ),
@@ -576,6 +578,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('program_id').optional().isInt().withMessage('Program ID must be an integer'),
+    queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -591,7 +594,7 @@ router.get(
          AND end_date < CURRENT_DATE`
       );
 
-      const { branch_id, program_id, page = 1, limit = 20 } = req.query;
+      const { branch_id, program_id, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
       let sql = `SELECT c.class_id,
@@ -653,6 +656,21 @@ router.get(
         paramCount++;
         sql += ` AND c.program_id = $${paramCount}`;
         params.push(program_id);
+      }
+
+      const searchTerm = search ? String(search).trim() : '';
+      if (searchTerm) {
+        paramCount++;
+        sql += ` AND (
+          COALESCE(c.class_name, '') ILIKE $${paramCount}
+          OR COALESCE(c.level_tag, '') ILIKE $${paramCount}
+          OR COALESCE(u.full_name, '') ILIKE $${paramCount}
+          OR COALESCE(b.branch_nickname, b.branch_name, '') ILIKE $${paramCount}
+          OR COALESCE(p.program_name, '') ILIKE $${paramCount}
+          OR COALESCE(p.program_code, '') ILIKE $${paramCount}
+          OR COALESCE(r.room_name, '') ILIKE $${paramCount}
+        )`;
+        params.push(`%${searchTerm}%`);
       }
 
       sql += ` ORDER BY c.class_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;

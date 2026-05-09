@@ -99,8 +99,8 @@ export async function sumInvoiceLineOriginal(client, invoiceId) {
  * @param {import('pg').PoolClient} client
  * @param {number|string} invoiceId
  * @param {object} invoiceRow - row from invoicestbl (amount = remaining at read time before current payment when used in POST)
- * @param {number} totalPaidAfterCurrentPayment - sum payable_amount Completed including current insert
- * @param {number} currentPayableAmount - this payment amount
+ * @param {number} totalPaidAfterCurrentPayment - sum paid + payment discounts, including current insert
+ * @param {number} currentPayableAmount - this payment settlement amount
  */
 export async function computeOriginalInvoiceAmount(
   client,
@@ -154,7 +154,11 @@ export async function computeInvoiceOriginalForRecalc(client, invoiceId, invoice
     return { originalInvoiceAmount: originalFromItems };
   }
   const totalPaidR = await client.query(
-    `SELECT COALESCE(SUM(payable_amount), 0) AS t FROM paymenttbl WHERE invoice_id = $1 AND status = 'Completed'`,
+    `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS t
+     FROM paymenttbl
+     WHERE invoice_id = $1
+       AND status = 'Completed'
+       AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
     [invoiceId]
   );
   const tp = parseFloat(totalPaidR.rows[0].t) || 0;
@@ -205,9 +209,11 @@ export async function getChainFinancialSummary(client, invoiceId) {
   const leafId = chainIds[chainIds.length - 1];
 
   const paidRes = await client.query(
-    `SELECT COALESCE(SUM(payable_amount), 0) AS t
+    `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS t
      FROM paymenttbl
-     WHERE invoice_id = ANY($1::int[]) AND status = 'Completed'`,
+     WHERE invoice_id = ANY($1::int[])
+       AND status = 'Completed'
+       AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
     [chainIds]
   );
   const totalPaidInChain = parseFloat(paidRes.rows[0]?.t) || 0;
@@ -232,7 +238,11 @@ export async function getChainFinancialSummary(client, invoiceId) {
       : null;
 
   const leafPayments = await client.query(
-    `SELECT COALESCE(SUM(payable_amount), 0) AS t FROM paymenttbl WHERE invoice_id = $1 AND status = 'Completed'`,
+    `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS t
+     FROM paymenttbl
+     WHERE invoice_id = $1
+       AND status = 'Completed'
+       AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
     [leafId]
   );
   const paidOnLeaf = parseFloat(leafPayments.rows[0]?.t) || 0;
@@ -289,7 +299,11 @@ export async function getCanonicalInstallmentPhaseCounts(
  */
 export async function removeUnusedBalanceInvoice(client, childInvoiceId) {
   const payCount = await client.query(
-    `SELECT COUNT(*)::int AS c FROM paymenttbl WHERE invoice_id = $1 AND status = 'Completed'`,
+    `SELECT COUNT(*)::int AS c
+     FROM paymenttbl
+     WHERE invoice_id = $1
+       AND status = 'Completed'
+       AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
     [childInvoiceId]
   );
   if (parseInt(payCount.rows[0]?.c || 0, 10) > 0) {

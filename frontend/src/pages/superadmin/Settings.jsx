@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 const TABS = [
   { id: 'billing', label: 'Billing & Penalties' },
   { id: 'schedule', label: 'Invoice Schedule' },
+  { id: 'alerts', label: 'Alerts' },
   { id: 'templates', label: 'Templates' },
 ];
 
@@ -154,9 +155,20 @@ const Settings = () => {
   const [templateEffective, setTemplateEffective] = useState(null);
   const [templates, setTemplates] = useState(buildEmptyTemplatesState);
 
+  // ── Alerts tab ────────────────────────────────────────────────────────────
+  const [alertsScope, setAlertsScope] = useState('global'); // 'global' | 'branch'
+  const [alertsSelectedBranchId, setAlertsSelectedBranchId] = useState('');
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsSaving, setAlertsSaving] = useState(false);
+  const [alertsError, setAlertsError] = useState('');
+  const [alertsSuccess, setAlertsSuccess] = useState('');
+  const [alertsEffective, setAlertsEffective] = useState(null);
+  const [cashHoldingThreshold, setCashHoldingThreshold] = useState('100000');
+
   const canLoadBillingBranch = billingScope === 'branch' ? Boolean(billingSelectedBranchId) : true;
   const canLoadScheduleBranch = scheduleScope === 'branch' ? Boolean(scheduleSelectedBranchId) : true;
   const canLoadTemplateBranch = templateScope === 'branch' ? Boolean(templateSelectedBranchId) : true;
+  const canLoadAlertsBranch = alertsScope === 'branch' ? Boolean(alertsSelectedBranchId) : true;
 
   // ── Fetch branches ────────────────────────────────────────────────────────
   const fetchBranches = async () => {
@@ -265,6 +277,31 @@ const Settings = () => {
     }
   };
 
+  // ── Fetch alerts settings ─────────────────────────────────────────────────
+  const fetchAlertsSettings = async () => {
+    if (!canLoadAlertsBranch) {
+      setAlertsEffective(null);
+      return;
+    }
+    setAlertsLoading(true);
+    setAlertsError('');
+    setAlertsSuccess('');
+    try {
+      const params = new URLSearchParams({ category: 'alerts' });
+      if (alertsScope === 'branch') params.set('branch_id', alertsSelectedBranchId);
+      const res = await apiRequest(`/settings/effective?${params}`, { method: 'GET' });
+      const settings = res?.data?.settings || {};
+      setAlertsEffective(settings);
+
+      const t = Number(settings?.cash_holding_alert_threshold_php?.value);
+      setCashHoldingThreshold(Number.isFinite(t) ? String(t) : '100000');
+    } catch (e) {
+      setAlertsError(e?.message || 'Failed to load alerts settings');
+    } finally {
+      setAlertsLoading(false);
+    }
+  };
+
   // ── Derived scope meta ────────────────────────────────────────────────────
   const billingScopeMeta = useMemo(() => {
     const meta = {};
@@ -283,6 +320,12 @@ const Settings = () => {
     for (const [k, v] of Object.entries(templateEffective || {})) meta[k] = v?.scope || 'default';
     return meta;
   }, [templateEffective]);
+
+  const alertsScopeMeta = useMemo(() => {
+    const meta = {};
+    for (const [k, v] of Object.entries(alertsEffective || {})) meta[k] = v?.scope || 'default';
+    return meta;
+  }, [alertsEffective]);
 
   const updateTemplateField = (key, field, value) => {
     setTemplates((prev) => ({
@@ -311,6 +354,11 @@ const Settings = () => {
     fetchTemplateSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateScope, templateSelectedBranchId]);
+
+  useEffect(() => {
+    fetchAlertsSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertsScope, alertsSelectedBranchId]);
 
   // ── Save billing settings ─────────────────────────────────────────────────
   const onSaveBilling = async () => {
@@ -440,6 +488,44 @@ const Settings = () => {
     }
   };
 
+  // ── Save alerts settings ──────────────────────────────────────────────────
+  const onSaveAlerts = async () => {
+    setAlertsSaving(true);
+    setAlertsError('');
+    setAlertsSuccess('');
+    try {
+      const t = Number(cashHoldingThreshold);
+      if (!Number.isFinite(t) || t < 0)
+        throw new Error('Cash holding alert threshold must be a non-negative number');
+      if (t > 100000000)
+        throw new Error('Cash holding alert threshold seems unreasonably high');
+
+      const payload =
+        alertsScope === 'global'
+          ? {
+              scope: 'global',
+              settings: {
+                cash_holding_alert_threshold_php: t,
+              },
+            }
+          : {
+              scope: 'branch',
+              branch_id: Number(alertsSelectedBranchId),
+              settings: {
+                cash_holding_alert_threshold_php: t,
+              },
+            };
+
+      await apiRequest('/settings/batch', { method: 'PUT', body: payload });
+      setAlertsSuccess('Alerts settings saved successfully.');
+      await fetchAlertsSettings();
+    } catch (e) {
+      setAlertsError(e?.message || 'Failed to save alerts settings');
+    } finally {
+      setAlertsSaving(false);
+    }
+  };
+
   // ── Helpers ───────────────────────────────────────────────────────────────
   const ScopeTag = ({ scopeVal }) => {
     const color =
@@ -463,7 +549,8 @@ const Settings = () => {
         <div className="rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-gray-100">
           <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Configure system-wide parameters for billing, penalties, and installment invoices.
+            Configure system-wide parameters for billing, penalties, installment invoices, and
+            operational alerts.
           </p>
         </div>
 
@@ -786,7 +873,112 @@ const Settings = () => {
               </div>
             )}
 
-            {/* ── Tab 3: Templates ── */}
+            {/* ── Tab 3: Alerts ── */}
+            {activeTab === 'alerts' && (
+              <div>
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">Operational Alerts</h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Configure thresholds that trigger urgent in-app alerts for branch staff.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-700">Scope</span>
+                        <select
+                          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
+                          value={alertsScope}
+                          onChange={(e) => setAlertsScope(e.target.value)}
+                        >
+                          <option value="global">Global default</option>
+                          <option value="branch">Branch override</option>
+                        </select>
+                      </div>
+
+                      {alertsScope === 'branch' && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-700">Branch</span>
+                          <select
+                            className="w-full min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
+                            value={alertsSelectedBranchId}
+                            onChange={(e) => setAlertsSelectedBranchId(e.target.value)}
+                          >
+                            <option value="">Select branch</option>
+                            {branches.map((b) => (
+                              <option key={b.branch_id} value={String(b.branch_id)}>
+                                {b.branch_name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {alertsScope === 'branch' && !canLoadAlertsBranch && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Please select a branch to edit branch overrides.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {alertsError && (
+                  <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                    {alertsError}
+                  </div>
+                )}
+                {alertsSuccess && (
+                  <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+                    {alertsSuccess}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Cash holding alert threshold (PHP)
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      step="1000"
+                      value={cashHoldingThreshold}
+                      onChange={(e) => setCashHoldingThreshold(e.target.value)}
+                      disabled={!canLoadAlertsBranch || alertsLoading || alertsSaving}
+                      className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
+                    />
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                      Source: <ScopeTag scopeVal={alertsScopeMeta.cash_holding_alert_threshold_php} />
+                    </p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Branch Admins see an urgent login alert when undeposited Cash exceeds this
+                      amount. Set to <code>0</code> to disable.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-gray-500">
+                    Note: Only payments with <code>payment_method = Cash</code> count towards this
+                    threshold; non-cash methods are excluded.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onSaveAlerts}
+                    disabled={!canLoadAlertsBranch || alertsLoading || alertsSaving}
+                    className="inline-flex w-full items-center justify-center rounded-lg bg-[#F7C844] px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                  >
+                    {alertsSaving ? 'Saving…' : 'Save alerts'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Tab 4: Templates ── */}
             {activeTab === 'templates' && (
               <div>
                 <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

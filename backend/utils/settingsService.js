@@ -153,6 +153,22 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
       enabled: true,
     },
   },
+
+  // --- Operational Alerts ---
+  // Threshold (in PHP) above which a Branch Admin is shown an urgent
+  // login-time alert reminding them to deposit pending Cash collections.
+  // Counts only payment_method = 'Cash' that has not yet been included in
+  // a Submitted/Approved cash deposit summary. Set to 0 to disable.
+  cash_holding_alert_threshold_php: {
+    key: 'cash_holding_alert_threshold_php',
+    type: 'number',
+    category: 'alerts',
+    description:
+      'Threshold (PHP) of pending uncovered Cash collections at which the Branch Admin sees an urgent login-time alert. Set to 0 to disable.',
+    defaultValue: 100000,
+    min: 0,
+    max: 100000000,
+  },
 });
 
 export const SETTINGS_KEYS = Object.freeze(Object.keys(SETTINGS_DEFINITIONS));

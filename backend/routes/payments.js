@@ -29,6 +29,35 @@ const router = express.Router();
 const PAYMENT_LOG_BUSINESS_DATE_SQL = `p.issue_date`;
 const AR_PAYMENT_BUSINESS_DATE_SQL = `ar.issue_date`;
 
+/**
+ * Rejected tab lists payment rows with status/approval Rejected. Once the branch records a new
+ * payment, invoicestbl.status leaves `Rejected` (e.g. Paid / Partially Paid). Those resolved rows
+ * should disappear from the tab while staying in the DB for audit.
+ */
+const PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL = `
+  AND (
+    p.invoice_id IS NULL
+    OR i.invoice_id IS NULL
+    OR TRIM(COALESCE(i.status::text, '')) = 'Rejected'
+  )`;
+
+/**
+ * Resubmit after rejection creates another payment row; both stay Rejected in history.
+ * The Rejected tab should list only the latest rejection per invoice (newest rejected_at).
+ */
+const PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL = `
+  AND (
+    p.invoice_id IS NULL
+    OR p.payment_id = (
+      SELECT p3.payment_id
+      FROM paymenttbl p3
+      WHERE p3.invoice_id = p.invoice_id
+        AND COALESCE(p3.approval_status, '') = 'Rejected'
+        AND COALESCE(p3.status, '') = 'Rejected'
+      ORDER BY COALESCE(p3.rejected_at, p3.created_at) DESC NULLS LAST, p3.payment_id DESC
+      LIMIT 1
+    )
+  )`;
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
@@ -480,6 +509,155 @@ const notifyPaymentResubmittedForVerification = async ({
   }
 };
 
+const notifyPaymentRejectedToBranch = async ({
+  paymentId,
+  branchId,
+  invoiceId,
+  reason,
+  rejectedByUserId,
+  actionOwnerUserId,
+  invoiceOwnerUserId,
+}) => {
+  try {
+    if (!branchId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
+    const [branchRes, userRes, payRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+        [branchId]
+      ),
+      query(`SELECT full_name, email FROM userstbl WHERE user_id = $1`, [rejectedByUserId]),
+      query(
+        `SELECT COALESCE(u.full_name, u.email, 'Student') AS student_label
+         FROM paymenttbl p
+         LEFT JOIN userstbl u ON p.student_id = u.user_id
+         WHERE p.payment_id = $1`,
+        [paymentId]
+      ),
+    ]);
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const rejectedBy = userRes.rows[0]?.full_name || userRes.rows[0]?.email || 'Finance';
+    const studentLabel = payRes.rows[0]?.student_label || 'Student';
+    const invLabel = invoiceId != null ? `INV-${invoiceId}` : `Payment #${paymentId}`;
+    const reasonText = reason && String(reason).trim() ? ` Reason: ${String(reason).trim()}` : '';
+    const detailBody = `${rejectedBy} rejected ${invLabel} (${studentLabel}) at ${branchName}.${reasonText}`;
+
+    if (!hasTargetUserIdColumn) {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
+        [
+          'Payment rejected — action needed',
+          detailBody,
+          ['Admin'],
+          branchId,
+          rejectedByUserId,
+          'payment-logs',
+          'notificationTab=rejected',
+        ]
+      );
+    } else {
+      const ownerTargetIds = Array.from(
+        new Set(
+          [invoiceOwnerUserId, actionOwnerUserId]
+            .map((id) => (id == null ? null : Number(id)))
+            .filter((id) => id != null && !Number.isNaN(id))
+        )
+      );
+
+      if (ownerTargetIds.length > 0) {
+        await Promise.all(
+          ownerTargetIds.map((targetUserId) =>
+            query(
+              `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+               VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+              [
+                'Payment rejected — action needed',
+                `${invLabel} (${studentLabel}) was rejected by ${rejectedBy}.${reasonText}`,
+                ['All'],
+                branchId,
+                rejectedByUserId,
+                targetUserId,
+                'payment-logs',
+                'notificationTab=rejected',
+              ]
+            )
+          )
+        );
+      }
+
+      const superadminRes = await query(
+        `SELECT user_id
+         FROM userstbl
+         WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+      );
+      const superadminIds = (superadminRes.rows || [])
+        .map((row) => row.user_id)
+        .filter(
+          (uid) =>
+            uid != null &&
+            !ownerTargetIds.some((ownerId) => Number(ownerId) === Number(uid))
+        );
+      if (superadminIds.length > 0) {
+        await Promise.all(
+          superadminIds.map((superadminUserId) =>
+            query(
+              `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+               VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+              [
+                'Payment rejected — superadmin review',
+                detailBody,
+                ['All'],
+                branchId,
+                rejectedByUserId,
+                superadminUserId,
+                'payment-logs',
+                'notificationTab=rejected',
+              ]
+            )
+          )
+        );
+      }
+    }
+
+    if (
+      actionOwnerUserId &&
+      Number(actionOwnerUserId) !== Number(rejectedByUserId)
+    ) {
+      try {
+        const ownerRes = await query(
+          `SELECT full_name, email FROM userstbl WHERE user_id = $1`,
+          [actionOwnerUserId]
+        );
+        const rawEmail = ownerRes.rows[0]?.email;
+        const [to] = normalizeNotificationRecipients([rawEmail]);
+        if (to) {
+          const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
+          const subject = `Payment rejected — ${invLabel} (${branchName})`;
+          const html = `
+            <!DOCTYPE html>
+            <html><head><meta charset="UTF-8"></head>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <p>Hi ${escapeHtml(ownerFirst)},</p>
+              <p><strong>${escapeHtml(rejectedBy)}</strong> rejected <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong>.</p>
+              <p><strong>Reason:</strong> ${escapeHtml(String(reason || '').trim())}</p>
+              <p>Open <strong>Payment Logs</strong> and use the <strong>Rejected</strong> tab to review the payment, then go to the invoice to record a new payment.</p>
+              <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
+            </body></html>`;
+          await sendSystemNotificationEmail({ to, subject, html });
+        }
+      } catch (emailErr) {
+        console.error(
+          'notifyPaymentRejectedToBranch email:',
+          emailErr?.message || emailErr
+        );
+      }
+    }
+  } catch (err) {
+    console.error('notifyPaymentRejectedToBranch:', err?.message || err);
+  }
+};
+
 /**
  * GET /api/sms/payments/financial-dashboard-metrics
  * Single round-trip aggregates for finance/superfinance dashboards (replaces many paginated /payments calls).
@@ -548,7 +726,7 @@ router.get(
         SELECT
           COALESCE(
             SUM(CASE WHEN p.status = 'Completed'
-              AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+              AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               THEN COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0) ELSE 0 END),
           0)::numeric AS total_revenue,
           COUNT(*) FILTER (WHERE p.status = 'Completed')::int AS completed_count,
@@ -564,13 +742,13 @@ router.get(
           COUNT(*) FILTER (
             WHERE p.status = 'Completed'
               AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-              AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+              AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
           )::int AS unverified_count,
           COALESCE(
             SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
               WHERE p.status = 'Completed'
                 AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
             ),
             0
           )::numeric AS unverified_amount
@@ -588,7 +766,7 @@ router.get(
         WHERE 1=1
         ${whereExtra}
           AND p.status = 'Completed'
-          AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+          AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
         GROUP BY p.branch_id, b.branch_nickname, b.branch_name
         ORDER BY revenue DESC NULLS LAST
         LIMIT 5
@@ -617,7 +795,7 @@ router.get(
         WHERE 1=1
         ${whereExtra}
           AND p.status = 'Completed'
-          AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+          AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
         ORDER BY p.payment_id DESC
         LIMIT 3
       `;
@@ -685,6 +863,14 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('payment_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -694,6 +880,7 @@ router.get(
     queryValidator('my_return_queue').optional().isString().withMessage('my_return_queue must be a string'),
     queryValidator('issued_by_me').optional().isString().withMessage('issued_by_me must be a string'),
     queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
+    queryValidator('search').optional().isString().withMessage('search must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -712,12 +899,17 @@ router.get(
         my_return_queue: myReturnQueueRaw,
         issued_by_me: issuedByMeRaw,
         payment_method: paymentMethodRaw,
+        search,
         page = 1,
         limit = 20,
       } = req.query;
       const paymentMethodFilter = paymentMethodRaw != null && String(paymentMethodRaw).trim() !== ''
         ? String(paymentMethodRaw).trim()
         : '';
+      const searchTerm = search ? String(search).trim() : '';
+      const isRejectedPaymentLogsTab =
+        String(status || '').trim() === 'Rejected' &&
+        String(approvalStatus || '').trim() === 'Rejected';
       const returnedByMe =
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
       let myReturnQueue =
@@ -740,7 +932,7 @@ router.get(
         : 'NULL::integer AS action_owner_user_id';
 
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                        p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
+                        p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                         TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_issue_date,
                         TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
@@ -753,6 +945,10 @@ router.get(
                         TO_CHAR(p.returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at,
                         p.returned_by,
                         returner.full_name as returned_by_name,
+                        p.reject_reason,
+                        TO_CHAR(p.rejected_at, 'YYYY-MM-DD HH24:MI:SS') as rejected_at,
+                        p.rejected_by,
+                        rejecter.full_name as rejected_by_name,
                         u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                         i.invoice_description, i.amount as invoice_amount,
                         i.status AS invoice_status,
@@ -778,6 +974,7 @@ router.get(
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN userstbl returner ON p.returned_by = returner.user_id
+                 LEFT JOIN userstbl rejecter ON p.rejected_by = rejecter.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                  WHERE 1=1`;
       const params = [];
@@ -883,6 +1080,34 @@ router.get(
         }
       }
 
+      // Optional filter on the record-creation date (when the payment row was
+      // logged into the system, p.created_at). Distinct from the customer
+      // payment date above; surfaced as the "Date created" mode in the UI.
+      const createdFrom = req.query.created_date_from
+        ? String(req.query.created_date_from).trim().slice(0, 10)
+        : '';
+      const createdTo = req.query.created_date_to
+        ? String(req.query.created_date_to).trim().slice(0, 10)
+        : '';
+      if (createdFrom || createdTo) {
+        if (createdFrom && createdTo && createdFrom > createdTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'created_date_from must be on or before created_date_to',
+          });
+        }
+        if (createdFrom) {
+          paramCount++;
+          sql += ` AND p.created_at::date >= $${paramCount}::date`;
+          params.push(createdFrom);
+        }
+        if (createdTo) {
+          paramCount++;
+          sql += ` AND p.created_at::date <= $${paramCount}::date`;
+          params.push(createdTo);
+        }
+      }
+
       if (status) {
         paramCount++;
         sql += ` AND p.status = $${paramCount}`;
@@ -953,6 +1178,30 @@ router.get(
         params.push(paymentMethodFilter);
       }
 
+      if (searchTerm) {
+        paramCount++;
+        sql += ` AND (
+          p.payment_id::text ILIKE $${paramCount}
+          OR COALESCE(i.invoice_description, '') ILIKE $${paramCount}
+          OR COALESCE(u.full_name, '') ILIKE $${paramCount}
+          OR COALESCE(u.email, '') ILIKE $${paramCount}
+          OR COALESCE(ar.prospect_student_name, '') ILIKE $${paramCount}
+          OR COALESCE(i.invoice_ar_number, '') ILIKE $${paramCount}
+          OR COALESCE(p.reference_number, '') ILIKE $${paramCount}
+          OR COALESCE(invoice_issuer.full_name, '') ILIKE $${paramCount}
+          OR COALESCE(invoice_issuer.email, '') ILIKE $${paramCount}
+          OR COALESCE(payment_creator.full_name, '') ILIKE $${paramCount}
+          OR COALESCE(payment_creator.email, '') ILIKE $${paramCount}
+          OR COALESCE(returner.full_name, '') ILIKE $${paramCount}
+        )`;
+        params.push(`%${searchTerm}%`);
+      }
+
+      if (isRejectedPaymentLogsTab) {
+        sql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
+        sql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
+      }
+
       sql += ` ORDER BY p.payment_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -982,6 +1231,11 @@ router.get(
       let countSql = `SELECT COUNT(*) as total
                       FROM paymenttbl p
                       LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                      LEFT JOIN userstbl u ON p.student_id = u.user_id
+                      LEFT JOIN userstbl payment_creator ON p.created_by = payment_creator.user_id
+                      LEFT JOIN userstbl invoice_issuer ON i.created_by = invoice_issuer.user_id
+                      LEFT JOIN userstbl returner ON p.returned_by = returner.user_id
+                      LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                       WHERE 1=1`;
       const countParams = [];
       let countParamCount = 0;
@@ -1048,6 +1302,21 @@ router.get(
           countParamCount++;
           countSql += ` AND ${PAYMENT_LOG_BUSINESS_DATE_SQL} <= $${countParamCount}::date`;
           countParams.push(payDateTo);
+        }
+      }
+
+      // Mirror the created_at filter on the count/sum query so the page
+      // count and "Total amount" badges line up with the rows returned.
+      if (createdFrom || createdTo) {
+        if (createdFrom) {
+          countParamCount++;
+          countSql += ` AND p.created_at::date >= $${countParamCount}::date`;
+          countParams.push(createdFrom);
+        }
+        if (createdTo) {
+          countParamCount++;
+          countSql += ` AND p.created_at::date <= $${countParamCount}::date`;
+          countParams.push(createdTo);
         }
       }
 
@@ -1121,6 +1390,30 @@ router.get(
         countParams.push(paymentMethodFilter);
       }
 
+      if (searchTerm) {
+        countParamCount++;
+        countSql += ` AND (
+          p.payment_id::text ILIKE $${countParamCount}
+          OR COALESCE(i.invoice_description, '') ILIKE $${countParamCount}
+          OR COALESCE(u.full_name, '') ILIKE $${countParamCount}
+          OR COALESCE(u.email, '') ILIKE $${countParamCount}
+          OR COALESCE(ar.prospect_student_name, '') ILIKE $${countParamCount}
+          OR COALESCE(i.invoice_ar_number, '') ILIKE $${countParamCount}
+          OR COALESCE(p.reference_number, '') ILIKE $${countParamCount}
+          OR COALESCE(invoice_issuer.full_name, '') ILIKE $${countParamCount}
+          OR COALESCE(invoice_issuer.email, '') ILIKE $${countParamCount}
+          OR COALESCE(payment_creator.full_name, '') ILIKE $${countParamCount}
+          OR COALESCE(payment_creator.email, '') ILIKE $${countParamCount}
+          OR COALESCE(returner.full_name, '') ILIKE $${countParamCount}
+        )`;
+        countParams.push(`%${searchTerm}%`);
+      }
+
+      if (isRejectedPaymentLogsTab) {
+        countSql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
+        countSql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
+      }
+
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total);
 
@@ -1169,8 +1462,17 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('payment_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('pending_only').optional().isString().withMessage('pending_only must be a string'),
     queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
+    queryValidator('search').optional().isString().withMessage('search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -1185,6 +1487,7 @@ router.get(
         issue_date_to: issueDateTo,
         pending_only: pendingOnlyRaw,
         payment_method: paymentMethodRaw,
+        search,
         page = 1,
         limit = 20,
       } = req.query;
@@ -1198,6 +1501,7 @@ router.get(
       const offset = (pageNum - 1) * limitNum;
       const pendingOnly =
         pendingOnlyRaw === '1' || String(pendingOnlyRaw || '').toLowerCase() === 'true';
+      const searchTerm = search ? String(search).trim() : '';
 
       const fromTrim = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
       const toTrim = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
@@ -1221,9 +1525,23 @@ router.get(
         });
       }
 
+      const createdFrom = req.query.created_date_from
+        ? String(req.query.created_date_from).trim().slice(0, 10)
+        : '';
+      const createdTo = req.query.created_date_to
+        ? String(req.query.created_date_to).trim().slice(0, 10)
+        : '';
+      if (createdFrom && createdTo && createdFrom > createdTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
+        });
+      }
+      const useCreatedDateRange = Boolean(createdFrom || createdTo);
+
       // ---------- 1) Normal payment rows ----------
       let paySql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
-                           p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
+                           p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
                            TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
                            TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
                            p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
@@ -1234,6 +1552,10 @@ router.get(
                            TO_CHAR(p.returned_at, 'YYYY-MM-DD HH24:MI:SS') as returned_at,
                            p.returned_by,
                            returner.full_name as returned_by_name,
+                           p.reject_reason,
+                           TO_CHAR(p.rejected_at, 'YYYY-MM-DD HH24:MI:SS') as rejected_at,
+                           p.rejected_by,
+                           rejecter.full_name as rejected_by_name,
                            u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                            i.invoice_description, i.amount as invoice_amount,
                            COALESCE(i.amount, 0) + COALESCE((
@@ -1258,6 +1580,7 @@ router.get(
                     LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                     LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                     LEFT JOIN userstbl returner ON p.returned_by = returner.user_id
+                    LEFT JOIN userstbl rejecter ON p.rejected_by = rejecter.user_id
                     LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                     WHERE 1=1`;
       const payParams = [];
@@ -1303,9 +1626,22 @@ router.get(
         }
       }
 
+      if (useCreatedDateRange) {
+        if (createdFrom) {
+          payPc++;
+          paySql += ` AND p.created_at::date >= $${payPc}::date`;
+          payParams.push(createdFrom);
+        }
+        if (createdTo) {
+          payPc++;
+          paySql += ` AND p.created_at::date <= $${payPc}::date`;
+          payParams.push(createdTo);
+        }
+      }
+
       if (pendingOnly) {
         paySql += ` AND p.status = 'Completed'
-                    AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned'))`;
+                    AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned', 'Rejected'))`;
       } else {
         // "All" queue: same completed-payment scope as Financial Dashboard total revenue (payment date range).
         paySql += ` AND p.status = 'Completed'`;
@@ -1317,6 +1653,25 @@ router.get(
         payParams.push(pmFilter);
       } else if (pmFilter === 'Acknowledgement Receipt') {
         paySql += ` AND FALSE`;
+      }
+
+      if (searchTerm) {
+        payPc++;
+        paySql += ` AND (
+          p.payment_id::text ILIKE $${payPc}
+          OR COALESCE(i.invoice_description, '') ILIKE $${payPc}
+          OR COALESCE(u.full_name, '') ILIKE $${payPc}
+          OR COALESCE(u.email, '') ILIKE $${payPc}
+          OR COALESCE(ar.prospect_student_name, '') ILIKE $${payPc}
+          OR COALESCE(i.invoice_ar_number, '') ILIKE $${payPc}
+          OR COALESCE(p.reference_number, '') ILIKE $${payPc}
+          OR COALESCE(invoice_issuer.full_name, '') ILIKE $${payPc}
+          OR COALESCE(invoice_issuer.email, '') ILIKE $${payPc}
+          OR COALESCE(payment_creator.full_name, '') ILIKE $${payPc}
+          OR COALESCE(payment_creator.email, '') ILIKE $${payPc}
+          OR COALESCE(returner.full_name, '') ILIKE $${payPc}
+        )`;
+        payParams.push(`%${searchTerm}%`);
       }
 
       paySql += ` ORDER BY p.issue_date DESC, p.payment_id DESC`;
@@ -1408,6 +1763,35 @@ router.get(
         }
       }
 
+      if (useCreatedDateRange) {
+        if (createdFrom) {
+          arPc++;
+          arSql += ` AND ar.created_at::date >= $${arPc}::date`;
+          arParams.push(createdFrom);
+        }
+        if (createdTo) {
+          arPc++;
+          arSql += ` AND ar.created_at::date <= $${arPc}::date`;
+          arParams.push(createdTo);
+        }
+      }
+
+      if (searchTerm) {
+        arPc++;
+        arSql += ` AND (
+          ('AR-' || ar.ack_receipt_id::text) ILIKE $${arPc}
+          OR ar.ack_receipt_id::text ILIKE $${arPc}
+          OR COALESCE(ar.ack_receipt_number, '') ILIKE $${arPc}
+          OR COALESCE(ar.prospect_student_name, '') ILIKE $${arPc}
+          OR COALESCE(ar.prospect_student_email, '') ILIKE $${arPc}
+          OR COALESCE(ar.package_name_snapshot, '') ILIKE $${arPc}
+          OR COALESCE(ar.reference_number, '') ILIKE $${arPc}
+          OR COALESCE(creator.full_name, '') ILIKE $${arPc}
+          OR COALESCE(creator.email, '') ILIKE $${arPc}
+        )`;
+        arParams.push(`%${searchTerm}%`);
+      }
+
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
       if (!pmFilter || pmFilter === 'Acknowledgement Receipt') {
@@ -1492,11 +1876,11 @@ router.get(
 
 /**
  * GET /api/sms/payments/cash-deposit-summary
- * All payments (any method) in an issue_date range (inclusive) used by the
- * branch admin's "Deposit Cash" submission flow. Originally restricted to
- * payment_method = 'cash' but widened to every method type per business
- * requirement; the route name and response field names are preserved for
- * backward compatibility (e.g. `total_cash_deposit_amount`).
+ * All Cash payments (payment_method = 'Cash') in an issue_date range
+ * (inclusive) used by the branch admin's "Deposit Cash" submission flow.
+ * Restricted to literal physical Cash because the deposit feature reconciles
+ * cash on hand only; non-cash methods (online banking, e-wallets, credit
+ * card) are already digital and have no cash to deposit.
  * Non-superadmin users are limited to their branch. Totals use Completed
  * payments only for the "deposit" amount.
  */
@@ -1520,7 +1904,7 @@ router.get(
       }
 
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
-                        p.payment_method, p.payment_type, p.payable_amount,
+                        p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -1545,6 +1929,8 @@ router.get(
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
                  WHERE p.issue_date >= $1::date AND p.issue_date <= $2::date
+                   AND LOWER(TRIM(p.payment_method)) = 'cash'
+                   AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                    AND NOT EXISTS (
                      SELECT 1
                      FROM cash_deposit_summarytbl c
@@ -1632,7 +2018,7 @@ router.get(
 
       const result = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                p.payment_method, p.payment_type, p.payable_amount, 
+                p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -1697,7 +2083,7 @@ router.get(
 
       const result = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                p.payment_method, p.payment_type, p.payable_amount, 
+                p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -1734,6 +2120,7 @@ router.post(
     body('payment_method').notEmpty().isString().withMessage('Payment method is required'),
     body('payment_type').notEmpty().isString().withMessage('Payment type is required'),
     body('payable_amount').isFloat({ min: 0.01 }).withMessage('Payable amount is required and must be greater than 0'),
+    body('discount_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Discount amount must be 0 or greater'),
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('status').optional().isString().withMessage('Status must be a string'),
@@ -1753,6 +2140,7 @@ router.post(
         payment_method,
         payment_type,
         payable_amount,
+        discount_amount,
         tip_amount,
         issue_date,
         status = 'Completed',
@@ -1850,13 +2238,14 @@ router.post(
         invoice.created_by != null ? invoice.created_by : createdBy;
 
       const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+      const normalizedDiscountAmount = Math.max(0, parseFloat(discount_amount || 0) || 0);
 
       // Create payment
       const paymentResult = hasActionOwnerCol
         ? await client.query(
             `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
-                                 payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                 payable_amount, discount_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
             [
               invoice_id,
@@ -1865,6 +2254,7 @@ router.post(
               payment_method,
               payment_type,
               payable_amount,
+              normalizedDiscountAmount,
               tip_amount || 0,
               issue_date,
               status,
@@ -1877,8 +2267,8 @@ router.post(
           )
         : await client.query(
             `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type, 
-                                 payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                 payable_amount, discount_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING *`,
             [
               invoice_id,
@@ -1887,6 +2277,7 @@ router.post(
               payment_method,
               payment_type,
               payable_amount,
+              normalizedDiscountAmount,
               tip_amount || 0,
               issue_date,
               status,
@@ -1900,20 +2291,27 @@ router.post(
       const newPayment = paymentResult.rows[0];
 
       const totalPaymentsResult = await client.query(
-        'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
+        `SELECT COALESCE(SUM(payable_amount), 0) as total_paid,
+                COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) as total_settled
+         FROM paymenttbl
+         WHERE invoice_id = $1
+           AND status = $2
+           AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
         [invoice_id, 'Completed']
       );
       const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
+      const totalSettled = parseFloat(totalPaymentsResult.rows[0].total_settled) || totalPaid;
+      const currentSettlementAmount = (parseFloat(payable_amount) || 0) + normalizedDiscountAmount;
 
       const { originalInvoiceAmount } = await computeOriginalInvoiceAmount(
         client,
         invoice_id,
         invoice,
-        totalPaid,
-        payable_amount
+        totalSettled,
+        currentSettlementAmount
       );
 
-      const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
+      const remainingBalance = Math.max(0, originalInvoiceAmount - totalSettled);
 
       let newInvoiceStatus = invoice.status;
       let createdBalanceInvoiceId = null;
@@ -1936,9 +2334,9 @@ router.post(
           invoice_id,
         ]);
 
-        if (totalPaid >= originalInvoiceAmount) {
+        if (totalSettled >= originalInvoiceAmount) {
           newInvoiceStatus = 'Paid';
-        } else if (totalPaid > 0) {
+        } else if (totalSettled > 0) {
           newInvoiceStatus = 'Partially Paid';
         } else {
           if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
@@ -2290,7 +2688,7 @@ router.post(
       // Fetch the complete payment with related data
       const paymentWithDetails = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                p.payment_method, p.payment_type, p.payable_amount, 
+                p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, 
                 COALESCE(p.tip_amount, 0) AS tip_amount,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
@@ -2473,7 +2871,11 @@ router.put(
           const invoice = invoiceResult.rows[0];
 
           const totalPaymentsResult = await client.query(
-            'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
+            `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) as total_paid
+             FROM paymenttbl
+             WHERE invoice_id = $1
+               AND status = $2
+               AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
             [payment.invoice_id, 'Completed']
           );
           const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
@@ -2811,7 +3213,7 @@ router.put(
       // Fetch updated payment
       const updatedPayment = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                p.payment_method, p.payment_type, p.payable_amount, 
+                p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, 
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -2894,7 +3296,11 @@ router.delete(
       const invDel = invoiceForDeleteCheck.rows[0];
       if (invDel?.balance_invoice_id) {
         const childPaid = await client.query(
-          `SELECT COALESCE(SUM(payable_amount), 0) AS t FROM paymenttbl WHERE invoice_id = $1 AND status = 'Completed'`,
+          `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS t
+           FROM paymenttbl
+           WHERE invoice_id = $1
+             AND status = 'Completed'
+             AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
           [invDel.balance_invoice_id]
         );
         if (parseFloat(childPaid.rows[0]?.t || 0) > 0) {
@@ -2925,7 +3331,11 @@ router.delete(
         const invoice = invoiceResult.rows[0];
 
         const totalPaymentsResult = await client.query(
-          'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
+          `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) as total_paid
+           FROM paymenttbl
+           WHERE invoice_id = $1
+             AND status = $2
+             AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
           [payment.invoice_id, 'Completed']
         );
         const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
@@ -2935,7 +3345,9 @@ router.delete(
           payment.invoice_id,
           invoiceSnap,
           totalPaid,
-          payment.status === 'Completed' ? payment.payable_amount : 0
+          payment.status === 'Completed'
+            ? (Number(payment.payable_amount || 0) + Number(payment.discount_amount || 0))
+            : 0
         );
 
         // Calculate remaining balance (original amount - total paid)
@@ -3151,7 +3563,7 @@ router.get(
 
       const result = await query(
         `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
-                p.payment_method, p.payment_type, p.payable_amount, 
+                p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
                 p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -3253,6 +3665,13 @@ router.put(
           success: false,
           message:
             'This payment was returned for correction. The branch must update reference/attachment and resubmit for verification before it can be approved.',
+        });
+      }
+      if (approve && payment.approval_status === 'Rejected') {
+        return res.status(400).json({
+          success: false,
+          message:
+            'This payment was rejected. Please record a new payment from the rejected invoice instead.',
         });
       }
 
@@ -3429,6 +3848,9 @@ router.put(
              return_reason = $1,
              returned_by = $2,
              returned_at = CURRENT_TIMESTAMP,
+             reject_reason = NULL,
+             rejected_by = NULL,
+             rejected_at = NULL,
              approved_by = NULL,
              approved_at = NULL,
              remarks = CASE
@@ -3458,6 +3880,137 @@ router.put(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/payments/:id/reject
+ * Finance/Superfinance: permanently reject a payment. Rejected payments no
+ * longer count as revenue, but enrollment remains unchanged.
+ */
+router.put(
+  '/:id/reject',
+  requireRole('Finance', 'Superfinance'),
+  [
+    param('id').isInt().withMessage('Payment ID must be an integer'),
+    body('reason')
+      .trim()
+      .notEmpty()
+      .withMessage('Reject reason is required')
+      .isString()
+      .withMessage('Reject reason must be text'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { id } = req.params;
+      const reason = String(req.body.reason).trim();
+      const userId = req.user.userId;
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      await client.query('BEGIN');
+
+      const paymentCheck = await client.query(
+        `SELECT p.*, i.created_by AS invoice_created_by
+         FROM paymenttbl p
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         WHERE p.payment_id = $1
+         FOR UPDATE OF p`,
+        [id]
+      );
+
+      if (paymentCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Payment not found' });
+      }
+
+      const payment = paymentCheck.rows[0];
+
+      if (payment.approval_status === 'Rejected' || payment.status === 'Rejected') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'This payment is already rejected.' });
+      }
+
+      if (payment.approval_status === 'Approved') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Approved payments cannot be rejected. Revoke approval first if needed.',
+        });
+      }
+
+      if (
+        userType === 'Finance' &&
+        userBranchId !== null &&
+        userBranchId !== undefined &&
+        payment.branch_id !== userBranchId
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'You can only reject payments from your assigned branch',
+        });
+      }
+
+      const result = await client.query(
+        `UPDATE paymenttbl
+         SET status = 'Rejected',
+             approval_status = 'Rejected',
+             reject_reason = $1,
+             rejected_by = $2,
+             rejected_at = CURRENT_TIMESTAMP,
+             return_reason = NULL,
+             returned_by = NULL,
+             returned_at = NULL,
+             approved_by = NULL,
+             approved_at = NULL,
+             finance_verified_reference_number = NULL,
+             remarks = CASE
+               WHEN COALESCE(remarks, '') LIKE '%[Rejected]%' THEN remarks
+               ELSE RTRIM(COALESCE(remarks, '') || E'\\n[Rejected] ' || COALESCE($1::text, ''))
+             END
+         WHERE payment_id = $3
+         RETURNING payment_id, invoice_id, branch_id, status, approval_status, reject_reason,
+                   TO_CHAR(rejected_at, 'YYYY-MM-DD HH24:MI:SS') as rejected_at,
+                   rejected_by`,
+        [reason, userId, id]
+      );
+
+      if (payment.invoice_id != null) {
+        await client.query(
+          `UPDATE invoicestbl
+           SET status = 'Rejected',
+               amount = COALESCE(amount, 0) + COALESCE($1::numeric, 0)
+           WHERE invoice_id = $2`,
+          [Number(payment.payable_amount || 0) + Number(payment.discount_amount || 0), payment.invoice_id]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      void notifyPaymentRejectedToBranch({
+        paymentId: parseInt(id, 10),
+        branchId: payment.branch_id,
+        invoiceId: payment.invoice_id,
+        reason,
+        rejectedByUserId: userId,
+        actionOwnerUserId: getPaymentReturnOwnerId(payment, payment.invoice_created_by),
+        invoiceOwnerUserId: payment.invoice_created_by,
+      });
+
+      res.json({
+        success: true,
+        message: 'Payment rejected successfully.',
+        data: result.rows[0],
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      next(error);
+    } finally {
+      client.release();
     }
   }
 );

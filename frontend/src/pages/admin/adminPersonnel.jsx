@@ -1,18 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const AdminPersonnel = () => {
   const { signup, userInfo } = useAuth();
   const [personnel, setPersonnel] = useState([]);
   const [loading, setLoading] = useState(true);
+  // After the first fetch, keep the table mounted and refresh in the background
+  // so typing in the search input doesn't flash a full-page loading spinner.
+  const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [userSearchTerm, setUserSearchTerm] = useState('');
+  // Debounced search value sent to the API (avoids one request per keystroke).
+  const debouncedUserSearchTerm = useDebouncedValue(userSearchTerm, 300);
   const [filterRole, setFilterRole] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
@@ -55,7 +61,7 @@ const AdminPersonnel = () => {
 
   useEffect(() => {
     fetchPersonnel();
-  }, [currentPage, itemsPerPage]);
+  }, [currentPage, itemsPerPage, debouncedUserSearchTerm, filterRole]);
 
   // Auto-set branch_id when adminBranchId is available
   useEffect(() => {
@@ -134,12 +140,14 @@ const AdminPersonnel = () => {
 
   const fetchPersonnel = async () => {
     try {
-      setLoading(true);
+      if (!hasLoadedOnceRef.current) setLoading(true);
       const params = new URLSearchParams({
         exclude_user_type: 'Student',
         limit: String(itemsPerPage),
         page: String(currentPage),
       });
+      if (debouncedUserSearchTerm.trim()) params.set('search', debouncedUserSearchTerm.trim());
+      if (filterRole) params.set('display_role', filterRole);
       const response = await apiRequest(`/users?${params.toString()}`);
       setPersonnel(response.data || []);
       setTotalItems(response.pagination?.total ?? 0);
@@ -148,7 +156,10 @@ const AdminPersonnel = () => {
       setError(err.message || 'Failed to fetch personnel');
       console.error('Error fetching personnel:', err);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(false);
+        hasLoadedOnceRef.current = true;
+      }
     }
   };
 
@@ -520,21 +531,9 @@ const AdminPersonnel = () => {
   // Get unique roles and branches for filter dropdowns
   // Use display roles (Finance with no branch = Superfinance)
   // Exclude Student role since students have their own page
-  const uniqueRoles = [...new Set(personnel.filter(p => p.user_type !== 'Student').map(p => getDisplayRole(p)).filter(Boolean))];
+  const uniqueRoles = ['Admin', 'Finance', 'Teacher'];
 
-  const filteredPersonnel = personnel.filter((person) => {
-    // Exclude students - they have their own page
-    if (person.user_type === 'Student') {
-      return false;
-    }
-    
-    const matchesUserSearch = !userSearchTerm || 
-      person.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase());
-    // Use display role for filtering
-    const displayRole = getDisplayRole(person);
-    const matchesRole = !filterRole || displayRole === filterRole;
-    return matchesUserSearch && matchesRole;
-  });
+  const filteredPersonnel = personnel;
 
   const getUserTypeBadgeColor = (userType) => {
     const colors = {
@@ -612,7 +611,10 @@ const AdminPersonnel = () => {
                         <input
                           type="text"
                           value={userSearchTerm}
-                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onChange={(e) => {
+                            setCurrentPage(1);
+                            setUserSearchTerm(e.target.value);
+                          }}
                           placeholder="Search user..."
                           className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
                           onClick={(e) => e.stopPropagation()}
@@ -621,6 +623,7 @@ const AdminPersonnel = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              setCurrentPage(1);
                               setUserSearchTerm('');
                             }}
                             className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -860,6 +863,7 @@ const AdminPersonnel = () => {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              setCurrentPage(1);
               setFilterRole('');
               setOpenRoleDropdown(false);
               setRoleDropdownRect(null);
@@ -876,6 +880,7 @@ const AdminPersonnel = () => {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
+                setCurrentPage(1);
                 setFilterRole(role);
                 setOpenRoleDropdown(false);
                 setRoleDropdownRect(null);

@@ -7,6 +7,8 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -25,6 +27,7 @@ const StudentPaymentLogs = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportPaymentDateFrom, setExportPaymentDateFrom] = useState('');
   const [exportPaymentDateTo, setExportPaymentDateTo] = useState('');
+  const [sortConfig, setSortConfig] = useState(null);
 
   const studentId = userInfo?.userId || userInfo?.user_id;
 
@@ -193,11 +196,20 @@ const StudentPaymentLogs = () => {
   );
 
   const itemsPerPage = 10;
-  const totalPages = Math.max(Math.ceil(filteredPayments.length / itemsPerPage), 1);
-  const paginatedPayments = filteredPayments.slice(
+  const sortedPayments = sortRows(filteredPayments, sortConfig, {
+    status: { accessor: 'status', type: 'string' },
+    payment_date: { accessor: 'payment_date', type: 'date' },
+  });
+  const totalPages = Math.max(Math.ceil(sortedPayments.length / itemsPerPage), 1);
+  const paginatedPayments = sortedPayments.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+    setCurrentPage(1);
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -484,7 +496,7 @@ const StudentPaymentLogs = () => {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
         <span>
-          <span className="font-semibold text-gray-900">Payments:</span>{' '}
+          <span className="font-semibold text-gray-900">Total Payments:</span>{' '}
           <span className="font-medium text-gray-900">{filteredPayments.length.toLocaleString('en-US')}</span>
         </span>
         <span className="text-gray-300">·</span>
@@ -538,12 +550,8 @@ const StudentPaymentLogs = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Payment Date
-                  </th>
+                  <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <span className="block">Acknowledgement</span>
                     <span className="block">Receipt#</span>

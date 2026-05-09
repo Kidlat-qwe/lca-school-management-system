@@ -8,6 +8,8 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const TAB_EOD = 'eod';
 const TAB_CASH = 'cash';
@@ -37,8 +39,13 @@ const AdminDailySummary = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [filterDate, setFilterDate] = useState('');
+  // Date range filter — applies to summary_date for End-of-Shift and to the
+  // [start_date, end_date] period overlap for Cash Deposit. Either bound is
+  // optional (e.g. "from only" = everything from that date onward).
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [sortConfig, setSortConfig] = useState(null);
   const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
 
   const [returnBadgeCount, setReturnBadgeCount] = useState(0);
@@ -109,10 +116,12 @@ const AdminDailySummary = () => {
         } else if (filterStatus) {
           params.set('status', filterStatus);
         }
-        if (filterDate) {
-          if (isCash) params.set('date', filterDate);
-          else params.set('summary_date', filterDate);
-        }
+        // Range params differ per tab: EOD uses summary_date_from/_to (single
+        // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
+        const fromParam = isCash ? 'date_from' : 'summary_date_from';
+        const toParam = isCash ? 'date_to' : 'summary_date_to';
+        if (filterDateFrom) params.set(fromParam, filterDateFrom);
+        if (filterDateTo) params.set(toParam, filterDateTo);
         const endpoint = isCash ? '/cash-deposit-summaries' : '/daily-summary-sales';
         const res = await apiRequest(`${endpoint}?${params.toString()}`);
         setRecords(res.data || []);
@@ -138,7 +147,7 @@ const AdminDailySummary = () => {
         setLoading(false);
       }
     },
-    [branchId, isCash, viewTab, filterStatus, filterDate]
+    [branchId, isCash, viewTab, filterStatus, filterDateFrom, filterDateTo]
   );
 
   useEffect(() => {
@@ -148,12 +157,13 @@ const AdminDailySummary = () => {
   useEffect(() => {
     setPagination((p) => ({ ...p, page: 1 }));
     setFilterStatus('');
-    setFilterDate('');
+    setFilterDateFrom('');
+    setFilterDateTo('');
   }, [summaryKind, viewTab]);
 
   useEffect(() => {
     fetchRecords(1);
-  }, [fetchRecords, summaryKind, viewTab, filterStatus, filterDate]);
+  }, [fetchRecords, summaryKind, viewTab, filterStatus, filterDateFrom, filterDateTo]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -267,6 +277,13 @@ const AdminDailySummary = () => {
 
   const cashTotals = cashDetail?.totals;
   const tableScrollStyle = { scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' };
+  const sortedRecords = sortRows(records, sortConfig, {
+    status: { accessor: 'status', type: 'string' },
+  });
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+  };
 
   const statusOptions = useMemo(
     () => [
@@ -367,23 +384,33 @@ const AdminDailySummary = () => {
             </select>
           </div>
           <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              {isCash ? 'Date in period' : 'Summary date'}
-            </label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">From</label>
             <input
               type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
+              value={filterDateFrom}
+              max={filterDateTo || undefined}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
               className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
-          {(filterStatus || filterDate) && (
+          <div className="min-w-0 w-full sm:w-auto">
+            <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
+            <input
+              type="date"
+              value={filterDateTo}
+              min={filterDateFrom || undefined}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
+            />
+          </div>
+          {(filterStatus || filterDateFrom || filterDateTo) && (
             <button
               type="button"
               className="text-sm text-primary-600 hover:underline"
               onClick={() => {
                 setFilterStatus('');
-                setFilterDate('');
+                setFilterDateFrom('');
+                setFilterDateTo('');
               }}
             >
               Clear filters
@@ -415,7 +442,7 @@ const AdminDailySummary = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Summary date</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Total</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Count</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Status</th>
+                <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600" />
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Submitted</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Finance notes</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Actions</th>
@@ -429,7 +456,7 @@ const AdminDailySummary = () => {
                   </td>
                 </tr>
               ) : (
-                records.map((row) => (
+                sortedRecords.map((row) => (
                   <tr key={row.daily_summary_id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">
                       {row.summary_date ? formatDateManila(row.summary_date) : '-'}
@@ -477,7 +504,7 @@ const AdminDailySummary = () => {
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Deposit total</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Cash (range)</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Reference</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Status</th>
+                <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600" />
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Submitted</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-600">Finance notes</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-600">Actions</th>
@@ -491,7 +518,7 @@ const AdminDailySummary = () => {
                   </td>
                 </tr>
               ) : (
-                records.map((row) => (
+                sortedRecords.map((row) => (
                   <tr key={row.cash_deposit_summary_id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">
                       {row.start_date && row.end_date

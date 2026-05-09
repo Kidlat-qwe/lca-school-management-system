@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -6,6 +6,7 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import { getDefaultPasswordForUserType } from '../../utils/defaultPasswords';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Personnel = () => {
@@ -13,8 +14,14 @@ const Personnel = () => {
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [personnel, setPersonnel] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Tracks whether the very first fetch finished. After that we keep the table
+  // mounted and silently refresh in the background instead of swapping in a
+  // full-page spinner on every keystroke (matches the Student page UX).
+  const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [userSearchTerm, setUserSearchTerm] = useState('');
+  // Debounced version sent to the API so we don't fire a request per keystroke.
+  const debouncedUserSearchTerm = useDebouncedValue(userSearchTerm, 300);
   const [filterRole, setFilterRole] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -63,17 +70,14 @@ const Personnel = () => {
 
   useEffect(() => {
     setFilterBranch(globalBranchId || '');
+    setCurrentPage(1);
     setOpenBranchDropdown(false);
     setBranchDropdownRect(null);
   }, [globalBranchId]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [filterBranch]);
-
-  useEffect(() => {
     fetchPersonnel();
-  }, [currentPage, itemsPerPage, filterBranch]);
+  }, [currentPage, itemsPerPage, debouncedUserSearchTerm, filterRole, filterBranch]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -148,13 +152,15 @@ const Personnel = () => {
 
   const fetchPersonnel = async () => {
     try {
-      setLoading(true);
+      if (!hasLoadedOnceRef.current) setLoading(true);
       const params = new URLSearchParams({
         exclude_user_type: 'Student',
         limit: String(itemsPerPage),
         page: String(currentPage),
       });
       if (filterBranch) params.set('branch_id', filterBranch);
+      if (debouncedUserSearchTerm.trim()) params.set('search', debouncedUserSearchTerm.trim());
+      if (filterRole) params.set('display_role', filterRole);
       const response = await apiRequest(`/users?${params.toString()}`);
       setPersonnel(response.data || []);
       setTotalItems(response.pagination?.total ?? 0);
@@ -163,7 +169,10 @@ const Personnel = () => {
       setError(err.message || 'Failed to fetch personnel');
       console.error('Error fetching personnel:', err);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(false);
+        hasLoadedOnceRef.current = true;
+      }
     }
   };
 
@@ -623,7 +632,7 @@ const Personnel = () => {
   // Get unique roles and branches for filter dropdowns
   // Use display roles (Finance with no branch = Superfinance)
   // Exclude Student role since students have their own page
-  const uniqueRoles = [...new Set(personnel.filter(p => p.user_type !== 'Student').map(p => getDisplayRole(p)).filter(Boolean))];
+  const uniqueRoles = ['Superadmin', 'Admin', 'Superfinance', 'Finance', 'Teacher'];
   const uniqueBranches = [...new Set(personnel.map(p => p.branch_id).filter(Boolean))].sort((a, b) => a - b);
   
   // Helper function to get branch display name by ID (prefer nickname)
@@ -662,25 +671,7 @@ const Personnel = () => {
     };
   };
 
-  const filteredPersonnel = personnel.filter((person) => {
-    // Exclude students - they have their own page
-    if (person.user_type === 'Student') {
-      return false;
-    }
-    
-    // Filter by user search (name only)
-    const matchesUserSearch = !userSearchTerm || 
-      person.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase());
-    
-    // Filter by role (use display role for filtering)
-    const displayRole = getDisplayRole(person);
-    const matchesRole = !filterRole || displayRole === filterRole;
-    
-    // Filter by branch
-    const matchesBranch = !filterBranch || person.branch_id?.toString() === filterBranch;
-    
-    return matchesUserSearch && matchesRole && matchesBranch;
-  });
+  const filteredPersonnel = personnel;
 
   const getUserTypeBadgeColor = (userType) => {
     const colors = {
@@ -760,7 +751,10 @@ const Personnel = () => {
                         <input
                           type="text"
                           value={userSearchTerm}
-                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onChange={(e) => {
+                            setCurrentPage(1);
+                            setUserSearchTerm(e.target.value);
+                          }}
                           placeholder="Search user..."
                           className="px-2 py-1 pr-6 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
                           onClick={(e) => e.stopPropagation()}
@@ -769,6 +763,7 @@ const Personnel = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              setCurrentPage(1);
                               setUserSearchTerm('');
                             }}
                             className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -1044,6 +1039,7 @@ const formattedDate = formatDateManila(date);
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              setCurrentPage(1);
               setFilterRole('');
               setOpenRoleDropdown(false);
               setRoleDropdownRect(null);
@@ -1060,6 +1056,7 @@ const formattedDate = formatDateManila(date);
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
+                setCurrentPage(1);
                 setFilterRole(role);
                 setOpenRoleDropdown(false);
                 setRoleDropdownRect(null);

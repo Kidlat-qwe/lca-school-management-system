@@ -22,6 +22,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
+    queryValidator('display_role').optional().isIn(['Superadmin', 'Admin', 'Superfinance', 'Finance', 'Teacher']).withMessage('Invalid display_role'),
     queryValidator('exclude_user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid exclude_user_type'),
     queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
@@ -30,7 +31,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { branch_id, user_type, exclude_user_type, search, page = 1, limit = 20 } = req.query;
+      const { branch_id, user_type, display_role, exclude_user_type, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
       // Check if last_login column exists
@@ -77,6 +78,16 @@ router.get(
         params.push(user_type);
       }
 
+      if (display_role) {
+        if (display_role === 'Superfinance') {
+          sql += ` AND user_type = 'Finance' AND branch_id IS NULL`;
+        } else {
+          paramCount++;
+          sql += ` AND user_type = $${paramCount}`;
+          params.push(display_role);
+        }
+      }
+
       if (exclude_user_type) {
         paramCount++;
         sql += ` AND user_type != $${paramCount}`;
@@ -121,6 +132,16 @@ router.get(
         countParamCount++;
         countSql += ` AND user_type = $${countParamCount}`;
         countParams.push(user_type);
+      }
+
+      if (display_role) {
+        if (display_role === 'Superfinance') {
+          countSql += ` AND user_type = 'Finance' AND branch_id IS NULL`;
+        } else {
+          countParamCount++;
+          countSql += ` AND user_type = $${countParamCount}`;
+          countParams.push(display_role);
+        }
       }
 
       if (exclude_user_type) {

@@ -9,6 +9,8 @@ import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import SortableHeader from '../../components/table/SortableHeader';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
@@ -69,8 +71,13 @@ const DailySummarySalesApprovalPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [filterDate, setFilterDate] = useState('');
+  // Date range filter — applies to summary_date for End-of-Shift and to the
+  // [start_date, end_date] period overlap for Cash Deposit. Either bound is
+  // optional (e.g. "from only" = everything from that date onward).
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [sortConfig, setSortConfig] = useState(null);
   const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
   const [approvingId, setApprovingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, remarks: '' });
@@ -123,7 +130,12 @@ const DailySummarySalesApprovalPage = () => {
       const params = new URLSearchParams({ page: String(page), limit: '10' });
       if (effectiveBranchFilter) params.set('branch_id', effectiveBranchFilter);
       if (filterStatus) params.set('status', filterStatus);
-      if (filterDate) params.set(isCashDepositTab ? 'date' : 'summary_date', filterDate);
+      // Range params differ per tab: EOD uses summary_date_from/_to (single
+      // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
+      const fromParam = isCashDepositTab ? 'date_from' : 'summary_date_from';
+      const toParam = isCashDepositTab ? 'date_to' : 'summary_date_to';
+      if (filterDateFrom) params.set(fromParam, filterDateFrom);
+      if (filterDateTo) params.set(toParam, filterDateTo);
 
       const endpoint = isCashDepositTab ? '/cash-deposit-summaries' : '/daily-summary-sales';
       const res = await apiRequest(`${endpoint}?${params.toString()}`);
@@ -152,7 +164,7 @@ const DailySummarySalesApprovalPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [effectiveBranchFilter, filterStatus, filterDate, isCashDepositTab]);
+  }, [effectiveBranchFilter, filterStatus, filterDateFrom, filterDateTo, isCashDepositTab]);
 
   useEffect(() => {
     setOpenMenuId(null);
@@ -162,7 +174,7 @@ const DailySummarySalesApprovalPage = () => {
     setDetailData(null);
     setVerifyData(null);
     fetchRecords(1);
-  }, [activeTab, filterStatus, filterDate, globalBranchId, fetchRecords]);
+  }, [activeTab, filterStatus, filterDateFrom, filterDateTo, globalBranchId, fetchRecords]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -171,7 +183,8 @@ const DailySummarySalesApprovalPage = () => {
 
     if (fromNotification) {
       setFilterStatus('');
-      setFilterDate('');
+      setFilterDateFrom('');
+      setFilterDateTo('');
       setOpenMenuId(null);
     }
 
@@ -456,6 +469,15 @@ const DailySummarySalesApprovalPage = () => {
       Number(detailSubmittedSnapshot.payment_count ?? 0) !== Number(cashDetailTotals.payment_count ?? 0) ||
       Number(detailSubmittedSnapshot.completed_cash_count ?? 0) !== Number(cashDetailTotals.completed_cash_count ?? 0));
 
+  const sortedRecords = sortRows(records, sortConfig, {
+    branch: { accessor: (record) => record.branch_nickname || record.branch_name || '', type: 'string' },
+    status: { accessor: 'status', type: 'string' },
+  });
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+  };
+
   const detailMetrics = isCashDepositTab
     ? [
         { label: 'Period', value: formatPeriod(detailModal.record) },
@@ -564,16 +586,39 @@ const DailySummarySalesApprovalPage = () => {
             </select>
           </div>
           <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-500 mb-1">
-              {isCashDepositTab ? 'Date in Period' : 'Date'}
-            </label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
             <input
               type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
+              value={filterDateFrom}
+              max={filterDateTo || undefined}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
               className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
+          <div className="min-w-0 w-full sm:w-auto">
+            <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+            <input
+              type="date"
+              value={filterDateTo}
+              min={filterDateFrom || undefined}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
+            />
+          </div>
+          {(filterDateFrom || filterDateTo) && (
+            <div className="min-w-0 w-full sm:w-auto self-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterDateFrom('');
+                  setFilterDateTo('');
+                }}
+                className="text-sm text-primary-600 hover:underline"
+              >
+                Clear dates
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="inline-flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm w-full min-w-0 sm:w-auto sm:max-w-full sm:px-4">
@@ -604,7 +649,7 @@ const DailySummarySalesApprovalPage = () => {
         <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '980px' : '900px' }}>
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Branch</th>
+              <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-semibold text-gray-700" />
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
                 {isCashDepositTab ? 'Period' : 'Date'}
               </th>
@@ -618,7 +663,7 @@ const DailySummarySalesApprovalPage = () => {
                 {isCashDepositTab ? 'Cash Rows' : 'Status'}
               </th>
               {isCashDepositTab ? (
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
+                <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-semibold text-gray-700" />
               ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Submitted By</th>
               {!isCashDepositTab ? (
@@ -641,7 +686,7 @@ const DailySummarySalesApprovalPage = () => {
                 </td>
               </tr>
             ) : (
-              records.map((record) => (
+              sortedRecords.map((record) => (
                 <tr key={record[recordIdField]}>
                   <td className="px-4 py-3 text-sm text-gray-900">{record.branch_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-900">{formatPeriod(record)}</td>

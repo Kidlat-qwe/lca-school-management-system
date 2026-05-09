@@ -2,7 +2,8 @@ import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
-import { query } from '../config/database.js';
+import { query, getClient } from '../config/database.js';
+import { getEffectiveSettings } from '../utils/settingsService.js';
 
 const router = express.Router();
 
@@ -63,6 +64,8 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
      WHERE p.branch_id = $1
        AND p.issue_date >= $2::date
        AND p.issue_date <= $3::date
+       AND LOWER(TRIM(p.payment_method)) = 'cash'
+       AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
        AND NOT EXISTS (
          SELECT 1
          FROM cash_deposit_summarytbl c
@@ -202,6 +205,124 @@ const createCashDepositSubmissionNotification = async ({
   }
 };
 
+/**
+ * GET /cash-deposit-summaries/cash-holding-status
+ *
+ * Branch-Admin-only login-time endpoint that reports how much physical Cash
+ * the branch is currently holding (i.e. cash payments not yet covered by a
+ * Submitted/Approved cash_deposit_summarytbl row), and whether it has crossed
+ * the Superadmin-configured alert threshold.
+ *
+ * Distinct from the rest of the cash-deposit endpoints because:
+ *   - It filters strictly to `payment_method = 'Cash'` (literal cash on hand),
+ *     unlike the broader deposit snapshot which spans every payment method.
+ *   - It returns a single scalar across the branch's full unreconciled history
+ *     (no date filters), so the frontend never has to guess a date window.
+ *
+ * Response shape:
+ *   {
+ *     success: true,
+ *     data: {
+ *       pending_cash_amount: number,   // PHP, 2dp
+ *       pending_cash_count:  number,
+ *       threshold_php:       number,   // 0 means feature disabled
+ *       is_over_threshold:   boolean,
+ *       branch_id:           number,
+ *       branch_name:         string|null,
+ *       as_of:               string,   // ISO timestamp
+ *     }
+ *   }
+ */
+router.get(
+  '/cash-holding-status',
+  requireRole('Admin'),
+  async (req, res, next) => {
+    let client;
+    try {
+      const userBranchId = req.user.branchId;
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin users have a cash-holding status.',
+        });
+      }
+
+      client = await getClient();
+
+      const settingsRes = await getEffectiveSettings(
+        client,
+        ['cash_holding_alert_threshold_php'],
+        userBranchId
+      );
+      const thresholdRaw = Number(
+        settingsRes?.cash_holding_alert_threshold_php?.value
+      );
+      const threshold = Number.isFinite(thresholdRaw) && thresholdRaw >= 0 ? thresholdRaw : 0;
+
+      // Sum payable_amount of every Cash payment that is NOT already in any
+      // Submitted/Approved cash deposit snapshot. We mirror the NOT EXISTS
+      // pattern used by getCashDepositSnapshot for parity, but force
+      // payment_method = 'Cash' since "cash on hand" is literally cash only.
+      const pendingRes = await client.query(
+        `SELECT COALESCE(SUM(p.payable_amount), 0)::numeric AS pending_amount,
+                COUNT(*)::int                                AS pending_count
+         FROM paymenttbl p
+         WHERE p.branch_id = $1
+           AND LOWER(TRIM(p.payment_method)) = 'cash'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM cash_deposit_summarytbl c
+             CROSS JOIN LATERAL jsonb_array_elements(
+               COALESCE(c.cash_payment_snapshot, '[]'::jsonb)
+             ) deposited(payment_row)
+             WHERE c.branch_id = p.branch_id
+               AND c.status IN ('Submitted', 'Approved')
+               AND deposited.payment_row ? 'payment_id'
+               AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
+               AND (deposited.payment_row->>'payment_id')::int = p.payment_id
+           )`,
+        [userBranchId]
+      );
+
+      const branchRes = await client.query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name
+         FROM branchestbl
+         WHERE branch_id = $1`,
+        [userBranchId]
+      );
+
+      const pendingAmount = Math.round(
+        (parseFloat(pendingRes.rows[0]?.pending_amount) || 0) * 100
+      ) / 100;
+      const pendingCount = pendingRes.rows[0]?.pending_count || 0;
+      const isOverThreshold = threshold > 0 && pendingAmount >= threshold;
+
+      res.json({
+        success: true,
+        data: {
+          pending_cash_amount: pendingAmount,
+          pending_cash_count: pendingCount,
+          threshold_php: threshold,
+          is_over_threshold: isOverThreshold,
+          branch_id: userBranchId,
+          branch_name: branchRes.rows[0]?.branch_name || null,
+          as_of: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      next(error);
+    } finally {
+      if (client) {
+        try {
+          client.release();
+        } catch {
+          /* noop */
+        }
+      }
+    }
+  }
+);
+
 router.get(
   '/deposit-defaults',
   requireRole('Admin'),
@@ -215,9 +336,10 @@ router.get(
         });
       }
 
-      // Note: this endpoint historically queried "cash" payments only. It now
-      // returns the earliest payment date across ALL payment methods because
-      // the deposit summary itself was widened to include every method type.
+      // Cash Deposit covers literal physical Cash only (payment_method =
+      // 'Cash'). The fallback "earliest payment date" therefore filters to
+      // Cash so the From-date in the modal isn't pulled back to an old
+      // online-banking payment that has nothing to do with cash on hand.
       const [latestDepositRes, earliestPaymentRes] = await Promise.all([
         query(
           `SELECT TO_CHAR(MAX(end_date), 'YYYY-MM-DD') AS latest_deposit_end_date,
@@ -229,7 +351,8 @@ router.get(
         query(
           `SELECT TO_CHAR(MIN(issue_date), 'YYYY-MM-DD') AS earliest_payment_date
            FROM paymenttbl
-           WHERE branch_id = $1`,
+           WHERE branch_id = $1
+             AND LOWER(TRIM(payment_method)) = 'cash'`,
           [userBranchId]
         ),
       ]);
@@ -243,12 +366,10 @@ router.get(
         data: {
           // Default the next deposit window to the day AFTER the previous
           // deposit's end_date so the same payment date is never reconciled
-          // twice. Falls back to the earliest payment on record (any method),
-          // or null if no payments exist yet.
+          // twice. Falls back to the earliest Cash payment on record, or
+          // null if no Cash payments exist yet.
           default_start_date: nextUncoveredStartDate || earliestPaymentDate || null,
           latest_deposit_end_date: latestDepositEndDate,
-          // Kept for backward-compatibility; now reflects the earliest
-          // payment of any method (not just Cash).
           earliest_cash_payment_date: earliestPaymentDate,
         },
       });
@@ -263,6 +384,19 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('date').optional().isISO8601().withMessage('date must be YYYY-MM-DD'),
+    // Range filter (preferred over single-day `date`). Either bound is
+    // optional; if both omitted, no date filter is applied. If `date` is
+    // also sent, the range params take precedence so old callers still work.
+    // Range semantics: include any deposit whose [start_date, end_date]
+    // period intersects the [date_from, date_to] window.
+    queryValidator('date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('date_from must be YYYY-MM-DD'),
+    queryValidator('date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('date_to must be YYYY-MM-DD'),
     queryValidator('status')
       .optional()
       .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
@@ -278,12 +412,26 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { branch_id, date, status, page = 1, limit = 50 } = req.query;
+      const {
+        branch_id,
+        date,
+        date_from,
+        date_to,
+        status,
+        page = 1,
+        limit = 50,
+      } = req.query;
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
       const limitNum = parseInt(limit, 10) || 50;
       const pageNum = parseInt(page, 10) || 1;
       const offset = (pageNum - 1) * limitNum;
+
+      // Range params take precedence; fall back to legacy single-day filter.
+      const dateFrom = date_from || null;
+      const dateTo = date_to || null;
+      const useRange = Boolean(dateFrom || dateTo);
+      const legacyDate = !useRange && date ? date : null;
 
       let sql = `
         SELECT c.cash_deposit_summary_id, c.branch_id,
@@ -313,10 +461,23 @@ router.get(
         params.push(branch_id);
       }
 
-      if (date) {
+      if (useRange) {
+        // Period overlap: include rows whose [start_date, end_date] window
+        // intersects the requested [dateFrom, dateTo] range.
+        if (dateTo) {
+          pc++;
+          sql += ` AND c.start_date <= $${pc}::date`;
+          params.push(dateTo);
+        }
+        if (dateFrom) {
+          pc++;
+          sql += ` AND c.end_date >= $${pc}::date`;
+          params.push(dateFrom);
+        }
+      } else if (legacyDate) {
         pc++;
         sql += ` AND c.start_date <= $${pc}::date AND c.end_date >= $${pc}::date`;
-        params.push(date);
+        params.push(legacyDate);
       }
 
       if (status) {
@@ -348,10 +509,21 @@ router.get(
         countParams.push(branch_id);
       }
 
-      if (date) {
+      if (useRange) {
+        if (dateTo) {
+          cc++;
+          countSql += ` AND c.start_date <= $${cc}::date`;
+          countParams.push(dateTo);
+        }
+        if (dateFrom) {
+          cc++;
+          countSql += ` AND c.end_date >= $${cc}::date`;
+          countParams.push(dateFrom);
+        }
+      } else if (legacyDate) {
         cc++;
         countSql += ` AND c.start_date <= $${cc}::date AND c.end_date >= $${cc}::date`;
-        countParams.push(date);
+        countParams.push(legacyDate);
       }
 
       if (status) {
@@ -382,10 +554,21 @@ router.get(
         submittedSql += ` AND c.branch_id = $${sc}`;
         submittedParams.push(branch_id);
       }
-      if (date) {
+      if (useRange) {
+        if (dateTo) {
+          sc++;
+          submittedSql += ` AND c.start_date <= $${sc}::date`;
+          submittedParams.push(dateTo);
+        }
+        if (dateFrom) {
+          sc++;
+          submittedSql += ` AND c.end_date >= $${sc}::date`;
+          submittedParams.push(dateFrom);
+        }
+      } else if (legacyDate) {
         sc++;
         submittedSql += ` AND c.start_date <= $${sc}::date AND c.end_date >= $${sc}::date`;
-        submittedParams.push(date);
+        submittedParams.push(legacyDate);
       }
       const submittedRes = await query(submittedSql, submittedParams);
       const submittedSummary = submittedRes.rows[0] || { submitted_count: 0, submitted_total_amount: 0 };
@@ -405,10 +588,21 @@ router.get(
         filteredSql += ` AND c.branch_id = $${fc}`;
         filteredParams.push(branch_id);
       }
-      if (date) {
+      if (useRange) {
+        if (dateTo) {
+          fc++;
+          filteredSql += ` AND c.start_date <= $${fc}::date`;
+          filteredParams.push(dateTo);
+        }
+        if (dateFrom) {
+          fc++;
+          filteredSql += ` AND c.end_date >= $${fc}::date`;
+          filteredParams.push(dateFrom);
+        }
+      } else if (legacyDate) {
         fc++;
         filteredSql += ` AND c.start_date <= $${fc}::date AND c.end_date >= $${fc}::date`;
-        filteredParams.push(date);
+        filteredParams.push(legacyDate);
       }
       if (status) {
         if (status === 'Returned') {

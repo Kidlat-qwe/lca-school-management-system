@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All' },
@@ -14,8 +15,13 @@ const AdminReport = () => {
   const { userInfo } = useAuth();
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+  // After the first fetch, refresh in the background instead of swapping the
+  // table for a full-page spinner so typing in the search input feels live.
+  const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  // Debounced search value sent to the API (avoids one request per keystroke).
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterStatus, setFilterStatus] = useState('all');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
@@ -23,12 +29,13 @@ const AdminReport = () => {
 
   const fetchStudents = async (page = 1) => {
     try {
-      setLoading(true);
+      if (!hasLoadedOnceRef.current) setLoading(true);
       const params = new URLSearchParams({
         status: filterStatus,
         page: String(page),
         limit: String(pagination.limit),
       });
+      if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
       const response = await apiRequest(`/reports/students?${params.toString()}`);
       setStudents(response.data || []);
       if (response.pagination) {
@@ -46,13 +53,16 @@ const AdminReport = () => {
       setError('Failed to load student report.');
       setStudents([]);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(false);
+        hasLoadedOnceRef.current = true;
+      }
     }
   };
 
   useEffect(() => {
     fetchStudents(1);
-  }, [filterStatus]);
+  }, [filterStatus, debouncedSearchTerm]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -67,11 +77,7 @@ const AdminReport = () => {
     }
   }, [openStatusDropdown]);
 
-  const filteredStudents = students.filter((row) => {
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase().trim();
-    return (row.full_name || '').toLowerCase().includes(term);
-  });
+  const filteredStudents = students;
 
   return (
     <div className="space-y-4 px-2 sm:px-4">

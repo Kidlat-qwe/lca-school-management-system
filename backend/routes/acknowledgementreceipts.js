@@ -256,6 +256,14 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('only_unused')
       .optional()
       .isIn(['0', '1', 'true', 'false'])
@@ -277,6 +285,8 @@ router.get(
         exclude_status,
         issue_date_from: issueDateFrom,
         issue_date_to: issueDateTo,
+        created_date_from: createdDateFrom,
+        created_date_to: createdDateTo,
       } = req.query;
       const arFrom = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
       const arTo = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
@@ -284,6 +294,14 @@ router.get(
         return res.status(400).json({
           success: false,
           message: 'issue_date_from must be on or before issue_date_to',
+        });
+      }
+      const createdFrom = createdDateFrom ? String(createdDateFrom).trim().slice(0, 10) : '';
+      const createdTo = createdDateTo ? String(createdDateTo).trim().slice(0, 10) : '';
+      if (createdFrom && createdTo && createdFrom > createdTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
         });
       }
       const onlyUnusedList =
@@ -373,6 +391,17 @@ router.get(
         params.push(arTo);
       }
 
+      if (createdFrom) {
+        paramCount += 1;
+        sql += ` AND ar.created_at::date >= $${paramCount}::date`;
+        params.push(createdFrom);
+      }
+      if (createdTo) {
+        paramCount += 1;
+        sql += ` AND ar.created_at::date <= $${paramCount}::date`;
+        params.push(createdTo);
+      }
+
       sql += ` ORDER BY ar.ack_receipt_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       params.push(limitNum, offset);
 
@@ -444,6 +473,17 @@ router.get(
         countParamCount += 1;
         countSql += ` AND ar.issue_date <= $${countParamCount}::date`;
         countParams.push(arTo);
+      }
+
+      if (createdFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.created_at::date >= $${countParamCount}::date`;
+        countParams.push(createdFrom);
+      }
+      if (createdTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.created_at::date <= $${countParamCount}::date`;
+        countParams.push(createdTo);
       }
 
       const countResult = await query(countSql, countParams);
@@ -1378,7 +1418,11 @@ router.post(
       const originalInvoiceAmount = itemAmount - totalDiscount + totalPenalty + totalTax;
 
       const totalPaymentsResult = await client.query(
-        'SELECT COALESCE(SUM(payable_amount), 0) as total_paid FROM paymenttbl WHERE invoice_id = $1 AND status = $2',
+        `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) as total_paid
+         FROM paymenttbl
+         WHERE invoice_id = $1
+           AND status = $2
+           AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
         [invoice_id, 'Completed']
       );
       const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;

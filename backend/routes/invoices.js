@@ -31,6 +31,8 @@ router.get(
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
     queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from').optional().isISO8601().withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to').optional().isISO8601().withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -124,6 +126,9 @@ router.get(
       const issueDateFrom = req.query.issue_date_from ? String(req.query.issue_date_from).trim().slice(0, 10) : '';
       const issueDateTo = req.query.issue_date_to ? String(req.query.issue_date_to).trim().slice(0, 10) : '';
       const useIssueRange = Boolean(issueDateFrom || issueDateTo);
+      const createdDateFrom = req.query.created_date_from ? String(req.query.created_date_from).trim().slice(0, 10) : '';
+      const createdDateTo = req.query.created_date_to ? String(req.query.created_date_to).trim().slice(0, 10) : '';
+      const useCreatedRange = Boolean(createdDateFrom || createdDateTo);
 
       let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
@@ -131,7 +136,9 @@ router.get(
                        (
                          SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
                          FROM paymenttbl p
-                         WHERE p.invoice_id = i.invoice_id AND p.status = 'Completed'
+                         WHERE p.invoice_id = i.invoice_id
+                           AND p.status = 'Completed'
+                           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                        ) AS last_payment_date,
                         i.created_by,
                         i.installmentinvoiceprofiles_id,
@@ -183,6 +190,25 @@ router.get(
           paramCount++;
           sql += ` AND i.issue_date <= $${paramCount}::date`;
           params.push(issueDateTo);
+        }
+      }
+
+      if (useCreatedRange) {
+        if (createdDateFrom && createdDateTo && createdDateFrom > createdDateTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'created_date_from must be on or before created_date_to',
+          });
+        }
+        if (createdDateFrom) {
+          paramCount++;
+          sql += ` AND i.created_at::date >= $${paramCount}::date`;
+          params.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          paramCount++;
+          sql += ` AND i.created_at::date <= $${paramCount}::date`;
+          params.push(createdDateTo);
         }
       }
 
@@ -266,19 +292,23 @@ router.get(
 
             const paymentsResult = await query(
               `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid,
+                      COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS total_settled,
                       COALESCE(SUM(COALESCE(tip_amount, 0)), 0) AS total_tip
                FROM paymenttbl
-               WHERE invoice_id = $1 AND status = 'Completed'`,
+               WHERE invoice_id = $1
+                 AND status = 'Completed'
+                 AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
               [invoice.invoice_id]
             );
             const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+            const totalSettled = Number(paymentsResult.rows[0]?.total_settled || totalPaid);
             const totalTip = Number(paymentsResult.rows[0]?.total_tip || 0);
 
             // For itemized invoices, compute remaining from items - completed payments.
             // For non-itemized/manual invoices, invoicestbl.amount is already treated as remaining.
             const effectiveAmount =
               baseAmountFromItems !== null
-                ? Math.max(0, baseAmountFromItems - totalPaid)
+                ? Math.max(0, baseAmountFromItems - totalSettled)
                 : Number(invoice.amount) || 0;
 
             const canRecordPayment =
@@ -298,7 +328,7 @@ router.get(
             let effectiveStatus = invoice.computed_status || invoice.status;
             if (
               invoice.balance_invoice_id &&
-              totalPaid > 0 &&
+              totalSettled > 0 &&
               effectiveStatus !== 'Paid' &&
               effectiveStatus !== 'Cancelled'
             ) {
@@ -465,18 +495,22 @@ router.get(
         : null;
 
       const paymentsResult = await query(
-        `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid,
+              `SELECT COALESCE(SUM(payable_amount), 0) AS total_paid,
+                      COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS total_settled,
                 COALESCE(SUM(COALESCE(tip_amount, 0)), 0) AS total_tip
          FROM paymenttbl
-         WHERE invoice_id = $1 AND status = 'Completed'`,
+         WHERE invoice_id = $1
+           AND status = 'Completed'
+           AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
         [id]
       );
       const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+      const totalSettled = Number(paymentsResult.rows[0]?.total_settled || totalPaid);
       const totalTip = Number(paymentsResult.rows[0]?.total_tip || 0);
 
       const effectiveAmount =
         baseAmountFromItems !== null
-          ? Math.max(0, baseAmountFromItems - totalPaid)
+          ? Math.max(0, baseAmountFromItems - totalSettled)
           : Number(invoiceRow.amount) || 0;
 
       let chainSummary = null;
@@ -488,7 +522,7 @@ router.get(
       let effectiveStatus = invoiceRow.status;
       if (
         invoiceRow.balance_invoice_id &&
-        totalPaid > 0 &&
+        totalSettled > 0 &&
         effectiveStatus !== 'Paid' &&
         effectiveStatus !== 'Cancelled'
       ) {
@@ -540,7 +574,9 @@ router.get(
             await query(
               `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_date
                FROM paymenttbl p
-               WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
+               WHERE p.invoice_id = $1
+                 AND p.status = 'Completed'
+                 AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
               [id]
             )
           ).rows?.[0]?.last_payment_date || null,
@@ -673,17 +709,21 @@ router.get(
 
       // Fetch payments for this invoice (and compute the actual recorded payment date)
       const paymentsResult = await query(
-        `SELECT p.payment_method, p.payment_type, p.payable_amount, p.reference_number,
+        `SELECT p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as payment_date_raw
          FROM paymenttbl p
-         WHERE p.invoice_id = $1 AND p.status = 'Completed'
+         WHERE p.invoice_id = $1
+           AND p.status = 'Completed'
+           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
          ORDER BY p.issue_date DESC`,
         [id]
       );
       const lastPaymentDateResult = await query(
         `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_ymd
          FROM paymenttbl p
-         WHERE p.invoice_id = $1 AND p.status = 'Completed'`,
+         WHERE p.invoice_id = $1
+           AND p.status = 'Completed'
+           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
         [id]
       );
       const lastPaymentYmd = lastPaymentDateResult.rows?.[0]?.last_payment_ymd || null;
@@ -728,7 +768,10 @@ router.get(
       const grandTotal = totals.subtotal - totals.discount + totals.penalty + totals.tax;
 
       // Calculate total payments
-      const totalPayments = paymentsResult.rows.reduce((sum, p) => sum + (Number(p.payable_amount) || 0), 0);
+      const totalPayments = paymentsResult.rows.reduce(
+        (sum, p) => sum + (Number(p.payable_amount) || 0) + (Number(p.discount_amount) || 0),
+        0
+      );
       const amountDue = grandTotal - totalPayments;
 
       const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isAr ? 'landscape' : 'portrait' });
@@ -783,7 +826,9 @@ router.get(
               `SELECT u.full_name, u.email
              FROM paymenttbl p
              LEFT JOIN userstbl u ON p.student_id = u.user_id
-             WHERE p.invoice_id = $1 AND p.status = 'Completed'
+             WHERE p.invoice_id = $1
+               AND p.status = 'Completed'
+               AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
              ORDER BY p.payment_id DESC
              LIMIT 1`,
               [id]
@@ -1005,10 +1050,11 @@ router.get(
                         TO_CHAR(i.due_date, 'YYYY-MM-DD')   AS due_date,
                         COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
                         COALESCE((
-                          SELECT SUM(p.payable_amount)
+                          SELECT SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.discount_amount, 0))
                           FROM paymenttbl p
                           WHERE p.invoice_id = i.invoice_id
                             AND p.status = 'Completed'
+                            AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                         ), 0)::numeric AS paid_total_for_invoice
                  FROM invoicestbl i
                  WHERE i.installmentinvoiceprofiles_id = $1

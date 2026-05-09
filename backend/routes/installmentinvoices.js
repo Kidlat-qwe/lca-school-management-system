@@ -333,16 +333,18 @@ router.get(
                 i.parent_invoice_id,
                 i.balance_invoice_id,
                 COALESCE((
-                  SELECT SUM(p.payable_amount)
+                  SELECT SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.discount_amount, 0))
                   FROM paymenttbl p
                   WHERE p.invoice_id = i.invoice_id
                     AND p.status = 'Completed'
+                    AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                 ), 0)::numeric AS paid_total_for_invoice,
                 (
                   SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
                   FROM paymenttbl p
                   WHERE p.invoice_id = i.invoice_id
                     AND p.status = 'Completed'
+                    AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                 ) AS latest_payment_date_for_invoice
          FROM invoicestbl i
          WHERE i.installmentinvoiceprofiles_id = $1

@@ -7,6 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { appAlert, appPrompt, appConfirm } from '../../utils/appAlert';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -16,8 +17,13 @@ const AdminClasses = () => {
   const [selectedBranchName, setSelectedBranchName] = useState(userInfo?.branch_name || 'Your Branch');
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  // After the first fetch, refresh in the background instead of swapping the
+  // table for a full-page spinner so typing in the search input feels live.
+  const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
+  // Debounced search value sent to the API (avoids one request per keystroke).
+  const debouncedNameSearchTerm = useDebouncedValue(nameSearchTerm, 300);
   // Removed filterBranch - admin only sees their branch
   const [filterProgram, setFilterProgram] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -347,6 +353,12 @@ const initializePackageMerchSelections = useCallback(
     fetchRooms();
     fetchTeachers();
   }, []);
+
+  useEffect(() => {
+    if (adminBranchId) {
+      fetchClasses();
+    }
+  }, [adminBranchId, debouncedNameSearchTerm, filterProgram]);
 
   // Auto-set branch_id from adminBranchId when available
   useEffect(() => {
@@ -1153,17 +1165,24 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const fetchClasses = async () => {
-    // Filter by admin's branch
     try {
-      setLoading(true);
-      // Request a higher limit to get all classes filtered by admin's branch
-      const response = await apiRequest(`/classes?branch_id=${adminBranchId}&limit=100`);
+      if (!hasLoadedOnceRef.current) setLoading(true);
+      const params = new URLSearchParams({
+        branch_id: String(adminBranchId),
+        limit: '100',
+      });
+      if (filterProgram) params.set('program_id', filterProgram);
+      if (debouncedNameSearchTerm.trim()) params.set('search', debouncedNameSearchTerm.trim());
+      const response = await apiRequest(`/classes?${params.toString()}`);
       setClasses(response.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch classes');
       console.error('Error fetching classes:', err);
     } finally {
-      setLoading(false);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(false);
+        hasLoadedOnceRef.current = true;
+      }
     }
   };
 

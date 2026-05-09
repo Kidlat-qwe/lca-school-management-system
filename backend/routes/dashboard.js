@@ -167,6 +167,7 @@ router.get(
             SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
             FROM paymenttbl
             WHERE status = 'Completed'
+              AND COALESCE(approval_status, 'Pending') <> 'Rejected'
             GROUP BY invoice_id
           ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           WHERE i.issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
@@ -183,6 +184,7 @@ router.get(
             SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
             FROM paymenttbl
             WHERE status = 'Completed'
+              AND COALESCE(approval_status, 'Pending') <> 'Rejected'
             GROUP BY invoice_id
           ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           WHERE i.issue_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
@@ -234,6 +236,7 @@ router.get(
             SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
             FROM paymenttbl
             WHERE status = 'Completed'
+              AND COALESCE(approval_status, 'Pending') <> 'Rejected'
             GROUP BY invoice_id
           ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           WHERE i.branch_id = $1
@@ -250,6 +253,7 @@ router.get(
             SELECT invoice_id, SUM(COALESCE(tip_amount, 0)) AS tip_sum
             FROM paymenttbl
             WHERE status = 'Completed'
+              AND COALESCE(approval_status, 'Pending') <> 'Rejected'
             GROUP BY invoice_id
           ) inv_tips ON inv_tips.invoice_id = i.invoice_id
           ${monthStartDate ? 'WHERE i.issue_date >= $1::date AND i.issue_date < $2::date' : ''}
@@ -283,13 +287,13 @@ router.get(
             COUNT(*) FILTER (
               WHERE p.status = 'Completed'
                 AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
             )::bigint AS unverified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed'
                   AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                  AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+                  AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               ),
               0
             ) AS unverified_amount
@@ -311,13 +315,13 @@ router.get(
             COUNT(*) FILTER (
               WHERE p.status = 'Completed'
                 AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
             )::bigint AS unverified_count,
             COALESCE(
               SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
                 WHERE p.status = 'Completed'
                   AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                  AND COALESCE(p.approval_status, 'Pending') <> 'Returned'
+                  AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               ),
               0
             ) AS unverified_amount
@@ -611,6 +615,7 @@ router.get(
                 FROM paymenttbl p_hist
                 WHERE p_hist.student_id = des.student_id
                   AND p_hist.status = 'Completed'
+                  AND COALESCE(p_hist.approval_status, 'Pending') <> 'Rejected'
                   AND p_hist.issue_date < $${branchParams.length + 1}::date
               )
               GROUP BY des.branch_id
@@ -624,6 +629,7 @@ router.get(
               LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
               WHERE p.status = 'Completed'
                 AND COALESCE(ar.issue_date, p.issue_date) = $${branchParams.length + 1}::date
+                AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
               GROUP BY p.branch_id
             ),
             ar_sales AS (
@@ -657,6 +663,7 @@ router.get(
               ) AS item(merchandise_id INTEGER, quantity TEXT) ON TRUE
               WHERE p.status = 'Completed'
                 AND p.issue_date = $${branchParams.length + 1}::date
+                AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                 AND ar.ar_type = 'Merchandise'
               GROUP BY p.branch_id
             ),
@@ -670,6 +677,7 @@ router.get(
                 FROM paymenttbl p_hist
                 WHERE p_hist.student_id = des.student_id
                   AND p_hist.status = 'Completed'
+                  AND COALESCE(p_hist.approval_status, 'Pending') <> 'Rejected'
                   AND p_hist.issue_date < $${branchParams.length + 1}::date
               )
               GROUP BY des.branch_id
@@ -706,7 +714,7 @@ router.get(
               FROM paymenttbl p
               WHERE p.status = 'Completed'
                 AND p.issue_date = $${branchParams.length + 1}::date
-                AND (p.approval_status IS NULL OR p.approval_status <> 'Approved')
+                AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Rejected'))
               GROUP BY p.branch_id
             ),
             ar_verified AS (
@@ -777,6 +785,7 @@ router.get(
             LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
             LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
             WHERE p.status = 'Completed'
+              AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
               AND COALESCE(ar.issue_date, p.issue_date) >= $${branchParams.length + 1}::date - INTERVAL '6 days'
               AND COALESCE(ar.issue_date, p.issue_date) <= $${branchParams.length + 1}::date
               ${branchFilter ? 'AND p.branch_id = $1' : ''}
