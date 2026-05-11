@@ -419,14 +419,34 @@ const DailySummarySalesApprovalPage = () => {
   const selectedRecord = records.find((record) => record[recordIdField] === openMenuId) || null;
   const canActOnRecord = (record) =>
     canVerifySummary && record && ['Submitted', 'Returned', 'Rejected'].includes(String(record.status || ''));
-  const detailPayments = detailData?.payments || [];
+  const livePayments = detailData?.payments || [];
   const detailArReceipts = detailData?.arReceipts || [];
   const detailTotals = detailData?.totals;
   const detailSubmittedSnapshot = detailData?.submittedSnapshot;
+  const submittedSnapshotPayments = Array.isArray(detailSubmittedSnapshot?.payments)
+    ? detailSubmittedSnapshot.payments
+    : [];
+  // Cash Deposit details: prefer live recalc (reflects current DB state), but
+  // fall back to the audit snapshot rows when live is empty so the modal still
+  // shows what was originally submitted (e.g. rows that were hard-deleted post-
+  // submission). Non-cash tabs keep the current behavior.
+  const detailPayments =
+    isCashDepositTab && livePayments.length === 0 && submittedSnapshotPayments.length > 0
+      ? submittedSnapshotPayments
+      : livePayments;
+  const detailIsUsingSubmittedSnapshot =
+    isCashDepositTab && livePayments.length === 0 && submittedSnapshotPayments.length > 0;
   const cashDetailTotals = isCashDepositTab ? detailData?.totals : null;
-  const verifyPayments = verifyData?.payments || [];
+  const liveVerifyPayments = verifyData?.payments || [];
   const verifyArReceipts = verifyData?.arReceipts || [];
   const verifyTotals = verifyData?.totals;
+  const verifySubmittedSnapshotPayments = Array.isArray(verifyData?.submittedSnapshot?.payments)
+    ? verifyData.submittedSnapshot.payments
+    : [];
+  const verifyPayments =
+    isCashDepositTab && liveVerifyPayments.length === 0 && verifySubmittedSnapshotPayments.length > 0
+      ? verifySubmittedSnapshotPayments
+      : liveVerifyPayments;
 
   const detailPieLines = useMemo(() => {
     if (isCashDepositTab) return [];
@@ -1348,6 +1368,11 @@ const DailySummarySalesApprovalPage = () => {
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                 {isCashDepositTab ? 'Cash payment records (from payment logs)' : 'Completed payments (payment logs)'}
               </p>
+              {isCashDepositTab && detailIsUsingSubmittedSnapshot ? (
+                <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+                  Showing the original submitted snapshot — the live recalc found no matching payment rows for this period (rows may have been deleted after submission).
+                </p>
+              ) : null}
               {detailLoading ? (
                 <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
               ) : isCashDepositTab ? (

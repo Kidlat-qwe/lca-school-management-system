@@ -28,7 +28,30 @@ const findOverlappingCashDepositSummary = async ({ branchId, startDate, endDate 
   return result.rows[0] || null;
 };
 
-const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
+/**
+ * Returns the cash payments for [startDate, endDate] in a branch that are NOT
+ * already covered by any Submitted/Approved cash deposit summary.
+ *
+ * @param {object} args
+ * @param {number} args.branchId
+ * @param {string} args.startDate            - YYYY-MM-DD inclusive
+ * @param {string} args.endDate              - YYYY-MM-DD inclusive
+ * @param {number} [args.excludeSummaryId]   - When set, the matching cash deposit
+ *   summary row is ignored in the NOT EXISTS subquery so we DON'T mistakenly
+ *   self-exclude its own payments. Used by `GET /:id/payments` (detail view) so
+ *   the recalc reflects "what's currently in this summary's window minus OTHER
+ *   deposits", instead of returning zero because every payment is in this very
+ *   summary's snapshot. Create/resubmit flows leave this unset because they
+ *   need to exclude every prior deposit, including their own.
+ */
+const getCashDepositSnapshot = async ({ branchId, startDate, endDate, excludeSummaryId } = {}) => {
+  const params = [branchId, startDate, endDate];
+  let excludeClause = '';
+  if (excludeSummaryId !== undefined && excludeSummaryId !== null && Number.isFinite(Number(excludeSummaryId))) {
+    params.push(Number(excludeSummaryId));
+    excludeClause = ` AND c.cash_deposit_summary_id <> $${params.length}`;
+  }
+
   const result = await query(
     `SELECT p.payment_id,
             p.invoice_id,
@@ -71,13 +94,13 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate }) => {
          FROM cash_deposit_summarytbl c
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
          WHERE c.branch_id = p.branch_id
-           AND c.status IN ('Submitted', 'Approved')
+           AND c.status IN ('Submitted', 'Approved')${excludeClause}
            AND deposited.payment_row ? 'payment_id'
            AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
            AND (deposited.payment_row->>'payment_id')::int = p.payment_id
        )
      ORDER BY p.issue_date ASC, p.payment_id ASC`,
-    [branchId, startDate, endDate]
+    params
   );
 
   let totalDepositAmount = 0;
@@ -1003,7 +1026,8 @@ router.get(
         `SELECT cash_deposit_summary_id, branch_id,
                 TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                 TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
-                total_deposit_amount, total_cash_amount, payment_count, completed_cash_count
+                total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
+                COALESCE(cash_payment_snapshot, '[]'::jsonb) AS cash_payment_snapshot
          FROM cash_deposit_summarytbl
          WHERE cash_deposit_summary_id = $1`,
         [id]
@@ -1032,11 +1056,21 @@ router.get(
         });
       }
 
+      // CRITICAL: pass excludeSummaryId so the recalc DOESN'T self-exclude every
+      // payment in this summary's own snapshot (which would zero out the modal).
       const snapshot = await getCashDepositSnapshot({
         branchId: summary.branch_id,
         startDate: summary.start_date,
         endDate: summary.end_date,
+        excludeSummaryId: summary.cash_deposit_summary_id,
       });
+
+      // Surface the audit snapshot rows from the JSONB column so the frontend
+      // can fall back to "what was originally submitted" if a payment was hard
+      // deleted after submission.
+      const snapshotRows = Array.isArray(summary.cash_payment_snapshot)
+        ? summary.cash_payment_snapshot
+        : [];
 
       res.json({
         success: true,
@@ -1053,6 +1087,7 @@ router.get(
             total_cash_amount: parseFloat(summary.total_cash_amount) || 0,
             payment_count: parseInt(summary.payment_count, 10) || 0,
             completed_cash_count: parseInt(summary.completed_cash_count, 10) || 0,
+            payments: snapshotRows,
           },
         },
       });

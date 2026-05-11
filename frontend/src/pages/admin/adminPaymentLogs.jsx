@@ -1694,10 +1694,15 @@ const AdminPaymentLogs = () => {
                   <input
                     type="date"
                     value={depositEndDate}
-                    readOnly
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    disabled
+                    onChange={(e) => setDepositEndDate(e.target.value)}
+                    min={depositStartDate || undefined}
+                    max={todayManila()}
+                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
                   />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Pick any date from the From date up to today. The summary refreshes automatically.
+                  </p>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
