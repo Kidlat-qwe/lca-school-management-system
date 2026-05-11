@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
+import {
+  formatDateManila,
+  formatDateTimeManila,
+  issueDateRangeFromManilaMonth,
+  manilaMonthYYYYMM,
+} from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
@@ -39,11 +44,15 @@ const AdminDailySummary = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  // Date range filter — applies to summary_date for End-of-Shift and to the
-  // [start_date, end_date] period overlap for Cash Deposit. Either bound is
-  // optional (e.g. "from only" = everything from that date onward).
+  // Date filtering is mutually exclusive between an explicit From/To range and a
+  // single Month picker (matches the Payment Logs UX). The Month picker defaults
+  // to the current Manila month so the page opens on "This Month" out of the box;
+  // typing in From/To clears the month, picking a month clears From/To.
+  // Range params still target summary_date for End-of-Shift and the
+  // [start_date, end_date] period overlap for Cash Deposit.
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterMonth, setFilterMonth] = useState(manilaMonthYYYYMM());
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [sortConfig, setSortConfig] = useState(null);
   const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
@@ -120,8 +129,13 @@ const AdminDailySummary = () => {
         // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
         const fromParam = isCash ? 'date_from' : 'summary_date_from';
         const toParam = isCash ? 'date_to' : 'summary_date_to';
-        if (filterDateFrom) params.set(fromParam, filterDateFrom);
-        if (filterDateTo) params.set(toParam, filterDateTo);
+        // Month picker takes precedence over From/To; it expands to the full
+        // Manila month range so backend filters stay date-based.
+        const monthRange = filterMonth ? issueDateRangeFromManilaMonth(filterMonth) : null;
+        const effectiveFrom = monthRange?.from || filterDateFrom;
+        const effectiveTo = monthRange?.to || filterDateTo;
+        if (effectiveFrom) params.set(fromParam, effectiveFrom);
+        if (effectiveTo) params.set(toParam, effectiveTo);
         const endpoint = isCash ? '/cash-deposit-summaries' : '/daily-summary-sales';
         const res = await apiRequest(`${endpoint}?${params.toString()}`);
         setRecords(res.data || []);
@@ -147,7 +161,7 @@ const AdminDailySummary = () => {
         setLoading(false);
       }
     },
-    [branchId, isCash, viewTab, filterStatus, filterDateFrom, filterDateTo]
+    [branchId, isCash, viewTab, filterStatus, filterDateFrom, filterDateTo, filterMonth]
   );
 
   useEffect(() => {
@@ -157,13 +171,16 @@ const AdminDailySummary = () => {
   useEffect(() => {
     setPagination((p) => ({ ...p, page: 1 }));
     setFilterStatus('');
+    // Reset to the Month picker's "This Month" default on tab switches so EOD
+    // and Cash Deposit both open on the current month, matching the on-mount UX.
     setFilterDateFrom('');
     setFilterDateTo('');
+    setFilterMonth(manilaMonthYYYYMM());
   }, [summaryKind, viewTab]);
 
   useEffect(() => {
     fetchRecords(1);
-  }, [fetchRecords, summaryKind, viewTab, filterStatus, filterDateFrom, filterDateTo]);
+  }, [fetchRecords, summaryKind, viewTab, filterStatus, filterDateFrom, filterDateTo, filterMonth]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -389,7 +406,10 @@ const AdminDailySummary = () => {
               type="date"
               value={filterDateFrom}
               max={filterDateTo || undefined}
-              onChange={(e) => setFilterDateFrom(e.target.value)}
+              onChange={(e) => {
+                setFilterDateFrom(e.target.value);
+                if (e.target.value) setFilterMonth('');
+              }}
               className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
@@ -399,11 +419,30 @@ const AdminDailySummary = () => {
               type="date"
               value={filterDateTo}
               min={filterDateFrom || undefined}
-              onChange={(e) => setFilterDateTo(e.target.value)}
+              onChange={(e) => {
+                setFilterDateTo(e.target.value);
+                if (e.target.value) setFilterMonth('');
+              }}
               className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
-          {(filterStatus || filterDateFrom || filterDateTo) && (
+          <div className="min-w-0 w-full sm:w-auto">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
+            <input
+              type="month"
+              value={filterMonth}
+              max={manilaMonthYYYYMM()}
+              onChange={(e) => {
+                setFilterMonth(e.target.value);
+                if (e.target.value) {
+                  setFilterDateFrom('');
+                  setFilterDateTo('');
+                }
+              }}
+              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
+            />
+          </div>
+          {(filterStatus || filterDateFrom || filterDateTo || filterMonth) && (
             <button
               type="button"
               className="text-sm text-primary-600 hover:underline"
@@ -411,6 +450,7 @@ const AdminDailySummary = () => {
                 setFilterStatus('');
                 setFilterDateFrom('');
                 setFilterDateTo('');
+                setFilterMonth('');
               }}
             >
               Clear filters

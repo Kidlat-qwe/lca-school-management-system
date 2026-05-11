@@ -28,10 +28,14 @@ const FinanceFinancialDashboard = () => {
   const [error, setError] = useState('');
   const [recentInvoices, setRecentInvoices] = useState([]);
   const [recentPayments, setRecentPayments] = useState([]);
-  const [draftFrom, setDraftFrom] = useState('');
-  const [draftTo, setDraftTo] = useState('');
-  const [issueDateFrom, setIssueDateFrom] = useState('');
-  const [issueDateTo, setIssueDateTo] = useState('');
+  // Default the dashboard date range to "This Month" (Manila) so totals/recent lists
+  // surface the current cycle on first paint. Users can clear or change via the filter modal.
+  const defaultMonthFrom = firstDayOfMonthManilaYMD();
+  const defaultMonthTo = todayManilaYMD();
+  const [draftFrom, setDraftFrom] = useState(defaultMonthFrom);
+  const [draftTo, setDraftTo] = useState(defaultMonthTo);
+  const [issueDateFrom, setIssueDateFrom] = useState(defaultMonthFrom);
+  const [issueDateTo, setIssueDateTo] = useState(defaultMonthTo);
 
   const fetchDashboardData = useCallback(async () => {
     try {

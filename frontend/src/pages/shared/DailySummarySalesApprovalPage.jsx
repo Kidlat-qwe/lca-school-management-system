@@ -5,7 +5,11 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatDateManila } from '../../utils/dateUtils';
+import {
+  formatDateManila,
+  issueDateRangeFromManilaMonth,
+  manilaMonthYYYYMM,
+} from '../../utils/dateUtils';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
@@ -71,11 +75,15 @@ const DailySummarySalesApprovalPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  // Date range filter — applies to summary_date for End-of-Shift and to the
-  // [start_date, end_date] period overlap for Cash Deposit. Either bound is
-  // optional (e.g. "from only" = everything from that date onward).
+  // Date filtering is mutually exclusive between an explicit From/To range and a
+  // single Month picker (matches the Payment Logs UX). The Month picker defaults
+  // to the current Manila month so the page opens on "This Month" out of the box;
+  // typing in From/To clears the month, picking a month clears From/To.
+  // Range params still target summary_date for End-of-Shift and the
+  // [start_date, end_date] period overlap for Cash Deposit.
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterMonth, setFilterMonth] = useState(manilaMonthYYYYMM());
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [sortConfig, setSortConfig] = useState(null);
   const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
@@ -134,8 +142,13 @@ const DailySummarySalesApprovalPage = () => {
       // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
       const fromParam = isCashDepositTab ? 'date_from' : 'summary_date_from';
       const toParam = isCashDepositTab ? 'date_to' : 'summary_date_to';
-      if (filterDateFrom) params.set(fromParam, filterDateFrom);
-      if (filterDateTo) params.set(toParam, filterDateTo);
+      // Month picker takes precedence over From/To; it expands to the full
+      // Manila month range so backend filters stay date-based.
+      const monthRange = filterMonth ? issueDateRangeFromManilaMonth(filterMonth) : null;
+      const effectiveFrom = monthRange?.from || filterDateFrom;
+      const effectiveTo = monthRange?.to || filterDateTo;
+      if (effectiveFrom) params.set(fromParam, effectiveFrom);
+      if (effectiveTo) params.set(toParam, effectiveTo);
 
       const endpoint = isCashDepositTab ? '/cash-deposit-summaries' : '/daily-summary-sales';
       const res = await apiRequest(`${endpoint}?${params.toString()}`);
@@ -164,7 +177,7 @@ const DailySummarySalesApprovalPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [effectiveBranchFilter, filterStatus, filterDateFrom, filterDateTo, isCashDepositTab]);
+  }, [effectiveBranchFilter, filterStatus, filterDateFrom, filterDateTo, filterMonth, isCashDepositTab]);
 
   useEffect(() => {
     setOpenMenuId(null);
@@ -174,7 +187,7 @@ const DailySummarySalesApprovalPage = () => {
     setDetailData(null);
     setVerifyData(null);
     fetchRecords(1);
-  }, [activeTab, filterStatus, filterDateFrom, filterDateTo, globalBranchId, fetchRecords]);
+  }, [activeTab, filterStatus, filterDateFrom, filterDateTo, filterMonth, globalBranchId, fetchRecords]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -185,6 +198,9 @@ const DailySummarySalesApprovalPage = () => {
       setFilterStatus('');
       setFilterDateFrom('');
       setFilterDateTo('');
+      // Clear the Month picker too — notification deep-links must surface the
+      // targeted record regardless of which month it belongs to.
+      setFilterMonth('');
       setOpenMenuId(null);
     }
 
@@ -591,7 +607,10 @@ const DailySummarySalesApprovalPage = () => {
               type="date"
               value={filterDateFrom}
               max={filterDateTo || undefined}
-              onChange={(e) => setFilterDateFrom(e.target.value)}
+              onChange={(e) => {
+                setFilterDateFrom(e.target.value);
+                if (e.target.value) setFilterMonth('');
+              }}
               className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
@@ -601,17 +620,37 @@ const DailySummarySalesApprovalPage = () => {
               type="date"
               value={filterDateTo}
               min={filterDateFrom || undefined}
-              onChange={(e) => setFilterDateTo(e.target.value)}
+              onChange={(e) => {
+                setFilterDateTo(e.target.value);
+                if (e.target.value) setFilterMonth('');
+              }}
               className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
             />
           </div>
-          {(filterDateFrom || filterDateTo) && (
+          <div className="min-w-0 w-full sm:w-auto">
+            <label className="block text-xs font-medium text-gray-500 mb-1">Month</label>
+            <input
+              type="month"
+              value={filterMonth}
+              max={manilaMonthYYYYMM()}
+              onChange={(e) => {
+                setFilterMonth(e.target.value);
+                if (e.target.value) {
+                  setFilterDateFrom('');
+                  setFilterDateTo('');
+                }
+              }}
+              className="input-field text-sm py-2 w-full sm:w-auto max-w-full min-h-[2.5rem]"
+            />
+          </div>
+          {(filterDateFrom || filterDateTo || filterMonth) && (
             <div className="min-w-0 w-full sm:w-auto self-end">
               <button
                 type="button"
                 onClick={() => {
                   setFilterDateFrom('');
                   setFilterDateTo('');
+                  setFilterMonth('');
                 }}
                 className="text-sm text-primary-600 hover:underline"
               >

@@ -59,7 +59,9 @@ const EnrollmentDashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  // Default to the current Manila month so the "Enrollments by Month" trend defaults to
+  // "this month" on first paint. Users can still pick another month from the picker.
+  const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
 
   const fetchData = async () => {
     try {

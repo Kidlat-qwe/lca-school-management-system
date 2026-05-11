@@ -66,7 +66,9 @@ const AdminFinancialDashboard = () => {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  // Default to the current Manila month so the dashboard shows "this month" on first paint
+  // (matches the Financial Dashboard / EOD UX). Users can still pick another month.
+  const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
 
   const branchName = useMemo(() => {
     return userInfo?.branch_name || userInfo?.branchName || 'Your Branch';

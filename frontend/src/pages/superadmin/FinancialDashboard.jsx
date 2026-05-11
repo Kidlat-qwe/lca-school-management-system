@@ -62,7 +62,9 @@ const FinancialDashboard = () => {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  // Default to the current Manila month so the dashboard shows "this month" on first paint
+  // (matches Admin Financial Dashboard and the EOD pages). Users can still pick another month.
+  const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
 
   const fetchDashboardData = async () => {
     try {
