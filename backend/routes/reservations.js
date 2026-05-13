@@ -542,7 +542,7 @@ router.put(
         `SELECT classstudent_id FROM classstudentstbl 
          WHERE student_id = $1
            AND class_id = $2
-           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND removed_at IS NULL`,
         [reservation.student_id, reservation.class_id]
       );
@@ -563,7 +563,7 @@ router.put(
           `SELECT COUNT(DISTINCT student_id) as count
            FROM classstudentstbl
            WHERE class_id = $1
-             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
              AND removed_at IS NULL`,
           [reservation.class_id]
         );

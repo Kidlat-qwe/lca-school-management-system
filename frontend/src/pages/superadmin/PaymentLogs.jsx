@@ -6,6 +6,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import * as XLSX from 'xlsx';
 import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
+import {
+  getPaymentLogTableAmountColumn,
+  getPaymentLogTableTotalAmountColumn,
+} from '../../utils/paymentLogTableAmounts';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import {
   PAYMENT_LOG_DATE_MODES,
@@ -90,6 +94,7 @@ const PaymentLogs = () => {
   const [returnFixPaymentType, setReturnFixPaymentType] = useState('');
   const [returnFixPayableAmount, setReturnFixPayableAmount] = useState('');
   const [returnFixTipAmount, setReturnFixTipAmount] = useState('');
+  const [returnFixDiscountAmount, setReturnFixDiscountAmount] = useState('');
   const [returnFixRemarks, setReturnFixRemarks] = useState('');
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -452,6 +457,8 @@ const PaymentLogs = () => {
     setReturnFixPayableAmount(pa != null && pa !== '' ? String(pa) : '');
     const tip = payment.tip_amount;
     setReturnFixTipAmount(tip != null && tip !== '' ? Number(tip).toFixed(2) : '0.00');
+    const disc = payment.discount_amount;
+    setReturnFixDiscountAmount(disc != null && disc !== '' ? Number(disc).toFixed(2) : '');
     setReturnFixRemarks((payment.remarks || '').trim());
     setReturnFixInvoiceSummary(null);
     setReturnFixInvoiceLoading(true);
@@ -481,6 +488,7 @@ const PaymentLogs = () => {
     setReturnFixPaymentType('');
     setReturnFixPayableAmount('');
     setReturnFixTipAmount('');
+    setReturnFixDiscountAmount('');
     setReturnFixRemarks('');
   };
 
@@ -489,7 +497,8 @@ const PaymentLogs = () => {
     if (!returnFixInvoiceSummary || !returnFixPayment) return null;
     const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
     const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
-    return Math.max(0, b.remaining + linePayable);
+    const lineDisc = parseFloat(returnFixPayment.discount_amount || 0) || 0;
+    return Math.max(0, b.remaining + linePayable + lineDisc);
   };
 
   const handleReturnFixInputChange = (e) => {
@@ -497,11 +506,15 @@ const PaymentLogs = () => {
     const inv = returnFixInvoiceSummary;
     const payment = returnFixPayment;
     const releaseCap = inv && payment ? getReturnFixReleaseCap() : null;
+    const discountNum =
+      returnFixDiscountAmount === '' ? 0 : Math.max(0, parseFloat(returnFixDiscountAmount) || 0);
 
     if (name === 'payment_type') {
       if (value === 'Full Payment' && releaseCap != null && releaseCap > 0) {
         setReturnFixPaymentType(value);
-        setReturnFixPayableAmount(releaseCap.toFixed(2));
+        const disc =
+          returnFixDiscountAmount === '' ? 0 : Math.max(0, parseFloat(returnFixDiscountAmount) || 0);
+        setReturnFixPayableAmount(Math.max(0.01, releaseCap - disc).toFixed(2));
         return;
       }
       if (value === 'Partial Payment' && releaseCap != null && releaseCap > 0) {
@@ -517,7 +530,12 @@ const PaymentLogs = () => {
     }
 
     if (name === 'payable_amount') {
-      if (returnFixPaymentType === 'Partial Payment' && releaseCap != null && releaseCap > 0 && Number(value) >= releaseCap) {
+      if (
+        returnFixPaymentType === 'Partial Payment' &&
+        releaseCap != null &&
+        releaseCap > 0 &&
+        Number(value) + discountNum >= releaseCap
+      ) {
         return;
       }
       setReturnFixPayableAmount(value);
@@ -526,6 +544,21 @@ const PaymentLogs = () => {
 
     if (name === 'tip_amount') {
       setReturnFixTipAmount(value);
+      return;
+    }
+
+    if (name === 'discount_amount') {
+      const nextDisc = value === '' ? 0 : Math.max(0, parseFloat(value) || 0);
+      const payableVal = parseFloat(returnFixPayableAmount || 0) || 0;
+      if (
+        returnFixPaymentType === 'Partial Payment' &&
+        releaseCap != null &&
+        releaseCap > 0 &&
+        payableVal + nextDisc >= releaseCap
+      ) {
+        return;
+      }
+      setReturnFixDiscountAmount(value);
       return;
     }
 
@@ -539,11 +572,20 @@ const PaymentLogs = () => {
     if (returnFixPaymentType !== 'Full Payment') return;
     const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
     const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
-    const cap = Math.max(0, b.remaining + linePayable);
+    const lineDisc = parseFloat(returnFixPayment.discount_amount || 0) || 0;
+    const cap = Math.max(0, b.remaining + linePayable + lineDisc);
+    const disc =
+      returnFixDiscountAmount === '' ? 0 : Math.max(0, parseFloat(returnFixDiscountAmount) || 0);
     if (cap > 0) {
-      setReturnFixPayableAmount(cap.toFixed(2));
+      const nextPayable = Math.max(0.01, cap - disc);
+      setReturnFixPayableAmount(nextPayable.toFixed(2));
     }
-  }, [returnFixInvoiceSummary, returnFixPayment, returnFixPaymentType]);
+  }, [
+    returnFixInvoiceSummary,
+    returnFixPayment,
+    returnFixPaymentType,
+    returnFixDiscountAmount,
+  ]);
 
   const handleReturnFixAttachmentChange = async (e) => {
     const file = e.target?.files?.[0];
@@ -608,6 +650,15 @@ const PaymentLogs = () => {
         appAlert('Tip amount must be 0 or greater.');
         return;
       }
+      const discountNum = returnFixDiscountAmount === '' ? 0 : parseFloat(returnFixDiscountAmount);
+      if (returnFixDiscountAmount !== '' && (Number.isNaN(discountNum) || discountNum < 0)) {
+        appAlert('Discount amount must be 0 or greater.');
+        return;
+      }
+      if (returnFixDiscountAmount !== '' && discountNum >= payableNum) {
+        appAlert('Discount amount must be less than payable amount.');
+        return;
+      }
       if (!refTrim) {
         appAlert('Reference number is required.');
         return;
@@ -627,9 +678,12 @@ const PaymentLogs = () => {
         }
         const b = getInvoiceBreakdownForReturnFix(returnFixInvoiceSummary);
         const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
-        const releaseCap = Math.max(0, b.remaining + linePayable);
-        if (releaseCap > 0 && payableNum >= releaseCap) {
-          appAlert('For partial payment, amount must be less than the remaining invoice amount for this line.');
+        const lineDisc = parseFloat(returnFixPayment.discount_amount || 0) || 0;
+        const releaseCap = Math.max(0, b.remaining + linePayable + lineDisc);
+        if (releaseCap > 0 && payableNum + discountNum >= releaseCap) {
+          appAlert(
+            'For partial payment, combined payable and discount must be less than the remaining invoice amount for this line.'
+          );
           return;
         }
       }
@@ -640,6 +694,7 @@ const PaymentLogs = () => {
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
+        discount_amount: discountNum,
         issue_date: issueDateTrim,
       };
       if (returnFixRemarks.trim()) {
@@ -923,8 +978,6 @@ const PaymentLogs = () => {
 
       // Prepare data for Excel
       const excelData = allPayments.map((payment) => {
-        const payable = parseFloat(payment.payable_amount) || 0;
-        const tip = parseFloat(payment.tip_amount) || 0;
         const uiStatus =
           branchLogTab === 'return' || branchLogTab === 'rejected'
             ? (payment.approval_status || payment.status || (branchLogTab === 'rejected' ? 'Rejected' : 'Returned'))
@@ -938,8 +991,8 @@ const PaymentLogs = () => {
           'PACKAGE/ITEM': payment.invoice_description || '-',
           'LEVEL TAG': payment.student_level_tag || '-',
           'PAYMENT METHOD': payment.payment_method || '-',
-          AMOUNT: Math.round(payable * 100) / 100,
-          'TOTAL AMOUNT': Math.round((payable + tip) * 100) / 100,
+          AMOUNT: Math.round(getPaymentLogTableAmountColumn(payment) * 100) / 100,
+          'TOTAL AMOUNT': Math.round(getPaymentLogTableTotalAmountColumn(payment) * 100) / 100,
           Status: uiStatus,
         };
         if (branchLogTab === 'return') {
@@ -1433,10 +1486,10 @@ const PaymentLogs = () => {
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
-                      {formatCurrency(payment.payable_amount)}
+                      {formatCurrency(getPaymentLogTableAmountColumn(payment))}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-emerald-700 min-w-0">
-                      {formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}
+                      {formatCurrency(getPaymentLogTableTotalAmountColumn(payment))}
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
@@ -1828,7 +1881,7 @@ const PaymentLogs = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="label-field text-xs">
                       Payable Amount <span className="text-red-500">*</span>
@@ -1839,8 +1892,17 @@ const PaymentLogs = () => {
                       step="0.01"
                       min="0.01"
                       max={
-                        returnFixPaymentType === 'Partial Payment' && getReturnFixReleaseCap() != null && getReturnFixReleaseCap() > 0
-                          ? Math.max(0, getReturnFixReleaseCap() - 0.01).toFixed(2)
+                        returnFixPaymentType === 'Partial Payment' &&
+                        getReturnFixReleaseCap() != null &&
+                        getReturnFixReleaseCap() > 0
+                          ? Math.max(
+                              0.01,
+                              getReturnFixReleaseCap() -
+                                (returnFixDiscountAmount === ''
+                                  ? 0
+                                  : Math.max(0, parseFloat(returnFixDiscountAmount) || 0)) -
+                                0.01
+                            ).toFixed(2)
                           : undefined
                       }
                       value={returnFixPayableAmount}
@@ -1856,10 +1918,13 @@ const PaymentLogs = () => {
                       placeholder="0.00"
                       required
                     />
-                    {returnFixPaymentType === 'Partial Payment' && getReturnFixReleaseCap() != null && getReturnFixReleaseCap() > 0 && (
+                    {returnFixPaymentType === 'Partial Payment' &&
+                      getReturnFixReleaseCap() != null &&
+                      getReturnFixReleaseCap() > 0 && (
                       <p className="text-xs text-amber-600 mt-1">
-                        Partial payment must be lower than{' '}
-                        <span className="font-medium">₱{getReturnFixReleaseCap().toFixed(2)}</span> (remaining + this line).
+                        Partial payment: combined payable + discount must be lower than{' '}
+                        <span className="font-medium">₱{getReturnFixReleaseCap().toFixed(2)}</span> (remaining + this
+                        line&apos;s payable and discount).
                       </p>
                     )}
                   </div>
@@ -1877,23 +1942,43 @@ const PaymentLogs = () => {
                       placeholder="0.00"
                     />
                   </div>
-                  <div className="sm:col-span-2">
-                    <label className="label-field text-xs">
-                      Issue Date <span className="text-red-500">*</span>
-                    </label>
-                    <p className="text-xs text-gray-500 mb-1">
-                      Defaults to the original payment date; change only if the receipt shows a different date.
-                    </p>
+                  <div>
+                    <label className="label-field text-xs">Discount Amount (Optional)</label>
                     <input
-                      id="return_fix_issue_date"
-                      type="date"
-                      value={returnFixIssueDate}
-                      onChange={(e) => setReturnFixIssueDate(e.target.value)}
+                      type="number"
+                      name="discount_amount"
+                      step="0.01"
+                      min="0"
+                      max={
+                        parseFloat(returnFixPayableAmount || 0) > 0
+                          ? Math.max(0, parseFloat(returnFixPayableAmount || 0) - 0.01).toFixed(2)
+                          : undefined
+                      }
+                      value={returnFixDiscountAmount}
+                      onChange={handleReturnFixInputChange}
                       disabled={returnFixLoading || returnFixAttachmentUploading}
                       className="input-field text-sm"
-                      required
+                      placeholder="0.00"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">
+                    Issue Date <span className="text-red-500">*</span>
+                  </label>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Defaults to the original payment date; change only if the receipt shows a different date.
+                  </p>
+                  <input
+                    id="return_fix_issue_date"
+                    type="date"
+                    value={returnFixIssueDate}
+                    onChange={(e) => setReturnFixIssueDate(e.target.value)}
+                    disabled={returnFixLoading || returnFixAttachmentUploading}
+                    className="input-field text-sm max-w-md"
+                    required
+                  />
                 </div>
 
                 <div>
@@ -1979,9 +2064,16 @@ const PaymentLogs = () => {
                     const inv = returnFixInvoiceSummary;
                     const breakdown = getInvoiceBreakdownForReturnFix(inv);
                     const linePayable = parseFloat(returnFixPayment.payable_amount) || 0;
-                    const enteredAmount = parseFloat(returnFixPayableAmount || 0) || 0;
-                    const payableToApply = Math.max(0, Math.min(enteredAmount, breakdown.remaining + linePayable));
-                    const projectedPaid = breakdown.paidAmount - linePayable + payableToApply;
+                    const lineDiscount = parseFloat(returnFixPayment.discount_amount || 0) || 0;
+                    const oldSettlement = linePayable + lineDiscount;
+                    const enteredPayable = parseFloat(returnFixPayableAmount || 0) || 0;
+                    const enteredDiscount =
+                      returnFixDiscountAmount === '' ? 0 : Math.max(0, parseFloat(returnFixDiscountAmount) || 0);
+                    const newSettlement = enteredPayable + enteredDiscount;
+                    const releaseCap = Math.max(0, breakdown.remaining + oldSettlement);
+                    const settlementToApply =
+                      releaseCap > 0 ? Math.max(0, Math.min(newSettlement, releaseCap)) : newSettlement;
+                    const projectedPaid = breakdown.paidAmount - oldSettlement + settlementToApply;
                     const projectedRemaining = Math.max(0, breakdown.totalDue - projectedPaid);
                     return (
                       <div className="bg-gray-50 rounded-lg p-4 space-y-3">
@@ -2033,7 +2125,7 @@ const PaymentLogs = () => {
                           </div>
                           <div className="flex justify-between gap-2">
                             <span className="text-gray-600">Payment to apply (this line)</span>
-                            <span className="text-gray-900 shrink-0">₱{payableToApply.toFixed(2)}</span>
+                            <span className="text-gray-900 shrink-0">₱{settlementToApply.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between gap-2">
                             <span className="text-gray-600">Projected Total Paid</span>
@@ -2179,7 +2271,14 @@ const PaymentLogs = () => {
             <div className="grid gap-3 px-6 py-5 text-sm sm:grid-cols-2">
               <div><span className="font-medium text-gray-700">Invoice:</span> INV-{selectedRejectedPayment.invoice_id || '-'}</div>
               <div><span className="font-medium text-gray-700">Student:</span> {selectedRejectedPayment.student_name || '-'}</div>
-              <div><span className="font-medium text-gray-700">Amount:</span> {formatCurrency(selectedRejectedPayment.payable_amount)}</div>
+              <div>
+                <span className="font-medium text-gray-700">Amount:</span>{' '}
+                {formatCurrency(getPaymentLogTableAmountColumn(selectedRejectedPayment))}
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">Total amount:</span>{' '}
+                {formatCurrency(getPaymentLogTableTotalAmountColumn(selectedRejectedPayment))}
+              </div>
               <div><span className="font-medium text-gray-700">Payment method:</span> {selectedRejectedPayment.payment_method || '-'}</div>
               <div><span className="font-medium text-gray-700">Payment date:</span> {selectedRejectedPayment.payment_date ? formatDate(selectedRejectedPayment.payment_date) : '-'}</div>
               <div><span className="font-medium text-gray-700">Reference#:</span> {selectedRejectedPayment.reference_number || '-'}</div>

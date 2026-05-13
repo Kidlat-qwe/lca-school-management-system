@@ -3,10 +3,12 @@
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Getting Started](#getting-started)
-3. [Superadmin Role Overview](#superadmin-role-overview)
-4. [Dashboard](#dashboard)
-5. [Pages and Features](#pages-and-features)
+2. [What's New in v1.3](#whats-new-in-v13)
+3. [Getting Started](#getting-started)
+4. [Superadmin Role Overview](#superadmin-role-overview)
+5. [Dashboard](#dashboard)
+6. [Common UI Patterns](#common-ui-patterns)
+7. [Pages and Features](#pages-and-features)
    - [Branch Management](#branch-management)
    - [Calendar](#calendar)
    - [Announcements](#announcements)
@@ -24,10 +26,12 @@
    - [Invoice Management](#invoice-management)
    - [Installment Invoice](#installment-invoice)
    - [Payment Logs](#payment-logs)
+   - [Acknowledgement Receipts](#acknowledgement-receipts)
+   - [Daily Summary Sales](#daily-summary-sales)
    - [Settings](#settings)
-6. [Common Workflows](#common-workflows)
-7. [Best Practices](#best-practices)
-8. [Troubleshooting](#troubleshooting)
+8. [Common Workflows](#common-workflows)
+9. [Best Practices](#best-practices)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -46,6 +50,55 @@ This manual is specifically designed for **Superadmin** users of the Physical Sc
   - Create system-wide configurations
   - Manage all users across all branches
 - **Scope**: Complete system administration and oversight
+
+---
+
+## What's New in v1.3
+
+This release adds new pages, refines the verification workflow and standardizes the UX of every list page system-wide.
+
+### New pages (system-wide)
+
+- **Acknowledgement Receipts** — review every up-front payment across all branches with status, attachment proof, branch and date filters.
+- **Daily Summary Sales** — view End of Shift and Cash Deposit Summary submissions per branch, including ones Finance returned for correction.
+
+### Payment lifecycle: Returned vs Rejected
+
+- "Return for correction" still exists for fixable mistakes (Finance sends the row back to the issuer to edit and resubmit).
+- A new **Reject** action permanently removes the payment from revenue/daily sales/dashboard. The student stays enrolled — only the money is reversed.
+- The originating branch admin sees the rejected payment in a new **Rejected** tab on Payment Logs with the full reason and a **Go to invoice** button to record a new payment.
+- The **Rejected tab is de-duplicated per invoice** (only the most recent rejection is shown) and **auto-clears** once a fresh payment moves the invoice out of "Rejected".
+
+### Record Payment — Discount field
+
+- Optional **Discount Amount** on the Record Payment modal. The amount counts toward invoice settlement (so a fully discounted payment closes the invoice cleanly) but is **not** counted as revenue. The database column `paymenttbl.discount_amount` is the source of truth — see migration `108_add_discount_amount_to_paymenttbl.sql`.
+
+### EOD email digest
+
+- Branch EOD submissions no longer email Finance/Superfinance.
+- Superadmins automatically receive the daily EOD digest. The recipient lookup tolerates whitespace in `user_type`, and an additional comma-separated list can be configured via the `EOD_STAKEHOLDER_EMAILS` environment variable for stakeholders without a system account.
+- See `backend/.env` for SMTP configuration; missing/empty SMTP settings are now logged with a clear `console.warn`.
+
+### Standardized list UX
+
+- **Debounced server-side search** on every list (no auto-refresh per keystroke; pagination resets on search).
+- **Sortable column headers** with ▲/▼ arrows on Issue Date, Payment Date, Branch, Status, Issued By.
+- **Three date-filter modes** on Payment Logs (Month picker / Payment date From-To / Date created From-To). AR and Invoice pages share Month/From-To filtering with default = current Manila month for AR and Dashboards. Invoice date filtering is now **server-side**.
+- Counts are labelled **"Total Invoice: N"** and **"Total Amount: ₱…"** uniformly.
+
+### Cash management
+
+- **Cash Holding Alert**: branch admins holding ≥ a configurable threshold of undeposited cash receive an **urgent login modal** every time they sign in until the deposit is submitted. Threshold lives in Settings (default ₱100,000).
+- **Cash Deposit modal**: From locked to last deposit's end date + 1; To is editable (capped at today). Cash-only payment table.
+- **Cash Deposit Summary Details**: regression fixed where the modal showed no rows; now falls back to the original audit snapshot if the live recalc returns nothing (e.g. payments deleted after submission).
+
+### Other UX
+
+- Reservation upgrade modal accepts a **promotion code**.
+- Acknowledgement Receipt header reformatted as **"Acknowledgement Receipt#"**.
+- Settings has a new **Template Settings** tab for notification/email/EOD/cash deposit/payment/reminder templates.
+- Merchandise → Uniforms now supports **2XL**.
+- Financial Dashboard, Enrollment Dashboard and Daily Summary Sales default to **"This Month"**.
 
 ---
 
@@ -137,6 +190,39 @@ The Superadmin Dashboard provides a comprehensive system-wide overview with key 
 3. **Track Activities**: Monitor recent system activities
 4. **Quick Navigation**: Use quick links to access common pages
 5. **Daily Overview**: Use dashboard as starting point each day
+
+### Default month
+
+Financial and Enrollment Dashboards default to the current Manila month. Switch the **Month** picker to view a different period — totals and charts recompute against the selected month.
+
+---
+
+## Common UI Patterns
+
+### Search bars (debounced + server-side)
+
+- ~300 ms debounce after the last keystroke; no per-character page refresh.
+- Pagination resets to page 1 on search so matches are visible immediately.
+- Filtering happens on the server, so totals and counts reflect the filtered set.
+
+### Sortable column headers
+
+- ▲/▼ arrows next to **Issue Date, Payment Date, Branch, Status, Issued By**.
+- First click = ascending, second click = descending, click another column to reset.
+
+### Date filter modes
+
+Payment Logs, AR, Invoice and Daily Summary Sales pages share the same three filter inputs. Selecting one clears the others:
+
+1. **Month picker** (`YYYY-MM`) — defaults to current Manila month on AR, Daily Summary Sales and Dashboards.
+2. **Payment date** From / To (Payment Logs only).
+3. **From / To** (record-created date for Payment Logs; issue date for AR; invoice issue date for Invoice).
+
+Use **Clear filters** to reset all three.
+
+### Branch filter (system-wide pages)
+
+Every list also exposes a **Branch** dropdown. Leave it blank to see all branches; choose one to scope filters, totals and exports.
 
 ---
 
@@ -874,6 +960,10 @@ Manage merchandise items across all branches. Merchandise can be included in pac
 - Delete merchandise
 - Manage across all branches
 
+#### Uniform sizes
+
+For items with category "Uniform", available sizes are **XS, S, M, L, XL, 2XL**. Stock is tracked per size.
+
 ---
 
 ### Promo
@@ -985,8 +1075,15 @@ Create, view, and manage invoices across all branches. Handle all billing and in
 
 - See all invoices across all branches
 - Filter by Branch
-- Filter by Status
-- Search by invoice number or student name
+- Filter by Status (Pending, Paid, Partially Paid, Unpaid, Overdue, Cancelled, **Rejected**)
+- Search by invoice number or student name (debounced, server-side)
+- **From / To** issue-date range or **Month picker** (server-side filtering — totals always reflect what is shown)
+- Sortable headers on Issue Date, Branch, Status
+- Summary card uses **"Total Invoice: N"** and **"Total Amount: ₱…"**
+
+**Invoice Status — Rejected**
+
+When Finance/Superfinance rejects a payment, the linked invoice immediately becomes **Rejected**. Branch admins can record a new payment from the action menu; the rejected payment remains in Payment Logs → Rejected for audit but is excluded from revenue and the dashboards.
 
 **Creating Invoices**
 
@@ -1076,30 +1173,98 @@ Record and track all payments across all branches. Manage financial transactions
 
 **Recording Payments**
 
-1. Click "Record Payment" button
-2. Fill in payment form:
-   - Select Invoice
-   - Payment Method
-   - Payment Type (Full, Partial, Deposit)
-   - Payable Amount
-   - Reference Number
-   - Issue Date
-   - Remarks
-3. Click "Record Payment"
+The Record Payment modal opens from the Invoice page (action menu → Pay).
 
-**Payment Management**
+1. Open the invoice's action menu and click **Pay**
+2. Fill in the form:
+   - **Payment Method** (Cash / Bank Transfer / GCash / PayMaya / Check / Credit Card / Other)
+   - **Payment Type** (Full / Partial / Deposit)
+   - **Payable Amount** — cash actually collected
+   - **Discount Amount** (optional) — counts toward invoice settlement (`payable_amount + discount_amount`) but **not** revenue. Use it so a fully discounted payment can close an invoice as "Paid" instead of "Partial".
+   - **Reference Number** (recommended)
+   - **Issue Date** (defaults to today)
+   - **Remarks**
+3. Click **Record Payment**
 
-- View payment details
-- Edit payments
-- Delete payments
-- Export payment data
-- System-wide access
+#### Filtering and tabs
 
-#### Important Notes
+- **Tabs**: All / Verified / Pending / Returned / **Rejected**
+- **Date filter modes**: Month picker (default = current month), Payment date From/To, Date created From/To
+- **Branch** dropdown for system-wide vs single-branch view
+- **Payment method**, **Status** dropdowns
+- Sortable columns and debounced search per Common UI Patterns
 
-- Can record payments for any branch
-- Can view all payments across all branches
-- Payment recording triggers automatic system actions
+#### Rejected payments tab
+
+Finance/Superfinance can permanently **reject** a payment. The original Admin/Superadmin sees the rejection in the **Rejected** tab:
+
+- Columns include the **rejected by** user, **rejected at** timestamp, **reject reason**, branch and student.
+- **View details** opens the full record; **Go to invoice** jumps to the invoice page so a new payment can be recorded.
+- The invoice flips to **Rejected** status immediately on rejection.
+- **De-duplicated**: if Finance rejects the same invoice multiple times (after resubmissions), only the most recent rejection appears.
+- Auto-clears once the invoice leaves "Rejected" status (e.g. after a successful re-payment).
+- Rejected amounts are excluded from Total Amount, the Financial Dashboard, the Daily Sales report and exports. Student enrollment is **unaffected**.
+
+#### Excel export
+
+The export now appends a single **Total Amount** row honoring the active filter (status + dates). Rejected and Returned payments are excluded from amount totals.
+
+---
+
+### Acknowledgement Receipts
+
+**Path**: Manage Invoice → Acknowledgement Receipts
+
+System-wide view of every acknowledgement receipt across all branches.
+
+#### Filters
+
+- **Branch**, **Status** (Submitted / Pending / Verified / Applied / Rejected / Cancelled)
+- **From / To** issue date or **Month picker** (default = current Manila month)
+- Search by AR number, student/prospect name, reference number
+
+#### Each row
+
+- AR number rendered as **"Acknowledgement Receipt# AR-XXXX"**
+- Student/prospect, package, level tag, amount, branch, status
+- Reference number, attachment (proof) and reject reason if any
+
+Click a row to view full details, the linked invoice (if any), the proof attachment and the reject reason. PDF download is available.
+
+> Audit tip: pair AR + Payment Logs filters by branch + date to reconcile bank deposits against actual receipts.
+
+---
+
+### Daily Summary Sales
+
+**Path**: Daily Summary Sales
+
+System-wide view of every End of Shift (EOD) and Cash Deposit Summary submission.
+
+#### Tabs
+
+- **End of Shift** — daily branch closeouts. Verifying an EOD locks the row; returning it sends the row to the branch admin's "Returned" view for correction.
+- **Cash Deposit Summary** — branch cash deposit submissions with proof attachment.
+
+Each tab includes a **Pending verification** view (Submitted) and **Returned** view (returned to issuer).
+
+#### Filters
+
+- **Branch**, **Status**
+- **From / To** + **Month picker** (default = current Manila month)
+
+#### Verifying
+
+1. Click a Submitted row to open the details modal.
+2. Review the recalculated payment list. The Cash Deposit modal also shows a **submitted snapshot** as a fallback if the live recalc returns no rows (e.g. payments deleted after submission). When this happens, an amber notice appears at the top of the table.
+3. Click **Verify** to approve, or **Return** with a reason for the issuer to correct.
+
+#### EOD email notifications
+
+- Branch EOD submissions email **Superadmins** automatically (no email is sent to Finance/Superfinance).
+- Add additional recipients by setting `EOD_STAKEHOLDER_EMAILS=alice@example.com,bob@example.com` in `backend/.env`.
+- The recipient query tolerates whitespace in the `userstbl.user_type` column. If no recipients are found or sending fails, the backend logs a warning to the console (check the server terminal in production).
+- SMTP configuration lives in `backend/.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`). Confirm these are set in production if Superadmins report missing emails.
 
 ---
 
@@ -1155,6 +1320,11 @@ Configure how the system handles overdue installment payments:
    - Enter final drop-off days (e.g., "30" for 30 days)
 5. Click "Save Settings"
 6. Settings are applied immediately
+
+#### Other settings
+
+- **Cash Holding Alert Threshold (₱)** — controls when branch admins receive the "deposit your cash" urgent login alert. Default ₱100,000. Branch-scoped overrides supported. Set to 0 to disable.
+- **Template Settings tab** — manage notification, email, EOD digest, cash deposit alert, payment confirmation and reminder templates. Variables/tokens used inside templates are listed in the editor's help panel. Templates can be set globally or per-branch.
 
 **How Settings Work**
 
@@ -1319,11 +1489,16 @@ Configure how the system handles overdue installment payments:
 
 ## Document Information
 
-**Version**: 1.2
-**Last Updated**: January 29, 2026
+**Version**: 1.3
+**Last Updated**: May 11, 2026
 **Role**: Superadmin
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.
+
+### Change log
+
+- **v1.3 (May 11, 2026)** — Documented Acknowledgement Receipts and Daily Summary Sales pages, the payment Reject workflow with auto-clearing Rejected tab, the discount field on Record Payment, three date-filter modes, debounced server-side search, sortable columns, "Total Invoice:" labelling, branch Cash Holding Alert with configurable threshold, Cash Deposit Summary editable "To" date and snapshot fallback, EOD email notifications now Superadmin-only with optional `EOD_STAKEHOLDER_EMAILS` recipients, default "This Month" on dashboards, Template Settings tab and Uniform 2XL size.
+- **v1.2 (January 29, 2026)** — Earlier baseline.
 
 ---
 

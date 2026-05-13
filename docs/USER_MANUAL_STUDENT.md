@@ -3,21 +3,22 @@
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Getting Started](#getting-started)
-3. [Student Role Overview](#student-role-overview)
-4. [Dashboard](#dashboard)
-5. [Pages and Features](#pages-and-features)
+2. [What's New in v1.3](#whats-new-in-v13)
+3. [Getting Started](#getting-started)
+4. [Student Role Overview](#student-role-overview)
+5. [Dashboard](#dashboard)
+6. [Pages and Features](#pages-and-features)
    - [Calendar](#calendar)
    - [Announcements](#announcements)
    - [Classes](#classes)
    - [Packages](#packages)
    - [Invoice](#invoice)
    - [Payment Logs](#payment-logs)
-6. [Understanding Your Information](#understanding-your-information)
-7. [Payment Process](#payment-process)
-8. [Enrollment Process](#enrollment-process)
-9. [Important Reminders](#important-reminders)
-10. [Troubleshooting](#troubleshooting)
+7. [Understanding Your Information](#understanding-your-information)
+8. [Payment Process](#payment-process)
+9. [Enrollment Process](#enrollment-process)
+10. [Important Reminders](#important-reminders)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -41,6 +42,35 @@ This manual is specifically designed for **Student** users of the Physical Schoo
   - Cannot access other students' information
   - Cannot modify classes or enrollments
   - Cannot create invoices or payments
+
+---
+
+## What's New in v1.3
+
+A handful of small UX improvements should make the Invoice and Payment Logs pages easier to navigate.
+
+### Smarter search
+
+- The search bars (invoice number, payment reference) now wait until you stop typing for a moment before sending the request. The page will not refresh on every keystroke and the matching results appear directly without you needing to click "Next".
+
+### Sortable column headers
+
+- On the Invoice and Payment Logs tables, columns like **Issue Date, Payment Date** and **Status** show small ▲ / ▼ arrows. Click once to sort ascending, click again to sort descending.
+
+### Better date filters
+
+- The Invoice and Payment Logs pages now have:
+  - **From / To** date filters
+  - A **Month** picker that defaults to the current month
+- Choosing one filter clears the others. Use **Clear filters** to reset.
+
+### Invoice status — Rejected
+
+- If Finance rejects a previously recorded payment for one of your invoices, the invoice will appear with **Rejected** status. This means a new payment needs to be recorded by the school's finance team. **Your enrollment is not affected** — only the rejected payment is reversed. Coordinate with the finance office to settle the invoice.
+
+### "Total Invoice:" label
+
+- The summary card on the Invoice page now reads **"Total Invoice: N"** and **"Total Amount: ₱…"** — it always reflects the rows that match your current filters.
 
 ---
 
@@ -416,7 +446,10 @@ View all invoices assigned to you. Track payment status, download invoice PDFs, 
   - **Unpaid**: Not paid yet (red badge)
   - **Overdue**: Past due date (red badge)
   - **Partially Paid**: Some payment received (yellow badge)
-- Search by invoice number
+  - **Rejected**: A payment for this invoice was rejected by Finance and a new payment is needed (red badge)
+- Search by invoice number (the page does not refresh while you type)
+- Filter by **From / To** date or **Month picker**
+- Sort by Issue Date, Status using the sortable column headers
 
 **Invoice Table Columns**
 
@@ -503,6 +536,11 @@ View all invoices assigned to you. Track payment status, download invoice PDFs, 
   - Partial payment made
   - Remaining balance still due
   - Complete payment to clear invoice
+- **Rejected** (Red): A previously recorded payment was rejected by Finance
+  - The amount has been reversed
+  - Your enrollment is **not** affected
+  - The school's finance team needs to record a new payment
+  - Coordinate with the finance office to resolve
 
 **Invoice Types**
 
@@ -575,7 +613,11 @@ Each payment shows:
 - **By Date Range**: Filter by specific date range
   - Select start date and end date
   - Useful for monthly or yearly reviews
-- **Search**: Search by invoice number
+- **By Month**: Use the **Month picker** to view a single month at a time (defaults to the current month)
+- **Search**: Search by invoice number or reference number (the page does not refresh while you type)
+- **Sort**: Click the ▲ / ▼ arrows on Payment Date or Status to sort
+
+> **Heads up**: If a payment was **Rejected** by Finance, it will appear with the "Rejected" status and a reason. The associated invoice goes back to **Rejected** status and the school's finance team will need to record a new payment. You don't need to do anything in the system — coordinate with the finance office.
 
 **Viewing Payment Details**
 
@@ -931,11 +973,16 @@ Each payment shows:
 
 ## Document Information
 
-**Version**: 1.2
-**Last Updated**: January 29, 2026
+**Version**: 1.3
+**Last Updated**: May 11, 2026
 **Role**: Student
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.
+
+### Change log
+
+- **v1.3 (May 11, 2026)** — Documented the new Rejected invoice/payment status, debounced search, sortable column headers, From/To and Month picker date filters, and the "Total Invoice:" summary label.
+- **v1.2 (January 29, 2026)** — Earlier baseline.
 
 ---
 

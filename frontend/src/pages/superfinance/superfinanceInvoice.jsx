@@ -26,6 +26,7 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
+import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const ITEMS_PER_PAGE = 10;
@@ -118,6 +119,8 @@ const SuperfinanceInvoice = () => {
   const [paymentFormErrors, setPaymentFormErrors] = useState({});
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [paymentAttachmentUploading, setPaymentAttachmentUploading] = useState(false);
+  const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
+  const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
@@ -342,30 +345,6 @@ const SuperfinanceInvoice = () => {
       setStudents(studentUsers);
     } catch (err) {
       console.error('Error fetching students:', err);
-    }
-  };
-
-  const handleDelete = async (invoiceId) => {
-    setOpenMenuId(null);
-    if (
-      !(await appConfirm({
-        title: 'Delete invoice',
-        message:
-          'Are you sure you want to delete this invoice? This will also delete all invoice items and student associations.',
-        destructive: true,
-        confirmLabel: 'Delete',
-      }))
-    ) {
-      return;
-    }
-
-    try {
-      await apiRequest(`/invoices/${invoiceId}`, {
-        method: 'DELETE',
-      });
-      fetchInvoices();
-    } catch (err) {
-      appAlert(err.message || 'Failed to delete invoice');
     }
   };
 
@@ -698,11 +677,6 @@ const SuperfinanceInvoice = () => {
     appAlert('Receipt management is not yet implemented.');
   };
 
-  const handleDeleteReceipt = async (invoice) => {
-    setOpenMenuId(null);
-    appAlert('Receipt deletion is not yet implemented.');
-  };
-
   const handleViewInstallmentInvoice = (invoice) => {
     setOpenMenuId(null);
     setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
@@ -829,6 +803,40 @@ const SuperfinanceInvoice = () => {
       attachment_url: '',
     });
     setPaymentFormErrors({});
+  };
+
+  const closePaymentRecordedInvoiceSummary = () => {
+    if (paymentRecordedPdfLoading) return;
+    setPaymentRecordedSummary(null);
+  };
+
+  const handlePrintPaymentRecordedAckPdf = async () => {
+    const inv = paymentRecordedSummary?.invoice;
+    if (!inv?.invoice_id) return;
+    setPaymentRecordedPdfLoading(true);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${inv.invoice_id}/pdf?doc_type=ar`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setPaymentRecordedPdfLoading(false);
+    }
   };
 
   const getInvoiceBreakdown = (invoice) => {
@@ -1006,9 +1014,18 @@ const SuperfinanceInvoice = () => {
         ? 0
         : Math.max(0, parseFloat(paymentFormData.discount_amount) || 0);
       const netPayable = Math.max(0, grossPayable - discountApplied);
+      const paidInvoiceId = selectedInvoiceForPayment.invoice_id;
+      const paymentSnapshot = {
+        student_id: parseInt(paymentFormData.student_id, 10),
+        payable_amount: netPayable,
+        discount_amount: discountApplied,
+        tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
+        issue_date: paymentFormData.issue_date,
+        reference_number: (paymentFormData.reference_number || '').trim(),
+      };
 
       const payload = {
-        invoice_id: selectedInvoiceForPayment.invoice_id,
+        invoice_id: paidInvoiceId,
         student_id: parseInt(paymentFormData.student_id, 10),
         payment_method: paymentFormData.payment_method,
         payment_type: paymentFormData.payment_type,
@@ -1036,10 +1053,20 @@ const SuperfinanceInvoice = () => {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      
-      appAlert('Payment recorded successfully!');
+
       handleClosePaymentModal();
-      fetchInvoices(); // Refresh invoice list to show updated status
+      await fetchInvoices();
+
+      try {
+        const invRes = await apiRequest(`/invoices/${paidInvoiceId}`);
+        setPaymentRecordedSummary({
+          invoice: invRes.data,
+          paymentSnapshot,
+        });
+      } catch (fetchErr) {
+        console.error('Error loading invoice after payment:', fetchErr);
+        appAlert('Payment recorded successfully, but the summary could not be loaded. Refresh the page if needed.');
+      }
     } catch (err) {
       console.error('Error submitting payment:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Error recording payment. Please try again.';
@@ -2085,21 +2112,6 @@ const SuperfinanceInvoice = () => {
                       <span>Download Acknowledgement Receipt</span>
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenuId(null);
-                        setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
-                        handleDelete(openMenuId);
-                      }}
-                      className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                    >
-                      <span>Delete Invoice</span>
-                      <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     </button>
                     {selectedInvoice.installmentinvoiceprofiles_id && (
@@ -3587,6 +3599,34 @@ const SuperfinanceInvoice = () => {
         </div>,
         document.body
       )}
+
+      <PaymentRecordedInvoiceSummaryModal
+        open={!!paymentRecordedSummary}
+        invoice={paymentRecordedSummary?.invoice}
+        branchName={
+          paymentRecordedSummary?.invoice
+            ? getBranchName(paymentRecordedSummary.invoice.branch_id) ||
+              paymentRecordedSummary.invoice.branch_name ||
+              ''
+            : ''
+        }
+        branchInfo={(() => {
+          const inv = paymentRecordedSummary?.invoice;
+          if (!inv?.branch_id) return null;
+          const b = branches.find((x) => Number(x.branch_id) === Number(inv.branch_id));
+          if (!b) return null;
+          return {
+            address: b.branch_address,
+            phone: b.branch_phone_number,
+            email: b.branch_email,
+            nickname: b.branch_nickname || b.branch_name,
+          };
+        })()}
+        paymentSnapshot={paymentRecordedSummary?.paymentSnapshot}
+        onClose={closePaymentRecordedInvoiceSummary}
+        onPrintAcknowledgementReceipt={handlePrintPaymentRecordedAckPdf}
+        printLoading={paymentRecordedPdfLoading}
+      />
     </div>
   );
 };

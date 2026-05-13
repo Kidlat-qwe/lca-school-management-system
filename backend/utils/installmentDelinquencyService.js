@@ -1,6 +1,10 @@
 import { getClient } from '../config/database.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
+import {
+  syncAllProgramPaymentStatuses,
+  syncProgramPaymentStatusForInvoice,
+} from './programPaymentStatusService.js';
 
 const getDefaultBillingSettings = () => ({
   installment_penalty_rate: { value: SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue, scope: 'default' },
@@ -87,6 +91,7 @@ export const processInstallmentDelinquencies = async () => {
     scanned: 0,
     penaltiesApplied: 0,
     removalsApplied: 0,
+    programPaymentStatusesSynced: 0,
     errors: 0,
   };
 
@@ -251,13 +256,13 @@ export const processInstallmentDelinquencies = async () => {
           if (totalsForRemoval.remainingBalance > 0) {
             const updateRes = await client.query(
               `UPDATE classstudentstbl
-               SET enrollment_status = 'Removed',
+               SET program_enrollment_status = 'dropped',
                    removed_at = CURRENT_TIMESTAMP,
                    removed_reason = $1,
                    removed_by = $2
                WHERE class_id = $3
                  AND student_id = $4
-                 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
               [
                 `Installment delinquency (>= ${
                   Number.isFinite(finalDropoffDays)
@@ -276,6 +281,9 @@ export const processInstallmentDelinquencies = async () => {
           }
         }
 
+        const syncResult = await syncProgramPaymentStatusForInvoice(client, invoiceId);
+        result.programPaymentStatusesSynced += syncResult.synced || 0;
+
         await client.query('COMMIT');
       } catch (e) {
         result.errors += 1;
@@ -287,6 +295,9 @@ export const processInstallmentDelinquencies = async () => {
         console.error('[Delinquency] Error processing invoice', invoiceId, e);
       }
     }
+
+    const allSyncResult = await syncAllProgramPaymentStatuses(client);
+    result.programPaymentStatusesSynced += allSyncResult.synced || 0;
 
     return result;
   } finally {

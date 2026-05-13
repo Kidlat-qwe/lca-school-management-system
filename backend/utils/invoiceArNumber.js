@@ -28,13 +28,37 @@ export async function allocateNextArStyleNumber(client) {
 }
 
 /**
+ * INSERT into invoicestbl with invoice_ar_number.
+ * When explicitInvoiceArNumber is a non-empty string, it is used as-is (no counter increment)
+ * so a prepaid package acknowledgement receipt keeps the same AR# on the invoice.
+ * Otherwise allocates the next YY#### from ar_number_counter.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {string} sql - Must list invoice_ar_number as the last column and use $N for the last placeholder.
+ * @param {unknown[]} baseParams - Params for $1 .. $(n-1); invoice_ar_number is appended.
+ * @param {string|null|undefined} explicitInvoiceArNumber
+ */
+export async function insertInvoiceWithArNumberReuseOrAllocate(
+  client,
+  sql,
+  baseParams,
+  explicitInvoiceArNumber
+) {
+  const trimmed =
+    explicitInvoiceArNumber != null && String(explicitInvoiceArNumber).trim() !== ''
+      ? String(explicitInvoiceArNumber).trim()
+      : null;
+  const arNum = trimmed ?? (await allocateNextArStyleNumber(client));
+  const result = await client.query(sql, [...baseParams, arNum]);
+  return result.rows[0];
+}
+
+/**
  * INSERT into invoicestbl with a generated invoice_ar_number.
  * @param {import('pg').PoolClient} client
  * @param {string} sql - Must list invoice_ar_number as the last column and use $N for the last placeholder.
  * @param {unknown[]} baseParams - Params for $1 .. $(n-1); invoice_ar_number is appended.
  */
 export async function insertInvoiceWithArNumber(client, sql, baseParams) {
-  const arNum = await allocateNextArStyleNumber(client);
-  const result = await client.query(sql, [...baseParams, arNum]);
-  return result.rows[0];
+  return insertInvoiceWithArNumberReuseOrAllocate(client, sql, baseParams, null);
 }

@@ -135,8 +135,9 @@ const SuperfinanceInstallmentInvoice = () => {
   };
 
   const filteredInvoices = invoices.filter((invoice) => {
-    const matchesSearch = !nameSearchTerm || 
+    const matchesSearch = !nameSearchTerm ||
       invoice.student_name?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
+      invoice.class_name?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       invoice.program_name?.toLowerCase().includes(nameSearchTerm.toLowerCase());
     
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
@@ -196,6 +197,10 @@ const SuperfinanceInstallmentInvoice = () => {
       } else if (reason === 'complete') {
         appAlert(
           'Phase progress for this installment plan is already complete. No further installment invoices can be generated.'
+        );
+      } else if (reason === 'superseded') {
+        appAlert(
+          'This is an older installment plan row for the same class. A newer plan exists—use Generate Invoice on the latest row, or extend the existing profile instead of creating a duplicate.'
         );
       } else {
         appAlert('Invoice generation is not available for this record.');
@@ -300,43 +305,6 @@ const SuperfinanceInstallmentInvoice = () => {
     }
   };
 
-  const handleDelete = async (invoice) => {
-    if (!invoice?.installmentinvoicedtl_id) {
-      appAlert('No installment schedule row exists yet for this student.');
-      setOpenActionMenu(null);
-      setActionMenuPosition(null);
-      return;
-    }
-    if (
-      !(await appConfirm({
-        title: 'Delete installment invoice',
-        message: `Are you sure you want to delete invoice for ${invoice.student_name}?`,
-        destructive: true,
-        confirmLabel: 'Delete',
-      }))
-    ) {
-      setOpenActionMenu(null);
-      setActionMenuPosition(null);
-      return;
-    }
-
-    try {
-      await apiRequest(`/installment-invoices/invoices/${invoice.installmentinvoicedtl_id}`, {
-        method: 'DELETE',
-      });
-      setOpenActionMenu(null);
-      setActionMenuPosition(null);
-      // Refresh the list
-      await fetchInvoices();
-      appAlert('Installment invoice deleted successfully!');
-    } catch (err) {
-      setError(err.message || 'Failed to delete invoice');
-      console.error('Error deleting invoice:', err);
-      setOpenActionMenu(null);
-      setActionMenuPosition(null);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -370,7 +338,7 @@ const SuperfinanceInstallmentInvoice = () => {
               type="text"
               value={nameSearchTerm}
               onChange={(e) => setNameSearchTerm(e.target.value)}
-              placeholder="Search by student name or program..."
+              placeholder="Search by student name, class, or program..."
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             />
             {nameSearchTerm && (
@@ -399,9 +367,10 @@ const SuperfinanceInstallmentInvoice = () => {
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px' }}>
+          <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1240px' }}>
             <colgroup>
               <col style={{ width: '140px' }} />
+              <col style={{ width: '150px' }} />
               <col style={{ width: '150px' }} />
               <col style={{ width: '120px' }} />
               <col style={{ width: '100px' }} />
@@ -415,10 +384,13 @@ const SuperfinanceInstallmentInvoice = () => {
               <tr>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   Student Name
-                </th>
+                      </th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                  Class Name
+                      </th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   Program Name
-                </th>
+                      </th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   Amount (Excl.)
                 </th>
@@ -445,7 +417,7 @@ const SuperfinanceInstallmentInvoice = () => {
             <tbody className="bg-[#ffffff] divide-y divide-gray-200">
               {filteredInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="px-6 py-12 text-center">
+                  <td colSpan="10" className="px-6 py-12 text-center">
                     <p className="text-gray-500">
                       {nameSearchTerm || filterStatus || filterBranch
                         ? 'No matching invoices. Try adjusting your search or filters.'
@@ -466,13 +438,18 @@ const SuperfinanceInstallmentInvoice = () => {
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.student_name || '-'}
+                          </div>
+                        </td>
+                    <td className="px-3 py-4">
+                      <div className="text-sm text-gray-900">
+                        {invoice.class_name || '-'}
                       </div>
                     </td>
                     <td className="px-3 py-4">
-                      <div className="text-sm text-gray-900">
+                          <div className="text-sm text-gray-900">
                         {invoice.program_name || '-'}
-                      </div>
-                    </td>
+                          </div>
+                        </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.total_amount_excluding_tax !== null && invoice.total_amount_excluding_tax !== undefined
@@ -681,16 +658,9 @@ const SuperfinanceInstallmentInvoice = () => {
                       {installmentGenerateBlockedReason(invoice) === 'complete' && (
                         <span className="ml-2 text-xs">(Complete)</span>
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(invoice);
-                      }}
-                      className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                    >
-                      Delete
+                      {installmentGenerateBlockedReason(invoice) === 'superseded' && (
+                        <span className="ml-2 text-xs">(Older plan)</span>
+                      )}
                     </button>
                   </>
                 );
@@ -725,6 +695,13 @@ const SuperfinanceInstallmentInvoice = () => {
                 </h2>
                 <div className="text-sm text-gray-500 mt-1">
                   <p>Generate invoice for {selectedInvoiceForGeneration.student_name}</p>
+                  {(selectedInvoiceForGeneration.class_name || selectedInvoiceForGeneration.program_name) && (
+                    <p className="mt-0.5">
+                      {[selectedInvoiceForGeneration.class_name, selectedInvoiceForGeneration.program_name]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  )}
                   {selectedInvoiceForGeneration.total_phases !== null && selectedInvoiceForGeneration.total_phases !== undefined && (
                     <p className="mt-1">
                       Phase Progress: {selectedInvoiceForGeneration.generated_count || 0} / {selectedInvoiceForGeneration.total_phases} invoices generated

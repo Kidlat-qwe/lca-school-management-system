@@ -9,7 +9,16 @@ import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
-import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
+import {
+  determineEnrollmentStatus,
+  PROGRAM_ENROLLMENT_STATUS,
+  ACTIVE_ENROLLMENT_STATUSES,
+} from '../utils/enrollmentStatus.js';
+import {
+  insertInvoiceWithArNumber,
+  insertInvoiceWithArNumberReuseOrAllocate,
+} from '../utils/invoiceArNumber.js';
+import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
 
 const router = express.Router();
 
@@ -210,7 +219,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
      FROM classstudentstbl
      WHERE student_id = $1
        AND class_id = $2
-       AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
     [studentId, classId]
   );
 
@@ -629,7 +638,7 @@ router.get(
                  LEFT JOIN (
                    SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
                    FROM classstudentstbl
-                   WHERE COALESCE(enrollment_status, 'Active') = 'Active'
+                   WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
                    GROUP BY class_id
                  ) enrollment_counts ON c.class_id = enrollment_counts.class_id
                  LEFT JOIN (
@@ -845,9 +854,9 @@ router.post(
       }
 
       const enrollmentsResult = await client.query(
-        `SELECT classstudent_id, student_id, class_id, phase_number, enrollment_status
+        `SELECT classstudent_id, student_id, class_id, phase_number, program_enrollment_status
          FROM classstudentstbl
-         WHERE student_id = $1 AND class_id = $2 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
         [student_id, source_class_id]
       );
 
@@ -861,7 +870,7 @@ router.post(
 
       const existingInTarget = await client.query(
         `SELECT classstudent_id FROM classstudentstbl
-         WHERE student_id = $1 AND class_id = $2 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
         [student_id, target_class_id]
       );
       if (existingInTarget.rows.length > 0) {
@@ -877,7 +886,7 @@ router.post(
         const targetEnrollmentCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count
            FROM classstudentstbl
-           WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'`,
+           WHERE class_id = $1 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
           [target_class_id]
         );
         const currentCount = parseInt(targetEnrollmentCount.rows[0].count, 10);
@@ -911,6 +920,222 @@ router.post(
         success: true,
         message: `Student moved to the other class successfully (${moveCount} enrollment(s), phase preserved).`,
         data: { student_id, source_class_id, target_class_id, enrollments_moved: moveCount },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/:id/students/:studentId/extend-installment-phase-scope
+ *
+ * Continue installment plan: extends `total_phases` on the **existing** active
+ * `installmentinvoiceprofilestbl` row so future generated invoices follow the
+ * wider phase range. Does **not** insert a second profile.
+ *
+ * Body:
+ *   - phase_end (required): new last covered phase (e.g. 5 to extend 1–2 → 1–5).
+ *   - phase_start (optional): must match the profile’s phase_start when sent.
+ *   - installmentinvoiceprofiles_id (optional): required if more than one active profile exists.
+ *
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/:id/students/:studentId/extend-installment-phase-scope',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    body('phase_end').isInt({ min: 1 }).withMessage('phase_end must be a positive integer'),
+    body('phase_start').optional().isInt({ min: 1 }),
+    body('installmentinvoiceprofiles_id').optional().isInt({ min: 1 }),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const classId = parseInt(req.params.id, 10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const newPhaseEnd = parseInt(req.body.phase_end, 10);
+      const requestedProfileId = req.body.installmentinvoiceprofiles_id
+        ? parseInt(req.body.installmentinvoiceprofiles_id, 10)
+        : null;
+      const requestedPhaseStart = req.body.phase_start != null ? parseInt(req.body.phase_start, 10) : null;
+
+      await client.query('BEGIN');
+
+      const classRes = await client.query(
+        `SELECT class_id, branch_id, number_of_phase FROM classestbl WHERE class_id = $1`,
+        [classId]
+      );
+      if (classRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Class not found.' });
+      }
+      const classRow = classRes.rows[0];
+      const classMaxPhase = classRow.number_of_phase != null ? parseInt(classRow.number_of_phase, 10) : null;
+
+      let profileQuery = `
+        SELECT ip.*,
+               p.package_type,
+               p.payment_option,
+               p.phase_start AS pkg_phase_start,
+               p.phase_end AS pkg_phase_end
+        FROM installmentinvoiceprofilestbl ip
+        LEFT JOIN packagestbl p ON ip.package_id = p.package_id
+        WHERE ip.student_id = $1
+          AND ip.class_id = $2
+          AND ip.is_active = true`;
+      const profileParams = [studentId, classId];
+      if (requestedProfileId != null) {
+        profileQuery += ` AND ip.installmentinvoiceprofiles_id = $3`;
+        profileParams.push(requestedProfileId);
+      }
+      profileQuery += ` ORDER BY ip.installmentinvoiceprofiles_id DESC`;
+
+      const profilesRes = await client.query(profileQuery, profileParams);
+      if (profilesRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message:
+            'No active installment profile found for this student in this class. Pass installmentinvoiceprofiles_id if multiple profiles exist.',
+        });
+      }
+      if (profilesRes.rows.length > 1 && requestedProfileId == null) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'Multiple active installment profiles match. Send installmentinvoiceprofiles_id to choose which plan to extend.',
+          data: {
+            profiles: profilesRes.rows.map((r) => ({
+              installmentinvoiceprofiles_id: r.installmentinvoiceprofiles_id,
+              package_id: r.package_id,
+              phase_start: r.phase_start,
+              total_phases: r.total_phases,
+              generated_count: r.generated_count,
+            })),
+          },
+        });
+      }
+
+      const profile = profilesRes.rows[0];
+      const pkg = profile.package_id
+        ? {
+            package_type: profile.package_type,
+            payment_option: profile.payment_option,
+            phase_start: profile.pkg_phase_start != null ? parseInt(profile.pkg_phase_start, 10) : null,
+            phase_end: profile.pkg_phase_end != null ? parseInt(profile.pkg_phase_end, 10) : null,
+          }
+        : null;
+
+      const isPhaseInstallment =
+        pkg &&
+        String(pkg.package_type || '').trim() === 'Phase' &&
+        String(pkg.payment_option || '').trim() === 'Installment';
+
+      const profilePhaseStart =
+        profile.phase_start != null && profile.phase_start !== ''
+          ? parseInt(profile.phase_start, 10)
+          : isPhaseInstallment && pkg.phase_start != null
+            ? pkg.phase_start
+            : 1;
+
+      if (requestedPhaseStart != null && requestedPhaseStart !== profilePhaseStart) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `phase_start mismatch: profile uses ${profilePhaseStart}, request sent ${requestedPhaseStart}.`,
+        });
+      }
+
+      const pkgMin = isPhaseInstallment && pkg.phase_start != null ? pkg.phase_start : 1;
+      const pkgCapEnd =
+        isPhaseInstallment && pkg.phase_end != null
+          ? pkg.phase_end
+          : isPhaseInstallment && classMaxPhase != null
+            ? classMaxPhase
+            : null;
+      if (newPhaseEnd < profilePhaseStart) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `phase_end (${newPhaseEnd}) must be >= plan phase_start (${profilePhaseStart}).`,
+        });
+      }
+      if (isPhaseInstallment && pkgCapEnd != null && (newPhaseEnd < pkgMin || newPhaseEnd > pkgCapEnd)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `phase_end must stay within the allowed range (${pkgMin}–${pkgCapEnd}).`,
+        });
+      }
+      if (classMaxPhase != null && Number.isInteger(classMaxPhase) && newPhaseEnd > classMaxPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `phase_end cannot exceed this class curriculum (${classMaxPhase} phase(s)).`,
+        });
+      }
+
+      const oldTotal = Math.max(1, parseInt(profile.total_phases, 10) || 1);
+      const genCount = Math.max(0, parseInt(profile.generated_count, 10) || 0);
+      const oldLastPhase = profilePhaseStart + oldTotal - 1;
+      const newTotalPhases = Math.max(1, newPhaseEnd - profilePhaseStart + 1);
+
+      if (newPhaseEnd <= oldLastPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Nothing to extend: plan already covers through phase ${oldLastPhase}. Choose a phase_end greater than ${oldLastPhase}.`,
+        });
+      }
+      if (newTotalPhases < genCount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Cannot reduce plan below already-generated installment count (generated_count=${genCount}, requested total_phases=${newTotalPhases}).`,
+        });
+      }
+
+      const updProfile = await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET total_phases = $1
+         WHERE installmentinvoiceprofiles_id = $2
+         RETURNING installmentinvoiceprofiles_id, student_id, class_id, phase_start, total_phases, generated_count, package_id`,
+        [newTotalPhases, profile.installmentinvoiceprofiles_id]
+      );
+
+      const remarksUpd = await client.query(
+        `UPDATE invoicestbl
+         SET remarks = regexp_replace(remarks, 'PHASE_END:\\d+', 'PHASE_END:' || $1::text, 'g')
+         WHERE installmentinvoiceprofiles_id = $2
+           AND remarks IS NOT NULL
+           AND remarks ~ 'PHASE_END:[0-9]+'
+         RETURNING invoice_id`,
+        [String(newPhaseEnd), profile.installmentinvoiceprofiles_id]
+      );
+
+      for (const row of remarksUpd.rows) {
+        await syncProgramPaymentStatusForInvoice(client, row.invoice_id);
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: `Installment plan extended through phase ${newPhaseEnd} (total_phases=${newTotalPhases}).`,
+        data: {
+          profile: updProfile.rows[0],
+          previous_last_phase: oldLastPhase,
+          new_phase_end: newPhaseEnd,
+          invoices_updated_remarks: remarksUpd.rows.map((r) => r.invoice_id),
+        },
       });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1253,7 +1478,7 @@ router.get(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
-           WHERE COALESCE(enrollment_status, 'Active') = 'Active'
+           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          LEFT JOIN (
@@ -2264,7 +2489,7 @@ router.delete(
 
       // Check for dependencies that prevent deletion
       const enrolledStudents = await client.query(
-        "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND COALESCE(enrollment_status, 'Active') = 'Active'",
+        "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')",
         [id]
       );
       const studentCount = parseInt(enrolledStudents.rows[0].count, 10);
@@ -2562,7 +2787,7 @@ router.get(
          FROM classstudentstbl
          WHERE class_id = $1
            AND phase_number IS NOT NULL
-           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
          GROUP BY phase_number`,
         [id]
       );
@@ -3531,6 +3756,10 @@ router.post(
       .withMessage('Phase number must be null or a positive integer'),
     body('promo_id').optional().isInt().withMessage('Promo ID must be an integer'),
     body('promo_code').optional().trim(),
+    body('ack_receipt_id')
+      .optional({ values: 'falsy' })
+      .isInt()
+      .withMessage('Acknowledgement receipt id must be an integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -3540,7 +3769,20 @@ router.post(
       await client.query('BEGIN');
 
       const { id: class_id } = req.params;
-      const { student_id, package_id, selected_pricing_lists = [], selected_merchandise = [], installment_settings, installment_scope, phase_number, per_phase_amount, reservation_invoice_settings, promo_id, promo_code } = req.body;
+      const {
+        student_id,
+        package_id,
+        selected_pricing_lists = [],
+        selected_merchandise = [],
+        installment_settings,
+        installment_scope,
+        phase_number,
+        per_phase_amount,
+        reservation_invoice_settings,
+        promo_id,
+        promo_code,
+        ack_receipt_id,
+      } = req.body;
 
       // Verify class exists and get branch_id, phase, start date, and level_tag
       const classCheck = await client.query(
@@ -3606,7 +3848,7 @@ router.post(
          FROM classstudentstbl
          WHERE student_id = $1
            AND class_id = $2
-           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND removed_at IS NULL`,
         [student_id, class_id]
       );
@@ -3862,7 +4104,7 @@ router.post(
             `SELECT classstudent_id FROM classstudentstbl
              WHERE student_id = $1
                AND class_id = $2
-               AND COALESCE(enrollment_status, 'Active') = 'Active'
+               AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
                AND removed_at IS NULL`,
             [student_id, class_id]
           );
@@ -3881,7 +4123,7 @@ router.post(
             const enrolledCount = await client.query(
               `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
                WHERE class_id = $1
-                 AND COALESCE(enrollment_status, 'Active') = 'Active'
+                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
                  AND removed_at IS NULL`,
               [class_id]
             );
@@ -4205,7 +4447,7 @@ router.post(
         const enrolledCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
            WHERE class_id = $1
-             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
              AND removed_at IS NULL`,
           [class_id]
         );
@@ -4554,6 +4796,93 @@ router.post(
         totalAmount = 0;
       }
 
+      // Prepaid package acknowledgement receipt: reuse its AR# on the first enrollment invoice
+      // so the printed receipt matches the invoice list (merchandise AR already shares one number).
+      let prepaidArNumberForNextInvoice = null;
+      let prepaidAckReceiptIdForInvoice = null;
+      if (ack_receipt_id != null && ack_receipt_id !== '') {
+        if (!package_id) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'A package is required when enrolling with a package acknowledgement receipt.',
+          });
+        }
+        const ackId = parseInt(String(ack_receipt_id), 10);
+        if (!Number.isInteger(ackId) || ackId < 1) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid acknowledgement receipt id',
+          });
+        }
+        const arRes = await client.query(
+          `SELECT * FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1 FOR UPDATE`,
+          [ackId]
+        );
+        if (arRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({
+            success: false,
+            message: 'Acknowledgement receipt not found',
+          });
+        }
+        const ar = arRes.rows[0];
+        const arStatusUpper = String(ar.status || '').trim().toUpperCase();
+        const isAlreadyUsed =
+          Boolean(ar.invoice_id || ar.payment_id) || arStatusUpper === 'APPLIED';
+        if (isAlreadyUsed) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'This acknowledgement receipt has already been used. Each acknowledgement receipt can only be applied once.',
+          });
+        }
+        const ackPaymentMethod = String(ar.payment_method || '').trim().toLowerCase();
+        const isCashAck = ackPaymentMethod === 'cash';
+        const isVerifiedForAttach = arStatusUpper === 'VERIFIED';
+        if (!isVerifiedForAttach && !isCashAck) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'Acknowledgement receipt must be Verified by Finance before enrollment (cash receipts are allowed without separate verification).',
+          });
+        }
+        if (String(ar.ar_type || '').trim().toLowerCase() !== 'package') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Only package acknowledgement receipts can be used for enrollment.',
+          });
+        }
+        if (packageData && packageData.package_type === 'Reserved') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Acknowledgement receipt cannot be used with reservation package enrollment.',
+          });
+        }
+        if (ar.branch_id != null && branch_id != null && Number(ar.branch_id) !== Number(branch_id)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Acknowledgement receipt branch does not match this class branch.',
+          });
+        }
+        if (package_id != null && ar.package_id != null && Number(ar.package_id) !== Number(package_id)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Acknowledgement receipt package does not match the enrollment package.',
+          });
+        }
+        const arNumTrim = ar.ack_receipt_number != null ? String(ar.ack_receipt_number).trim() : '';
+        prepaidArNumberForNextInvoice = arNumTrim || null;
+        prepaidAckReceiptIdForInvoice = ackId;
+      }
+
       // Create invoice
       const today = new Date();
       const issueDateStr = today.toISOString().split('T')[0];
@@ -4669,11 +4998,20 @@ router.post(
               })()
             : (dueDateStr || issueDateStr);
 
+          let explicitPrepaidAr = null;
+          let prepaidAckIdForRow = null;
+          if (prepaidArNumberForNextInvoice && prepaidAckReceiptIdForInvoice) {
+            explicitPrepaidAr = prepaidArNumberForNextInvoice;
+            prepaidAckIdForRow = prepaidAckReceiptIdForInvoice;
+            prepaidArNumberForNextInvoice = null;
+            prepaidAckReceiptIdForInvoice = null;
+          }
+
           // Create downpayment invoice
-          downpaymentInvoice = await insertInvoiceWithArNumber(
+          downpaymentInvoice = await insertInvoiceWithArNumberReuseOrAllocate(
             client,
-            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, invoice_ar_number)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, ack_receipt_id, invoice_ar_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING *`,
             [
               `Downpayment - ${invoiceDescription || packageName || 'Enrollment'}`,
@@ -4684,7 +5022,9 @@ router.post(
               downpaymentDueDate,
               req.user.userId || null,
               package_id || null,
-            ]
+              prepaidAckIdForRow,
+            ],
+            explicitPrepaidAr
           );
           
           // Link student to downpayment invoice
@@ -4722,11 +5062,20 @@ router.post(
 
       let newInvoice = null;
       if (!skipMainInvoice) {
+        let explicitPrepaidArMain = null;
+        let prepaidAckIdForRowMain = null;
+        if (prepaidArNumberForNextInvoice && prepaidAckReceiptIdForInvoice) {
+          explicitPrepaidArMain = prepaidArNumberForNextInvoice;
+          prepaidAckIdForRowMain = prepaidAckReceiptIdForInvoice;
+          prepaidArNumberForNextInvoice = null;
+          prepaidAckReceiptIdForInvoice = null;
+        }
+
         // Create main invoice (for non-Installment packages or Installment without downpayment)
-        newInvoice = await insertInvoiceWithArNumber(
+        newInvoice = await insertInvoiceWithArNumberReuseOrAllocate(
           client,
-          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, invoice_ar_number)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, issue_date, due_date, created_by, package_id, ack_receipt_id, invoice_ar_number)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *`,
           [
             invoiceDescription, // Description based on enrollment type
@@ -4737,7 +5086,9 @@ router.post(
             dueDateStr, // null for full payment, or installment due_date if installment is enabled
             req.user.userId || null,
             package_id || null, // Link invoice to package for promo tracking
-          ]
+            prepaidAckIdForRowMain,
+          ],
+          explicitPrepaidArMain
         );
       }
 
@@ -5257,6 +5608,7 @@ router.post(
           'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
           [newInvoice.invoice_id, student_id]
         );
+        await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
       } else if (skipMainInvoice && downpaymentInvoice) {
         // For Installment packages with downpayment, store class_id in downpayment invoice remarks
         let invoiceRemarks = `CLASS_ID:${class_id}`;
@@ -5267,6 +5619,7 @@ router.post(
           `UPDATE invoicestbl SET remarks = $1 WHERE invoice_id = $2`,
           [invoiceRemarks, downpaymentInvoice.invoice_id]
         );
+        await syncProgramPaymentStatusForInvoice(client, downpaymentInvoice.invoice_id);
       }
 
       // Create installment invoice profile if installment settings are provided
@@ -5456,6 +5809,7 @@ router.post(
                WHERE invoice_id = $2`,
               [installmentProfile.installmentinvoiceprofiles_id, downpaymentInvoice.invoice_id]
             );
+            await syncProgramPaymentStatusForInvoice(client, downpaymentInvoice.invoice_id);
           }
 
           // Link the main invoice to the installment profile (only if main invoice exists)
@@ -5467,6 +5821,7 @@ router.post(
                WHERE invoice_id = $2`,
               [installmentProfile.installmentinvoiceprofiles_id, newInvoice.invoice_id]
             );
+            await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
           }
 
           // Only create the first installment invoice record if downpayment is NOT required
@@ -5513,7 +5868,18 @@ router.post(
                 total_phases: totalPhases,
                 phase_start: profilePhaseStart,
               },
+              enrollmentAckReuse:
+                prepaidArNumberForNextInvoice && prepaidAckReceiptIdForInvoice
+                  ? {
+                      reuseInvoiceArNumber: prepaidArNumberForNextInvoice,
+                      ack_receipt_id: prepaidAckReceiptIdForInvoice,
+                    }
+                  : null,
             };
+            if (pendingInstallmentGeneration.enrollmentAckReuse) {
+              prepaidArNumberForNextInvoice = null;
+              prepaidAckReceiptIdForInvoice = null;
+            }
           }
           // If hasDownpayment is true, the first installment invoice record will be created
           // automatically when the downpayment is paid (handled in payments.js)
@@ -5533,7 +5899,8 @@ router.post(
         const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
         generatedPhaseInvoice = await generateInvoiceFromInstallment(
           pendingInstallmentGeneration.installmentRecord,
-          pendingInstallmentGeneration.profile
+          pendingInstallmentGeneration.profile,
+          pendingInstallmentGeneration.enrollmentAckReuse || null
         );
       }
 
@@ -6455,7 +6822,7 @@ router.post(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
-           WHERE COALESCE(enrollment_status, 'Active') = 'Active'
+           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          WHERE c.class_id = $1`,

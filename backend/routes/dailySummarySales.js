@@ -507,7 +507,7 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
                     WHERE cs.student_id = p.student_id
                     ORDER BY
                       CASE
-                        WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN 0
+                        WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell') AND cs.removed_at IS NULL THEN 0
                         ELSE 1
                       END,
                       cs.classstudent_id DESC

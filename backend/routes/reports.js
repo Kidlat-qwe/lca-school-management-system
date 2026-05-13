@@ -40,7 +40,7 @@ router.get(
       let paramCount = 0;
 
       // Base: all students (user_type = 'Student') with computed enrollment status and enrolled class names
-      // Active = has at least one row in classstudentstbl with enrollment_status = 'Active'
+      // Active = has at least one row in classstudentstbl with program_enrollment_status IN ('new','re_enrolled','upsell')
       let sql = `
         SELECT
           u.user_id,
@@ -55,7 +55,7 @@ router.get(
             WHEN EXISTS (
               SELECT 1 FROM classstudentstbl cs
               WHERE cs.student_id = u.user_id
-                AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+                AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
             ) THEN 'Active'
             ELSE 'Inactive'
           END AS enrollment_status,
@@ -66,7 +66,7 @@ router.get(
               FROM classstudentstbl cs
               LEFT JOIN classestbl c ON c.class_id = cs.class_id
               WHERE cs.student_id = u.user_id
-                AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+                AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
             ) AS distinct_classes
           ) AS enrolled_classes
         FROM userstbl u
@@ -90,13 +90,13 @@ router.get(
         sql += ` AND EXISTS (
           SELECT 1 FROM classstudentstbl cs
           WHERE cs.student_id = u.user_id
-            AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+            AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
         )`;
       } else if (status === 'inactive') {
         sql += ` AND NOT EXISTS (
           SELECT 1 FROM classstudentstbl cs
           WHERE cs.student_id = u.user_id
-            AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+            AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
         )`;
       }
 

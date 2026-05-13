@@ -8,6 +8,11 @@ import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { appAlert, appPrompt, appConfirm } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
+import {
+  getArListCombinedPackageAmount,
+  getArListLineTotal,
+  getArListPackagePrimaryLabel,
+} from '../../utils/acknowledgementReceiptDisplay';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -1598,9 +1603,9 @@ const initializePackageMerchSelections = useCallback(
       
       // Hide unenrolled/removed rows in the Manage Enrolled Students modal.
       const visibleEnrolledStudents = enrolledStudents.filter((student) => {
-        const status = String(student.enrollment_status || '').trim().toLowerCase();
+        const status = String(student.program_enrollment_status || '').trim().toLowerCase();
         const studentType = String(student.student_type || '').trim().toLowerCase();
-        return status !== 'removed' && studentType !== 'unenrolled';
+        return status !== 'dropped' && studentType !== 'unenrolled';
       });
 
       // Group enrolled students by student_id to show only unique students
@@ -1806,10 +1811,12 @@ const initializePackageMerchSelections = useCallback(
   const getCountableStudents = (students) => {
     return students.filter(student => {
       if (student.student_type === 'enrolled') {
-        // Exclude delinquent/removed students from capacity counts
-        // Backend provides either `shouldCount` (boolean) or `enrollment_status`
+        // Completed students should still count toward class max.
+        const status = String(student.program_enrollment_status || '').trim().toLowerCase();
+        if (status === 'completed') return true;
+        // Exclude delinquent/removed students from capacity counts.
         if (student.shouldCount === false) return false;
-        if (student.enrollment_status && student.enrollment_status !== 'Active') return false;
+        if (student.program_enrollment_status && !['new', 're_enrolled', 'upsell', 'completed'].includes(student.program_enrollment_status)) return false;
         return true;
       }
       if (student.student_type === 'reserved') {
@@ -1840,9 +1847,9 @@ const initializePackageMerchSelections = useCallback(
       
       // Hide unenrolled/removed rows in View Students as well for consistency.
       const visibleEnrolledStudents = enrolledStudents.filter((student) => {
-        const status = String(student.enrollment_status || '').trim().toLowerCase();
+        const status = String(student.program_enrollment_status || '').trim().toLowerCase();
         const studentType = String(student.student_type || '').trim().toLowerCase();
-        return status !== 'removed' && studentType !== 'unenrolled';
+        return status !== 'dropped' && studentType !== 'unenrolled';
       });
 
       // Group enrolled students by student_id to show only unique students
@@ -9646,11 +9653,13 @@ setFormData({
                           {enrolledStudents.map((student) => {
                             const isReserved = student.student_type === 'reserved';
                             const isPending = student.student_type === 'pending';
+                            const enrolledProgramStatus = String(student.program_enrollment_status || '').trim().toLowerCase();
+                            const isCompletedEnrollment = !isReserved && !isPending && enrolledProgramStatus === 'completed';
                             const isRemovedEnrollment =
                               !isReserved &&
                               !isPending &&
-                              (student.shouldCount === false ||
-                                (student.enrollment_status && student.enrollment_status !== 'Active'));
+                              (enrolledProgramStatus === 'dropped' || String(student.student_type || '').trim().toLowerCase() === 'unenrolled');
+                            if (isRemovedEnrollment) return null;
                             const uniqueKey = isReserved 
                               ? `reserved-${student.reservation_id}` 
                               : `enrolled-${student.classstudent_id || student.user_id}`;
@@ -9744,6 +9753,10 @@ setFormData({
                                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                                       Removed
                                     </span>
+                                  ) : !isReserved && !isPending && enrolledProgramStatus === 'completed' ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                                      Completed
+                                    </span>
                                   ) : reservationStatus ? (
                                     <span
                                       className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
@@ -9800,7 +9813,7 @@ setFormData({
                                     >
                                       Upgrade
                                     </button>
-                                  ) : !isReserved ? (
+                                  ) : !isReserved && !isCompletedEnrollment ? (
                                     <button
                                       onClick={() => handleUnenrollStudent(student)}
                                       className="text-red-600 hover:text-red-900 flex items-center space-x-1"
@@ -9984,17 +9997,17 @@ setFormData({
                                   </td>
                                   <td className="px-4 py-3">
                                     <div className="text-gray-900">
-                                      {ar.package_name_snapshot || ar.package_name || 'N/A'}
+                                      {getArListPackagePrimaryLabel(ar)}
                                     </div>
                                     <div className="text-xs text-gray-500">
-                                      ₱{Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                      ₱{getArListCombinedPackageAmount(ar).toLocaleString('en-US', {
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2,
                                       })}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-gray-900">
-                                    ₱{Number(ar.payment_amount || 0).toLocaleString('en-US', {
+                                    ₱{getArListLineTotal(ar).toLocaleString('en-US', {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
                                     })}
@@ -13779,6 +13792,8 @@ setFormData({
                                       }`}>{student.reservation_status || 'Reserved'}</span>
                                     ) : isPending ? (
                                       <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700">Pending</span>
+                                    ) : String(student.program_enrollment_status || '').trim().toLowerCase() === 'completed' ? (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium bg-indigo-50 text-indigo-700">Completed</span>
                                     ) : (
                                       <span className="inline-flex px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700">Enrolled</span>
                                     )}
@@ -14597,11 +14612,11 @@ setFormData({
                                     </td>
                                     <td className="px-4 py-3">
                                       <div className="text-gray-900">
-                                        {ar.package_name_snapshot || ar.package_name || 'N/A'}
+                                        {getArListPackagePrimaryLabel(ar)}
                                       </div>
                                       <div className="text-xs text-gray-500">
                                         ₱
-                                        {Number(ar.package_amount_snapshot || 0).toLocaleString('en-US', {
+                                        {getArListCombinedPackageAmount(ar).toLocaleString('en-US', {
                                           minimumFractionDigits: 2,
                                           maximumFractionDigits: 2,
                                         })}
@@ -14609,7 +14624,7 @@ setFormData({
                                     </td>
                                     <td className="px-4 py-3 text-gray-900">
                                       ₱
-                                      {Number(ar.payment_amount || 0).toLocaleString('en-US', {
+                                      {getArListLineTotal(ar).toLocaleString('en-US', {
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2,
                                       })}

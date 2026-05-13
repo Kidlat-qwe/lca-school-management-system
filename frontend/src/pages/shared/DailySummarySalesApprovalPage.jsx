@@ -15,56 +15,15 @@ import { appAlert } from '../../utils/appAlert';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import {
+  isFinanceReturnedSummaryStatus,
+  parseCashDepositPaymentsResponse,
+  parseDailySummaryPaymentsResponse,
+} from '../../utils/dailySummaryPaymentsParse';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
 const PIE_COLORS = ['#16A34A', '#2563EB', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#6366F1', '#EC4899'];
-
-/** Superadmin/Finance "reject" stores Returned (legacy rows may still be Rejected until migrated). */
-const isFinanceReturnedSummaryStatus = (s) => s === 'Returned' || s === 'Rejected';
-
-/** Normalize GET /daily-summary-sales/:id/payments (object with payments + AR + totals). */
-const parseDailySummaryPaymentsResponse = (res) => {
-  const d = res?.data;
-  if (d && typeof d === 'object' && !Array.isArray(d) && Array.isArray(d.payments)) {
-    return {
-      payments: d.payments || [],
-      arReceipts: d.ar_receipts || [],
-      totals: d.totals || null,
-      submittedSnapshot: d.submitted_snapshot || null,
-    };
-  }
-  if (Array.isArray(d)) {
-    return {
-      payments: d,
-      arReceipts: [],
-      totals: null,
-      submittedSnapshot: null,
-    };
-  }
-  return {
-    payments: [],
-    arReceipts: [],
-    totals: null,
-    submittedSnapshot: null,
-  };
-};
-
-/** Normalize GET /cash-deposit-summaries/:id/payments (payments + live totals + submitted snapshot). */
-const parseCashDepositPaymentsResponse = (res) => {
-  const d = res?.data;
-  if (d && typeof d === 'object' && !Array.isArray(d) && Array.isArray(d.payments)) {
-    return {
-      payments: d.payments || [],
-      totals: d.totals || null,
-      submittedSnapshot: d.submitted_snapshot || null,
-    };
-  }
-  if (Array.isArray(d)) {
-    return { payments: d, totals: null, submittedSnapshot: null };
-  }
-  return { payments: [], totals: null, submittedSnapshot: null };
-};
 
 const DailySummarySalesApprovalPage = () => {
   const location = useLocation();

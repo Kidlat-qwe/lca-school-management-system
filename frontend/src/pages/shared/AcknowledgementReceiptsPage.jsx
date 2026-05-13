@@ -13,7 +13,9 @@ import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsVi
 import { downloadAcknowledgementReceiptsXlsx } from '../../utils/acknowledgementReceiptsExcelExport';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
+import AcknowledgementReceiptStylePreview from '../../components/receipts/AcknowledgementReceiptStylePreview';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { getArListLineTotal, getArListPackagePrimaryLabel } from '../../utils/acknowledgementReceiptDisplay';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -47,6 +49,21 @@ const AR_STATUS_LEGENDS = {
 
 const getArStatusLegend = (status) =>
   AR_STATUS_LEGENDS[status] || 'No description available for this status.';
+
+/** Normalize DB json/jsonb merchandise snapshot for display rows */
+const parseMerchandiseItemsSnapshotForDisplay = (snap) => {
+  if (snap == null) return [];
+  if (Array.isArray(snap)) return snap;
+  if (typeof snap === 'string') {
+    try {
+      const parsed = JSON.parse(snap);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
 
 const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const { userInfo } = useAuth();
@@ -182,6 +199,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   });
   const [createFormErrors, setCreateFormErrors] = useState({});
   const [creating, setCreating] = useState(false);
+  /** After merchandise AR create: summary + same PDF template as invoice "Download Acknowledgement Receipt" */
+  const [merchandiseArCreatedSummary, setMerchandiseArCreatedSummary] = useState(null);
+  const [merchArPdfLoading, setMerchArPdfLoading] = useState(false);
+  /** After package AR create: summary + dedicated /acknowledgement-receipts/:id/pdf endpoint */
+  const [packageArCreatedSummary, setPackageArCreatedSummary] = useState(null);
+  const [packageArPdfLoading, setPackageArPdfLoading] = useState(false);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [verifyLoadingId, setVerifyLoadingId] = useState(null);
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
@@ -191,7 +214,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [editSaving, setEditSaving] = useState(false);
   const [isResubmitFlow, setIsResubmitFlow] = useState(false);
   const [financeReturnNote, setFinanceReturnNote] = useState('');
-  const [deleteLoadingId, setDeleteLoadingId] = useState(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
@@ -609,7 +631,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const getArPackageOrItems = (r) => {
     if (r.ar_type !== 'Merchandise') {
-      return r.package_name_snapshot || r.package_name || 'N/A';
+      return getArListPackagePrimaryLabel(r);
     }
     const items =
       typeof r.merchandise_items_snapshot === 'string'
@@ -711,7 +733,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         'Guardian Name': r.prospect_student_contact || '-',
         'Package / Items': getArPackageOrItems(r),
         'Level Tag': r.level_tag || '-',
-        'Total Amount (PHP)': (Number(r.payment_amount || 0) + Number(r.tip_amount || 0)).toFixed(2),
+        'Total Amount (PHP)': getArListLineTotal(r).toFixed(2),
         Branch: r.branch_name || '-',
         Status: r.status || '-',
         'Payment Method': r.payment_method || '-',
@@ -862,6 +884,79 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const closeCreateModal = () => {
     if (creating) return;
     setShowCreateModal(false);
+  };
+
+  const closeMerchandiseArCreatedSummary = () => {
+    if (merchArPdfLoading) return;
+    setMerchandiseArCreatedSummary(null);
+    resetCreateForm();
+  };
+
+  const closePackageArCreatedSummary = () => {
+    if (packageArPdfLoading) return;
+    setPackageArCreatedSummary(null);
+  };
+
+  const fetchPackageArPdfBlobUrl = async (ackReceiptId) => {
+    const token = localStorage.getItem('firebase_token');
+    const response = await fetch(`${API_BASE_URL}/acknowledgement-receipts/${ackReceiptId}/pdf`, {
+      headers: { Authorization: token ? `Bearer ${token}` : '' },
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+    }
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  };
+
+  const handleDownloadPackageArPdf = async (ackReceiptId) => {
+    if (!ackReceiptId) {
+      appAlert('No receipt ID available. Please try again.');
+      return;
+    }
+    setPackageArPdfLoading(true);
+    try {
+      const url = await fetchPackageArPdfBlobUrl(ackReceiptId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download package acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setPackageArPdfLoading(false);
+    }
+  };
+
+  const handleDownloadMerchandiseArPdf = async (invoiceId) => {
+    if (!invoiceId) {
+      appAlert('No invoice is linked to this receipt yet. Print is unavailable.');
+      return;
+    }
+    setMerchArPdfLoading(true);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${invoiceId}/pdf?doc_type=ar`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download merchandise acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setMerchArPdfLoading(false);
+    }
   };
 
   const handleCreateInputChange = (e) => {
@@ -1331,10 +1426,41 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         body: JSON.stringify(payload),
       });
 
-      appAlert(isMerch && result.message
-        ? result.message
-        : 'Acknowledgement Receipt created successfully.');
-      setShowCreateModal(false);
+      const created = result?.data;
+      if (isMerch && created?.ack_receipt_id) {
+        setShowCreateModal(false);
+        let invoiceArNumber = null;
+        if (created.invoice_id) {
+          try {
+            const invRes = await apiRequest(`/invoices/${created.invoice_id}`);
+            invoiceArNumber = invRes?.data?.invoice_ar_number ?? null;
+          } catch (fetchInvErr) {
+            console.error('Could not load invoice for AR summary modal:', fetchInvErr);
+          }
+        }
+        setMerchandiseArCreatedSummary({
+          receipt: created,
+          invoiceId: created.invoice_id ? Number(created.invoice_id) : null,
+          invoiceArNumber,
+          summaryMessage:
+            result.message ||
+            'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
+        });
+        resetCreateForm();
+      } else if (!isMerch && created?.ack_receipt_id) {
+        // Package AR: show receipt preview modal with dedicated PDF endpoint
+        setShowCreateModal(false);
+        setPackageArCreatedSummary({
+          receipt: created,
+          pairedReceipt: result.paired_acknowledgement_receipt || null,
+          summaryMessage: result.message || 'Package acknowledgement receipt created successfully.',
+        });
+        resetCreateForm();
+      } else {
+        appAlert(result.message || 'Acknowledgement Receipt created successfully.');
+        setShowCreateModal(false);
+        resetCreateForm();
+      }
       await fetchReceipts(1);
     } catch (err) {
       console.error('Error creating acknowledgement receipt:', err);
@@ -1634,36 +1760,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
   };
 
-  const handleDeleteReceipt = async (receipt) => {
-    if (!receipt?.ack_receipt_id || deleteLoadingId) return;
-    const ok = await appConfirm({
-      title: 'Delete Acknowledgement Receipt',
-      message: `Delete acknowledgement receipt #${receipt.ack_receipt_id}? This cannot be undone.`,
-      confirmLabel: 'Delete',
-      cancelLabel: 'Cancel',
-      destructive: true,
-      variant: 'error',
-    });
-    if (!ok) return;
-
-    setOpenActionMenuId(null);
-    setActionMenuRect(null);
-    setDeleteLoadingId(receipt.ack_receipt_id);
-    try {
-      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`, {
-        method: 'DELETE',
-      });
-      appAlert('Acknowledgement receipt deleted successfully.');
-      await fetchReceipts(pagination.page || 1);
-      if (isAdminOrSuperadmin) await fetchReturnedCount();
-    } catch (err) {
-      console.error('AR delete error:', err);
-      appAlert(err?.message || 'Failed to delete acknowledgement receipt.');
-    } finally {
-      setDeleteLoadingId(null);
-    }
-  };
-
   const uniqueStatuses = () => {
     const set = new Set();
     receipts.forEach((r) => {
@@ -1695,10 +1791,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const summaryAcknowledgementReceiptTotal =
     filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))
       ? Number(filterTotalLineAmount)
-      : receipts.reduce(
-          (sum, receipt) => sum + (Number(receipt.payment_amount || 0) + Number(receipt.tip_amount || 0)),
-          0
-        );
+      : receipts.reduce((sum, receipt) => sum + getArListLineTotal(receipt), 0);
   const dateFilterArgs = {
     mode: dateFilterMode,
     month: filterIssueMonth,
@@ -2158,11 +2251,18 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         ) : (
                           <>
                             <div className="text-gray-900">
-                              {r.package_name_snapshot || r.package_name || 'N/A'}
+                              {r.list_package_primary_label ||
+                                r.package_name_snapshot ||
+                                r.package_name ||
+                                'N/A'}
                             </div>
                             <div className="text-xs text-gray-500">
                               ₱
-                              {Number(r.package_amount_snapshot || 0).toLocaleString('en-US', {
+                              {Number(
+                                r.list_combined_package_amount != null && r.list_combined_package_amount !== ''
+                                  ? r.list_combined_package_amount
+                                  : r.package_amount_snapshot || 0
+                              ).toLocaleString('en-US', {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2,
                               })}
@@ -2175,7 +2275,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       </td>
                       <td className="px-4 py-3 text-gray-900 font-medium">
                         ₱
-                        {(Number(r.payment_amount || 0) + Number(r.tip_amount || 0)).toLocaleString('en-US', {
+                        {getArListLineTotal(r).toLocaleString('en-US', {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}
@@ -2430,19 +2530,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
                         >
                           Edit
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setOpenActionMenuId(null);
-                            setActionMenuRect(null);
-                            handleDeleteReceipt(actionMenuReceipt);
-                          }}
-                          disabled={deleteLoadingId === actionMenuReceipt.ack_receipt_id}
-                          className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          {deleteLoadingId === actionMenuReceipt.ack_receipt_id ? 'Deleting...' : 'Delete'}
                         </button>
                       </>
                     )}
@@ -3317,6 +3404,282 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {merchandiseArCreatedSummary &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+            onClick={() => {
+              if (!merchArPdfLoading) closeMerchandiseArCreatedSummary();
+            }}
+            role="presentation"
+          >
+            <div
+              className="max-h-[95vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="merch-ar-created-title"
+            >
+              <div className="flex flex-col gap-2 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div>
+                  <h2 id="merch-ar-created-title" className="text-sm font-semibold text-gray-900 sm:text-base">
+                    Merchandise acknowledgement receipt created
+                  </h2>
+                  <p className="text-xs text-gray-600">{merchandiseArCreatedSummary.summaryMessage}</p>
+                </div>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-2">
+                  <button
+                    type="button"
+                    onClick={closeMerchandiseArCreatedSummary}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                    disabled={merchArPdfLoading}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadMerchandiseArPdf(merchandiseArCreatedSummary.invoiceId)}
+                    disabled={merchArPdfLoading || !merchandiseArCreatedSummary.invoiceId}
+                    className="rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      merchandiseArCreatedSummary.invoiceId
+                        ? 'Opens the same acknowledgement receipt PDF as Download Acknowledgement Receipt on the invoice page.'
+                        : 'No linked invoice'
+                    }
+                  >
+                    {merchArPdfLoading ? 'Opening PDF…' : 'Print'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 sm:p-4">
+                {(() => {
+                  const r = merchandiseArCreatedSummary.receipt;
+                  const items = parseMerchandiseItemsSnapshotForDisplay(r.merchandise_items_snapshot);
+                  const b =
+                    branches.find((br) => Number(br.branch_id) === Number(r.branch_id)) || null;
+                  const branchLabel =
+                    b?.branch_nickname || b?.branch_name || (r.branch_id != null ? `Branch #${r.branch_id}` : '—');
+                  const issueYmd =
+                    r.issue_date != null && String(r.issue_date).trim() !== ''
+                      ? String(r.issue_date).slice(0, 10)
+                      : '';
+                  const totalWithTip = (Number(r.payment_amount) || 0) + (Number(r.tip_amount) || 0);
+                  const receiptNo =
+                    merchandiseArCreatedSummary.invoiceArNumber ||
+                    (merchandiseArCreatedSummary.invoiceId
+                      ? `Invoice #${merchandiseArCreatedSummary.invoiceId}`
+                      : '—');
+
+                  const merchRows = items.map((row) => {
+                    const qty = Number(row.quantity) || 1;
+                    const unit = Number(row.price) || 0;
+                    const line = unit * qty;
+                    const desc = `Merchandise: ${row.merchandise_name || 'Item'}${row.size ? ` (${row.size})` : ''}`;
+                    return { description: desc, rate: unit, amount: line };
+                  });
+                  if (Number(r.tip_amount) > 0) {
+                    const t = Number(r.tip_amount) || 0;
+                    merchRows.push({ description: 'Tip', rate: t, amount: t });
+                  }
+
+                  return (
+                    <>
+                      <AcknowledgementReceiptStylePreview
+                        branchAddress={b?.branch_address || undefined}
+                        branchPhone={b?.branch_phone_number || undefined}
+                        branchEmail={b?.branch_email || undefined}
+                        branchFallbackLine={!b?.branch_address?.trim() ? branchLabel : undefined}
+                        receiptNo={receiptNo}
+                        studentName={r.prospect_student_name || '—'}
+                        classLabel={r.level_tag || '-'}
+                        receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                        tableRows={merchRows}
+                        totalAmount={totalWithTip}
+                      />
+                      {r.prospect_student_notes ? (
+                        <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">
+                          <span className="font-semibold text-gray-700">Notes: </span>
+                          {r.prospect_student_notes}
+                        </p>
+                      ) : null}
+                      {r.prospect_student_email ? (
+                        <p className="mt-2 text-xs text-gray-500">
+                          <span className="font-medium">Client email: </span>
+                          {r.prospect_student_email}
+                        </p>
+                      ) : null}
+                      {r.reference_number ? (
+                        <p className="mt-1 text-xs text-gray-500">
+                          <span className="font-medium">Reference: </span>
+                          {r.reference_number}
+                        </p>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {packageArCreatedSummary &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+            onClick={() => {
+              if (!packageArPdfLoading) closePackageArCreatedSummary();
+            }}
+            role="presentation"
+          >
+            <div
+              className="max-h-[95vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pkg-ar-created-title"
+            >
+              <div className="flex flex-col gap-2 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div>
+                  <h2 id="pkg-ar-created-title" className="text-sm font-semibold text-gray-900 sm:text-base">
+                    {packageArCreatedSummary.pairedReceipt
+                      ? 'Package acknowledgement receipts created'
+                      : 'Package acknowledgement receipt created'}
+                  </h2>
+                  <p className="text-xs text-gray-600">{packageArCreatedSummary.summaryMessage}</p>
+                </div>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-2">
+                  <button
+                    type="button"
+                    onClick={closePackageArCreatedSummary}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                    disabled={packageArPdfLoading}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadPackageArPdf(packageArCreatedSummary.receipt?.ack_receipt_id)}
+                    disabled={packageArPdfLoading || !packageArCreatedSummary.receipt?.ack_receipt_id}
+                    className="rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      packageArCreatedSummary.pairedReceipt
+                        ? 'Opens one PDF: page 1 = downpayment AR number, page 2 = Phase 1 AR number (matches invoices).'
+                        : 'Opens the Acknowledgement Receipt PDF for this package AR.'
+                    }
+                  >
+                    {packageArPdfLoading ? 'Opening PDF…' : 'Print'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 sm:p-4">
+                {(() => {
+                  const renderPackageBlock = (r, sectionLabel) => {
+                    if (!r) return null;
+                    const b =
+                      branches.find((br) => Number(br.branch_id) === Number(r.branch_id)) || null;
+                    const branchLabel =
+                      b?.branch_nickname ||
+                      b?.branch_name ||
+                      (r.branch_id != null ? `Branch #${r.branch_id}` : '—');
+                    const issueYmd =
+                      r.issue_date != null && String(r.issue_date).trim() !== ''
+                        ? String(r.issue_date).slice(0, 10)
+                        : '';
+                    const totalWithTip =
+                      (Number(r.payment_amount) || 0) + (Number(r.tip_amount) || 0);
+                    const receiptNo = r.ack_receipt_number || '—';
+
+                    const packageRows = [
+                      {
+                        description: r.package_name_snapshot || 'Package',
+                        rate: Number(r.payment_amount) || 0,
+                        amount: Number(r.payment_amount) || 0,
+                      },
+                    ];
+                    if (Number(r.tip_amount) > 0) {
+                      const t = Number(r.tip_amount) || 0;
+                      packageRows.push({ description: 'Tip', rate: t, amount: t });
+                    }
+
+                    return (
+                      <div
+                        key={r.ack_receipt_id ?? receiptNo}
+                        className={
+                          sectionLabel
+                            ? 'mb-8 rounded-lg border border-gray-200 bg-white p-3 shadow-sm last:mb-0 sm:p-4'
+                            : ''
+                        }
+                      >
+                        {sectionLabel ? (
+                          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                            {sectionLabel}
+                          </p>
+                        ) : null}
+                        <AcknowledgementReceiptStylePreview
+                          branchAddress={b?.branch_address || undefined}
+                          branchPhone={b?.branch_phone_number || undefined}
+                          branchEmail={b?.branch_email || undefined}
+                          branchFallbackLine={!b?.branch_address?.trim() ? branchLabel : undefined}
+                          receiptNo={receiptNo}
+                          studentName={r.prospect_student_name || '—'}
+                          classLabel={r.level_tag || '-'}
+                          receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                          tableRows={packageRows}
+                          totalAmount={totalWithTip}
+                        />
+                        {r.prospect_student_notes ? (
+                          <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">
+                            <span className="font-semibold text-gray-700">Notes: </span>
+                            {r.prospect_student_notes}
+                          </p>
+                        ) : null}
+                        {r.prospect_student_email ? (
+                          <p className="mt-2 text-xs text-gray-500">
+                            <span className="font-medium">Client email: </span>
+                            {r.prospect_student_email}
+                          </p>
+                        ) : null}
+                        {r.reference_number ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Reference: </span>
+                            {r.reference_number}
+                          </p>
+                        ) : null}
+                        {r.payment_method ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Payment method: </span>
+                            {r.payment_method}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  };
+
+                  const primary = packageArCreatedSummary.receipt;
+                  const paired = packageArCreatedSummary.pairedReceipt;
+                  return (
+                    <>
+                      {paired ? (
+                        <p className="mb-4 text-xs text-gray-600">
+                          Downpayment and Phase 1 each have a different AR number (next in sequence). Attach the
+                          <span className="font-medium"> downpayment </span>
+                          receipt for enrollment; the Phase 1 invoice will show the second AR number after auto-pay.
+                        </p>
+                      ) : null}
+                      {paired ? renderPackageBlock(primary, 'Downpayment') : renderPackageBlock(primary, null)}
+                      {paired ? renderPackageBlock(paired, 'Phase 1') : null}
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           </div>,
           document.body

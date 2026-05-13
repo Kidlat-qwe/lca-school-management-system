@@ -3,18 +3,21 @@
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Getting Started](#getting-started)
-3. [Superfinance Role Overview](#superfinance-role-overview)
-4. [Finance vs Superfinance](#finance-vs-superfinance)
-5. [Dashboards](#dashboards)
-6. [Pages and Features](#pages-and-features)
+2. [What's New in v1.3](#whats-new-in-v13)
+3. [Getting Started](#getting-started)
+4. [Superfinance Role Overview](#superfinance-role-overview)
+5. [Finance vs Superfinance](#finance-vs-superfinance)
+6. [Dashboards](#dashboards)
+7. [Common UI Patterns](#common-ui-patterns)
+8. [Pages and Features](#pages-and-features)
    - [Invoice Management](#invoice-management)
    - [Installment Invoice](#installment-invoice)
    - [Payment Logs](#payment-logs)
    - [Acknowledgement Receipts](#acknowledgement-receipts)
-7. [Common Workflows](#common-workflows)
-8. [Best Practices](#best-practices)
-9. [Troubleshooting](#troubleshooting)
+   - [Daily Summary Sales](#daily-summary-sales)
+9. [Common Workflows](#common-workflows)
+10. [Best Practices](#best-practices)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -35,6 +38,46 @@ If you are a branch‑level **Finance** user, please refer to `USER_MANUAL_FINAN
 - **You do _not_**:
   - Create classes, packages, programs, or students
   - Configure academic structures (that is managed by Admin/Superadmin)
+
+---
+
+## What's New in v1.3
+
+This release significantly changes how you verify branch payments and EOD/Cash Deposit submissions across the system.
+
+### Payment verification: Approve / Return / **Reject**
+
+The Payment Status modal (opened from the Pending tab in Payment Logs) now offers three terminal actions:
+
+- **Verify** — approves the payment. Invoice settlement uses `payable_amount + discount_amount`.
+- **Return** — sends the row back to the issuer to fix and resubmit. No money or status changes.
+- **Reject** — **new** action. Permanently rejects the payment with a mandatory **reject reason**. The linked invoice immediately becomes **Rejected** so Admin/Superadmin can record a new payment. The amount is removed from revenue, the dashboards and the Daily Sales report. **Student enrollment is unchanged** — only the money is reversed.
+
+You can also now **edit the Payment Date** in the modal before approving — useful when the issuer entered the wrong day. The new date is reflected everywhere.
+
+### New "Rejected" tab in Payment Logs
+
+A dedicated **Rejected** tab lists all payments that were rejected (across all branches when no Branch is selected). It is **de-duplicated per invoice** (only the most recent rejection appears) and **auto-clears** when a fresh successful payment moves the invoice out of Rejected status.
+
+### Discount Amount on Record Payment
+
+The Record Payment modal accepts an optional **Discount Amount** that counts toward invoice settlement but **not** revenue. A fully discounted payment correctly closes the invoice as "Paid" instead of "Partial".
+
+### EOD email digest
+
+You **no longer receive** the EOD digest by email — only Superadmins do (with optional `EOD_STAKEHOLDER_EMAILS` recipients). Use the in-app **Daily Summary Sales** page to monitor branch submissions instead.
+
+### New page: Daily Summary Sales
+
+Verify or audit **End of Shift** and **Cash Deposit Summary** submissions across every branch. Includes a "Returned" view, server-side filters and date filters.
+
+### Standardized list UX
+
+- Debounced server-side search on every list (no auto-refresh per keystroke; pagination resets).
+- Sortable column headers (▲/▼) on Issue Date, Payment Date, Branch, Status, Issued By.
+- **Three date-filter modes** on Payment Logs: Month picker (default = current Manila month), Payment date From/To, Date created From/To.
+- AR and Invoice pages share Month / From-To filtering with default "This Month" on AR and Dashboards.
+- Counts labelled **"Total Invoice: N"** and **"Total Amount: ₱…"** uniformly. Excel exports include a Total Amount footer that excludes Returned/Rejected amounts.
 
 ---
 
@@ -126,9 +169,44 @@ Depending on your system configuration, you may see:
 
 ### How to Use as Superfinance
 
-1. Choose a **Branch** in the dashboard filter if you want branch‑level metrics, or leave it set to “All” for consolidated totals.
+1. Choose a **Branch** in the dashboard filter if you want branch‑level metrics, or leave it set to "All" for consolidated totals.
 2. Scan **Overdue / Pending** cards to identify problem branches.
 3. Click through from widgets (where supported) to go into **Invoices** or **Payment Logs** for deeper investigation.
+
+### Default date range
+
+The Superfinance Financial Dashboard defaults the **From / To** to the current Manila month on first load. Change them to investigate other periods.
+
+> Rejected and Returned payments are excluded from revenue. Only Verified payments contribute to dashboard totals.
+
+---
+
+## Common UI Patterns
+
+### Search bars (debounced + server-side)
+
+- ~300 ms debounce after the last keystroke; no per-character refresh.
+- Pagination resets to page 1 on search so matches are visible immediately.
+- Filtering is server-side, so the totals on the page reflect the filtered set.
+
+### Sortable column headers
+
+- ▲/▼ arrows on **Issue Date, Payment Date, Branch, Status, Issued By**.
+- First click ascending, second descending; click another column to reset.
+
+### Date filter modes
+
+Payment Logs, AR, Invoice and Daily Summary Sales pages share the same three filter inputs. Selecting one clears the others:
+
+1. **Month picker** (`YYYY-MM`) — defaults to current Manila month on AR, Daily Summary Sales and Dashboards.
+2. **Payment date** From / To — Payment Logs only.
+3. **From / To** — record-created date for Payment Logs; issue date for AR / Invoice.
+
+Use **Clear filters** to reset all three.
+
+### Branch dropdown
+
+Every list also exposes a **Branch** dropdown. Leave it blank for system-wide totals; choose one to scope filters, sums and exports.
 
 ---
 
@@ -203,30 +281,49 @@ Shows **installment invoice profiles** and generated installment invoices, espec
 
 #### Purpose
 
-Audit trail of **all payments** recorded in the system.
+Audit trail of **all payments** recorded in the system, plus the verification workspace where you Approve / Return / Reject branch payments.
 
-#### Key Features
+#### Tabs
 
-- Filters:
-  - **Branch** (Superfinance only).
-  - **Date range**.
-  - **Payment method** (cash, bank, e‑wallet, etc., depending on setup).
-  - **Invoice number** or **student name**.
-- Table columns typically include:
-  - Payment date and time.
-  - Invoice number.
-  - Student name.
-  - Amount paid.
-  - Payment method and reference number.
-  - Branch.
+- **All** — every payment matching the filters.
+- **Pending** — payments awaiting verification (your verification queue).
+- **Verified** — approved payments.
+- **Returned** — payments you returned to the issuer for correction.
+- **Rejected** — payments permanently rejected.
 
-#### As Superfinance
+#### Filters
 
-- Verify **branch deposits** against recorded payments.
-- Investigate disputes by:
-  - Searching for a specific **reference number** or **amount**.
-  - Comparing payment timestamps with bank statements.
-- Export or copy data (if export is enabled) for external reporting.
+- **Branch** (system-wide list when blank).
+- **Date filter modes** — Month picker (default = This Month), Payment date From/To, Date created From/To.
+- **Status** and **Payment method**.
+- Debounced search by invoice number, student name or reference number.
+- Sortable columns per Common UI Patterns.
+
+#### Verifying a payment (Pending → Status modal)
+
+1. Open the **Pending** tab and click a row to open the **Payment Status info** modal.
+2. Inspect the linked invoice, the student, the payment method and any attached proof.
+3. (Optional) Update the **Payment Date** if the issuer used the wrong date — the change cascades to dashboards, daily summary, AR and exports.
+4. Choose one action (left → right):
+   - **Cancel** — close without changes.
+   - **Reject** — permanently rejects the payment. **Reject reason is required**. The linked invoice immediately becomes **Rejected** so Admin/Superadmin can record a new payment. The amount is removed from revenue and dashboards. Student enrollment is unchanged.
+   - **Verify** — approve the payment. Invoice settlement uses `payable_amount + discount_amount`.
+5. Both **Reject** and **Verify** notify the issuer in-app.
+
+> **Return vs Reject**:
+> - **Return** = "fix this and resubmit" (no money is reversed; the row goes back to the issuer's draft).
+> - **Reject** = "this payment never happened in our books" (money is reversed; the invoice flips to Rejected for re-payment).
+
+#### Rejected tab
+
+- Shows every rejected payment across branches (or a single branch when you've selected one).
+- Columns include rejected by, rejected at, reject reason, branch and student.
+- **De-duplicated by invoice** — only the latest rejection appears, even if a payment for that invoice has been rejected multiple times across resubmissions.
+- **Auto-clears** when Admin/Superadmin records a new payment that moves the invoice out of Rejected status.
+
+#### Excel export
+
+The export honors the active filter (branch + status + dates) and appends a single **Total Amount** row that excludes Returned and Rejected amounts.
 
 ---
 
@@ -236,25 +333,58 @@ Audit trail of **all payments** recorded in the system.
 
 #### Purpose
 
-Record and review **up‑front payments** (e.g., reservation fees, downpayments) before they are fully tied to an invoice or enrollment.
+Audit every up-front payment (reservation fees, downpayments) across all branches before they are fully tied to an invoice or enrollment.
 
-#### Main Columns
+#### Filters
 
-- Student Name and Guardian Name.
-- Package and Level Tag.
-- **Amount** (what the parent paid up front).
-- Branch and Status (e.g., `Enrolled`, `Reserved`).
-- Reference Number and Attachment (uploaded proof of payment).
-- Issue Date.
+- **Branch**, **Status** (Submitted / Pending / Verified / Applied / Rejected / Cancelled).
+- **From / To** issue date or **Month picker** (default = current Manila month).
+- Search by AR number, student/prospect name, reference number.
+- Sortable headers on Issue Date, Status, Branch, Issued By.
 
-#### As Superfinance
+#### Each row
 
-- Check that branches:
-  - Record all **reservation/downpayment** receipts.
-  - Attach proof (screenshot, deposit slip) where required.
-- Use branch filter + date range (if available) to reconcile **daily bank deposits** vs acknowledgement receipts.
+- AR number rendered as **"Acknowledgement Receipt# AR-XXXX"**.
+- Student / prospect, package, level tag, **Amount**, branch, status.
+- Reference number, attachment (proof image), reject reason if any.
+- Issue date and Issued By.
 
-> Note: Creating new acknowledgement receipts is usually done by **Finance** at the branch; Superfinance primarily **reviews and audits**.
+Click a row to view full details, the proof attachment, the linked invoice (if any) and the reject reason. PDF download is available.
+
+> Audit tip: pair AR + Payment Logs filters by **Branch + Date range** to reconcile bank deposits against actual receipts.
+
+---
+
+### Daily Summary Sales
+
+**Menu Path**: **Daily Summary Sales**
+
+#### Purpose
+
+Verify or audit branch admins' **End of Shift (EOD)** and **Cash Deposit Summary** submissions across every branch.
+
+#### Tabs
+
+- **End of Shift** — daily branch closeouts (Submitted → Verified or Returned).
+- **Cash Deposit Summary** — periodic cash deposit submissions with proof attachment (Submitted → Approved or Returned).
+
+Each tab includes a **Pending verification** view (Submitted) and a **Returned** view.
+
+#### Filters
+
+- **Branch**, **Status**.
+- **From / To** + **Month picker** (default = current Manila month).
+
+#### Verifying
+
+1. Open a Submitted row to view the recalculated payment list and totals.
+2. **End of Shift** — confirm cash on hand, payment count and total amount match the submission. Approve or Return with a reason.
+3. **Cash Deposit Summary** — confirm the listed cash payments match the deposit slip. The modal shows live recalculated rows; if the live recalc returns nothing (e.g. payments were deleted after submission), it falls back to the **original audit snapshot** with an amber notice. Use the snapshot to validate the original deposit.
+4. Click **Verify** / **Approve**, or **Return** with a clear reason.
+
+#### EOD email digest
+
+You **no longer receive** the EOD digest by email. Use this page to monitor submissions instead.
 
 ---
 
@@ -335,4 +465,19 @@ For more detailed, step‑by‑step screens and screenshots, refer also to:
 
 - `USER_MANUAL_FINANCE.md` – shared Finance/Superfinance behavior.
 - `USER_MANUAL_SUPERADMIN.md` – for understanding how branches, packages, and invoices are configured.
+
+---
+
+## Document Information
+
+**Version**: 1.3
+**Last Updated**: May 11, 2026
+**Role**: Superfinance
+**System**: Physical School Management System
+**Organization**: Little Champions Academy Inc.
+
+### Change log
+
+- **v1.3 (May 11, 2026)** — Added the Reject action with mandatory reason and Rejected tab, the editable Payment Date in the Payment Status modal, the optional Discount Amount on Record Payment, the Daily Summary Sales page, three date-filter modes, debounced server-side search and sortable columns. Removed the EOD email digest for Superfinance.
+- **v1.2 (January 29, 2026)** — Earlier baseline.
 

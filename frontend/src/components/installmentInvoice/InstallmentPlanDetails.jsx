@@ -3,16 +3,21 @@ import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
+import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 
 /**
- * Self-contained, read-only presentation of a single installment plan
- * (`installmentinvoiceprofiles_id`).
+ * Presentation of a single installment plan (`installmentinvoiceprofiles_id`).
  *
  * Loads `GET /installment-invoices/profiles/:id/phases` and renders:
  *   - student / plan / frequency / phase progress / branch / status card
  *   - optional downpayment card
  *   - phases table (every phase: paid, unpaid, or not yet generated)
  *   - totals card (outstanding balance, total paid by student)
+ *   - **Pay Now** on the first actionable phase: **existing** unpaid invoice
+ *     via `POST /payments`, or **advance** on the next not-yet-generated phase
+ *     via `POST .../advance-pay`
+ *   - After a successful payment, the same **Payment recorded** modal as the
+ *     Invoice page (receipt preview + Print AR PDF)
  *
  * Used by:
  *   - `InstallmentInvoicePhasesModal`     (wrapped in a modal shell)
@@ -45,6 +50,9 @@ const statusBadgeClass = (status) => {
       return 'bg-gray-100 text-gray-700 border border-gray-200';
     case 'not generated':
       return 'bg-gray-50 text-gray-500 border border-gray-200';
+    case 'unpaid':
+    case 'partially paid':
+      return 'bg-blue-50 text-blue-700 border border-blue-200';
     default:
       return 'bg-blue-50 text-blue-700 border border-blue-200';
   }
@@ -58,8 +66,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
 
-  // Advance payment modal state
-  const [advancePayPhase, setAdvancePayPhase] = useState(null); // { phase_number, amount, absolute }
+  /** @type {null | { mode: 'invoice'|'advance', phase_number: number, absolute: number, amount: number|null, outstanding?: number, invoice_id?: number }} */
+  const [paymentModal, setPaymentModal] = useState(null);
   const [apForm, setApForm] = useState({
     payment_method: 'Cash',
     tip_amount: '',
@@ -72,6 +80,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
   const [apSubmitting, setApSubmitting] = useState(false);
   const [apAttachUploading, setApAttachUploading] = useState(false);
   const apModalRef = useRef(null);
+
+  const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
+  const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
 
   const fetchPhases = useCallback(async () => {
     if (!profileId) return;
@@ -99,8 +110,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     };
   }, [profileId, fetchPhases]);
 
-  const openAdvancePay = useCallback((phase) => {
-    setAdvancePayPhase(phase);
+  const openPaymentModal = useCallback((payload) => {
+    setPaymentModal(payload);
     setApForm({
       payment_method: 'Cash',
       tip_amount: '',
@@ -112,9 +123,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     setApFormErrors({});
   }, []);
 
-  const closeAdvancePay = useCallback(() => {
+  const closePaymentModal = useCallback(() => {
     if (apSubmitting) return;
-    setAdvancePayPhase(null);
+    setPaymentModal(null);
     setApFormErrors({});
   }, [apSubmitting]);
 
@@ -165,9 +176,70 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     setApForm((prev) => ({ ...prev, attachment_url: '' }));
   }, []);
 
-  const submitAdvancePay = useCallback(async (e) => {
+  const closePaymentRecordedInvoiceSummary = useCallback(() => {
+    if (paymentRecordedPdfLoading) return;
+    setPaymentRecordedSummary(null);
+  }, [paymentRecordedPdfLoading]);
+
+  const handlePrintPaymentRecordedAckPdf = useCallback(async () => {
+    const inv = paymentRecordedSummary?.invoice;
+    if (!inv?.invoice_id) return;
+    setPaymentRecordedPdfLoading(true);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${inv.invoice_id}/pdf?doc_type=ar`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setPaymentRecordedPdfLoading(false);
+    }
+  }, [paymentRecordedSummary]);
+
+  const loadPaymentRecordedSummary = useCallback(async (invoiceId, paymentSnapshot, branchId) => {
+    let branchInfo = null;
+    if (branchId != null && branchId !== '') {
+      try {
+        const brRes = await apiRequest(`/branches/${branchId}`);
+        const d = brRes?.data;
+        if (d) {
+          branchInfo = {
+            address: d.branch_address,
+            phone: d.branch_phone_number,
+            email: d.branch_email,
+            nickname: d.branch_nickname || d.branch_name,
+          };
+        }
+      } catch (e) {
+        console.warn('Branch detail fetch for receipt preview skipped:', e);
+      }
+    }
+    const invRes = await apiRequest(`/invoices/${invoiceId}`);
+    setPaymentRecordedSummary({
+      invoice: invRes.data,
+      paymentSnapshot,
+      branchInfo,
+    });
+  }, []);
+
+  const submitPaymentModal = useCallback(async (e) => {
     e?.preventDefault();
-    if (!advancePayPhase || !profileId) return;
+    const studentId = data?.profile?.student_id;
+    if (!paymentModal || !profileId || studentId == null) return;
 
     // Validate
     const errors = {};
@@ -180,37 +252,106 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
       errors.tip_amount = 'Must be a valid number.';
     if (Object.keys(errors).length) { setApFormErrors(errors); return; }
 
+    const modalSnap = { ...paymentModal };
+    const branchId = data?.profile?.branch_id;
+    const tipValParsed = apForm.tip_amount ? parseFloat(apForm.tip_amount) : 0;
+    const tipVal = Number.isFinite(tipValParsed) && tipValParsed > 0 ? tipValParsed : 0;
+
     setApSubmitting(true);
     try {
-      await apiRequest(`/installment-invoices/profiles/${profileId}/advance-pay`, {
-        method: 'POST',
-        body: JSON.stringify({
-          phase_index: advancePayPhase.phase_number,
-          payment_method: apForm.payment_method,
-          reference_number: apForm.reference_number.trim() || undefined,
-          payment_date: apForm.issue_date || undefined,
-          remarks: apForm.remarks.trim() || undefined,
-          attachment_url: apForm.attachment_url || undefined,
-          tip_amount: apForm.tip_amount ? parseFloat(apForm.tip_amount) : undefined,
-        }),
-      });
-      appAlert(`Advance payment for Phase ${advancePayPhase.absolute} recorded successfully.`);
-      setAdvancePayPhase(null);
-      fetchPhases();
+      if (modalSnap.mode === 'invoice') {
+        const base = Number(modalSnap.outstanding ?? modalSnap.amount ?? 0);
+        if (!Number.isFinite(base) || base < 0.01) {
+          setApFormErrors({ _general: 'Invalid amount to pay for this phase.' });
+          setApSubmitting(false);
+          return;
+        }
+        const paidInvoiceId = modalSnap.invoice_id;
+        const paymentSnapshot = {
+          student_id: Number(studentId),
+          payable_amount: base,
+          discount_amount: 0,
+          tip_amount: tipVal,
+          issue_date: apForm.issue_date,
+          reference_number: (apForm.reference_number || '').trim(),
+        };
+
+        await apiRequest('/payments', {
+          method: 'POST',
+          body: JSON.stringify({
+            invoice_id: paidInvoiceId,
+            student_id: Number(studentId),
+            payment_method: apForm.payment_method,
+            payment_type: 'Full',
+            payable_amount: base,
+            discount_amount: 0,
+            tip_amount: tipVal,
+            issue_date: apForm.issue_date || undefined,
+            reference_number: apForm.reference_number.trim() || undefined,
+            remarks: apForm.remarks.trim() || undefined,
+            attachment_url: apForm.attachment_url || undefined,
+          }),
+        });
+
+        setPaymentModal(null);
+        await fetchPhases();
+        try {
+          await loadPaymentRecordedSummary(paidInvoiceId, paymentSnapshot, branchId);
+        } catch (fetchErr) {
+          console.error('Error loading invoice after payment:', fetchErr);
+          appAlert('Payment recorded successfully, but the receipt preview could not be loaded. Refresh the page if needed.');
+        }
+      } else {
+        const advRes = await apiRequest(`/installment-invoices/profiles/${profileId}/advance-pay`, {
+          method: 'POST',
+          body: JSON.stringify({
+            phase_index: modalSnap.phase_number,
+            payment_method: apForm.payment_method,
+            reference_number: apForm.reference_number.trim() || undefined,
+            payment_date: apForm.issue_date || undefined,
+            remarks: apForm.remarks.trim() || undefined,
+            attachment_url: apForm.attachment_url || undefined,
+            tip_amount: apForm.tip_amount ? parseFloat(apForm.tip_amount) : undefined,
+          }),
+        });
+        const newInvoiceId = advRes?.data?.invoice_id;
+        const phasePayable = Number(modalSnap.amount) || 0;
+        const paymentSnapshot = {
+          student_id: Number(studentId),
+          payable_amount: phasePayable,
+          discount_amount: 0,
+          tip_amount: tipVal,
+          issue_date: apForm.issue_date,
+          reference_number: (apForm.reference_number || '').trim(),
+        };
+
+        setPaymentModal(null);
+        await fetchPhases();
+        if (newInvoiceId) {
+          try {
+            await loadPaymentRecordedSummary(newInvoiceId, paymentSnapshot, branchId);
+          } catch (fetchErr) {
+            console.error('Error loading invoice after advance payment:', fetchErr);
+            appAlert('Advance payment recorded, but the receipt preview could not be loaded. Refresh the page if needed.');
+          }
+        } else {
+          appAlert(`Advance payment for Phase ${modalSnap.absolute} recorded successfully.`);
+        }
+      }
     } catch (err) {
-      setApFormErrors({ _general: err?.message || 'Failed to record advance payment.' });
+      setApFormErrors({ _general: err?.message || 'Failed to record payment.' });
     } finally {
       setApSubmitting(false);
     }
-  }, [advancePayPhase, profileId, apForm, fetchPhases]);
+  }, [paymentModal, profileId, data?.profile?.student_id, data?.profile?.branch_id, apForm, fetchPhases, loadPaymentRecordedSummary]);
 
-  // Close advance-pay modal on Escape
+  // Close payment modal on Escape
   useEffect(() => {
-    if (!advancePayPhase) return;
-    const handler = (e) => { if (e.key === 'Escape') closeAdvancePay(); };
+    if (!paymentModal) return;
+    const handler = (e) => { if (e.key === 'Escape') closePaymentModal(); };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [advancePayPhase, closeAdvancePay]);
+  }, [paymentModal, closePaymentModal]);
 
   const profile = data?.profile || null;
   const phases = data?.phases || [];
@@ -258,6 +399,32 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
       denominator,
     };
   }, [profile, phases, phaseStartOffset]);
+
+  /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
+  const firstPayAction = useMemo(() => {
+    for (let i = 0; i < phases.length; i += 1) {
+      const p = phases[i];
+      const out =
+        p.is_generated && p.amount != null
+          ? Math.max(0, Number(p.amount) - Number(p.paid_amount || 0))
+          : 0;
+      const st = String(p.status || '').toLowerCase();
+      const cancelled = st === 'cancelled' || st === 'canceled';
+      if (p.is_generated && p.invoice_id && !cancelled && st !== 'paid' && out > 0.009) {
+        return { index: i, mode: 'invoice', outstanding: out };
+      }
+      if (!p.is_generated && p.status === 'Not Generated') {
+        const prevPaid = phases.slice(0, i).every(
+          (prev) => String(prev.status || '').toLowerCase() === 'paid',
+        );
+        if (prevPaid) {
+          return { index: i, mode: 'advance' };
+        }
+        return null;
+      }
+    }
+    return null;
+  }, [phases]);
 
   return (
     <div className={`space-y-4 sm:space-y-6 ${className}`}>
@@ -474,19 +641,22 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                         No phase records found.
                       </td>
                     </tr>
-                  ) : (() => {
-                    // Sequential locking: only the immediate next unpaid phase can be advance-paid.
-                    // Find the lowest phase_number among "Not Generated" phases.
-                    const nextPayablePhaseNum = phases
-                      .filter((p) => p.status === 'Not Generated')
-                      .reduce((min, p) => (p.phase_number < min ? p.phase_number : min), Infinity);
-
-                    return phases.map((phase) => {
+                  ) : (
+                    phases.map((phase, idx) => {
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
                       const isNotGenerated = phase.status === 'Not Generated';
-                      // Only the very next not-generated phase is unlocked.
-                      const isPayable = isNotGenerated && phase.phase_number === nextPayablePhaseNum;
-                      const isLocked = isNotGenerated && !isPayable;
+                      const outstanding =
+                        phase.is_generated && phase.amount != null
+                          ? Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0))
+                          : 0;
+                      const isPayRow =
+                        firstPayAction &&
+                        firstPayAction.index === idx &&
+                        (firstPayAction.mode === 'invoice' || firstPayAction.mode === 'advance');
+                      const isLockedFuture =
+                        isNotGenerated &&
+                        !(firstPayAction && firstPayAction.index === idx && firstPayAction.mode === 'advance');
+
                       return (
                         <tr
                           key={`phase-${phase.phase_number}`}
@@ -522,21 +692,35 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                             </span>
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
-                            {isPayable ? (
+                            {isPayRow ? (
                               <button
                                 type="button"
-                                onClick={() => openAdvancePay({
-                                  phase_number: phase.phase_number,
-                                  absolute: absolutePhase,
-                                  amount: phase.amount,
-                                })}
+                                onClick={() => {
+                                  if (firstPayAction.mode === 'invoice') {
+                                    openPaymentModal({
+                                      mode: 'invoice',
+                                      phase_number: phase.phase_number,
+                                      absolute: absolutePhase,
+                                      amount: phase.amount,
+                                      outstanding,
+                                      invoice_id: phase.invoice_id,
+                                    });
+                                  } else {
+                                    openPaymentModal({
+                                      mode: 'advance',
+                                      phase_number: phase.phase_number,
+                                      absolute: absolutePhase,
+                                      amount: phase.amount,
+                                    });
+                                  }
+                                }}
                                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-primary-50 text-primary-700 border border-primary-200 hover:bg-primary-100 transition-colors"
                               >
                                 Pay Now
                               </button>
-                            ) : isLocked ? (
+                            ) : isLockedFuture ? (
                               <span
-                                title="Pay the previous phase first"
+                                title="Pay the current phase (or earlier unpaid invoice) first"
                                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed select-none"
                               >
                                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -548,8 +732,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                           </td>
                         </tr>
                       );
-                    });
-                  })()}
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -586,8 +770,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
         </div>
       )}
 
-      {/* Advance Payment Modal — styled to match the Invoice payment modal */}
-      {advancePayPhase && createPortal(
+      {/* Record payment (existing invoice) or advance payment — matches Invoice page payment flow */}
+      {paymentModal && createPortal(
         <div className="fixed inset-0 z-[20000] flex items-center justify-center backdrop-blur-sm bg-black/30">
           <div
             ref={apModalRef}
@@ -596,14 +780,26 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             {/* Sticky header */}
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10">
               <div>
-                <h2 className="text-xl font-semibold text-gray-900">Record Advance Payment</h2>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {paymentModal.mode === 'invoice' ? 'Record Payment' : 'Record Advance Payment'}
+                </h2>
                 <p className="text-sm text-gray-500 mt-0.5">
-                  Phase {advancePayPhase.absolute} — {formatCurrency(advancePayPhase.amount || 0)}
+                  Phase {paymentModal.absolute} —{' '}
+                  {formatCurrency(
+                    paymentModal.mode === 'invoice'
+                      ? (paymentModal.outstanding ?? 0)
+                      : (paymentModal.amount || 0),
+                  )}
+                  {paymentModal.mode === 'invoice' && paymentModal.invoice_id != null && (
+                    <span className="block text-xs text-gray-400 mt-0.5">
+                      Invoice #{paymentModal.invoice_id}
+                    </span>
+                  )}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={closeAdvancePay}
+                onClick={closePaymentModal}
                 disabled={apSubmitting}
                 className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
               >
@@ -614,7 +810,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             </div>
 
             {/* Form */}
-            <form onSubmit={submitAdvancePay} className="p-6 space-y-6">
+            <form onSubmit={submitPaymentModal} className="p-6 space-y-6">
               <div className="space-y-4">
                 {/* Payment Type + Payment Method */}
                 <div className="grid grid-cols-2 gap-4">
@@ -622,7 +818,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                     <label className="label-field text-xs">Payment Type</label>
                     <input
                       type="text"
-                      value="Advance Payment"
+                      value={paymentModal.mode === 'invoice' ? 'Full payment (invoice)' : 'Advance Payment'}
                       readOnly
                       className="input-field text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
@@ -655,11 +851,19 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                     <label className="label-field text-xs">Payable Amount</label>
                     <input
                       type="text"
-                      value={formatCurrency(advancePayPhase.amount || 0)}
+                      value={formatCurrency(
+                        paymentModal.mode === 'invoice'
+                          ? (paymentModal.outstanding ?? 0)
+                          : (paymentModal.amount || 0),
+                      )}
                       readOnly
                       className="input-field text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Full phase amount — fixed.</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {paymentModal.mode === 'invoice'
+                        ? 'Remaining balance on this invoice — fixed.'
+                        : 'Full phase amount — fixed.'}
+                    </p>
                   </div>
                   <div>
                     <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
@@ -793,7 +997,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div>
                       <p className="text-xs text-gray-500">Phase</p>
-                      <p className="font-medium text-gray-900">Phase {advancePayPhase.absolute}</p>
+                      <p className="font-medium text-gray-900">Phase {paymentModal.absolute}</p>
                     </div>
                     <div>
                       <p className="text-xs text-gray-500">Student</p>
@@ -810,8 +1014,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                   </div>
                   <div className="border-t border-gray-200 pt-3 space-y-1 text-sm">
                     <div className="flex justify-between font-semibold">
-                      <span className="text-gray-800">Phase Amount</span>
-                      <span className="text-gray-900">{formatCurrency(advancePayPhase.amount || 0)}</span>
+                      <span className="text-gray-800">
+                        {paymentModal.mode === 'invoice' ? 'Amount due' : 'Phase Amount'}
+                      </span>
+                      <span className="text-gray-900">
+                        {formatCurrency(
+                          paymentModal.mode === 'invoice'
+                            ? (paymentModal.outstanding ?? 0)
+                            : (paymentModal.amount || 0),
+                        )}
+                      </span>
                     </div>
                     {apForm.tip_amount && parseFloat(apForm.tip_amount) > 0 && (
                       <div className="flex justify-between">
@@ -823,17 +1035,27 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                       <span className="text-gray-800">Total Collected</span>
                       <span className="text-emerald-700">
                         {formatCurrency(
-                          (parseFloat(advancePayPhase.amount) || 0) +
-                          (parseFloat(apForm.tip_amount) || 0)
+                          (paymentModal.mode === 'invoice'
+                            ? (parseFloat(paymentModal.outstanding) || 0)
+                            : (parseFloat(paymentModal.amount) || 0)) +
+                          (parseFloat(apForm.tip_amount) || 0),
                         )}
                       </span>
                     </div>
                   </div>
-                  <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-2">
-                    This creates a <strong>Paid</strong> invoice and <strong>Completed</strong> payment. The
-                    auto-generation schedule advances by one month and the student is enrolled in Phase{' '}
-                    {advancePayPhase.absolute} class sessions.
-                  </p>
+                  {paymentModal.mode === 'invoice' ? (
+                    <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-2">
+                      This records the same <strong>Full</strong> payment as on the Invoice page. When the
+                      balance is settled, the invoice status becomes <strong>Paid</strong> and appears paid
+                      everywhere invoices are listed.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-2">
+                      This creates a <strong>Paid</strong> invoice and <strong>Completed</strong> payment. The
+                      auto-generation schedule advances by one month and the student is enrolled in Phase{' '}
+                      {paymentModal.absolute} class sessions.
+                    </p>
+                  )}
                 </div>
 
                 {apFormErrors._general && (
@@ -847,7 +1069,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
               <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                 <button
                   type="button"
-                  onClick={closeAdvancePay}
+                  onClick={closePaymentModal}
                   disabled={apSubmitting}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
                 >
@@ -872,6 +1094,24 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
         </div>,
         document.body
       )}
+
+      <PaymentRecordedInvoiceSummaryModal
+        open={!!paymentRecordedSummary}
+        invoice={paymentRecordedSummary?.invoice}
+        branchName={
+          paymentRecordedSummary?.invoice
+            ? paymentRecordedSummary.invoice.branch_name ||
+              paymentRecordedSummary.branchInfo?.nickname ||
+              ''
+            : ''
+        }
+        branchInfo={paymentRecordedSummary?.branchInfo || null}
+        paymentSnapshot={paymentRecordedSummary?.paymentSnapshot}
+        onClose={closePaymentRecordedInvoiceSummary}
+        onPrintAcknowledgementReceipt={handlePrintPaymentRecordedAckPdf}
+        printLoading={paymentRecordedPdfLoading}
+        overlayClassName="fixed inset-0 z-[21000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+      />
     </div>
   );
 };

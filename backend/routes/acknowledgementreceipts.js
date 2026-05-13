@@ -5,6 +5,10 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
+import { determineEnrollmentStatus as detEnrollmentStatus, ensurePendingEnrollmentAfterDownpaymentPaid } from '../utils/enrollmentStatus.js';
+import PDFDocument from 'pdfkit';
+import fs from 'fs';
+import path from 'path';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import {
   sendArPaymentConfirmationByAckId,
@@ -15,6 +19,7 @@ const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 let ackVerifierColumnsKnownTrue = false;
 let announcementTargetUserIdKnownTrue = false;
+let ackPairedAckColumnKnownTrue = false;
 
 const ackReceiptHasVerifierColumns = async () => {
   if (ackVerifierColumnsKnownTrue) return true;
@@ -31,6 +36,27 @@ const ackReceiptHasVerifierColumns = async () => {
     );
     if (r.rows.length > 0) {
       ackVerifierColumnsKnownTrue = true;
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+};
+
+const ackReceiptHasPairedAckReceiptIdColumn = async () => {
+  if (ackPairedAckColumnKnownTrue) return true;
+  try {
+    const r = await query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'acknowledgement_receiptstbl'
+         AND column_name = 'paired_ack_receipt_id'
+       LIMIT 1`
+    );
+    if (r.rows.length > 0) {
+      ackPairedAckColumnKnownTrue = true;
       return true;
     }
   } catch {
@@ -69,6 +95,268 @@ function omitAckReceiptNumber(row) {
   if (!row || typeof row !== 'object') return row;
   const { ack_receipt_number: _n, ...rest } = row;
   return rest;
+}
+
+/** Row shape for AR PDF: acknowledgement_receiptstbl + issue_date_fmt + branch_* + package pricing for dual-page PDF */
+const ACK_RECEIPT_PDF_SELECT_SQL = `
+  SELECT ar.*,
+         TO_CHAR(ar.issue_date, 'YYYY-MM-DD')         AS issue_date_fmt,
+         b.branch_address,
+         b.branch_phone_number,
+         b.branch_email,
+         COALESCE(b.branch_nickname, b.branch_name)   AS branch_display_name,
+         p.package_name       AS pkg_join_name,
+         p.downpayment_amount AS pkg_join_downpayment,
+         p.package_price      AS pkg_join_monthly
+  FROM acknowledgement_receiptstbl ar
+  LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
+  LEFT JOIN packagestbl p ON ar.package_id = p.package_id
+  WHERE ar.ack_receipt_id = $1
+`;
+
+/**
+ * Validates two Package AR rows for a combined Downpayment + Phase 1 PDF:
+ * - Linked via paired_ack_receipt_id (leader → phase), or
+ * - Legacy pair: one row installment_option downpayment_only, sibling without that option.
+ */
+function isDualPackageInstallmentPairForPdf(a, b) {
+  if (!a || !b) return false;
+  if (Number(a.ack_receipt_id) === Number(b.ack_receipt_id)) return false;
+  if (String(a.ar_type || '').toLowerCase() !== 'package') return false;
+  if (String(b.ar_type || '').toLowerCase() !== 'package') return false;
+  if (Number(a.branch_id) !== Number(b.branch_id)) return false;
+  if (Number(a.package_id || 0) !== Number(b.package_id || 0)) return false;
+  const d1 = String(a.issue_date_fmt || '').slice(0, 10);
+  const d2 = String(b.issue_date_fmt || '').slice(0, 10);
+  if (!d1 || d1 !== d2) return false;
+  if (String(a.prospect_student_name || '').trim() !== String(b.prospect_student_name || '').trim()) return false;
+  if (String(a.reference_number || '').trim() !== String(b.reference_number || '').trim()) return false;
+
+  if (Number(a.paired_ack_receipt_id) === Number(b.ack_receipt_id)) return true;
+  if (Number(b.paired_ack_receipt_id) === Number(a.ack_receipt_id)) return true;
+
+  const optA = String(a.installment_option || '').toLowerCase();
+  const optB = String(b.installment_option || '').toLowerCase();
+  const aDp = optA === 'downpayment_only';
+  const bDp = optB === 'downpayment_only';
+  return aDp !== bDp;
+}
+
+/** Returns [downpaymentRow, phaseRow] for a valid pair. */
+function orderDualPackageArRowsForPdf(a, b) {
+  if (Number(a.paired_ack_receipt_id) === Number(b.ack_receipt_id)) return [a, b];
+  if (Number(b.paired_ack_receipt_id) === Number(a.ack_receipt_id)) return [b, a];
+  const aDp = String(a.installment_option || '').toLowerCase() === 'downpayment_only';
+  return aDp ? [a, b] : [b, a];
+}
+
+/** Two virtual row shapes for PDF pages from one AR (Downpayment + Phase 1 single row). */
+function buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt) {
+  const pkgDisp = String(ar.pkg_join_name || '').trim() || 'Installment';
+  const stud = String(ar.prospect_student_name || '').trim() || 'N/A';
+  const lvl = String(ar.level_tag || '').trim() || '-';
+  const tip = parseFloat(ar.tip_amount || 0) || 0;
+  const dpDesc = `Downpayment for ${pkgDisp}`;
+  const phDesc = `(Phase 1) Installment plan for ${stud} - ${lvl}`;
+  const base = { ...ar };
+  return [
+    {
+      ...base,
+      payment_amount: dpAmt,
+      tip_amount: tip,
+      package_name_snapshot: dpDesc,
+      package_amount_snapshot: dpAmt,
+    },
+    {
+      ...base,
+      payment_amount: moAmt,
+      tip_amount: 0,
+      package_name_snapshot: phDesc,
+      package_amount_snapshot: moAmt,
+    },
+  ];
+}
+
+function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
+  const isMerchandise = (ar.ar_type || '').toLowerCase() === 'merchandise';
+  const paymentAmount = parseFloat(ar.payment_amount || 0) || 0;
+  const tipAmount = parseFloat(ar.tip_amount || 0) || 0;
+  const totalAmount = paymentAmount + tipAmount;
+
+  let itemDescriptions = [];
+  if (isMerchandise && ar.merchandise_items_snapshot) {
+    try {
+      const snapItems =
+        typeof ar.merchandise_items_snapshot === 'string'
+          ? JSON.parse(ar.merchandise_items_snapshot)
+          : ar.merchandise_items_snapshot;
+      if (Array.isArray(snapItems) && snapItems.length > 0) {
+        for (const item of snapItems) {
+          const name = item.merchandise_name || 'Item';
+          const size = item.size ? ` (${item.size})` : '';
+          itemDescriptions.push(`${name}${size}`);
+        }
+      }
+    } catch {
+      /* ignore malformed snapshot */
+    }
+  }
+
+  const packageDesc = ar.package_name_snapshot;
+  const mergedDesc =
+    itemDescriptions.length > 0
+      ? itemDescriptions.join(' | ')
+      : packageDesc || 'Acknowledgement Receipt';
+
+  const arNumber = ar.ack_receipt_number || `AR-${ar.ack_receipt_id}`;
+  const studentName = (ar.prospect_student_name || 'N/A').trim();
+  const classLabel = (ar.level_tag || '-').trim();
+
+  const rawDateStr = ar.issue_date_fmt || '';
+  const formatDate = (ymd) => {
+    if (!ymd) return '-';
+    const [year, month, day] = ymd.split('-');
+    if (!year || !month || !day) return ymd;
+    return `${day}/${month}/${year}`;
+  };
+  const arDate = formatDate(rawDateStr);
+
+  const formatCurrency = (value) =>
+    `PHP ${(Number(value) || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+  const pageWidth = doc.page.width;
+  const left = 40;
+  const right = pageWidth - 40;
+  const contentWidth = right - left;
+  let y = 42;
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(19)
+    .fillColor('#111827')
+    .text('ACKNOWLEDGEMENT RECEIPT', left, y, { width: contentWidth, align: 'right' });
+  y += 6;
+
+  if (hasLogo) {
+    doc.image(logoPath, left, y + 4, { width: 42, height: 42 });
+  }
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(13)
+    .fillColor('#111827')
+    .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 6, { width: 360 });
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#374151')
+    .text(ar.branch_address || '-', hasLogo ? left + 52 : left, y + 24, { width: 360 });
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#374151')
+    .text(`Contact: ${ar.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 36, { width: 360 });
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#374151')
+    .text(`Email: ${ar.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 48, { width: 360 });
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .fillColor('#111827')
+    .text(`No. ${arNumber}`, right - 180, y + 34, { width: 180, align: 'right' });
+  y += 74;
+
+  const metaStartY = y;
+  doc.font('Helvetica').fontSize(10).fillColor('#111827');
+  doc.text(`DATE: ${arDate}`, right - 230, metaStartY, { width: 230, align: 'right' });
+  doc.text(`STUDENT NAME: ${studentName}`, left, metaStartY, {
+    width: contentWidth - 20,
+  });
+  y += 20;
+  doc.text(`CLASS: ${classLabel}`, left, y, { width: 320 });
+  y += 24;
+
+  const tLeft = left;
+  const tWidth = contentWidth;
+  const rowH = 24;
+  const headerH = 24;
+  const detailRows = 5;
+  const footerRows = 1;
+  const totalRows = detailRows + footerRows;
+  const descW = tWidth * 0.5;
+  const rateW = tWidth * 0.25;
+  const amountW = tWidth - descW - rateW;
+  const xDesc = tLeft + 8;
+  const xRate = tLeft + descW + 8;
+  const xAmount = tLeft + descW + rateW + 8;
+
+  doc.save();
+  doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
+  doc.restore();
+  doc
+    .rect(tLeft, y, tWidth, headerH + rowH * totalRows)
+    .lineWidth(1)
+    .strokeColor('#111827')
+    .stroke();
+  doc
+    .moveTo(tLeft + descW, y)
+    .lineTo(tLeft + descW, y + headerH + rowH * totalRows)
+    .stroke();
+  doc
+    .moveTo(tLeft + descW + rateW, y)
+    .lineTo(tLeft + descW + rateW, y + headerH + rowH * totalRows)
+    .stroke();
+
+  for (let i = 1; i <= totalRows; i += 1) {
+    const yLine = y + headerH + rowH * i;
+    doc.moveTo(tLeft, yLine).lineTo(tLeft + tWidth, yLine).stroke();
+  }
+
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
+  doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
+  doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
+  doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
+
+  doc.font('Helvetica').fontSize(9).fillColor('#111827');
+  doc.text(mergedDesc, xDesc, y + headerH + 8, { width: descW - 16 });
+  doc.text(formatCurrency(paymentAmount), xRate, y + headerH + 8, {
+    width: rateW - 16,
+    align: 'right',
+  });
+  doc.text(formatCurrency(totalAmount), xAmount, y + headerH + 8, {
+    width: amountW - 16,
+    align: 'right',
+  });
+
+  const footerRowY = y + headerH + rowH * detailRows + 8;
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(10)
+    .fillColor('#111827')
+    .text(`TOTAL  ${formatCurrency(totalAmount)}`, xRate, footerRowY, {
+      width: rateW + amountW - 16,
+      align: 'right',
+    });
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .fillColor('#111827')
+    .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, {
+      width: descW - 16,
+      align: 'center',
+    });
+
+  y += headerH + rowH * totalRows + 24;
+  doc.font('Helvetica').fontSize(9).fillColor('#111827');
+  doc.text('Prepared by:', left, y);
+  doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
+  doc.text('Received by:', right - 200, y);
+  doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
 }
 
 const createArSubmissionNotification = async ({
@@ -310,18 +598,52 @@ router.get(
       const limitNum = parseInt(limit) || 20;
       const offset = (pageNum - 1) * limitNum;
 
+      const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
+
+      const listPairJoin = hidePairedPhaseRows
+        ? `
+        LEFT JOIN acknowledgement_receiptstbl ar_pair ON ar_pair.ack_receipt_id = ar.paired_ack_receipt_id`
+        : '';
+
+      const listPairSelect = hidePairedPhaseRows
+        ? `,
+          (COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0) + COALESCE(ar_pair.payment_amount, 0) + COALESCE(ar_pair.tip_amount, 0)) AS list_line_total_amount,
+          (COALESCE(ar.package_amount_snapshot, 0) + COALESCE(ar_pair.package_amount_snapshot, 0)) AS list_combined_package_amount,
+          CASE
+            WHEN ar.paired_ack_receipt_id IS NOT NULL THEN
+              CONCAT(
+                'Downpayment + Phase 1',
+                CASE
+                  WHEN p.package_name IS NOT NULL AND LENGTH(TRIM(p.package_name::text)) > 0
+                  THEN CONCAT(' — ', TRIM(p.package_name::text))
+                  ELSE ''
+                END
+              )
+            ELSE COALESCE(ar.package_name_snapshot::text, p.package_name::text, 'N/A')
+          END AS list_package_primary_label`
+        : '';
+
       let sql = `
         SELECT
           ar.*,
           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           p.package_name,
           u.full_name AS student_name
+          ${listPairSelect}
         FROM acknowledgement_receiptstbl ar
         LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
         LEFT JOIN packagestbl p ON ar.package_id = p.package_id
         LEFT JOIN userstbl u ON ar.student_id = u.user_id
+        ${listPairJoin}
         WHERE 1=1
       `;
+
+      if (hidePairedPhaseRows) {
+        sql += ` AND NOT EXISTS (
+          SELECT 1 FROM acknowledgement_receiptstbl ar_parent
+          WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
+        )`;
+      }
 
       const params = [];
       let paramCount = 0;
@@ -409,6 +731,12 @@ router.get(
 
       // Total count for pagination
       let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar WHERE 1=1`;
+      if (hidePairedPhaseRows) {
+        countSql += ` AND NOT EXISTS (
+          SELECT 1 FROM acknowledgement_receiptstbl ar_parent
+          WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
+        )`;
+      }
       const countParams = [];
       let countParamCount = 0;
 
@@ -488,9 +816,16 @@ router.get(
 
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total, 10) || 0;
+      const sumLineExpr = hidePairedPhaseRows
+        ? `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0) + COALESCE((
+             SELECT COALESCE(pay.payment_amount, 0) + COALESCE(pay.tip_amount, 0)
+             FROM acknowledgement_receiptstbl pay
+             WHERE pay.ack_receipt_id = ar.paired_ack_receipt_id
+           ), 0)`
+        : `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)`;
       const sumSql = countSql.replace(
         /SELECT COUNT\(\*\) AS total/i,
-        'SELECT COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0)::numeric AS total_line_amount'
+        `SELECT COALESCE(SUM(${sumLineExpr}), 0)::numeric AS total_line_amount`
       );
       const sumResult = await query(sumSql, countParams);
       const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
@@ -596,6 +931,11 @@ router.post(
       } = req.body;
 
       let branchId = bodyBranchId || req.user.branchId || null;
+      /** When true, create two Package AR rows (sequential AR numbers); leader links phase via paired_ack_receipt_id. */
+      let isSplitDualPackageAr = false;
+      let splitDownpaymentAmt = 0;
+      let splitMonthlyAmt = 0;
+      let splitPackageDisplayName = null;
       const normalizedPaymentMethod = ALLOWED_AR_PAYMENT_METHODS.includes(String(payment_method || '').trim())
         ? String(payment_method).trim()
         : 'Cash';
@@ -731,8 +1071,15 @@ router.post(
         const monthly = parseFloat(pkg.package_price ?? 0) || 0;
 
         if (isInstallmentPkg && downpayment > 0) {
-          const opt = installment_option === 'downpayment_plus_phase1' ? 'downpayment_plus_phase1' : 'downpayment_only';
+          const opt =
+            installment_option === 'downpayment_plus_phase1' ? 'downpayment_plus_phase1' : 'downpayment_only';
           totalPaymentAmount = opt === 'downpayment_plus_phase1' ? downpayment + monthly : downpayment;
+          if (opt === 'downpayment_plus_phase1') {
+            isSplitDualPackageAr = true;
+            splitDownpaymentAmt = downpayment;
+            splitMonthlyAmt = monthly;
+            splitPackageDisplayName = pkg.package_name;
+          }
         } else {
           totalPaymentAmount = monthly;
         }
@@ -784,11 +1131,24 @@ router.post(
         !isMerchandise && initialPackageStatus === 'Verified' ? createdBy : null;
       const arVerifiedAtOnCreate = arVerifiedByOnCreate ? new Date() : null;
 
-      const ackNumber = await allocateNextArStyleNumber(client);
-      const insertParams = [
-          ackNumber,
-          isMerchandise ? 'Pending' : initialPackageStatus,
-          isMerchandise ? 'Merchandise' : 'Package',
+      let ackReceipt;
+      let pairedAckReceipt = null;
+
+      const insertAcknowledgementRow = async ({
+        ackNum,
+        statusVal,
+        arTypeVal,
+        payAmt,
+        tipAmt,
+        pkgSnapName,
+        pkgSnapAmt,
+        merchJson,
+        installmentOpt,
+      }) => {
+        const insertParams = [
+          ackNum,
+          statusVal,
+          arTypeVal,
           prospect_student_name,
           prospect_student_contact?.trim() || null,
           prospect_student_email?.trim()?.toLowerCase() || null,
@@ -796,27 +1156,25 @@ router.post(
           linkedStudentId || null,
           branchId,
           pkgId,
-          packageNameSnapshot,
-          packageAmountSnapshot,
-          merchandiseItemsSnapshot ? JSON.stringify(merchandiseItemsSnapshot) : null,
-          totalPaymentAmount,
-          tip_amount || 0,
+          pkgSnapName,
+          pkgSnapAmt,
+          merchJson,
+          payAmt,
+          tipAmt,
           issue_date,
           normalizedPaymentMethod,
           reference_number?.trim() || null,
           payment_attachment_url || null,
           level_tag?.trim() || null,
-          isMerchandise ? null : (installment_option || null),
+          installmentOpt,
           createdBy,
-      ];
-
-      const insertParamsWithVerifier = hasVerifierCols
-        ? [...insertParams, arVerifiedByOnCreate, arVerifiedAtOnCreate]
-        : insertParams;
-
-      const insertResult = hasVerifierCols
-        ? await client.query(
-            `INSERT INTO acknowledgement_receiptstbl (
+        ];
+        const insertParamsWithVerifier = hasVerifierCols
+          ? [...insertParams, arVerifiedByOnCreate, arVerifiedAtOnCreate]
+          : insertParams;
+        const insResult = hasVerifierCols
+          ? await client.query(
+              `INSERT INTO acknowledgement_receiptstbl (
                ack_receipt_number,
                status,
                ar_type,
@@ -850,10 +1208,10 @@ router.post(
                $23, $24
              )
              RETURNING *`,
-            insertParamsWithVerifier
-          )
-        : await client.query(
-            `INSERT INTO acknowledgement_receiptstbl (
+              insertParamsWithVerifier
+            )
+          : await client.query(
+              `INSERT INTO acknowledgement_receiptstbl (
                ack_receipt_number,
                status,
                ar_type,
@@ -884,9 +1242,69 @@ router.post(
                $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL, NULL, $22
              )
              RETURNING *`,
-            insertParams
-          );
-      const ackReceipt = insertResult.rows[0];
+              insertParams
+            );
+        return insResult.rows[0];
+      };
+
+      if (isSplitDualPackageAr && !isMerchandise) {
+        const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn();
+        if (!hasPairedCol) {
+          await client.query('ROLLBACK');
+          return res.status(503).json({
+            success: false,
+            message:
+              'Run database migration 109_add_paired_ack_receipt_id.sql (paired_ack_receipt_id on acknowledgement_receiptstbl) before creating Downpayment + Phase 1 receipts.',
+          });
+        }
+        const n1 = await allocateNextArStyleNumber(client);
+        const n2 = await allocateNextArStyleNumber(client);
+        const stud = String(prospect_student_name || '').trim();
+        const lvl = String(level_tag || '').trim() || '-';
+        const dpDesc = `Downpayment for ${splitPackageDisplayName || 'Installment'}`;
+        const phDesc = `(Phase 1) Installment plan for ${stud} - ${lvl}`;
+        const tipVal = parseFloat(tip_amount || 0) || 0;
+
+        ackReceipt = await insertAcknowledgementRow({
+          ackNum: n1,
+          statusVal: initialPackageStatus,
+          arTypeVal: 'Package',
+          payAmt: splitDownpaymentAmt,
+          tipAmt: tipVal,
+          pkgSnapName: dpDesc,
+          pkgSnapAmt: splitDownpaymentAmt,
+          merchJson: null,
+          installmentOpt: 'downpayment_plus_phase1',
+        });
+        pairedAckReceipt = await insertAcknowledgementRow({
+          ackNum: n2,
+          statusVal: initialPackageStatus,
+          arTypeVal: 'Package',
+          payAmt: splitMonthlyAmt,
+          tipAmt: 0,
+          pkgSnapName: phDesc,
+          pkgSnapAmt: splitMonthlyAmt,
+          merchJson: null,
+          installmentOpt: null,
+        });
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET paired_ack_receipt_id = $1 WHERE ack_receipt_id = $2`,
+          [pairedAckReceipt.ack_receipt_id, ackReceipt.ack_receipt_id]
+        );
+      } else {
+        const ackNumber = await allocateNextArStyleNumber(client);
+        ackReceipt = await insertAcknowledgementRow({
+          ackNum: ackNumber,
+          statusVal: isMerchandise ? 'Pending' : initialPackageStatus,
+          arTypeVal: isMerchandise ? 'Merchandise' : 'Package',
+          payAmt: totalPaymentAmount,
+          tipAmt: tip_amount || 0,
+          pkgSnapName: packageNameSnapshot,
+          pkgSnapAmt: packageAmountSnapshot,
+          merchJson: merchandiseItemsSnapshot ? JSON.stringify(merchandiseItemsSnapshot) : null,
+          installmentOpt: isMerchandise ? null : installment_option || null,
+        });
+      }
 
       // ── For Merchandise AR: auto-generate invoice ─────────────────────────
       if (isMerchandise && merchandiseItemsSnapshot) {
@@ -926,7 +1344,7 @@ router.post(
             issue_date,
             createdBy,
             ackReceipt.ack_receipt_id,
-            ackNumber,
+            ackReceipt.ack_receipt_number,
           ]
         );
 
@@ -1041,6 +1459,18 @@ router.post(
         status: ackReceipt.status,
       });
 
+      if (pairedAckReceipt) {
+        createArSubmissionNotification({
+          ackReceiptId: pairedAckReceipt.ack_receipt_id,
+          branchId,
+          createdByUserId: createdBy,
+          studentName: prospect_student_name,
+          arType: 'Package',
+          paymentMethod: normalizedPaymentMethod,
+          status: pairedAckReceipt.status,
+        });
+      }
+
       if (ackReceipt.status === 'Paid' || ackReceipt.status === 'Applied') {
         (async () => {
           try {
@@ -1064,8 +1494,23 @@ router.post(
 
       res.status(201).json({
         success: true,
-        data: omitAckReceiptNumber(ackReceipt),
-        ...(isMerchandise && ackReceipt.invoice_id
+        // Include ack_receipt_number for the creator so the post-creation
+        // modal can display and print the receipt without a separate lookup.
+        data: {
+          ...omitAckReceiptNumber(ackReceipt),
+          ack_receipt_number: ackReceipt.ack_receipt_number,
+        },
+        ...(pairedAckReceipt
+          ? {
+              paired_acknowledgement_receipt: {
+                ...omitAckReceiptNumber(pairedAckReceipt),
+                ack_receipt_number: pairedAckReceipt.ack_receipt_number,
+              },
+              message:
+                'Two sequential AR numbers were issued (downpayment, then Phase 1). Only the downpayment receipt appears on the AR list; Phase 1 is linked for printing and matches the Phase 1 invoice AR number after enrollment.',
+            }
+          : {}),
+        ...(isMerchandise && ackReceipt.invoice_id && !pairedAckReceipt
           ? {
               message:
                 'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
@@ -1129,6 +1574,156 @@ router.get(
         success: true,
         data: omitAckReceiptNumber(ar),
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/acknowledgement-receipts/:id/pdf
+ * Generate a printable Acknowledgement Receipt PDF directly from AR data.
+ * Works for both Package and Merchandise ARs without needing an invoice_id.
+ *
+ * Optional query `paired_id`: legacy — two sibling AR rows from an older split create;
+ * returns one PDF with two pages. New Downpayment + Phase 1 receipts use a single row;
+ * that case produces two pages automatically without `paired_id`.
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.get(
+  '/:id/pdf',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    queryValidator('paired_id')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('paired_id must be a positive integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const idNum = Number(id);
+      const pairedRaw = req.query.paired_id;
+      const pairedNum =
+        pairedRaw !== undefined && pairedRaw !== null && String(pairedRaw).trim() !== ''
+          ? Number(pairedRaw)
+          : null;
+
+      const arResult = await query(ACK_RECEIPT_PDF_SELECT_SQL, [idNum]);
+
+      if (arResult.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Acknowledgement receipt not found' });
+      }
+
+      const ar = arResult.rows[0];
+
+      if (
+        req.user.userType !== 'Superadmin' &&
+        req.user.branchId != null &&
+        ar.branch_id != null &&
+        Number(ar.branch_id) !== Number(req.user.branchId)
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+
+      const logoPath = path.resolve(process.cwd(), '../frontend/public/LCA Icon.png');
+      const hasLogo = fs.existsSync(logoPath);
+
+      let pageRows = [ar];
+
+      if (pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0) {
+        if (pairedNum === idNum) {
+          return res.status(400).json({
+            success: false,
+            message: 'paired_id must differ from the receipt id.',
+          });
+        }
+
+        const ar2Result = await query(ACK_RECEIPT_PDF_SELECT_SQL, [pairedNum]);
+        if (ar2Result.rows.length === 0) {
+          return res.status(404).json({ success: false, message: 'Paired acknowledgement receipt not found' });
+        }
+        const ar2 = ar2Result.rows[0];
+
+        if (
+          req.user.userType !== 'Superadmin' &&
+          req.user.branchId != null &&
+          ar2.branch_id != null &&
+          Number(ar2.branch_id) !== Number(req.user.branchId)
+        ) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+
+        if (!isDualPackageInstallmentPairForPdf(ar, ar2)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'These two receipts cannot be combined in one PDF. Use paired_id only for a Downpayment + Phase 1 package pair from the same submission.',
+          });
+        }
+
+        pageRows = orderDualPackageArRowsForPdf(ar, ar2);
+      } else if (ar.paired_ack_receipt_id) {
+        const ar2Result = await query(ACK_RECEIPT_PDF_SELECT_SQL, [ar.paired_ack_receipt_id]);
+        if (ar2Result.rows.length === 0) {
+          return res.status(404).json({ success: false, message: 'Paired acknowledgement receipt not found' });
+        }
+        const ar2 = ar2Result.rows[0];
+        if (
+          req.user.userType !== 'Superadmin' &&
+          req.user.branchId != null &&
+          ar2.branch_id != null &&
+          Number(ar2.branch_id) !== Number(req.user.branchId)
+        ) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+        if (!isDualPackageInstallmentPairForPdf(ar, ar2)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid Downpayment + Phase 1 acknowledgement receipt pair.',
+          });
+        }
+        pageRows = orderDualPackageArRowsForPdf(ar, ar2);
+      } else if (
+        pairedNum == null &&
+        String(ar.ar_type || '').toLowerCase() === 'package' &&
+        String(ar.installment_option || '').toLowerCase() === 'downpayment_plus_phase1' &&
+        ar.package_id != null
+      ) {
+        const dpAmt = parseFloat(ar.pkg_join_downpayment) || 0;
+        const moAmt = parseFloat(ar.pkg_join_monthly) || 0;
+        if (dpAmt > 0 && moAmt > 0) {
+          pageRows = buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt);
+        }
+      }
+
+      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
+      res.setHeader('Content-Type', 'application/pdf');
+      const pairedIdForName =
+        pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0
+          ? pairedNum
+          : ar.paired_ack_receipt_id
+            ? Number(ar.paired_ack_receipt_id)
+            : null;
+      const filename =
+        pageRows.length > 1
+          ? pairedIdForName
+            ? `acknowledgement-receipt-${idNum}-and-${pairedIdForName}.pdf`
+            : `acknowledgement-receipt-${idNum}-dp-phase1.pdf`
+          : `acknowledgement-receipt-${idNum}.pdf`;
+      res.setHeader('Content-Disposition', `inline; filename=${filename}`);
+      doc.pipe(res);
+
+      for (let i = 0; i < pageRows.length; i += 1) {
+        if (i > 0) {
+          doc.addPage({ margin: 40, size: 'A4', layout: 'landscape' });
+        }
+        drawAcknowledgementReceiptPage(doc, pageRows[i], logoPath, hasLogo);
+      }
+
+      doc.end();
     } catch (err) {
       next(err);
     }
@@ -1532,6 +2127,19 @@ router.post(
               const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
               console.log(`✅ AR downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
 
+              let phaseAckId = null;
+              let phaseAckNum = null;
+              if (ack.installment_option === 'downpayment_plus_phase1' && ack.paired_ack_receipt_id) {
+                const phaseAckRes = await client.query(
+                  'SELECT ack_receipt_id, ack_receipt_number FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+                  [ack.paired_ack_receipt_id]
+                );
+                if (phaseAckRes.rows.length > 0) {
+                  phaseAckId = phaseAckRes.rows[0].ack_receipt_id;
+                  phaseAckNum = phaseAckRes.rows[0].ack_receipt_number;
+                }
+              }
+
               // Store for async generation after COMMIT
               const enrollPhase = profile.phase_start != null ? parseInt(profile.phase_start) : 1;
               _pendingInvoiceGeneration = {
@@ -1562,11 +2170,19 @@ router.post(
                   reference_number: ack.reference_number || null,
                   payment_attachment_url: ack.payment_attachment_url || null,
                   enroll_phase: enrollPhase, // Phase to enroll (phase_start for Phase packages, else 1)
+                  phase_ack_receipt_id: phaseAckId,
+                  phase_ack_receipt_number: phaseAckNum,
                 } : null,
               };
-              // NOTE: If downpayment_only, student is NOT enrolled yet.
-              // Auto-enrollment happens when Phase 1 invoice is paid (via payments.js).
-              // If downpayment_plus_phase1, Phase 1 is auto-paid below and student is enrolled then.
+
+              const skipPendingEnrollment =
+                String(ack.installment_option || '').toLowerCase() === 'downpayment_plus_phase1' &&
+                Boolean(ack.paired_ack_receipt_id);
+              await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id, {
+                skip: skipPendingEnrollment,
+              });
+              // NOTE: If downpayment_only, student row is pending_enrollment until Phase 1 is paid.
+              // If downpayment_plus_phase1, Phase 1 is auto-paid after COMMIT and student is enrolled then.
             }
           }
         } catch (installmentError) {
@@ -1640,15 +2256,17 @@ router.post(
 
               // If student is not enrolled, enroll in all phases for full payment
               if (existingEnrollmentCheck.rows.length === 0) {
+                const arFullStatus = await detEnrollmentStatus({ db: client, studentId: student_id, classId, enrollmentType: 'full_payment' });
                 for (let phase = phaseStart; phase <= phaseEnd; phase += 1) {
                   await client.query(
-                    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                     VALUES ($1, $2, $3, $4)`,
+                    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+                     VALUES ($1, $2, $3, $4, $5)`,
                     [
                       student_id,
                       classId,
                       'System (Auto-enrolled via acknowledgement receipt — full payment)',
                       phase,
+                      arFullStatus,
                     ]
                   );
                 }
@@ -1671,6 +2289,30 @@ router.post(
          WHERE ack_receipt_id = $4`,
         [student_id, invoice_id, newPayment.payment_id, id]
       );
+
+      if (ack.paired_ack_receipt_id) {
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET student_id = $1 WHERE ack_receipt_id = $2`,
+          [student_id, ack.paired_ack_receipt_id]
+        );
+      }
+
+      // Package AR was issued with ack_receipt_number before enrollment; older enroll flows
+      // allocated a new invoice_ar_number. Align invoice display with the physical receipt.
+      const ackNumTrim = String(ack.ack_receipt_number || '').trim();
+      if (
+        String(ack.ar_type || '').trim().toLowerCase() === 'package' &&
+        ackNumTrim &&
+        String(invoice.invoice_ar_number || '').trim() !== ackNumTrim
+      ) {
+        await client.query(
+          `UPDATE invoicestbl
+           SET invoice_ar_number = $1,
+               ack_receipt_id = COALESCE(ack_receipt_id, $3)
+           WHERE invoice_id = $2`,
+          [ackNumTrim, invoice_id, ack.ack_receipt_id]
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -1699,8 +2341,22 @@ router.post(
             const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
             const { query: dbQuery } = await import('../config/database.js');
 
-            // Step 1: Generate Phase 1 invoice
-            const generatedInvoice = await generateInvoiceFromInstallment(firstInvoiceRecord, genProfile);
+            const enrollmentAckReuse =
+              autoPayPhase1 &&
+              autoPayPhase1Data?.phase_ack_receipt_id &&
+              autoPayPhase1Data?.phase_ack_receipt_number
+                ? {
+                    reuseInvoiceArNumber: String(autoPayPhase1Data.phase_ack_receipt_number).trim(),
+                    ack_receipt_id: Number(autoPayPhase1Data.phase_ack_receipt_id),
+                  }
+                : null;
+
+            // Step 1: Generate Phase 1 invoice (reuse Phase 1 AR number on invoice when paired)
+            const generatedInvoice = await generateInvoiceFromInstallment(
+              firstInvoiceRecord,
+              genProfile,
+              enrollmentAckReuse
+            );
             console.log(`✅ AR downpayment paid: Generated Phase 1 invoice ${generatedInvoice.invoice_id} for profile ${profileId}`);
 
             // Step 2: If "downpayment_plus_phase1", auto-pay Phase 1 and generate Phase 2
@@ -1768,6 +2424,15 @@ router.post(
                 );
                 console.log(`✅ AR Phase 1 auto-paid: invoice ${phase1InvoiceId}`);
 
+                if (autoPayPhase1Data.phase_ack_receipt_id) {
+                  await dbQuery(
+                    `UPDATE acknowledgement_receiptstbl
+                     SET status = 'Applied', student_id = $1, invoice_id = $2
+                     WHERE ack_receipt_id = $3`,
+                    [sid, phase1InvoiceId, autoPayPhase1Data.phase_ack_receipt_id]
+                  );
+                }
+
                 // Enroll student in first phase (phase_start for Phase packages, else 1)
                 if (class_id) {
                   const enrollPhase = autoPayPhase1Data.enroll_phase != null ? parseInt(autoPayPhase1Data.enroll_phase) : 1;
@@ -1777,7 +2442,7 @@ router.post(
                      WHERE student_id = $1
                        AND class_id = $2
                        AND phase_number = $3
-                       AND COALESCE(enrollment_status, 'Active') = 'Active'
+                       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
                        AND removed_at IS NULL
                      LIMIT 1`,
                     [sid, class_id, enrollPhase]
@@ -1790,32 +2455,36 @@ router.post(
                        WHERE student_id = $1
                          AND class_id = $2
                          AND phase_number = $3
-                         AND COALESCE(enrollment_status, 'Active') = 'Removed'
+                         AND program_enrollment_status = 'dropped'
                        ORDER BY removed_at DESC NULLS LAST, classstudent_id DESC
                        LIMIT 1`,
                       [sid, class_id, enrollPhase]
                     );
 
+                    // Business rule: first paid installment phase after downpayment is "new".
+                    // Later phases are handled by payments.js and marked "re_enrolled".
+                    const arEnrollStatus = 'new';
+
                     if (removedEnrollment.rows.length > 0) {
                       await dbQuery(
                         `UPDATE classstudentstbl
-                         SET enrollment_status = 'Active',
+                         SET program_enrollment_status = $1,
                              removed_at = NULL,
                              removed_reason = NULL,
                              removed_by = NULL,
-                             enrolled_by = $1,
+                             enrolled_by = $2,
                              enrolled_at = CURRENT_TIMESTAMP
-                         WHERE classstudent_id = $2`,
-                        ['System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', removedEnrollment.rows[0].classstudent_id]
+                         WHERE classstudent_id = $3`,
+                        [arEnrollStatus, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', removedEnrollment.rows[0].classstudent_id]
                       );
-                      console.log(`✅ AR Phase 1 re-activated enrollment: student ${sid} class ${class_id} phase ${enrollPhase}`);
+                      console.log(`✅ AR Phase 1 re-activated enrollment: student ${sid} class ${class_id} phase ${enrollPhase} (status: ${arEnrollStatus})`);
                     } else {
                       await dbQuery(
-                        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-                         VALUES ($1, $2, $3, $4)`,
-                        [sid, class_id, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', enrollPhase]
+                        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [sid, class_id, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', enrollPhase, arEnrollStatus]
                       );
-                      console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase ${enrollPhase}`);
+                      console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase ${enrollPhase} (status: ${arEnrollStatus})`);
                     }
                   } else {
                     // Keep metadata fresh when installment auto-payment confirms this phase is truly paid.
@@ -1846,6 +2515,34 @@ router.post(
                     generated_count: generatedInvoice.generated_count || 1,
                   });
                   console.log(`✅ AR Phase 2 generated: invoice ${phase2Invoice.invoice_id} for profile ${profile_id}`);
+
+                  // Pre-generated Phase 2 uses the *next* billing cycle's nominal issue (e.g. 25th of next month),
+                  // so it disappears from the main Invoice list when users filter by the enrollment month.
+                  // Align issue_date to the AR payment / enrollment date while keeping due_date on the real schedule.
+                  const rawAckIssue = autoPayPhase1Data?.issue_date;
+                  let physicalIssueYmd = null;
+                  if (rawAckIssue != null && String(rawAckIssue).trim() !== '') {
+                    const s = String(rawAckIssue).trim();
+                    physicalIssueYmd = /^\d{4}-\d{2}-\d{2}$/.test(s)
+                      ? s.slice(0, 10)
+                      : formatYmdLocal(new Date(s));
+                  }
+                  if (physicalIssueYmd && phase2Invoice?.invoice_id) {
+                    const dueRes = await dbQuery(
+                      `SELECT TO_CHAR(due_date, 'YYYY-MM-DD') AS d FROM invoicestbl WHERE invoice_id = $1`,
+                      [phase2Invoice.invoice_id]
+                    );
+                    const dueYmd = (dueRes.rows[0]?.d || '').slice(0, 10);
+                    if (!dueYmd || physicalIssueYmd <= dueYmd) {
+                      await dbQuery(
+                        `UPDATE invoicestbl SET issue_date = $1::date WHERE invoice_id = $2`,
+                        [physicalIssueYmd, phase2Invoice.invoice_id]
+                      );
+                      console.log(
+                        `✅ AR Phase 2 issue_date set to ${physicalIssueYmd} (AR date) for invoice ${phase2Invoice.invoice_id}`
+                      );
+                    }
+                  }
                 } else {
                   console.log(`ℹ️ AR Phase 2 skipped: no pending installment record found (all phases generated)`);
                 }

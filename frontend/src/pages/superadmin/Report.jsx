@@ -218,10 +218,10 @@ const Report = () => {
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-                            row.enrollment_status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                            ['Active'].includes(row.enrollment_status) || ['new', 're_enrolled', 'upsell'].includes(row.enrollment_status) ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                           }`}
                         >
-                          {row.enrollment_status === 'Active' ? 'Active' : 'Inactive'}
+                          {(['Active', 'new', 're_enrolled', 'upsell'].includes(row.enrollment_status)) ? 'Active' : 'Inactive'}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600 max-w-[220px]" title={row.enrolled_classes || undefined}>

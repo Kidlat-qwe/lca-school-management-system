@@ -3,20 +3,21 @@
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Getting Started](#getting-started)
-3. [Teacher Role Overview](#teacher-role-overview)
-4. [Dashboard](#dashboard)
-5. [Pages and Features](#pages-and-features)
+2. [What's New in v1.3](#whats-new-in-v13)
+3. [Getting Started](#getting-started)
+4. [Teacher Role Overview](#teacher-role-overview)
+5. [Dashboard](#dashboard)
+6. [Pages and Features](#pages-and-features)
    - [Calendar](#calendar)
    - [Announcements](#announcements)
    - [Classes](#classes)
    - [Student List](#student-list)
    - [Program](#program)
    - [Curriculum](#curriculum)
-6. [Daily Teaching Workflow](#daily-teaching-workflow)
-7. [Attendance Management](#attendance-management)
-8. [Best Practices](#best-practices)
-9. [Troubleshooting](#troubleshooting)
+7. [Daily Teaching Workflow](#daily-teaching-workflow)
+8. [Attendance Management](#attendance-management)
+9. [Best Practices](#best-practices)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,6 +40,24 @@ This manual is specifically designed for **Teacher** users of the Physical Schoo
   - Cannot access financial information
   - Cannot modify curriculum (view only)
   - Only see classes you're assigned to
+
+---
+
+## What's New in v1.3
+
+A small set of UX improvements landed for tables you use day-to-day (Classes, Student List).
+
+### Smarter search
+
+- Search bars (student name, class name) now wait until you stop typing for a moment before sending the request. The page will not refresh on every keystroke and the matching results appear directly without you needing to click "Next".
+
+### Sortable column headers
+
+- Tables show small ▲ / ▼ arrows next to sortable columns (e.g. Class Code, Class Name, Student Name, Issue Date). Click once to sort ascending, click again to sort descending. Click another column to reset.
+
+### Other notes
+
+- Attendance marking, session details and curriculum behavior are unchanged. The lock-after-save rule still applies: once you save attendance for a session, it cannot be edited from the Teacher side.
 
 ---
 
@@ -430,9 +449,10 @@ Click on a student to see:
 
 **Searching and Filtering**
 
-- **Search Bar**: Type student name or email to search
-- **Filter by Class**: Select specific class to filter students
-- **Clear Filters**: Reset to see all students
+- **Search Bar**: Type student name or email to search. The list updates after a brief pause and resets to page 1 automatically.
+- **Filter by Class**: Select specific class to filter students.
+- **Sort**: Click the ▲ / ▼ arrows in the column headers to sort by Student Name, Email or Attendance Rate.
+- **Clear Filters**: Reset to see all students.
 
 #### How to Use
 
@@ -815,11 +835,16 @@ View curriculum details for your classes. Access learning topics, goals, and age
 
 ## Document Information
 
-**Version**: 1.2
-**Last Updated**: January 29, 2026
+**Version**: 1.3
+**Last Updated**: May 11, 2026
 **Role**: Teacher
 **System**: Physical School Management System
 **Organization**: Little Champions Academy Inc.
+
+### Change log
+
+- **v1.3 (May 11, 2026)** — Documented the new debounced search behavior and sortable column headers across Teacher tables. No changes to attendance marking, session details, curriculum or class-management behavior.
+- **v1.2 (January 29, 2026)** — Earlier baseline.
 
 ---
 

@@ -8,7 +8,7 @@
 
   | File | Purpose |
   | ---- | ------- |
-  | `InstallmentPlanDetails.jsx`         | Self-contained, read-only **presentational** component that fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Reused inline by other dialogs. |
+  | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments`, or advance pay via `POST .../advance-pay`. Reused inline by other dialogs. |
   | `InstallmentInvoicePhasesModal.jsx`  | Modal shell around `InstallmentPlanDetails` for the "View Details" action on the Installment Invoice Logs pages. |
 
   ## `InstallmentPlanDetails`
@@ -54,19 +54,23 @@
   | `profileId` | `number \| string \| null` | yes | `installmentinvoiceprofiles_id` to load. |
   | `onClose` | `() => void` | yes | Called when the user dismisses the modal (overlay click, Close button, or X button). |
 
-  The modal is intentionally read-only: there are no inline edits, no
-  status writes, and no parent-state callbacks. To make changes,
-  collaborators continue to use the existing Invoice / Payment pages.
+  The modal hosts `InstallmentPlanDetails`, which can open a nested payment
+  form. **Pay Now** always targets the **earliest** actionable phase: any
+  outstanding balance on a generated invoice is paid first (same API as the
+  Invoice page); only when all generated phases are paid does **advance pay**
+  unlock for the next not-yet-generated phase.
 
-  ### Backend dependency
+  ### Backend dependencies
 
-  The component fetches:
-
-  - `GET /api/sms/installment-invoices/profiles/:id/phases` — returns
-    the profile, downpayment summary, ordered phases array (each row
-    including a `payment_date` field with the latest completed payment
-    date for that phase), and totals. Branch isolation is enforced
-    server-side for non-Superadmin roles.
+  - `GET /api/sms/installment-invoices/profiles/:id/phases` — profile,
+    downpayment, phases, totals (see below).
+  - `POST /api/sms/payments` — record full payment on an existing installment
+    phase invoice (Finance / Admin / Superadmin / Superfinance). On success the
+    UI loads `GET /invoices/:id` and opens **PaymentRecordedInvoiceSummaryModal**
+    (same as Invoice page: AR preview + PDF).
+  - `POST /api/sms/installment-invoices/profiles/:id/advance-pay` — pay ahead
+    for a phase that has not been generated yet; then the same receipt summary
+    opens for the new paid invoice.
 
   ### Role wiring
 

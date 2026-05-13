@@ -15,6 +15,7 @@ import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsVi
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import AdminDailySummaryDetailsModal from '../../components/dailySummary/AdminDailySummaryDetailsModal';
 
 const TAB_EOD = 'eod';
 const TAB_CASH = 'cash';
@@ -73,7 +74,12 @@ const AdminDailySummary = () => {
   const [cashUploading, setCashUploading] = useState(false);
   const [cashResubmitLoading, setCashResubmitLoading] = useState(false);
 
+  const [openActionsMenuId, setOpenActionsMenuId] = useState(null);
+  const [actionsMenuPosition, setActionsMenuPosition] = useState({ top: 0, right: 0 });
+  const [detailsView, setDetailsView] = useState({ open: false, record: null });
+
   const isCash = summaryKind === TAB_CASH;
+  const summaryRecordIdField = isCash ? 'cash_deposit_summary_id' : 'daily_summary_id';
 
   /** Same as superadmin Daily Summary list: prefer live EOD totals from GET (payments + AR for date). */
   const endOfShiftListAmount = (record) => {
@@ -176,6 +182,8 @@ const AdminDailySummary = () => {
     setFilterDateFrom('');
     setFilterDateTo('');
     setFilterMonth(manilaMonthYYYYMM());
+    setOpenActionsMenuId(null);
+    setDetailsView({ open: false, record: null });
   }, [summaryKind, viewTab]);
 
   useEffect(() => {
@@ -301,6 +309,23 @@ const AdminDailySummary = () => {
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
   };
+
+  const openActionsMenuForRecord = (event, id) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const menuWidth = 176;
+    const top = rect.bottom + 4;
+    let right = viewportWidth - rect.right;
+    if (right < 8) right = 8;
+    if (right > viewportWidth - menuWidth - 8) {
+      right = Math.max(8, viewportWidth - rect.left - menuWidth);
+    }
+    setActionsMenuPosition({ top, right });
+    setOpenActionsMenuId((prev) => (prev === id ? null : id));
+  };
+
+  const selectedActionRecord =
+    records.find((r) => r[summaryRecordIdField] === openActionsMenuId) || null;
 
   const statusOptions = useMemo(
     () => [
@@ -517,17 +542,18 @@ const AdminDailySummary = () => {
                       {row.remarks || '—'}
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {viewTab === VIEW_RETURN && isReturnedSummaryStatus(row.status) ? (
+                      <div className="inline-flex items-center justify-end gap-1">
                         <button
                           type="button"
-                          onClick={() => openEodResubmit(row)}
-                          className="text-sm font-medium text-primary-600 hover:text-primary-800"
+                          onClick={(e) => openActionsMenuForRecord(e, row.daily_summary_id)}
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          aria-label="Actions"
                         >
-                          Review &amp; resubmit
+                          <svg className="w-4 h-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                            <path d="M10 3a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 11.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 20a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                          </svg>
                         </button>
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -586,17 +612,18 @@ const AdminDailySummary = () => {
                       {row.remarks || '—'}
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {viewTab === VIEW_RETURN && isReturnedSummaryStatus(row.status) ? (
+                      <div className="inline-flex items-center justify-end gap-1">
                         <button
                           type="button"
-                          onClick={() => openCashResubmit(row)}
-                          className="text-sm font-medium text-primary-600 hover:text-primary-800"
+                          onClick={(e) => openActionsMenuForRecord(e, row.cash_deposit_summary_id)}
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          aria-label="Actions"
                         >
-                          Review &amp; resubmit
+                          <svg className="w-4 h-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                            <path d="M10 3a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 11.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 20a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                          </svg>
                         </button>
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -616,6 +643,60 @@ const AdminDailySummary = () => {
           onPageChange={(p) => fetchRecords(p)}
         />
       )}
+
+      {openActionsMenuId &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setOpenActionsMenuId(null)} />
+            <div
+              className="fixed z-[9999] w-44 bg-white rounded-md shadow-lg border border-gray-200 text-left py-1"
+              style={{ top: actionsMenuPosition.top, right: actionsMenuPosition.right }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedActionRecord) setDetailsView({ open: true, record: selectedActionRecord });
+                  setOpenActionsMenuId(null);
+                }}
+                className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+              >
+                View details
+              </button>
+              {viewTab === VIEW_RETURN &&
+              selectedActionRecord &&
+              isReturnedSummaryStatus(selectedActionRecord.status) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedActionRecord) return;
+                    if (isCash) {
+                      void openCashResubmit(selectedActionRecord);
+                    } else {
+                      openEodResubmit(selectedActionRecord);
+                    }
+                    setOpenActionsMenuId(null);
+                  }}
+                  className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                >
+                  Review &amp; resubmit
+                </button>
+              ) : null}
+            </div>
+          </>,
+          document.body
+        )}
+
+      <AdminDailySummaryDetailsModal
+        open={detailsView.open}
+        record={detailsView.record}
+        isCashDeposit={isCash}
+        fallbackBranchName={branchName}
+        onClose={() => {
+          setDetailsView({ open: false, record: null });
+          setOpenActionsMenuId(null);
+        }}
+      />
 
       {eodResubmit.open &&
         createPortal(

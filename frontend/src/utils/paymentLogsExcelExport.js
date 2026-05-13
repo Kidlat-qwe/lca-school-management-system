@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 
 /**
  * Column key for payment line amount in Payment Logs Excel exports.
- * Prefer summing TOTAL AMOUNT (matches Payment Logs table), fallback to legacy Amount (₱).
+ * Prefer summing TOTAL AMOUNT (matches Payment Logs table: payable + tip), fallback to legacy Amount (₱).
  */
 export const PAYMENT_LOGS_EXPORT_TOTAL_AMOUNT_KEY = 'TOTAL AMOUNT';
 export const PAYMENT_LOGS_EXPORT_LEGACY_AMOUNT_KEY = 'Amount (₱)';

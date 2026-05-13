@@ -688,7 +688,7 @@ router.get(
                 COUNT(DISTINCT cs.student_id) AS dropped_unenrolled_count
               FROM classstudentstbl cs
               INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.enrollment_status = 'Removed'
+              WHERE cs.program_enrollment_status = 'dropped'
                 AND cs.removed_at IS NOT NULL
                 AND cs.enrolled_at IS NOT NULL
                 AND cs.enrolled_at < cs.removed_at
@@ -936,7 +936,7 @@ router.get(
 /**
  * GET /api/sms/dashboard/enrollment
  * Enrollment dashboard: active/inactive students, reserved-only, monthly enrollments, charts data.
- * Active = student with at least one enrollment where enrollment_status = 'Active' and removed_at IS NULL.
+ * Active = student with at least one enrollment where program_enrollment_status IN ('new','re_enrolled','upsell') and removed_at IS NULL.
  * Inactive = student with no active enrollments (includes reserved-only and never enrolled).
  * Access: Superadmin, Admin, Finance (Admin/Finance see their branch only)
  */
@@ -969,7 +969,7 @@ router.get(
       const studentWhere = branchFilter
         ? 'WHERE u.user_type = \'Student\' AND u.branch_id = $1'
         : 'WHERE u.user_type = \'Student\'';
-      const activeEnrollment = "COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL";
+      const activeEnrollment = "cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell') AND cs.removed_at IS NULL";
 
       // KPI cards: always system snapshot (not month-scoped). Month only affects the enrollments trend chart.
       const totalStudentsResult = await query(
@@ -1414,7 +1414,7 @@ router.get(
         ? `AND ${filterConditions.join(' AND ')}`
         : '';
 
-      const activeEnrollment = `cs.enrollment_status = 'Active' AND cs.removed_at IS NULL`;
+      const activeEnrollment = `cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell') AND cs.removed_at IS NULL`;
 
       const [perClassResult, perTeacherResult, perRoomResult] = await Promise.all([
         query(

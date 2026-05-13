@@ -66,7 +66,7 @@ router.get(
          INNER JOIN userstbl u ON cs_enroll.student_id = u.user_id
          WHERE cs_enroll.class_id = $1
            AND cs_enroll.phase_number = $2
-           AND COALESCE(cs_enroll.enrollment_status, 'Active') = 'Active'
+           AND cs_enroll.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND cs_enroll.removed_at IS NULL
          ORDER BY cs_enroll.enrolled_at DESC`,
         [session.class_id, session.phase_number]
@@ -209,7 +209,7 @@ router.post(
          WHERE cs.class_id = $1
            AND cs.phase_number = $2
            AND cs.student_id = ANY($3::int[])
-           AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+           AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND cs.removed_at IS NULL`,
         [session.class_id, session.phase_number, studentIds]
       );

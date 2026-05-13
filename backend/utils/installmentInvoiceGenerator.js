@@ -1,5 +1,5 @@
 import { query, getClient } from '../config/database.js';
-import { insertInvoiceWithArNumber } from './invoiceArNumber.js';
+import { insertInvoiceWithArNumberReuseOrAllocate } from './invoiceArNumber.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 import { getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
 import {
@@ -7,6 +7,7 @@ import {
   getPhaseDueDateYmd,
   isPhaseInstallmentProfile,
 } from './phaseInstallmentUtils.js';
+import { syncProgramPaymentStatusForInvoice } from './programPaymentStatusService.js';
 
 /**
  * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
@@ -101,9 +102,14 @@ const buildFixedInstallmentCycleDates = (generationAnchor, frequency) => {
  * Generate invoice from installment invoice
  * @param {Object} installmentInvoice - Installment invoice record from installmentinvoicestbl
  * @param {Object} profile - Installment invoice profile from installmentinvoiceprofilestbl
+ * @param {{ reuseInvoiceArNumber?: string, ack_receipt_id?: number }|null} enrollmentAckReuse - When enrolling with a prepaid package AR (no downpayment invoice), reuse that AR# on the first generated phase invoice.
  * @returns {Object} Created invoice data
  */
-export const generateInvoiceFromInstallment = async (installmentInvoice, profile) => {
+export const generateInvoiceFromInstallment = async (
+  installmentInvoice,
+  profile,
+  enrollmentAckReuse = null
+) => {
   const client = await getClient();
   
   try {
@@ -212,11 +218,21 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
     const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
     const finalInvoiceAmount = Math.max(0, baseAmount - promoDiscount);
     
+    const reuseAr =
+      enrollmentAckReuse?.reuseInvoiceArNumber != null &&
+      String(enrollmentAckReuse.reuseInvoiceArNumber).trim() !== ''
+        ? String(enrollmentAckReuse.reuseInvoiceArNumber).trim()
+        : null;
+    const ackReceiptIdCol =
+      enrollmentAckReuse?.ack_receipt_id != null && Number.isInteger(Number(enrollmentAckReuse.ack_receipt_id))
+        ? Number(enrollmentAckReuse.ack_receipt_id)
+        : null;
+
     // Create invoice (link to installment invoice profile for phase tracking)
-    const newInvoice = await insertInvoiceWithArNumber(
+    const newInvoice = await insertInvoiceWithArNumberReuseOrAllocate(
       client,
-      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id, invoice_ar_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id, ack_receipt_id, invoice_ar_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         'TEMP', // Temporary, will be updated
@@ -231,7 +247,9 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
         null, // System-generated
         installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile for phase tracking
         shouldApplyPromoToMonthly ? promoId : null, // Link promo if discount applied
-      ]
+        ackReceiptIdCol,
+      ],
+      reuseAr
     );
     
     // Update invoice description
@@ -308,6 +326,7 @@ export const generateInvoiceFromInstallment = async (installmentInvoice, profile
       'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
       [newInvoice.invoice_id, profile.student_id]
     );
+    await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
     
     // Calculate next generation date and next invoice month from fixed cadence.
     const nextGenDate = cycle.nextGenerationDate;

@@ -749,11 +749,15 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     action_owner_user_id integer,
     tip_amount numeric(12, 2) DEFAULT 0,
     finance_verified_reference_number text COLLATE pg_catalog."default",
+    reject_reason text COLLATE pg_catalog."default",
+    rejected_by integer,
+    rejected_at timestamp without time zone,
+    discount_amount numeric(10, 2) DEFAULT 0,
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
 
 COMMENT ON COLUMN public.paymenttbl.approval_status
-    IS 'Pending | Approved | Returned — Returned means sent back to branch for reference/attachment correction.';
+    IS 'Pending | Approved | Returned | Rejected — Rejected is final and excludes the payment from revenue totals.';
 
 COMMENT ON COLUMN public.paymenttbl.approved_by
     IS 'User ID of the finance team member (Superadmin/Superfinance/Finance) who approved the payment';
@@ -778,6 +782,18 @@ COMMENT ON COLUMN public.paymenttbl.action_owner_user_id
 
 COMMENT ON COLUMN public.paymenttbl.finance_verified_reference_number
     IS 'Reference number entered by Finance/Superfinance during payment verification approval.';
+
+COMMENT ON COLUMN public.paymenttbl.reject_reason
+    IS 'Why Finance/Superfinance permanently rejected this payment.';
+
+COMMENT ON COLUMN public.paymenttbl.rejected_by
+    IS 'Finance/Superfinance user who rejected the payment.';
+
+COMMENT ON COLUMN public.paymenttbl.rejected_at
+    IS 'When the payment was rejected.';
+
+COMMENT ON COLUMN public.paymenttbl.discount_amount
+    IS 'Discount applied at payment time. Counts toward invoice settlement, not revenue.';
 
 CREATE TABLE IF NOT EXISTS public.phasesessionstbl
 (
@@ -1740,6 +1756,13 @@ ALTER TABLE IF EXISTS public.paymenttbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_payment_invoice_id
     ON public.paymenttbl(invoice_id);
+
+
+ALTER TABLE IF EXISTS public.paymenttbl
+    ADD CONSTRAINT paymenttbl_rejected_by_fkey FOREIGN KEY (rejected_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
 
 
 ALTER TABLE IF EXISTS public.paymenttbl

@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
 
 const router = express.Router();
 
@@ -329,7 +330,7 @@ router.post(
           `SELECT COUNT(DISTINCT student_id) AS count
            FROM classstudentstbl
            WHERE class_id = $1
-             AND COALESCE(enrollment_status, 'Active') = 'Active'
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
              AND removed_at IS NULL`,
           [class_id]
         );
@@ -349,7 +350,7 @@ router.post(
          FROM classstudentstbl
          WHERE student_id = $1
            AND class_id = $2
-           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND removed_at IS NULL`,
         [student_id, class_id]
       );
@@ -376,11 +377,17 @@ router.post(
 
       // Enroll student with automatically determined phase
       console.log('💾 Inserting enrollment with phase_number:', enrollmentPhase);
+      const programEnrollmentStatus = await determineEnrollmentStatus({
+        db: client,
+        studentId: student_id,
+        classId: class_id,
+        enrollmentType: 'direct',
+      });
       const result = await client.query(
-        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [student_id, class_id, req.user.fullName || req.user.email, enrollmentPhase]
+        [student_id, class_id, req.user.fullName || req.user.email, enrollmentPhase, programEnrollmentStatus]
       );
       
       console.log('✅ Enrollment created:', {
@@ -441,7 +448,7 @@ router.delete(
 
       await client.query(
         `UPDATE classstudentstbl
-         SET enrollment_status = 'Removed',
+         SET program_enrollment_status = 'dropped',
              removed_at = CURRENT_TIMESTAMP,
              removed_reason = $1,
              removed_by = $2
@@ -543,7 +550,7 @@ router.get(
           cs.enrolled_at,
           cs.enrolled_by,
           cs.phase_number,
-          COALESCE(cs.enrollment_status, 'Active') as enrollment_status,
+          cs.program_enrollment_status,
           cs.removed_at,
           cs.removed_reason,
           cs.removed_by,
@@ -558,14 +565,14 @@ router.get(
           u.level_tag,
           u.profile_picture_url,
           CASE
-            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Removed' OR cs.removed_at IS NOT NULL
+            WHEN cs.program_enrollment_status = 'dropped' OR cs.removed_at IS NOT NULL
               THEN 'unenrolled'
             ELSE 'enrolled'
           END as student_type,
           CASE
-            WHEN COALESCE(cs.enrollment_status, 'Active') = 'Active' AND cs.removed_at IS NULL THEN true
+            WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell') AND cs.removed_at IS NULL THEN true
             WHEN active_profile.package_id IS NOT NULL
-              AND COALESCE(cs.enrollment_status, 'Active') <> 'Removed'
+              AND cs.program_enrollment_status NOT IN ('dropped')
               AND cs.removed_at IS NULL THEN true
             ELSE false
           END as shouldCount
@@ -618,7 +625,7 @@ router.get(
          LEFT JOIN classstudentstbl cs
            ON ip.student_id = cs.student_id
           AND cs.class_id = $1
-          AND COALESCE(cs.enrollment_status, 'Active') = 'Active'
+          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
           AND cs.removed_at IS NULL
          WHERE ip.class_id = $1
            AND cs.classstudent_id IS NULL -- Not enrolled yet (Phase 1 not paid)

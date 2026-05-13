@@ -6,6 +6,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import * as XLSX from 'xlsx';
 import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
+import {
+  getPaymentLogTableAmountColumn,
+  getPaymentLogTableTotalAmountColumn,
+} from '../../utils/paymentLogTableAmounts';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import {
   PAYMENT_LOG_DATE_MODES,
@@ -749,8 +753,6 @@ const SuperfinancePaymentLogs = () => {
 
       // Prepare data for Excel (match Payment Logs table columns)
       const excelData = allPayments.map((payment) => {
-        const payable = parseFloat(payment.payable_amount) || 0;
-        const tip = parseFloat(payment.tip_amount) || 0;
         const uiStatus =
           financeLogTab === 'return'
             ? (payment.approval_status || payment.status || 'Returned')
@@ -767,8 +769,8 @@ const SuperfinancePaymentLogs = () => {
             payment.payment_method === 'Acknowledgement Receipt'
               ? 'Acknowledgement Receipt'
               : (payment.payment_method || '-'),
-          AMOUNT: Math.round(payable * 100) / 100,
-          'TOTAL AMOUNT': Math.round((payable + tip) * 100) / 100,
+          AMOUNT: Math.round(getPaymentLogTableAmountColumn(payment) * 100) / 100,
+          'TOTAL AMOUNT': Math.round(getPaymentLogTableTotalAmountColumn(payment) * 100) / 100,
           Status: uiStatus,
         };
         if (financeLogTab === 'return') {
@@ -1230,10 +1232,10 @@ const SuperfinancePaymentLogs = () => {
                       {getPaymentMethodBadge(payment.payment_method)}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-green-600 min-w-0">
-                      {formatCurrency(payment.payable_amount)}
+                      {formatCurrency(getPaymentLogTableAmountColumn(payment))}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-emerald-700 min-w-0">
-                      {formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}
+                      {formatCurrency(getPaymentLogTableTotalAmountColumn(payment))}
                     </td>
                     <td className="px-3 py-2.5 text-sm payment-status-cell align-top min-w-0 overflow-hidden">
                       <div className="min-w-0 max-w-full">
@@ -1466,87 +1468,93 @@ const SuperfinancePaymentLogs = () => {
           onClick={closeReferenceModal}
         >
           <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-lg shadow-xl w-full max-w-lg sm:max-w-2xl md:max-w-4xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
+            <div className="p-4 sm:p-6">
+              <div className="flex justify-between items-start gap-3 mb-3">
                 <h2 className="text-xl font-semibold text-gray-900">Payment Status info</h2>
                 <button
                   type="button"
                   onClick={closeReferenceModal}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 shrink-0"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
-              <p className="text-sm text-gray-600 mb-4">
+              <p className="text-sm text-gray-600 mb-4 md:mb-6">
                 Payment INV-{selectedPaymentForReference.invoice_id} · {selectedPaymentForReference.student_name || 'N/A'}
               </p>
-              {selectedPaymentForReference.payment_attachment_url && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachmentViewerUrl(selectedPaymentForReference.payment_attachment_url);
-                      setShowAttachmentViewer(true);
-                    }}
-                    className="block cursor-pointer text-left rounded-lg border border-gray-200 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1"
-                  >
-                    <img
-                      src={selectedPaymentForReference.payment_attachment_url}
-                      alt="Payment attachment"
-                      className="max-h-48 w-auto rounded-lg object-contain"
-                    />
-                  </button>
-                </div>
-              )}
               <form onSubmit={handleUpdateReferenceNumber}>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Payment Date
-                  </label>
-                  <input
-                    type="date"
-                    value={paymentDateInput}
-                    onChange={(e) => setPaymentDateInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    Adjust the date if needed. Saving will update the payment date everywhere it is shown.
-                  </p>
+                <div
+                  className={`flex flex-col gap-6 ${selectedPaymentForReference.payment_attachment_url ? 'md:flex-row md:items-start md:gap-8' : ''}`}
+                >
+                  {selectedPaymentForReference.payment_attachment_url && (
+                    <div className="w-full md:w-[40%] md:max-w-md md:shrink-0">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAttachmentViewerUrl(selectedPaymentForReference.payment_attachment_url);
+                          setShowAttachmentViewer(true);
+                        }}
+                        className="block w-full cursor-pointer text-left rounded-lg border border-gray-200 bg-gray-50 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 overflow-hidden"
+                      >
+                        <img
+                          src={selectedPaymentForReference.payment_attachment_url}
+                          alt="Payment attachment"
+                          className="max-h-52 w-full md:max-h-[min(60vh,400px)] object-contain mx-auto"
+                        />
+                      </button>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 flex flex-col gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Payment Date
+                      </label>
+                      <input
+                        type="date"
+                        value={paymentDateInput}
+                        onChange={(e) => setPaymentDateInput(e.target.value)}
+                        className="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                        disabled={referenceModalUpdating || returnActionLoading}
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Adjust the date if needed. Saving will update the payment date everywhere it is shown.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Finance/Superfinance Reference Number
+                      </label>
+                      <input
+                        type="text"
+                        value={referenceModalInput}
+                        onChange={(e) => setReferenceModalInput(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                        placeholder="Enter verification reference number"
+                        required
+                      />
+                    </div>
+                    <div className="pt-4 border-t border-gray-200">
+                      <p className="text-xs text-gray-600 mb-2">
+                        If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span>. You will be asked for a required note in the next step.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={openReturnModal}
+                        className="mt-1 w-full sm:w-auto px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md border border-amber-200 disabled:opacity-50"
+                        disabled={referenceModalUpdating || returnActionLoading}
+                      >
+                        Return to branch
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Finance/Superfinance Reference Number
-                  </label>
-                  <input
-                    type="text"
-                    value={referenceModalInput}
-                    onChange={(e) => setReferenceModalInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Enter verification reference number"
-                    required
-                  />
-                </div>
-                <div className="mb-4 pt-4 border-t border-gray-200">
-                  <p className="text-xs text-gray-600 mb-2">
-                    If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span>. You will be asked for a required note in the next step.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={openReturnModal}
-                    className="mt-3 w-full sm:w-auto px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md border border-amber-200 disabled:opacity-50"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  >
-                    Return to branch
-                  </button>
-                </div>
-                <div className="flex justify-end gap-3">
+                <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mt-6 pt-4 border-t border-gray-100">
                   <button
                     type="button"
                     onClick={closeReferenceModal}
@@ -1780,7 +1788,14 @@ const SuperfinancePaymentLogs = () => {
               <div><span className="font-medium text-gray-700">Invoice:</span> INV-{selectedRejectedPayment.invoice_id || '-'}</div>
               <div><span className="font-medium text-gray-700">Student:</span> {selectedRejectedPayment.student_name || '-'}</div>
               <div><span className="font-medium text-gray-700">Branch:</span> {getBranchName(selectedRejectedPayment.branch_id) || selectedRejectedPayment.branch_name || '-'}</div>
-              <div><span className="font-medium text-gray-700">Amount:</span> {formatCurrency(selectedRejectedPayment.payable_amount)}</div>
+              <div>
+                <span className="font-medium text-gray-700">Amount:</span>{' '}
+                {formatCurrency(getPaymentLogTableAmountColumn(selectedRejectedPayment))}
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">Total amount:</span>{' '}
+                {formatCurrency(getPaymentLogTableTotalAmountColumn(selectedRejectedPayment))}
+              </div>
               <div><span className="font-medium text-gray-700">Payment method:</span> {selectedRejectedPayment.payment_method || '-'}</div>
               <div><span className="font-medium text-gray-700">Payment date:</span> {selectedRejectedPayment.payment_date ? formatDate(selectedRejectedPayment.payment_date) : '-'}</div>
               <div><span className="font-medium text-gray-700">Reference#:</span> {selectedRejectedPayment.reference_number || '-'}</div>

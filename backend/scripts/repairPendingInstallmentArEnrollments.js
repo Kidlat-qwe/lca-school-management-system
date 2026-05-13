@@ -53,7 +53,7 @@ async function main() {
          WHERE student_id = $1
            AND class_id = $2
            AND phase_number = $3
-           AND COALESCE(enrollment_status, 'Active') = 'Active'
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
            AND removed_at IS NULL
          LIMIT 1`,
         [student_id, class_id, target_phase]
@@ -66,7 +66,7 @@ async function main() {
          WHERE student_id = $1
            AND class_id = $2
            AND phase_number = $3
-           AND COALESCE(enrollment_status, 'Active') = 'Removed'
+           AND program_enrollment_status = 'dropped'
          ORDER BY removed_at DESC NULLS LAST, classstudent_id DESC
          LIMIT 1`,
         [student_id, class_id, target_phase]
@@ -85,7 +85,7 @@ async function main() {
         if (!isDryRun) {
           await client.query(
             `UPDATE classstudentstbl
-             SET enrollment_status = 'Active',
+             SET program_enrollment_status = 're_enrolled',
                  removed_at = NULL,
                  removed_reason = NULL,
                  removed_by = NULL,
