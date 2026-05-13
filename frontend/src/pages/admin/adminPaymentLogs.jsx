@@ -2862,9 +2862,15 @@ const AdminPaymentLogs = () => {
                             <span className="text-gray-600">Subtotal</span>
                             <span className="text-gray-900 shrink-0">₱{breakdown.subtotal.toFixed(2)}</span>
                           </div>
+                          {breakdown.discount > 0.005 ? (
+                            <div className="flex justify-between gap-2">
+                              <span className="text-gray-600">Invoice discount (line items)</span>
+                              <span className="text-gray-900 shrink-0">- ₱{breakdown.discount.toFixed(2)}</span>
+                            </div>
+                          ) : null}
                           <div className="flex justify-between gap-2">
                             <span className="text-gray-600">Discount</span>
-                            <span className="text-gray-900 shrink-0">- ₱{breakdown.discount.toFixed(2)}</span>
+                            <span className="text-gray-900 shrink-0">- ₱{enteredDiscount.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between gap-2">
                             <span className="text-gray-600">Penalty</span>
