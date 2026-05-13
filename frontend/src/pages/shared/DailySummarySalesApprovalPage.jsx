@@ -20,6 +20,10 @@ import {
   parseCashDepositPaymentsResponse,
   parseDailySummaryPaymentsResponse,
 } from '../../utils/dailySummaryPaymentsParse';
+import {
+  getPaymentLogTableAmountColumn,
+  getPaymentLogTableTotalAmountColumn,
+} from '../../utils/paymentLogTableAmounts';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
@@ -883,7 +887,8 @@ const DailySummarySalesApprovalPage = () => {
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Collected</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Amount</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                       </tr>
@@ -891,7 +896,7 @@ const DailySummarySalesApprovalPage = () => {
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {verifyPayments.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={8} className="px-3 py-4 text-center text-gray-500">
                             No payment records found for this submission.
                           </td>
                         </tr>
@@ -913,12 +918,11 @@ const DailySummarySalesApprovalPage = () => {
                             <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
                             <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
                             <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap align-top">
-                              <div>{formatCurrency(collected)}</div>
-                              {tip > 0 ? (
-                                <div className="text-[10px] text-gray-500 font-normal mt-0.5">
-                                  {formatCurrency(payable)} + tip {formatCurrency(tip)}
-                                </div>
-                              ) : null}
+                              {formatCurrency(getPaymentLogTableAmountColumn(payment))}
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap align-top">
+                              <div>{formatCurrency(getPaymentLogTableTotalAmountColumn(payment))}</div>
+                              {tip > 0 ? <div className="text-[10px] text-gray-500 font-normal mt-0.5">{formatCurrency(payable)} + tip {formatCurrency(tip)}</div> : null}
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
                             <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[120px]">
@@ -940,7 +944,7 @@ const DailySummarySalesApprovalPage = () => {
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
                   <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                  <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '960px' }}>
+                  <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '1080px' }}>
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="w-[8%] py-2 ps-4 pe-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
@@ -949,7 +953,8 @@ const DailySummarySalesApprovalPage = () => {
                         <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
                         <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
                         <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
-                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
+                        <th className="w-[10%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Amount</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Total Amount</th>
                         <th className="w-[10%] py-2 px-2 text-center font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
                         <th className="w-[16%] py-2 ps-2 pe-4 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
                       </tr>
@@ -965,7 +970,8 @@ const DailySummarySalesApprovalPage = () => {
                         verifyPayments.map((payment) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
-                          const collected = payable + tip;
+                          const amount = getPaymentLogTableAmountColumn(payment);
+                          const totalAmount = getPaymentLogTableTotalAmountColumn(payment);
                           const invTotal = payment.invoice_document_total;
                           const attUrl = (payment.payment_attachment_url || '').trim();
                           return (
@@ -991,7 +997,10 @@ const DailySummarySalesApprovalPage = () => {
                                 {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
                               </td>
                               <td className="py-2 px-2 text-right align-top min-w-0">
-                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                <div className="font-semibold text-gray-900 tabular-nums">{formatCurrency(amount)}</div>
+                              </td>
+                              <td className="py-2 px-2 text-right align-top min-w-0">
+                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(totalAmount)}</div>
                                 {tip > 0 ? (
                                   <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
                                     {formatCurrency(payable)} + tip {formatCurrency(tip)}
@@ -1033,7 +1042,7 @@ const DailySummarySalesApprovalPage = () => {
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
                   <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                    <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '720px' }}>
+                    <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '820px' }}>
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Acknowledgement Receipt #</th>
@@ -1041,7 +1050,8 @@ const DailySummarySalesApprovalPage = () => {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prospect</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Level</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Collected</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Amount</th>
                           <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Image</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                         </tr>
@@ -1049,7 +1059,7 @@ const DailySummarySalesApprovalPage = () => {
                       <tbody className="bg-white divide-y divide-gray-200">
                         {verifyArReceipts.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="px-3 py-3 text-center text-gray-500">
+                            <td colSpan={9} className="px-3 py-3 text-center text-gray-500">
                               No standalone acknowledgement receipts for this date.
                             </td>
                           </tr>
@@ -1057,7 +1067,7 @@ const DailySummarySalesApprovalPage = () => {
                           verifyArReceipts.map((ar) => {
                             const tip = Number(ar.tip_amount) || 0;
                             const pam = Number(ar.payment_amount) || 0;
-                            const collected = pam + tip;
+                            const totalAmount = pam + tip;
                             const attUrl = (ar.payment_attachment_url || '').trim();
                             return (
                               <tr key={`verify-ar-${ar.ack_receipt_id}`}>
@@ -1068,7 +1078,8 @@ const DailySummarySalesApprovalPage = () => {
                                 </td>
                                 <td className="px-3 py-2 min-w-0 max-w-[100px] truncate">{ar.program_level_tag || '-'}</td>
                                 <td className="px-3 py-2 whitespace-nowrap">{ar.payment_method || '-'}</td>
-                                <td className="px-3 py-2 text-right font-semibold text-green-600">{formatCurrency(collected)}</td>
+                                <td className="px-3 py-2 text-right font-semibold text-gray-900">{formatCurrency(pam)}</td>
+                                <td className="px-3 py-2 text-right font-semibold text-green-600">{formatCurrency(totalAmount)}</td>
                                 <td className="px-3 py-2 text-center">
                                   {attUrl ? (
                                     <button
@@ -1347,7 +1358,8 @@ const DailySummarySalesApprovalPage = () => {
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Program/Level Tag</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Collected</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Amount</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                       </tr>
@@ -1355,7 +1367,7 @@ const DailySummarySalesApprovalPage = () => {
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {detailPayments.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={9} className="px-3 py-4 text-center text-gray-500">
                             No payment records found for this submission.
                           </td>
                         </tr>
@@ -1382,12 +1394,11 @@ const DailySummarySalesApprovalPage = () => {
                             <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{formatDateManila(payment.issue_date)}</td>
                             <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{payment.payment_method || '-'}</td>
                             <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap align-top">
-                              <div>{formatCurrency(collected)}</div>
-                              {tip > 0 ? (
-                                <div className="text-[10px] text-gray-500 font-normal mt-0.5">
-                                  {formatCurrency(payable)} + tip {formatCurrency(tip)}
-                                </div>
-                              ) : null}
+                              {formatCurrency(getPaymentLogTableAmountColumn(payment))}
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap align-top">
+                              <div>{formatCurrency(getPaymentLogTableTotalAmountColumn(payment))}</div>
+                              {tip > 0 ? <div className="text-[10px] text-gray-500 font-normal mt-0.5">{formatCurrency(payable)} + tip {formatCurrency(tip)}</div> : null}
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap">{statusBadge(payment.status)}</td>
                             <td className="px-3 py-2 text-gray-500 min-w-0 max-w-[120px]">
@@ -1409,7 +1420,7 @@ const DailySummarySalesApprovalPage = () => {
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
                   <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                  <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '960px' }}>
+                  <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '1080px' }}>
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="w-[8%] py-2 ps-4 pe-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
@@ -1418,7 +1429,8 @@ const DailySummarySalesApprovalPage = () => {
                         <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
                         <th className="w-[10%] py-2 px-2 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
                         <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
-                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
+                        <th className="w-[10%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Amount</th>
+                        <th className="w-[11%] py-2 px-2 text-right font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Total Amount</th>
                         <th className="w-[10%] py-2 px-2 text-center font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
                         <th className="w-[16%] py-2 ps-2 pe-4 text-left font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
                       </tr>
@@ -1434,7 +1446,8 @@ const DailySummarySalesApprovalPage = () => {
                         detailPayments.map((payment) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
-                          const collected = payable + tip;
+                          const amount = getPaymentLogTableAmountColumn(payment);
+                          const totalAmount = getPaymentLogTableTotalAmountColumn(payment);
                           const invTotal = payment.invoice_document_total;
                           const attUrl = (payment.payment_attachment_url || '').trim();
                           return (
@@ -1460,7 +1473,10 @@ const DailySummarySalesApprovalPage = () => {
                                 {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
                               </td>
                               <td className="py-2 px-2 text-right align-top min-w-0">
-                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                <div className="font-semibold text-gray-900 tabular-nums">{formatCurrency(amount)}</div>
+                              </td>
+                              <td className="py-2 px-2 text-right align-top min-w-0">
+                                <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(totalAmount)}</div>
                                 {tip > 0 ? (
                                   <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
                                     {formatCurrency(payable)} + tip {formatCurrency(tip)}
@@ -1502,7 +1518,7 @@ const DailySummarySalesApprovalPage = () => {
                   style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                 >
                   <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                    <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '720px' }}>
+                    <table className="border-collapse text-[11px] sm:text-xs" style={{ width: '100%', minWidth: '820px' }}>
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Acknowledgement Receipt #</th>
@@ -1510,7 +1526,8 @@ const DailySummarySalesApprovalPage = () => {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prospect / student</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Level</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
-                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Collected</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Amount</th>
                           <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Image</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reference</th>
                         </tr>
@@ -1518,7 +1535,7 @@ const DailySummarySalesApprovalPage = () => {
                       <tbody className="bg-white divide-y divide-gray-200">
                         {detailArReceipts.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="px-3 py-4 text-center text-gray-500">
+                            <td colSpan={9} className="px-3 py-4 text-center text-gray-500">
                               No standalone acknowledgement receipts for this summary date.
                             </td>
                           </tr>
@@ -1526,7 +1543,7 @@ const DailySummarySalesApprovalPage = () => {
                           detailArReceipts.map((ar) => {
                             const tip = Number(ar.tip_amount) || 0;
                             const pam = Number(ar.payment_amount) || 0;
-                            const collected = pam + tip;
+                            const totalAmount = pam + tip;
                             const attUrl = (ar.payment_attachment_url || '').trim();
                             return (
                               <tr key={`ar-${ar.ack_receipt_id}`} className="hover:bg-gray-50/80">
@@ -1547,8 +1564,11 @@ const DailySummarySalesApprovalPage = () => {
                                   </span>
                                 </td>
                                 <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{ar.payment_method || '-'}</td>
+                                <td className="px-3 py-2 text-right font-semibold text-gray-900 tabular-nums whitespace-nowrap">
+                                  <div>{formatCurrency(pam)}</div>
+                                </td>
                                 <td className="px-3 py-2 text-right font-semibold text-green-600 tabular-nums whitespace-nowrap">
-                                  <div>{formatCurrency(collected)}</div>
+                                  <div>{formatCurrency(totalAmount)}</div>
                                   {tip > 0 ? (
                                     <div className="text-[10px] text-gray-500 mt-0.5">
                                       {formatCurrency(pam)} + tip {formatCurrency(tip)}

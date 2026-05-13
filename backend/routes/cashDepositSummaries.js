@@ -282,16 +282,21 @@ router.get(
       );
       const threshold = Number.isFinite(thresholdRaw) && thresholdRaw >= 0 ? thresholdRaw : 0;
 
-      // Sum payable_amount of every Cash payment that is NOT already in any
-      // Submitted/Approved cash deposit snapshot. We mirror the NOT EXISTS
-      // pattern used by getCashDepositSnapshot for parity, but force
-      // payment_method = 'Cash' since "cash on hand" is literally cash only.
+      // Keep this aligned with the branch-admin Deposit Cash modal rules so the
+      // login-time "Cash on hand" figure matches "Total to deposit":
+      //   - physical cash payments only
+      //   - payment not already covered by Submitted/Approved deposit snapshots
+      //   - only Completed payments (deposit-eligible)
+      //   - exclude payment rows explicitly rejected in approval workflow
+      //   - include tip in the amount shown to users (Total Amount semantics)
       const pendingRes = await client.query(
-        `SELECT COALESCE(SUM(p.payable_amount), 0)::numeric AS pending_amount,
+        `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0)::numeric AS pending_amount,
                 COUNT(*)::int                                AS pending_count
          FROM paymenttbl p
          WHERE p.branch_id = $1
            AND LOWER(TRIM(p.payment_method)) = 'cash'
+           AND p.status = 'Completed'
+           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
            AND NOT EXISTS (
              SELECT 1
              FROM cash_deposit_summarytbl c
@@ -368,7 +373,8 @@ router.get(
           `SELECT TO_CHAR(MAX(end_date), 'YYYY-MM-DD') AS latest_deposit_end_date,
                   TO_CHAR(MAX(end_date) + INTERVAL '1 day', 'YYYY-MM-DD') AS next_uncovered_start_date
            FROM cash_deposit_summarytbl
-           WHERE branch_id = $1`,
+           WHERE branch_id = $1
+             AND status IN ('Submitted', 'Approved')`,
           [userBranchId]
         ),
         query(

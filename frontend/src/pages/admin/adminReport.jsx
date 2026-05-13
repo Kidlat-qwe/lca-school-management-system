@@ -1,33 +1,108 @@
-import { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../../config/api';
-import { useAuth } from '../../contexts/AuthContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
+import StatusLegend from '../../components/reports/StatusLegend';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 
-const STATUS_OPTIONS = [
-  { value: 'all', label: 'All' },
-  { value: 'active', label: 'Active (Enrolled)' },
-  { value: 'inactive', label: 'Inactive (Not Enrolled)' },
+const TAB_STUDENT_STATUS = 'student_status';
+const TAB_PROGRAM_PAYMENT_STATUS = 'program_payment_status';
+const TAB_PROGRAM_ENROLLMENT_STATUS = 'program_enrollment_status';
+
+const REPORT_TABS = [
+  { id: TAB_STUDENT_STATUS, label: 'Student Status' },
+  { id: TAB_PROGRAM_PAYMENT_STATUS, label: 'Program Payment Status' },
+  { id: TAB_PROGRAM_ENROLLMENT_STATUS, label: 'Program Enrollment Status' },
 ];
 
+const TAB_CONFIG = {
+  [TAB_STUDENT_STATUS]: {
+    endpoint: '/reports/student-status',
+    title: 'Report - Student Status',
+    description: 'Rows from student_statustbl.',
+    itemLabel: 'students',
+    statusOptions: [
+      { value: 'all', label: 'All' },
+      { value: 'active', label: 'Active' },
+      { value: 'inactive', label: 'Inactive' },
+    ],
+  },
+  [TAB_PROGRAM_PAYMENT_STATUS]: {
+    endpoint: '/reports/program-payment-status',
+    title: 'Report - Program Payment Status',
+    description: 'Rows from program_payment_statustbl.',
+    itemLabel: 'payment statuses',
+    statusOptions: [
+      { value: 'all', label: 'All' },
+      { value: 'wait_for_payment', label: 'Wait for payment' },
+      { value: 'paid', label: 'Paid' },
+      { value: 'under_grace_period', label: 'Under grace period' },
+      { value: 'due_date', label: 'Due date' },
+    ],
+  },
+  [TAB_PROGRAM_ENROLLMENT_STATUS]: {
+    endpoint: '/reports/program-enrollment-status',
+    title: 'Report - Program Enrollment Status',
+    description: 'Rows from classstudentstbl using program_enrollment_status.',
+    itemLabel: 'enrollment rows',
+    statusOptions: [
+      { value: 'all', label: 'All' },
+      { value: 'reserved', label: 'Reserved' },
+      { value: 'pending_enrollment', label: 'Pending enrollment' },
+      { value: 'new', label: 'New' },
+      { value: 're_enrolled', label: 'Re-enrolled' },
+      { value: 'upsell', label: 'Upsell' },
+      { value: 'dropped', label: 'Dropped' },
+      { value: 'completed', label: 'Completed' },
+    ],
+  },
+};
+
+const formatDateTime = (value) => {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Manila',
+  });
+};
+
+const statusBadgeClass = (value) => {
+  const v = String(value || '').toLowerCase();
+  if (['active', 'paid', 'completed', 'new', 're_enrolled', 'upsell'].includes(v)) return 'bg-green-100 text-green-800';
+  if (['wait_for_payment', 'pending_enrollment', 'under_grace_period', 'reserved'].includes(v)) return 'bg-amber-100 text-amber-800';
+  if (['inactive', 'dropped', 'due_date'].includes(v)) return 'bg-gray-100 text-gray-800';
+  return 'bg-slate-100 text-slate-800';
+};
+
 const AdminReport = () => {
-  const { userInfo } = useAuth();
-  const [students, setStudents] = useState([]);
+  const [tab, setTab] = useState(TAB_STUDENT_STATUS);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  // After the first fetch, refresh in the background instead of swapping the
-  // table for a full-page spinner so typing in the search input feels live.
   const hasLoadedOnceRef = useRef(false);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  // Debounced search value sent to the API (avoids one request per keystroke).
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterStatus, setFilterStatus] = useState('all');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
-  const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
-  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
 
-  const fetchStudents = async (page = 1) => {
+  const config = TAB_CONFIG[tab];
+
+  useEffect(() => {
+    setFilterStatus('all');
+    setSearchTerm('');
+    setRows([]);
+    setPagination((p) => ({ ...p, page: 1 }));
+    hasLoadedOnceRef.current = false;
+    setLoading(true);
+  }, [tab]);
+
+  const fetchRows = async (page = 1) => {
     try {
       if (!hasLoadedOnceRef.current) setLoading(true);
       const params = new URLSearchParams({
@@ -36,8 +111,8 @@ const AdminReport = () => {
         limit: String(pagination.limit),
       });
       if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
-      const response = await apiRequest(`/reports/students?${params.toString()}`);
-      setStudents(response.data || []);
+      const response = await apiRequest(`${config.endpoint}?${params.toString()}`);
+      setRows(response.data || []);
       if (response.pagination) {
         setPagination((prev) => ({
           ...prev,
@@ -49,9 +124,8 @@ const AdminReport = () => {
       }
       setError('');
     } catch (err) {
-      console.error('Error fetching report:', err);
-      setError('Failed to load student report.');
-      setStudents([]);
+      setError(err.message || 'Failed to load report.');
+      setRows([]);
     } finally {
       if (!hasLoadedOnceRef.current) {
         setLoading(false);
@@ -61,45 +135,147 @@ const AdminReport = () => {
   };
 
   useEffect(() => {
-    fetchStudents(1);
-  }, [filterStatus, debouncedSearchTerm]);
+    fetchRows(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, filterStatus, debouncedSearchTerm]);
 
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (openStatusDropdown && !e.target.closest('.report-status-dropdown') && !e.target.closest('.report-status-dropdown-portal')) {
-        setOpenStatusDropdown(false);
-        setStatusDropdownRect(null);
-      }
-    };
-    if (openStatusDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+  const table = useMemo(() => {
+    if (tab === TAB_STUDENT_STATUS) {
+      return {
+        minWidth: '900px',
+        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Updated At', 'Reason'],
+        render: (row) => (
+          <>
+            <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 truncate" title={row.email || '-'}>
+              {row.email || '-'}
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.level_tag || '-'}</td>
+            <td className="px-4 py-3 whitespace-nowrap">
+              <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.status)}`}>
+                {row.status || '-'}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.updated_at)}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 max-w-[260px]" title={row.updated_reason || '-'}>
+              <span className="truncate block">{row.updated_reason || '-'}</span>
+            </td>
+          </>
+        ),
+      };
     }
-  }, [openStatusDropdown]);
-
-  const filteredStudents = students;
+    if (tab === TAB_PROGRAM_PAYMENT_STATUS) {
+      return {
+        minWidth: '1160px',
+        headers: ['Student', 'Email', 'Invoice', 'Class', 'Status', 'Due Date', 'Grace Until', 'Paid At', 'Updated At'],
+        render: (row) => (
+          <>
+            <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 truncate" title={row.email || '-'}>
+              {row.email || '-'}
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 max-w-[220px]" title={row.invoice_description || '-'}>
+              <span className="truncate block">{row.invoice_description || `INV-${row.invoice_id}`}</span>
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 max-w-[160px]" title={row.class_name || '-'}>
+              <span className="truncate block">{row.class_name || '-'}</span>
+            </td>
+            <td className="px-4 py-3 whitespace-nowrap">
+              <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.status)}`}>
+                {row.status || '-'}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.invoice_due_date || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.grace_until || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.paid_at || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.updated_at)}</td>
+          </>
+        ),
+      };
+    }
+    return {
+      minWidth: '1080px',
+      headers: ['Student', 'Email', 'Level Tag', 'Class', 'Enrollment Status', 'Created At', 'Removed At'],
+      render: (row) => (
+        <>
+          <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
+          <td className="px-4 py-3 text-sm text-gray-600 truncate" title={row.email || '-'}>
+            {row.email || '-'}
+          </td>
+          <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.level_tag || '-'}</td>
+          <td className="px-4 py-3 text-sm text-gray-600 max-w-[240px]" title={row.class_name || '-'}>
+            <span className="truncate block">{row.class_name || '-'}</span>
+          </td>
+          <td className="px-4 py-3 whitespace-nowrap">
+            <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.program_enrollment_status)}`}>
+              {row.program_enrollment_status || '-'}
+            </span>
+          </td>
+          <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.created_at)}</td>
+          <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.removed_at)}</td>
+        </>
+      ),
+    };
+  }, [tab]);
 
   return (
     <div className="space-y-4 px-2 sm:px-4">
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Report – Student Status</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">{config.title}</h1>
+        <p className="text-sm text-gray-600 mt-1">{config.description}</p>
       </div>
 
-      <p className="text-sm text-gray-600">
-        Active = enrolled in at least one class. Inactive = registered in the system but not enrolled in any class. Shown for your branch only.
-      </p>
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-4 overflow-x-auto" style={{ scrollbarWidth: 'thin' }}>
+          {REPORT_TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${
+                tab === t.id ? 'text-primary-700 border-primary-600' : 'text-gray-500 border-transparent hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{error}</div>
-      )}
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Search</label>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search student/email/class..."
+            className="input-field text-sm min-w-[260px]"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="input-field text-sm min-w-[200px]"
+          >
+            {config.statusOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <StatusLegend tab={tab} />
+
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
 
       {loading ? (
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600" />
-        </div>
-      ) : students.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <p className="text-gray-500">No students found for the selected filters.</p>
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow">
@@ -107,78 +283,27 @@ const AdminReport = () => {
             className="overflow-x-auto rounded-lg"
             style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
           >
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '820px', tableLayout: 'fixed' }}>
-              <thead className="bg-gray-50 table-header-stable">
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: table.minWidth }}>
+              <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '180px', minWidth: '180px' }}>
-                    <div className="flex flex-col space-y-2">
-                      <span className="inline-block">Name</span>
-                      <input
-                        type="text"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        placeholder="Search by name..."
-                        className="px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 w-full"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </div>
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '200px', minWidth: '200px' }}>
-                    Email
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
-                    Level tag
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }}>
-                    <div className="report-status-dropdown">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setStatusDropdownRect(rect);
-                          setOpenStatusDropdown(!openStatusDropdown);
-                        }}
-                        className="flex items-center gap-1 hover:text-gray-700 w-full text-left"
-                      >
-                        Status
-                        {filterStatus !== 'all' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary-600 flex-shrink-0" aria-hidden />}
-                        <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '220px', minWidth: '220px' }}>
-                    Class Enrolled
-                  </th>
+                  {table.headers.map((h) => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredStudents.length === 0 ? (
+                {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500">
-                      No students match your search.
+                    <td colSpan={table.headers.length} className="px-4 py-12 text-center text-sm text-gray-500">
+                      No records found for the selected filters.
                     </td>
                   </tr>
                 ) : (
-                  filteredStudents.map((row) => (
-                    <tr key={row.user_id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600 truncate" title={row.email}>{row.email || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.level_tag || '-'}</td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-                            ['Active', 'new', 're_enrolled', 'upsell'].includes(row.enrollment_status) ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                          }`}
-                        >
-                          {(['Active', 'new', 're_enrolled', 'upsell'].includes(row.enrollment_status)) ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-600 max-w-[220px]" title={row.enrolled_classes || undefined}>
-                        <span className="truncate block">{row.enrolled_classes || '—'}</span>
-                      </td>
+                  rows.map((row, idx) => (
+                    <tr key={row.student_status_id || row.program_payment_status_id || row.classstudent_id || `${tab}-${idx}`} className="hover:bg-gray-50">
+                      {table.render(row)}
                     </tr>
                   ))
                 )}
@@ -190,42 +315,12 @@ const AdminReport = () => {
               page={pagination.page}
               totalPages={pagination.totalPages}
               totalItems={pagination.total}
-              itemsPerPage={10}
-              itemLabel="students"
-              onPageChange={fetchStudents}
+              itemsPerPage={pagination.limit}
+              itemLabel={config.itemLabel}
+              onPageChange={fetchRows}
             />
           )}
         </div>
-      )}
-
-      {openStatusDropdown && statusDropdownRect && createPortal(
-        <div
-          className="fixed report-status-dropdown-portal z-[100] w-56 bg-white rounded-md shadow-lg border border-gray-200 py-1"
-          style={{
-            top: `${statusDropdownRect.bottom + 4}px`,
-            left: `${statusDropdownRect.left}px`,
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {STATUS_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => {
-                setFilterStatus(opt.value);
-                setOpenStatusDropdown(false);
-                setStatusDropdownRect(null);
-              }}
-              className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${
-                filterStatus === opt.value ? 'bg-gray-100 font-medium' : ''
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>,
-        document.body
       )}
     </div>
   );

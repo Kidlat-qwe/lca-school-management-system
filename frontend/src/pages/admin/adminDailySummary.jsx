@@ -16,6 +16,10 @@ import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import AdminDailySummaryDetailsModal from '../../components/dailySummary/AdminDailySummaryDetailsModal';
+import {
+  getPaymentLogTableAmountColumn,
+  getPaymentLogTableTotalAmountColumn,
+} from '../../utils/paymentLogTableAmounts';
 
 const TAB_EOD = 'eod';
 const TAB_CASH = 'cash';
@@ -200,6 +204,9 @@ const AdminDailySummary = () => {
   const formatMoney = (n) =>
     `₱${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  const getArAmountColumn = (row) => Number(row?.payment_amount) || 0;
+  const getArTotalAmountColumn = (row) => (Number(row?.payment_amount) || 0) + (Number(row?.tip_amount) || 0);
+
   const loadEodResubmitPayments = async (dailySummaryId) => {
     const res = await apiRequest(`/daily-summary-sales/${dailySummaryId}/payments`);
     setEodResubmitDetail(res.data || null);
@@ -301,6 +308,9 @@ const AdminDailySummary = () => {
   };
 
   const cashTotals = cashDetail?.totals;
+  const cashModalRows = Array.isArray(cashDetail?.payments) ? cashDetail.payments : [];
+  const cashModalAmountTotal = cashModalRows.reduce((sum, p) => sum + getPaymentLogTableAmountColumn(p), 0);
+  const cashModalGrandTotal = cashModalRows.reduce((sum, p) => sum + getPaymentLogTableTotalAmountColumn(p), 0);
   const tableScrollStyle = { scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' };
   const sortedRecords = sortRows(records, sortConfig, {
     status: { accessor: 'status', type: 'string' },
@@ -767,7 +777,19 @@ const AdminDailySummary = () => {
                   <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-800">
                     <p className="font-medium text-gray-900">Recalculated totals (this date, this branch)</p>
                     <p className="mt-1">
-                      <span className="font-semibold">Grand total:</span> {formatMoney(eodResubmitDetail.totals.grand_total)} ·{' '}
+                      <span className="font-semibold">Grand total:</span>{' '}
+                      {formatMoney(
+                        ((eodResubmitDetail?.payments || []).reduce(
+                          (sum, p) => sum + getPaymentLogTableTotalAmountColumn(p),
+                          0
+                        ) +
+                          (eodResubmitDetail?.ar_receipts || []).reduce(
+                            (sum, a) => sum + getArTotalAmountColumn(a),
+                            0
+                          )) ||
+                          eodResubmitDetail.totals.grand_total
+                      )}{' '}
+                      ·{' '}
                       <span className="font-semibold">Records:</span> {eodResubmitDetail.totals.grand_count ?? 0}
                     </p>
                     <p className="mt-1 text-xs text-gray-600">
@@ -796,13 +818,14 @@ const AdminDailySummary = () => {
                         WebkitOverflowScrolling: 'touch',
                       }}
                     >
-                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '640px' }}>
+                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '760px' }}>
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Student / payer</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Invoice</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Method</th>
                             <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Amount</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total Amount</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Ref.</th>
                           </tr>
                         </thead>
@@ -815,7 +838,10 @@ const AdminDailySummary = () => {
                               </td>
                               <td className="px-3 py-2 text-sm text-gray-600">{p.payment_method || '—'}</td>
                               <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                {formatMoney((Number(p.payable_amount) || 0) + (Number(p.tip_amount) || 0))}
+                                {formatMoney(getPaymentLogTableAmountColumn(p))}
+                              </td>
+                              <td className="px-3 py-2 text-right text-sm font-medium text-emerald-700">
+                                {formatMoney(getPaymentLogTableTotalAmountColumn(p))}
                               </td>
                               <td className="px-3 py-2 text-sm text-gray-500">{p.reference_number || '—'}</td>
                             </tr>
@@ -837,13 +863,14 @@ const AdminDailySummary = () => {
                         WebkitOverflowScrolling: 'touch',
                       }}
                     >
-                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '600px' }}>
+                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '720px' }}>
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Receipt</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Prospect</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Method</th>
                             <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Amount</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total Amount</th>
                             <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Ref.</th>
                           </tr>
                         </thead>
@@ -854,7 +881,10 @@ const AdminDailySummary = () => {
                               <td className="px-3 py-2 text-sm text-gray-700">{a.prospect_student_name || '—'}</td>
                               <td className="px-3 py-2 text-sm text-gray-600">{a.payment_method || '—'}</td>
                               <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                {formatMoney((Number(a.payment_amount) || 0) + (Number(a.tip_amount) || 0))}
+                                {formatMoney(getArAmountColumn(a))}
+                              </td>
+                              <td className="px-3 py-2 text-right text-sm font-medium text-emerald-700">
+                                {formatMoney(getArTotalAmountColumn(a))}
                               </td>
                               <td className="px-3 py-2 text-sm text-gray-500">{a.reference_number || '—'}</td>
                             </tr>
@@ -979,9 +1009,47 @@ const AdminDailySummary = () => {
                   <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm">
                     <p className="font-semibold text-gray-800">Current snapshot</p>
                     <ul className="mt-2 space-y-1 text-gray-700">
-                      <li>Deposit total: {formatMoney(cashTotals.total_deposit_amount)}</li>
-                      <li>Cash in range: {formatMoney(cashTotals.total_cash_amount)}</li>
+                      <li>Amount total: {formatMoney(cashModalAmountTotal || cashTotals.total_cash_amount)}</li>
+                      <li>Total amount: {formatMoney(cashModalGrandTotal || cashTotals.total_deposit_amount)}</li>
                     </ul>
+                  </div>
+                ) : null}
+
+                {!cashDetailLoading && cashModalRows.length > 0 ? (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-700 mb-2">Cash payment records (period)</p>
+                    <div className="overflow-x-auto rounded-lg" style={tableScrollStyle}>
+                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '760px' }}>
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Student / payer</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Invoice</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Method</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Amount</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Ref.</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 bg-white">
+                          {cashModalRows.map((p, idx) => (
+                            <tr key={p.payment_id || `cash-row-${idx}`}>
+                              <td className="px-3 py-2 text-sm text-gray-900">{p.student_name || '—'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-700">
+                                {p.invoice_description || (p.invoice_id ? `INV-${p.invoice_id}` : '—')}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{p.payment_method || '—'}</td>
+                              <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
+                                {formatMoney(getPaymentLogTableAmountColumn(p))}
+                              </td>
+                              <td className="px-3 py-2 text-right text-sm font-medium text-emerald-700">
+                                {formatMoney(getPaymentLogTableTotalAmountColumn(p))}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-500">{p.reference_number || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 ) : null}
               </div>

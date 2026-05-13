@@ -227,10 +227,17 @@ const AdminPaymentLogs = () => {
         apiRequest('/cash-deposit-summaries/deposit-defaults'),
       ]);
 
-      const ranges =
+      const rawRanges =
         rangesSettled.status === 'fulfilled' && Array.isArray(rangesSettled.value?.data)
           ? rangesSettled.value.data
           : [];
+      // "Already deposited" windows should only include records that are
+      // actually reconciled in the system (Submitted/Approved). Returned or
+      // Rejected summaries must not block admins from re-submitting the same
+      // date window.
+      const ranges = rawRanges.filter((r) =>
+        ['Submitted', 'Approved'].includes(String(r?.status || '').trim())
+      );
       setDepositExistingRanges(ranges);
 
       if (rangesSettled.status === 'rejected') {
@@ -1215,6 +1222,20 @@ const AdminPaymentLogs = () => {
     setSortConfig((current) => toggleSortConfig(current, key));
   };
 
+  const depositPaymentRows = Array.isArray(depositData?.payments) ? depositData.payments : [];
+  const depositTotalFromRows = depositPaymentRows.reduce(
+    (sum, p) => sum + getPaymentLogTableTotalAmountColumn(p),
+    0
+  );
+  const endOfShiftPaymentRows = Array.isArray(endOfShiftPreview?.payments) ? endOfShiftPreview.payments : [];
+  const endOfShiftArRows = Array.isArray(endOfShiftPreview?.ar_receipts) ? endOfShiftPreview.ar_receipts : [];
+  const endOfShiftTotalFromRows =
+    endOfShiftPaymentRows.reduce((sum, p) => sum + getPaymentLogTableTotalAmountColumn(p), 0) +
+    endOfShiftArRows.reduce(
+      (sum, a) => sum + ((Number(a.payment_amount) || 0) + (Number(a.tip_amount) || 0)),
+      0
+    );
+
   const exportPaymentDateRangeInvalid =
     Boolean(exportPaymentDateFrom && exportPaymentDateTo) && exportPaymentDateFrom > exportPaymentDateTo;
 
@@ -1848,7 +1869,7 @@ const AdminPaymentLogs = () => {
                     <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
                       <p className="text-xs font-medium text-sky-800 uppercase tracking-wide">Total to deposit</p>
                       <p className="text-xl font-bold text-sky-900 mt-1">
-                        {formatCurrency(depositData.total_cash_deposit_amount)}
+                        {formatCurrency(depositTotalFromRows)}
                       </p>
                       <p className="text-xs text-sky-700 mt-1">{depositData.completed_cash_count ?? 0} completed payment(s)</p>
                     </div>
@@ -1872,7 +1893,7 @@ const AdminPaymentLogs = () => {
                     className="overflow-x-auto rounded-lg border border-gray-200"
                     style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
                   >
-                    <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '940px' }}>
+                    <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '1060px' }}>
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Payment date</th>
@@ -1880,6 +1901,7 @@ const AdminPaymentLogs = () => {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Student</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Payment Method</th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Amount</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Total Amount</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Acknowledgement Receipt#</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Reference</th>
@@ -1888,7 +1910,7 @@ const AdminPaymentLogs = () => {
                       <tbody className="bg-white divide-y divide-gray-200">
                         {(depositData.payments || []).length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
+                            <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
                               No payments in this date range.
                             </td>
                           </tr>
@@ -1906,7 +1928,10 @@ const AdminPaymentLogs = () => {
                                 {p.payment_method || '-'}
                               </td>
                               <td className="px-3 py-2 text-right font-semibold text-green-600 whitespace-nowrap">
-                                {formatCurrency(p.payable_amount)}
+                                {formatCurrency(getPaymentLogTableAmountColumn(p))}
+                              </td>
+                              <td className="px-3 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">
+                                {formatCurrency(getPaymentLogTableTotalAmountColumn(p))}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap">{getStatusBadge(p.status)}</td>
                               <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
@@ -1981,7 +2006,7 @@ const AdminPaymentLogs = () => {
             {endOfShiftPreview && (
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
-                  Today&apos;s total: ₱{(endOfShiftPreview.total_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
+                  Today&apos;s total: ₱{(endOfShiftTotalFromRows || endOfShiftPreview.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
                   {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone acknowledgement receipt(s))
                 </p>
                 <p className="mt-1 text-xs text-gray-500 shrink-0">
@@ -2002,8 +2027,9 @@ const AdminPaymentLogs = () => {
                             <th className="w-[10%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
                             <th className="w-[11%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
                             <th className="w-[11%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Inv total</th>
-                            <th className="w-[12%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Collected</th>
-                            <th className="w-[11%] py-2.5 px-3 text-center text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
+                            <th className="w-[10%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Amount</th>
+                            <th className="w-[12%] py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Total Amount</th>
+                            <th className="w-[10%] py-2.5 px-3 text-center text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Attached image</th>
                             <th className="w-[10%] py-2.5 ps-3 pe-4 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Reference</th>
                           </tr>
                         </thead>
@@ -2011,7 +2037,8 @@ const AdminPaymentLogs = () => {
                           {endOfShiftPreview.payments.map((p) => {
                             const tip = parseFloat(p.tip_amount) || 0;
                             const payable = parseFloat(p.payable_amount) || 0;
-                            const collected = payable + tip;
+                            const totalAmount = getPaymentLogTableTotalAmountColumn(p);
+                            const amount = getPaymentLogTableAmountColumn(p);
                             const invTotal = p.invoice_document_total;
                             const attUrl = (p.payment_attachment_url || '').trim();
                             return (
@@ -2033,7 +2060,10 @@ const AdminPaymentLogs = () => {
                                   {invTotal != null && invTotal !== '' ? formatCurrency(invTotal) : '—'}
                                 </td>
                                 <td className="py-2.5 px-3 text-right align-top min-w-0">
-                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                  <div className="font-semibold text-gray-900 tabular-nums">{formatCurrency(amount)}</div>
+                                </td>
+                                <td className="py-2.5 px-3 text-right align-top min-w-0">
+                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(totalAmount)}</div>
                                   {tip > 0 && (
                                     <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
                                       {formatCurrency(payable)} + tip {formatCurrency(tip)}
@@ -2080,7 +2110,7 @@ const AdminPaymentLogs = () => {
                         WebkitOverflowScrolling: 'touch',
                       }}
                     >
-                      <table className="w-full border-collapse text-[11px] sm:text-xs" style={{ minWidth: '680px' }}>
+                      <table className="w-full border-collapse text-[11px] sm:text-xs" style={{ minWidth: '760px' }}>
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
@@ -2099,7 +2129,10 @@ const AdminPaymentLogs = () => {
                               Method
                             </th>
                             <th className="py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
-                              Collected
+                              Amount
+                            </th>
+                            <th className="py-2.5 px-3 text-right text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                              Total Amount
                             </th>
                             <th className="py-2.5 px-3 text-center text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
                               Attached image
@@ -2113,7 +2146,7 @@ const AdminPaymentLogs = () => {
                           {endOfShiftPreview.ar_receipts.map((a) => {
                             const tip = parseFloat(a.tip_amount) || 0;
                             const pamt = parseFloat(a.payment_amount) || 0;
-                            const collected = pamt + tip;
+                            const totalAmount = pamt + tip;
                             const attUrl = (a.payment_attachment_url || '').trim();
                             return (
                               <tr key={a.ack_receipt_id} className="hover:bg-gray-50/80 border-b border-gray-100 last:border-b-0">
@@ -2135,7 +2168,10 @@ const AdminPaymentLogs = () => {
                                 </td>
                                 <td className="py-2.5 px-3 text-gray-700 truncate align-top">{a.payment_method || '—'}</td>
                                 <td className="py-2.5 px-3 text-right align-top min-w-0">
-                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(collected)}</div>
+                                  <div className="font-semibold text-gray-900 tabular-nums">{formatCurrency(pamt)}</div>
+                                </td>
+                                <td className="py-2.5 px-3 text-right align-top min-w-0">
+                                  <div className="font-semibold text-green-600 tabular-nums">{formatCurrency(totalAmount)}</div>
                                   {tip > 0 && (
                                     <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">
                                       {formatCurrency(pamt)} + tip {formatCurrency(tip)}
