@@ -9,6 +9,7 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { buildStudentPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -196,10 +197,7 @@ const StudentPaymentLogs = () => {
   );
 
   const itemsPerPage = 10;
-  const sortedPayments = sortRows(filteredPayments, sortConfig, {
-    status: { accessor: 'status', type: 'string' },
-    payment_date: { accessor: 'payment_date', type: 'date' },
-  });
+  const sortedPayments = sortRows(filteredPayments, sortConfig, buildStudentPaymentLogsTableSortAccessors());
   const totalPages = Math.max(Math.ceil(sortedPayments.length / itemsPerPage), 1);
   const paginatedPayments = sortedPayments.slice(
     (currentPage - 1) * itemsPerPage,
@@ -535,30 +533,18 @@ const StudentPaymentLogs = () => {
               </colgroup>
               <thead className="bg-white">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Invoice
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Description
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Payment Method
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Payment Type
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
-                  </th>
+                  <SortableHeader label="Invoice" sortKey="invoice" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Description" sortKey="description" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Method" sortKey="payment_method" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Type" sortKey="payment_type" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Amount" sortKey="amount" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader sortKey="ack_receipt" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <span className="block">Acknowledgement</span>
                     <span className="block">Receipt#</span>
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Reference
-                  </th>
+                  </SortableHeader>
+                  <SortableHeader label="Reference" sortKey="reference" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">

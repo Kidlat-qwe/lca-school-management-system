@@ -17,7 +17,7 @@ import {
 } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, manilaMonthYYYYMM } from '../../utils/dateUtils';
 import { DashboardStatIcon } from './DashboardStatIcons';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
@@ -29,7 +29,7 @@ const formatCurrency = (amount) =>
   })}`;
 
 const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
-const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+const maxSummaryMonth = () => manilaMonthYYYYMM();
 
 const StatsCard = ({ title, value, iconName, accent, subtitle, onClick, ariaLabel }) => {
   const Wrapper = onClick ? 'button' : 'div';
@@ -75,7 +75,7 @@ const EmptyChartState = ({ message }) => (
   </div>
 );
 
-const DailyOperationalDashboardView = ({
+const MonthlyOperationalDashboardView = ({
   branchId = '',
   branchName = '',
   canFilterAcrossBranches = false,
@@ -85,7 +85,7 @@ const DailyOperationalDashboardView = ({
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedDate, setSelectedDate] = useState(getTodayManila());
+  const [selectedMonth, setSelectedMonth] = useState(maxSummaryMonth());
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const isAdmin = userType === 'Admin';
   const basePath = isAdmin ? '/admin' : '/superadmin';
@@ -98,18 +98,18 @@ const DailyOperationalDashboardView = ({
       if (branchId) {
         params.set('branch_id', branchId);
       }
-      if (selectedDate) {
-        params.set('summary_date', selectedDate);
+      if (selectedMonth) {
+        params.set('summary_month', selectedMonth);
       }
       const queryString = params.toString();
-      const response = await apiRequest(`/dashboard/daily-operational${queryString ? `?${queryString}` : ''}`);
+      const response = await apiRequest(`/dashboard/monthly-operational${queryString ? `?${queryString}` : ''}`);
       setData(response.data);
     } catch (err) {
-      setError(err?.message || 'Failed to load the daily operational dashboard.');
+      setError(err?.message || 'Failed to load the monthly operational dashboard.');
     } finally {
       setLoading(false);
     }
-  }, [branchId, selectedDate]);
+  }, [branchId, selectedMonth]);
 
   useEffect(() => {
     fetchDashboard();
@@ -117,7 +117,7 @@ const DailyOperationalDashboardView = ({
 
   const branchBreakdown = useMemo(() => data?.branch_breakdown || [], [data]);
   const branchMetrics = useMemo(() => data?.charts?.branch_metrics || [], [data]);
-  const salesLast7Days = useMemo(() => data?.charts?.sales_last_7_days || [], [data]);
+  const salesLast6Months = useMemo(() => data?.charts?.sales_last_6_months || [], [data]);
   const activityMix = useMemo(
     () => (data?.charts?.activity_mix || []).filter((item) => Number(item.value) > 0),
     [data]
@@ -164,23 +164,26 @@ const DailyOperationalDashboardView = ({
     );
   }, [branchId, branchName, data]);
 
-  /** YYYY-MM-DD for the selected summary date (matches verification SQL issue_date window). */
-  const verificationDayYmd = data?.verification_as_of || selectedDate || getTodayManila();
+  const verificationIssueFrom = data?.month_start || '';
+  const verificationIssueTo = data?.month_end_inclusive || '';
   const verificationAsOfDisplay =
-    verificationDayYmd && /^\d{4}-\d{2}-\d{2}$/.test(verificationDayYmd)
-      ? formatDateManila(`${verificationDayYmd}T12:00:00`)
-      : verificationDayYmd || '-';
+    verificationIssueFrom &&
+    verificationIssueTo &&
+    /^\d{4}-\d{2}-\d{2}$/.test(verificationIssueFrom) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(verificationIssueTo)
+      ? `${formatDateManila(`${verificationIssueFrom}T12:00:00`)} – ${formatDateManila(`${verificationIssueTo}T12:00:00`)}`
+      : data?.verification_as_of || '-';
 
   const goPaymentLogsByVerify = useCallback(
     (kind) => {
       const p = new URLSearchParams();
       p.set('notificationTab', 'main');
-      p.set('issue_date_from', verificationDayYmd);
-      p.set('issue_date_to', verificationDayYmd);
+      p.set('issue_date_from', verificationIssueFrom);
+      p.set('issue_date_to', verificationIssueTo);
       p.set('financeApproval', kind === 'verified' ? 'approved' : 'pending');
       navigate(`${basePath}/payment-logs?${p.toString()}`);
     },
-    [basePath, navigate, verificationDayYmd]
+    [basePath, navigate, verificationIssueFrom, verificationIssueTo]
   );
 
   const goArByVerify = useCallback(
@@ -188,12 +191,14 @@ const DailyOperationalDashboardView = ({
       const p = new URLSearchParams();
       p.set('page', '1');
       p.set('status', kind === 'verified' ? 'Verified,Applied' : 'Submitted,Pending,Paid');
+      if (verificationIssueFrom) p.set('issue_date_from', verificationIssueFrom);
+      if (verificationIssueTo) p.set('issue_date_to', verificationIssueTo);
       if (branchId && canFilterAcrossBranches) {
         p.set('branch_id', String(branchId));
       }
       navigate(`${basePath}/acknowledgement-receipts?${p.toString()}`);
     },
-    [basePath, branchId, canFilterAcrossBranches, navigate]
+    [basePath, branchId, canFilterAcrossBranches, navigate, verificationIssueFrom, verificationIssueTo]
   );
 
   const visibleBranchCount = branchBreakdown.filter(
@@ -228,20 +233,20 @@ const DailyOperationalDashboardView = ({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
             <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
-              Daily Operational Dashboard
+              Monthly Operational Dashboard
             </h1>
             <p className="text-sm text-gray-500">
-              Monitor today&apos;s enrollment activity, drops, collections, merchandise releases, and installment re-enrollment.
+              Same operational KPIs as the daily dashboard, aggregated over the selected calendar month (Manila).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
-              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Date</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Month</span>
               <input
-                type="date"
-                value={selectedDate}
-                max={getTodayManila()}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                type="month"
+                value={selectedMonth}
+                max={maxSummaryMonth()}
+                onChange={(e) => setSelectedMonth(e.target.value)}
                 className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
               />
             </label>
@@ -277,48 +282,48 @@ const DailyOperationalDashboardView = ({
             value={formatNumber(totals.new_enrollees)}
             iconName="users"
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            subtitle="Distinct students · program_enrollment_status = new · enrolled_at that day (Manila)"
+            subtitle="Distinct students · program_enrollment_status = new · enrolled_at in selected month (Manila)"
           />
           <StatsCard
             title="Dropped / Unenrolled"
             value={formatNumber(totals.dropped_unenrolled_count)}
             iconName="userMinus"
             accent="bg-gradient-to-br from-rose-500 to-red-600"
-            subtitle="program_enrollment_status = dropped · removed_at that day (Manila)"
+            subtitle="program_enrollment_status = dropped · removed_at in selected month (Manila)"
           />
           <StatsCard
             title="Invoice Sales (Completed)"
             value={formatCurrency(totals.daily_sales_amount)}
             iconName="currency"
             accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
-            subtitle="Payable + tips · payment issue date · excludes Returned/Rejected (Payment Logs main tab)"
+            subtitle="Payable + tips · payment issue date in month · excludes Returned/Rejected (Payment Logs main tab)"
           />
           <StatsCard
             title="Acknowledgement Receipt Sales"
             value={formatCurrency(totals.ar_sales_amount)}
             iconName="clipboardList"
             accent="bg-gradient-to-br from-violet-500 to-purple-600"
-            subtitle={`${formatNumber(totals.ar_sales_count)} receipt(s) · same filters as AR list (main tab, day issue dates; paired rows combined)`}
+            subtitle={`${formatNumber(totals.ar_sales_count)} receipt(s) · same filters as AR list (main tab, month issue dates; paired rows combined)`}
           />
           <StatsCard
             title="Merchandise Released"
             value={formatNumber(totals.merchandise_released_quantity)}
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
-            subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s)`}
+            subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s) in month`}
           />
           <StatsCard
             title="Re-enrollment"
             value={formatNumber(totals.re_enrollment_count)}
             iconName="academicCap"
             accent="bg-gradient-to-br from-teal-400 to-cyan-500"
-            subtitle="Distinct students · re_enrolled or upsell · enrolled_at that day (Manila)"
+            subtitle="Distinct students · re_enrolled or upsell · enrolled_at in selected month (Manila)"
           />
         </div>
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-gray-700">
-            Verification (selected day, Manila:{' '}
+            Verification (selected month, Manila:{' '}
             <span className="font-semibold text-gray-900">{verificationAsOfDisplay}</span>)
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -327,25 +332,25 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_verified_count || 0)}
               iconName="currency"
               accent="bg-gradient-to-br from-cyan-500 to-teal-600"
-              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total (payable + tips) · completed · ${verificationAsOfDisplay} · approval=Approved`}
+              subtitle={`${formatCurrency(totals.pay_verified_amount || 0)} total (payable + tips) · completed in range · approval=Approved`}
               onClick={() => goPaymentLogsByVerify('verified')}
-              ariaLabel={`Open payment logs for approved completed payments on ${verificationAsOfDisplay} (Manila)`}
+              ariaLabel="Open payment logs for approved completed payments in selected month"
             />
             <StatsCard
               title="Payments (not approved yet)"
               value={formatNumber(totals.pay_unverified_count || 0)}
               iconName="chartBar"
               accent="bg-gradient-to-br from-slate-500 to-slate-600"
-              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total (payable + tips) · completed · pending approval · ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.pay_unverified_amount || 0)} total (payable + tips) · completed · pending approval in range`}
               onClick={() => goPaymentLogsByVerify('unverified')}
-              ariaLabel={`Open payment logs for not-yet-approved completed payments on ${verificationAsOfDisplay} (Manila)`}
+              ariaLabel="Open payment logs for not-yet-approved completed payments in selected month"
             />
             <StatsCard
               title="Acknowledgement Receipt (verified or applied)"
               value={formatNumber(totals.ar_verified_count || 0)}
               iconName="clipboardList"
               accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
-              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total (payment + tips) · Package Acknowledgement Receipt · issue date ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.ar_verified_amount || 0)} total (payment + tips) · Package AR · issue dates in range`}
               onClick={() => goArByVerify('verified')}
               ariaLabel="Open acknowledgement receipt list filtered to verified and applied"
             />
@@ -354,7 +359,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_unverified_count || 0)}
               iconName="academicCap"
               accent="bg-gradient-to-br from-amber-500 to-orange-600"
-              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total (payment + tips) · not verified yet · issue date ${verificationAsOfDisplay}`}
+              subtitle={`${formatCurrency(totals.ar_unverified_amount || 0)} total (payment + tips) · not verified yet · issue dates in range`}
               onClick={() => goArByVerify('unverified')}
               ariaLabel="Open acknowledgement receipt list filtered to unverified statuses"
             />
@@ -363,14 +368,15 @@ const DailyOperationalDashboardView = ({
 
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
           <p className="text-xs font-medium text-indigo-800">
-            Sales guide: <span className="font-semibold">Invoice Sales (Completed)</span> sums completed payment rows (
+            Sales guide: <span className="font-semibold">Invoice Sales (Completed)</span> sums completed payment rows in the month (
             <span className="font-semibold">payable + tips</span>) using each row&apos;s{' '}
-            <span className="font-semibold">payment issue date</span> — the same date Payment Logs uses for filters.{' '}
-            <span className="font-semibold">Returned</span> and <span className="font-semibold">Rejected</span> rows are excluded (Payment Logs main tab).
-            <span className="font-semibold"> Acknowledgement Receipt Sales</span> (top row) matches the Acknowledgement Receipt page total for that day on the{' '}
-            <span className="font-semibold">main</span> tab (Returned excluded; paired rows combined when enabled). This is not the same as verification{' '}
-            <span className="font-semibold">Package Acknowledgement Receipt</span> (verified+), which is Package Acknowledgement Receipts in Verified or
-            Applied status.
+            <span className="font-semibold">payment issue date</span> — the same date Payment Logs uses for filters (
+            <span className="font-semibold">Issue Date</span> / <span className="font-semibold">Payment Date</span> column).{' '}
+            <span className="font-semibold">Returned</span> and <span className="font-semibold">Rejected</span> rows are excluded, matching the Payment Logs{' '}
+            <span className="font-semibold">main</span> tab (not the Return or Rejected tabs).
+            <span className="font-semibold"> Acknowledgement Receipt Sales</span> (top row) matches the Acknowledgement Receipt page total for the same month on the{' '}
+            <span className="font-semibold">main</span> tab (Returned excluded; Downpayment+Phase pairs use one combined line when pairs are enabled). Verification cards use{' '}
+            <span className="font-semibold">Package Acknowledgement Receipt</span> issue dates within the same month range.
           </p>
         </div>
 
@@ -379,8 +385,7 @@ const DailyOperationalDashboardView = ({
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Branch Breakdown</h2>
               <p className="mt-1 text-sm text-gray-500">
-                All columns, including payment and package acknowledgement receipt verification, use the same selected calendar day in Manila (
-                {verificationAsOfDisplay}).
+                All columns use the selected calendar month in Manila ({verificationAsOfDisplay}).
               </p>
             </div>
             <p className="text-xs text-gray-500">
@@ -461,7 +466,7 @@ const DailyOperationalDashboardView = ({
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <ChartCard
             title="Branch Activity Comparison"
-            subtitle="Daily counts for new enrollees, drops, merchandise released, and re-enrollment."
+            subtitle="Monthly counts for new enrollees, drops, merchandise released, and re-enrollment."
           >
             {activeBranchMetrics.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -478,13 +483,13 @@ const DailyOperationalDashboardView = ({
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyChartState message="No branch activity found for today." />
+              <EmptyChartState message="No branch activity found for the selected month." />
             )}
           </ChartCard>
 
           <ChartCard
             title="Invoice Sales by Branch"
-            subtitle="Completed invoice payments and acknowledgement receipt sales amounts recorded today."
+            subtitle="Completed invoice payments and acknowledgement receipt sales amounts in the selected month."
           >
             {activeBranchMetrics.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -499,22 +504,22 @@ const DailyOperationalDashboardView = ({
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyChartState message="No completed payments found for today." />
+              <EmptyChartState message="No completed payments found for the selected month." />
             )}
           </ChartCard>
         </div>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           <ChartCard
-            title="Sales Trend"
-            subtitle="Completed invoice payment totals for the last 7 days."
+            title="Invoice sales trend"
+            subtitle="Completed invoice payment totals by calendar month (six months ending with the selected month)."
             className="xl:col-span-2"
           >
-            {salesLast7Days.length > 0 ? (
+            {salesLast6Months.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={salesLast7Days} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                <AreaChart data={salesLast6Months} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                   <defs>
-                    <linearGradient id="dailySalesTrendFill" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="monthlySalesTrendFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.35} />
                       <stop offset="95%" stopColor="#4F46E5" stopOpacity={0.02} />
                     </linearGradient>
@@ -523,7 +528,7 @@ const DailyOperationalDashboardView = ({
                   <XAxis dataKey="label" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `Php ${Number(value || 0).toLocaleString('en-PH')}`} />
                   <Tooltip formatter={(value) => [formatCurrency(value), 'Invoice sales']} />
-                  <Area type="monotone" dataKey="total_amount" stroke="#4F46E5" fill="url(#dailySalesTrendFill)" strokeWidth={2.5} />
+                  <Area type="monotone" dataKey="total_amount" stroke="#4F46E5" fill="url(#monthlySalesTrendFill)" strokeWidth={2.5} />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
@@ -533,7 +538,7 @@ const DailyOperationalDashboardView = ({
 
           <ChartCard
             title="Activity Mix"
-            subtitle="Share of selected day&apos;s non-cash operational activity."
+            subtitle="Share of the selected month&apos;s non-cash operational activity."
           >
             {activityMix.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -556,7 +561,7 @@ const DailyOperationalDashboardView = ({
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyChartState message="No activity mix data available for today." />
+              <EmptyChartState message="No activity mix data available for the selected month." />
             )}
           </ChartCard>
         </div>
@@ -565,4 +570,4 @@ const DailyOperationalDashboardView = ({
   );
 };
 
-export default DailyOperationalDashboardView;
+export default MonthlyOperationalDashboardView;

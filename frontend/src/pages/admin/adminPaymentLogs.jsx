@@ -9,6 +9,7 @@ import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
+import { buildPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import {
   PAYMENT_LOG_DATE_MODES,
@@ -115,7 +116,7 @@ const AdminPaymentLogs = () => {
   const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
-  // Date-filter mode switcher (Month / Payment date / Date created).
+  // Date-filter mode switcher (Month / Payment date / Issue date).
   // Default mode is "month" pre-loaded with the current Manila month so the
   // page boots with a reasonable, narrow range.
   const [dateFilterMode, setDateFilterMode] = useState(DEFAULT_PAYMENT_LOG_DATE_MODE);
@@ -350,8 +351,8 @@ const AdminPaymentLogs = () => {
     setDepositData(null);
     try {
       const params = new URLSearchParams({
-        start_date: startDate,
-        end_date: endDate,
+        payment_date_from: startDate,
+        payment_date_to: endDate,
       });
       const res = await apiRequest(`/payments/cash-deposit-summary?${params.toString()}`);
       setDepositData(res.data || null);
@@ -1021,7 +1022,7 @@ const AdminPaymentLogs = () => {
         params.set('exclude_approval_status', 'Approved,Returned,Rejected');
       } else {
         params.set('status', 'Completed');
-        params.set('exclude_approval_status', 'Rejected');
+        params.set('exclude_approval_status', 'Returned,Rejected');
       }
       const response = await apiRequest(`/payments?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
@@ -1171,13 +1172,15 @@ const AdminPaymentLogs = () => {
         (payment.approval_status || 'Pending') !== 'Approved');
     return matchesFinanceApproval;
   });
-  const sortedPayments = sortRows(filteredPayments, sortConfig, {
-    branch: { accessor: (payment) => selectedBranchName || payment.branch_name || '', type: 'string' },
-    issue_date: { accessor: 'issue_date', type: 'date' },
-    payment_date: { accessor: 'payment_date', type: 'date' },
-    status: { accessor: (payment) => (payment.approval_status || payment.status || 'Pending'), type: 'string' },
-    issued_by: { accessor: (payment) => formatInvoiceIssuedBy(payment), type: 'string' },
-  });
+  const sortedPayments = sortRows(
+    filteredPayments,
+    sortConfig,
+    buildPaymentLogsTableSortAccessors({
+      branchAccessor: (payment) => selectedBranchName || payment.branch_name || '',
+      issuedByAccessor: formatInvoiceIssuedBy,
+      logTab: branchLogTab,
+    })
+  );
 
   const summaryLineTotal = useMemo(() => {
     const line = (p) => (parseFloat(p.payable_amount) || 0) + (parseFloat(p.tip_amount) || 0);
@@ -1218,11 +1221,26 @@ const AdminPaymentLogs = () => {
     fetchPayments(1);
   };
 
+  const formatDepositInclusionLabel = (p) => {
+    if (p?.deposit_summary_id == null) return '—';
+    const period =
+      p.deposit_summary_start_date && p.deposit_summary_end_date
+        ? `${formatDateManila(p.deposit_summary_start_date) || p.deposit_summary_start_date} → ${
+            formatDateManila(p.deposit_summary_end_date) || p.deposit_summary_end_date
+          }`
+        : '';
+    const st = (p.deposit_summary_status || '').trim();
+    return `#${p.deposit_summary_id}${st ? ` (${st})` : ''}${period ? ` · ${period}` : ''}`;
+  };
+
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
   };
 
   const depositPaymentRows = Array.isArray(depositData?.payments) ? depositData.payments : [];
+  const depositAlreadyDepositedRows = Array.isArray(depositData?.already_deposited_payments)
+    ? depositData.already_deposited_payments
+    : [];
   const depositTotalFromRows = depositPaymentRows.reduce(
     (sum, p) => sum + getPaymentLogTableTotalAmountColumn(p),
     0
@@ -1653,7 +1671,7 @@ const AdminPaymentLogs = () => {
                   <input
                     id="admin-created-date-from"
                     type="date"
-                    title="Date created from"
+                    title="Issue Date from"
                     value={filterCreatedDateFrom}
                     onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
@@ -1669,7 +1687,7 @@ const AdminPaymentLogs = () => {
                   <input
                     id="admin-created-date-to"
                     type="date"
-                    title="Date created to"
+                    title="Issue Date to"
                     value={filterCreatedDateTo}
                     onChange={(e) => setFilterCreatedDateTo(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
@@ -1685,7 +1703,7 @@ const AdminPaymentLogs = () => {
               ? 'Month filter uses payment date. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
-              : 'Date range is inclusive on the record-created date (when the payment row was logged). Leave both empty for all dates.'}
+              : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button
@@ -1840,7 +1858,7 @@ const AdminPaymentLogs = () => {
                 </div>
               </div>
               <p className="text-xs text-gray-500">
-                <strong>Deposit amount</strong> uses <strong>Cash</strong> payments with status <strong>Completed</strong> only. The selected range follows the payment date shown in payment logs. Rows already included in prior submitted or verified deposits are excluded.
+                <strong>Deposit amount</strong> uses <strong>Cash</strong> payments with status <strong>Completed</strong> only. The selected range follows the <strong>payment date</strong> stored on each payment (same value as the Payment Logs &quot;Payment date&quot; column). The first table lists rows still available for a new deposit; the second table lists cash in the same range that is already part of a <strong>Submitted</strong> or <strong>Approved</strong> deposit (not counted again).
               </p>
               {depositExistingRanges.length > 0 && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -1888,7 +1906,7 @@ const AdminPaymentLogs = () => {
                     </div>
                   </div>
 
-                  <p className="text-sm font-medium text-gray-800 mb-2">Cash payment lines</p>
+                  <p className="text-sm font-medium text-gray-800 mb-2">Cash payment lines (pending deposit)</p>
                   <div
                     className="overflow-x-auto rounded-lg border border-gray-200"
                     style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
@@ -1911,7 +1929,9 @@ const AdminPaymentLogs = () => {
                         {(depositData.payments || []).length === 0 ? (
                           <tr>
                             <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                              No payments in this date range.
+                              {depositAlreadyDepositedRows.length > 0
+                                ? 'No cash lines left to deposit in this range — all matching cash rows are already in a submitted or approved deposit (see below).'
+                                : 'No payments in this date range.'}
                             </td>
                           </tr>
                         ) : (
@@ -1946,6 +1966,64 @@ const AdminPaymentLogs = () => {
                       </tbody>
                     </table>
                   </div>
+
+                  {depositAlreadyDepositedRows.length > 0 ? (
+                    <div className="mt-6">
+                      <p className="text-sm font-medium text-gray-800 mb-1">Already in a cash deposit (reference only)</p>
+                      <p className="text-xs text-gray-500 mb-2">
+                        These {depositAlreadyDepositedRows.length} cash line(s) match the date range and are listed in a <strong>Submitted</strong> or <strong>Approved</strong> deposit snapshot <strong>whose period includes this payment date</strong>. They are <strong>not</strong> included in &quot;Total to deposit&quot; above. If a line appears here by mistake, Superfinance/Superadmin can return or reject that deposit summary so it can be included again in a new submission.
+                      </p>
+                      <div
+                        className="overflow-x-auto rounded-lg border border-amber-200 bg-amber-50/40"
+                        style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                      >
+                        <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '1220px' }}>
+                          <thead className="bg-amber-50">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Payment date</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Invoice</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Student</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Method</th>
+                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Amount</th>
+                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Total</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Payment status</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">AR#</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Reference</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Deposit summary</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {depositAlreadyDepositedRows.map((p) => (
+                              <tr key={`dep-incl-${p.payment_id}`} className="hover:bg-amber-50/60">
+                                <td className="px-3 py-2 whitespace-nowrap text-gray-700">{formatDate(p.payment_date || p.issue_date)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
+                                  {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                                </td>
+                                <td className="px-3 py-2 text-gray-800 min-w-0 max-w-[200px]">
+                                  <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
+                                </td>
+                                <td className="px-3 py-2 whitespace-nowrap text-gray-700">{p.payment_method || '-'}</td>
+                                <td className="px-3 py-2 text-right text-gray-800 whitespace-nowrap">
+                                  {formatCurrency(getPaymentLogTableAmountColumn(p))}
+                                </td>
+                                <td className="px-3 py-2 text-right text-gray-900 whitespace-nowrap">
+                                  {formatCurrency(getPaymentLogTableTotalAmountColumn(p))}
+                                </td>
+                                <td className="px-3 py-2 whitespace-nowrap">{getStatusBadge(p.status)}</td>
+                                <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{p.invoice_ar_number || '—'}</td>
+                                <td className="px-3 py-2 text-gray-600 min-w-0 max-w-[120px]">
+                                  <span className="truncate block" title={p.reference_number || '-'}>{p.reference_number || '-'}</span>
+                                </td>
+                                <td className="px-3 py-2 text-xs text-gray-800 align-top min-w-0">
+                                  <span className="break-words" title={formatDepositInclusionLabel(p)}>{formatDepositInclusionLabel(p)}</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
               {!depositData && !depositLoading && !depositError && (
@@ -2297,43 +2375,33 @@ const AdminPaymentLogs = () => {
               )}
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Invoice
-                  </th>
+                  <SortableHeader label="Invoice" sortKey="invoice" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
-                    Student Name
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                  <SortableHeader label="Student Name" sortKey="student_name" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]" />
+                  <SortableHeader sortKey="package_item" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <span className="leading-tight">package/<br />item</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    LEVEL TAG
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
-                    Payment Method
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    AMOUNT
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    TOTAL AMOUNT
-                  </th>
+                  </SortableHeader>
+                  <SortableHeader label="LEVEL TAG" sortKey="level_tag" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Method" sortKey="payment_method" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]" />
+                  <SortableHeader label="AMOUNT" sortKey="amount" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]" />
+                  <SortableHeader label="TOTAL AMOUNT" sortKey="total_amount" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]" />
                   <SortableHeader label={branchLogTab === 'return' ? 'Return Status' : branchLogTab === 'rejected' ? 'Rejected Status' : 'Status'} sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]" />
                   {branchLogTab !== 'main' ? (
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      {branchLogTab === 'rejected' ? 'Rejected by' : 'Returned by'}
-                    </th>
+                    <SortableHeader
+                      label={branchLogTab === 'rejected' ? 'Rejected by' : 'Returned by'}
+                      sortKey="returned_by"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    />
                   ) : null}
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Reference#
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <SortableHeader label="Reference#" sortKey="reference" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
+                  <SortableHeader sortKey="ack_receipt" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <span className="block">Acknowledgement</span>
                     <span className="block">Receipt#</span>
-                  </th>
+                  </SortableHeader>
                   <SortableHeader label="Issued By" sortKey="issued_by" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                 </tr>
               </thead>

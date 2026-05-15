@@ -6,8 +6,10 @@ import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
 
 const ITEMS_PER_PAGE = 10;
+const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
 
 const StudentInvoice = () => {
   const { userInfo } = useAuth();
@@ -16,6 +18,24 @@ const StudentInvoice = () => {
   const [error, setError] = useState('');
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [dateFilterMode, setDateFilterMode] = useState(invoiceDateFilterUtil.DEFAULT_MODE);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
+  const [filterPaymentDateFrom, setFilterPaymentDateFrom] = useState('');
+  const [filterPaymentDateTo, setFilterPaymentDateTo] = useState('');
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+
+  const handleStudentInvoiceDateFilterModeChange = (nextMode) => {
+    if (nextMode === dateFilterMode) return;
+    setDateFilterMode(nextMode);
+    clearInactivePaymentIssueDateModeFields(nextMode, {
+      setPaymentFrom: setFilterPaymentDateFrom,
+      setPaymentTo: setFilterPaymentDateTo,
+      setIssueFrom: setFilterIssueDateFrom,
+      setIssueTo: setFilterIssueDateTo,
+    });
+  };
+
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
@@ -246,7 +266,8 @@ const StudentInvoice = () => {
   const getStatusBadge = (status) => {
     const statusColors = {
       'Paid': 'bg-green-100 text-green-800',
-      'Unpaid': 'bg-red-100 text-red-800',
+      'Unpaid': 'bg-gray-200 text-gray-700',
+      'Rejected': 'bg-red-100 text-red-800',
       'Partial': 'bg-yellow-100 text-yellow-800',
       'Draft': 'bg-gray-100 text-gray-800',
     };
@@ -263,6 +284,23 @@ const StudentInvoice = () => {
     return statuses.sort();
   };
 
+  const isYmdInRange = (ymd, from, to) => {
+    const d = String(ymd || '').slice(0, 10);
+    if (!d) return false;
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  };
+
+  const getMonthRange = (month) => {
+    if (!/^\d{4}-\d{2}$/.test(String(month || ''))) return { from: '', to: '' };
+    const [year, monthNum] = String(month).split('-').map((v) => parseInt(v, 10));
+    const start = `${year}-${String(monthNum).padStart(2, '0')}-01`;
+    const next = new Date(Date.UTC(year, monthNum, 1));
+    next.setUTCDate(next.getUTCDate() - 1);
+    return { from: start, to: next.toISOString().slice(0, 10) };
+  };
+
   const filteredInvoices = invoices.filter((invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
     const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
@@ -273,7 +311,18 @@ const StudentInvoice = () => {
       invoice.invoice_ar_number?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
       studentNames.includes(nameSearchTerm.toLowerCase());
     const matchesStatus = !filterStatus || invoice.status === filterStatus;
-    return matchesSearch && matchesStatus;
+    let matchesDate = true;
+    if (dateFilterMode === DATE_FILTER_MODES.MONTH) {
+      const range = getMonthRange(filterIssueMonth);
+      matchesDate = range.from || range.to
+        ? isYmdInRange(invoice.last_payment_date, range.from, range.to)
+        : true;
+    } else if (dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE) {
+      matchesDate = isYmdInRange(invoice.last_payment_date, filterPaymentDateFrom, filterPaymentDateTo);
+    } else if (dateFilterMode === DATE_FILTER_MODES.ISSUE_DATE) {
+      matchesDate = isYmdInRange(invoice.issue_date, filterIssueDateFrom, filterIssueDateTo);
+    }
+    return matchesSearch && matchesStatus && matchesDate;
   });
   const sortedInvoices = sortRows(filteredInvoices, sortConfig, {
     status: { accessor: 'status', type: 'string' },
@@ -292,7 +341,7 @@ const StudentInvoice = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [nameSearchTerm, filterStatus]);
+  }, [nameSearchTerm, filterStatus, dateFilterMode, filterIssueMonth, filterPaymentDateFrom, filterPaymentDateTo, filterIssueDateFrom, filterIssueDateTo]);
 
   useEffect(() => {
     setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
@@ -335,7 +384,7 @@ const StudentInvoice = () => {
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="relative">
             <input
               type="text"
@@ -399,6 +448,81 @@ const StudentInvoice = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-gray-700">Date filter</span>
+            <div
+              role="tablist"
+              aria-label="Invoice date filter mode"
+              className="inline-flex flex-wrap gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5"
+            >
+              {[
+                { mode: DATE_FILTER_MODES.MONTH, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
+                { mode: DATE_FILTER_MODES.PAYMENT_DATE, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PAYMENT_DATE] },
+                { mode: DATE_FILTER_MODES.ISSUE_DATE, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.ISSUE_DATE] },
+              ].map(({ mode, label }) => {
+                const isActive = dateFilterMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => handleStudentInvoiceDateFilterModeChange(mode)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      isActive ? 'bg-white text-[#b45309] shadow-sm ring-1 ring-yellow-200' : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {dateFilterMode === DATE_FILTER_MODES.MONTH && (
+              <input
+                type="month"
+                aria-label="Payment month"
+                value={filterIssueMonth}
+                onChange={(e) => setFilterIssueMonth(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
+              />
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  aria-label="Payment date from"
+                  value={filterPaymentDateFrom}
+                  onChange={(e) => setFilterPaymentDateFrom(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
+                />
+                <input
+                  type="date"
+                  aria-label="Payment date to"
+                  value={filterPaymentDateTo}
+                  onChange={(e) => setFilterPaymentDateTo(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
+                />
+              </div>
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.ISSUE_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  aria-label="Issue date from"
+                  value={filterIssueDateFrom}
+                  onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
+                />
+                <input
+                  type="date"
+                  aria-label="Issue date to"
+                  value={filterIssueDateTo}
+                  onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent"
+                />
               </div>
             )}
           </div>

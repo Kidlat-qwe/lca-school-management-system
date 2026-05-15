@@ -129,13 +129,24 @@ const FinancialDashboard = () => {
     [metrics]
   );
 
+  /** Same scope as Payment verification below: Completed rows by payment issue date in selected month. */
+  const totalPaymentsCount = useMemo(() => {
+    const v = Number(paymentVerification.verified_count) || 0;
+    const u = Number(paymentVerification.unverified_count) || 0;
+    return v + u;
+  }, [paymentVerification]);
+
+  const totalPaymentsAmount = useMemo(
+    () => (Number(paymentVerification.verified_amount) || 0) + (Number(paymentVerification.unverified_amount) || 0),
+    [paymentVerification]
+  );
+
   const formatPeso = (n) =>
     `₱${(Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const totals = metrics?.totals || {
     total_branches: 0,
     total_students: 0,
-    total_teachers: 0,
     active_classes: 0,
   };
 
@@ -236,10 +247,11 @@ const FinancialDashboard = () => {
             iconName="users"
           />
           <StatsCard
-            title="Total Teachers"
-            value={totals.total_teachers}
+            title="Total payments"
+            value={totalPaymentsCount}
+            trend={`${formatPeso(totalPaymentsAmount)} in selected month (completed, payable + tips)`}
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-            iconName="academicCap"
+            iconName="currency"
           />
           <StatsCard
             title="Active Classes"
@@ -255,11 +267,12 @@ const FinancialDashboard = () => {
             <h2 className="text-lg font-semibold text-gray-900">Payment verification (Finance & Superfinance)</h2>
             <p className="mt-1 text-sm text-gray-500">
               Completed payments only (amounts are <span className="font-medium text-gray-700">payable + tips</span>). When a{' '}
-              <span className="font-medium text-gray-700">month</span> is selected above, amounts use Manila{' '}
-              <span className="font-medium text-gray-700">payment date</span> in that month (same rule as the Finance /
-              Superfinance Financial Dashboard). <span className="font-medium text-gray-700">Verified</span> means approval
-              status is Approved; <span className="font-medium text-gray-700">Unverified</span> includes Pending, Returned,
-              or not yet approved.
+              <span className="font-medium text-gray-700">month</span> is selected above, amounts use{' '}
+              <span className="font-medium text-gray-700">payment issue date</span> on the payment record in that calendar month
+              (month start through the day before the next month), matching Payment Logs month mode.{' '}
+              <span className="font-medium text-gray-700">Verified</span> means approval status is Approved;{' '}
+              <span className="font-medium text-gray-700">Unverified</span> means Completed but not Approved, excluding Finance Returned or
+              Rejected.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">

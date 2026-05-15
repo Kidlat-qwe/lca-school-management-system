@@ -8,6 +8,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import FinancialDashboard from './pages/superadmin/FinancialDashboard';
 import DailyOperationalDashboard from './pages/superadmin/DailyOperationalDashboard';
+import MonthlyOperationalDashboard from './pages/superadmin/MonthlyOperationalDashboard';
 import OperationalDashboard from './pages/superadmin/OperationalDashboard';
 import EnrollmentDashboard from './pages/superadmin/EnrollmentDashboard';
 import Branch from './pages/superadmin/Branch';
@@ -35,6 +36,7 @@ import Settings from './pages/superadmin/Settings';
 import SystemLogs from './pages/superadmin/SystemLogs';
 import AdminFinancialDashboard from './pages/admin/adminFinancialDashboard';
 import AdminDailyOperationalDashboard from './pages/admin/adminDailyOperationalDashboard';
+import AdminMonthlyOperationalDashboard from './pages/admin/adminMonthlyOperationalDashboard';
 import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
@@ -103,8 +105,9 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="daily-operational-dashboard" replace />} />
+            <Route index element={<Navigate to="monthly-operational-dashboard" replace />} />
             <Route path="daily-operational-dashboard" element={<DailyOperationalDashboard />} />
+            <Route path="monthly-operational-dashboard" element={<MonthlyOperationalDashboard />} />
             <Route path="financial-dashboard" element={<FinancialDashboard />} />
             <Route path="operational-dashboard" element={<OperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
@@ -142,8 +145,9 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="daily-operational-dashboard" replace />} />
+            <Route index element={<Navigate to="monthly-operational-dashboard" replace />} />
             <Route path="daily-operational-dashboard" element={<AdminDailyOperationalDashboard />} />
+            <Route path="monthly-operational-dashboard" element={<AdminMonthlyOperationalDashboard />} />
             <Route path="financial-dashboard" element={<AdminFinancialDashboard />} />
             <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />

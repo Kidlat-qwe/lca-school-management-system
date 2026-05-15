@@ -49,6 +49,24 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('summary_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
+    // Payment Logs–aligned aliases: both map to summary calendar day (same
+    // business day as paymenttbl.issue_date for EOD snapshots).
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('status')
       .optional()
       .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
@@ -74,11 +92,46 @@ router.get(
       const pageNum = parseInt(page) || 1;
       const offset = (pageNum - 1) * limitNum;
 
-      // Range params take precedence; fall back to legacy single-day filter.
-      const dateFrom = summary_date_from || null;
-      const dateTo = summary_date_to || null;
-      const useRange = Boolean(dateFrom || dateTo);
-      const legacyDate = !useRange && summary_date ? summary_date : null;
+      const paymentDateFrom = req.query.payment_date_from
+        ? String(req.query.payment_date_from).trim().slice(0, 10)
+        : '';
+      const paymentDateTo = req.query.payment_date_to
+        ? String(req.query.payment_date_to).trim().slice(0, 10)
+        : '';
+      const createdDateFrom = req.query.created_date_from
+        ? String(req.query.created_date_from).trim().slice(0, 10)
+        : '';
+      const createdDateTo = req.query.created_date_to
+        ? String(req.query.created_date_to).trim().slice(0, 10)
+        : '';
+      // Legacy range (still supported for older callers).
+      const dateFrom = summary_date_from ? String(summary_date_from).trim().slice(0, 10) : null;
+      const dateTo = summary_date_to ? String(summary_date_to).trim().slice(0, 10) : null;
+
+      const usePaymentDateRange = Boolean(paymentDateFrom || paymentDateTo);
+      const useIssueDateRange = Boolean(createdDateFrom || createdDateTo);
+      const useSummaryRange = Boolean(dateFrom || dateTo);
+      const legacyDate =
+        !usePaymentDateRange && !useIssueDateRange && !useSummaryRange && summary_date ? summary_date : null;
+
+      if (usePaymentDateRange && paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+      if (useIssueDateRange && createdDateFrom && createdDateTo && createdDateFrom > createdDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
+        });
+      }
+      if (useSummaryRange && dateFrom && dateTo && dateFrom > dateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'summary_date_from must be on or before summary_date_to',
+        });
+      }
 
       let sql = `
         SELECT d.daily_summary_id, d.branch_id, d.summary_date, d.total_amount, d.payment_count,
@@ -105,7 +158,31 @@ router.get(
         params.push(branch_id);
       }
 
-      if (useRange) {
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          pc++;
+          sql += ` AND d.summary_date >= $${pc}::date`;
+          params.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          pc++;
+          sql += ` AND d.summary_date <= $${pc}::date`;
+          params.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        // Payment Logs "Issue Date" uses created_date_* on payments to filter
+        // p.issue_date; for EOD rows, that business day is d.summary_date.
+        if (createdDateFrom) {
+          pc++;
+          sql += ` AND d.summary_date >= $${pc}::date`;
+          params.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          pc++;
+          sql += ` AND d.summary_date <= $${pc}::date`;
+          params.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
         if (dateFrom) {
           pc++;
           sql += ` AND d.summary_date >= $${pc}::date`;
@@ -176,7 +253,29 @@ router.get(
         countSql += ` AND d.branch_id = $${cc}`;
         countParams.push(branch_id);
       }
-      if (useRange) {
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          cc++;
+          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          cc++;
+          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          cc++;
+          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          cc++;
+          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
         if (dateFrom) {
           cc++;
           countSql += ` AND d.summary_date >= $${cc}::date`;
@@ -219,7 +318,29 @@ router.get(
         submittedSql += ` AND d.branch_id = $${sc}`;
         submittedParams.push(branch_id);
       }
-      if (useRange) {
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          sc++;
+          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          sc++;
+          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          sc++;
+          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          sc++;
+          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
         if (dateFrom) {
           sc++;
           submittedSql += ` AND d.summary_date >= $${sc}::date`;
@@ -253,7 +374,29 @@ router.get(
         filteredSql += ` AND d.branch_id = $${fc}`;
         filteredParams.push(branch_id);
       }
-      if (useRange) {
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          fc++;
+          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          fc++;
+          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          fc++;
+          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          fc++;
+          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
         if (dateFrom) {
           fc++;
           filteredSql += ` AND d.summary_date >= $${fc}::date`;

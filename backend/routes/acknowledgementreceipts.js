@@ -14,12 +14,12 @@ import {
   sendArPaymentConfirmationByAckId,
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
+import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 let ackVerifierColumnsKnownTrue = false;
 let announcementTargetUserIdKnownTrue = false;
-let ackPairedAckColumnKnownTrue = false;
 
 const ackReceiptHasVerifierColumns = async () => {
   if (ackVerifierColumnsKnownTrue) return true;
@@ -36,27 +36,6 @@ const ackReceiptHasVerifierColumns = async () => {
     );
     if (r.rows.length > 0) {
       ackVerifierColumnsKnownTrue = true;
-      return true;
-    }
-  } catch {
-    /* ignore */
-  }
-  return false;
-};
-
-const ackReceiptHasPairedAckReceiptIdColumn = async () => {
-  if (ackPairedAckColumnKnownTrue) return true;
-  try {
-    const r = await query(
-      `SELECT 1
-       FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name = 'acknowledgement_receiptstbl'
-         AND column_name = 'paired_ack_receipt_id'
-       LIMIT 1`
-    );
-    if (r.rows.length > 0) {
-      ackPairedAckColumnKnownTrue = true;
       return true;
     }
   } catch {
@@ -536,6 +515,14 @@ router.get(
       .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('issue_date_from')
       .optional()
       .isISO8601()
@@ -571,11 +558,21 @@ router.get(
         limit = 20,
         only_unused,
         exclude_status,
+        payment_date_from: paymentDateFrom,
+        payment_date_to: paymentDateTo,
         issue_date_from: issueDateFrom,
         issue_date_to: issueDateTo,
         created_date_from: createdDateFrom,
         created_date_to: createdDateTo,
       } = req.query;
+      const paymentFrom = paymentDateFrom ? String(paymentDateFrom).trim().slice(0, 10) : '';
+      const paymentTo = paymentDateTo ? String(paymentDateTo).trim().slice(0, 10) : '';
+      if (paymentFrom && paymentTo && paymentFrom > paymentTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
       const arFrom = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
       const arTo = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
       if (arFrom && arTo && arFrom > arTo) {
@@ -702,6 +699,17 @@ router.get(
         params.push(payment_method);
       }
 
+      if (paymentFrom) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date >= $${paramCount}::date`;
+        params.push(paymentFrom);
+      }
+      if (paymentTo) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date <= $${paramCount}::date`;
+        params.push(paymentTo);
+      }
+
       if (arFrom) {
         paramCount += 1;
         sql += ` AND ar.issue_date >= $${paramCount}::date`;
@@ -790,6 +798,17 @@ router.get(
         countParamCount += 1;
         countSql += ` AND ar.payment_method = $${countParamCount}`;
         countParams.push(payment_method);
+      }
+
+      if (paymentFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date >= $${countParamCount}::date`;
+        countParams.push(paymentFrom);
+      }
+      if (paymentTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date <= $${countParamCount}::date`;
+        countParams.push(paymentTo);
       }
 
       if (arFrom) {
@@ -2518,28 +2537,41 @@ router.post(
 
                   // Pre-generated Phase 2 uses the *next* billing cycle's nominal issue (e.g. 25th of next month),
                   // so it disappears from the main Invoice list when users filter by the enrollment month.
-                  // Align issue_date to the AR payment / enrollment date while keeping due_date on the real schedule.
+                  // Align issue_date toward the AR / enrollment date while keeping due_date on the real schedule.
+                  // Never set Phase 2 issue_date earlier than Phase 1's issue_date (billing phases must not go backwards).
                   const rawAckIssue = autoPayPhase1Data?.issue_date;
-                  let physicalIssueYmd = null;
+                  let arIssueYmd = null;
                   if (rawAckIssue != null && String(rawAckIssue).trim() !== '') {
                     const s = String(rawAckIssue).trim();
-                    physicalIssueYmd = /^\d{4}-\d{2}-\d{2}$/.test(s)
+                    arIssueYmd = /^\d{4}-\d{2}-\d{2}$/.test(s)
                       ? s.slice(0, 10)
                       : formatYmdLocal(new Date(s));
                   }
-                  if (physicalIssueYmd && phase2Invoice?.invoice_id) {
+                  let candidateIssueYmd = arIssueYmd;
+                  if (phase1InvoiceId && /^\d{4}-\d{2}-\d{2}$/.test(String(candidateIssueYmd || ''))) {
+                    const p1IssueRes = await dbQuery(
+                      `SELECT TO_CHAR(issue_date, 'YYYY-MM-DD') AS d FROM invoicestbl WHERE invoice_id = $1`,
+                      [phase1InvoiceId]
+                    );
+                    const phase1IssueYmd = (p1IssueRes.rows[0]?.d || '').slice(0, 10);
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(phase1IssueYmd)) {
+                      candidateIssueYmd =
+                        candidateIssueYmd >= phase1IssueYmd ? candidateIssueYmd : phase1IssueYmd;
+                    }
+                  }
+                  if (candidateIssueYmd && phase2Invoice?.invoice_id) {
                     const dueRes = await dbQuery(
                       `SELECT TO_CHAR(due_date, 'YYYY-MM-DD') AS d FROM invoicestbl WHERE invoice_id = $1`,
                       [phase2Invoice.invoice_id]
                     );
                     const dueYmd = (dueRes.rows[0]?.d || '').slice(0, 10);
-                    if (!dueYmd || physicalIssueYmd <= dueYmd) {
+                    if (!dueYmd || candidateIssueYmd <= dueYmd) {
                       await dbQuery(
                         `UPDATE invoicestbl SET issue_date = $1::date WHERE invoice_id = $2`,
-                        [physicalIssueYmd, phase2Invoice.invoice_id]
+                        [candidateIssueYmd, phase2Invoice.invoice_id]
                       );
                       console.log(
-                        `✅ AR Phase 2 issue_date set to ${physicalIssueYmd} (AR date) for invoice ${phase2Invoice.invoice_id}`
+                        `✅ AR Phase 2 issue_date set to ${candidateIssueYmd} (AR / Phase-1 floor) for invoice ${phase2Invoice.invoice_id}`
                       );
                     }
                   }

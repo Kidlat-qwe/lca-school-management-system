@@ -20,11 +20,43 @@
 
 import { issueDateRangeFromManilaMonth, manilaMonthYYYYMM } from './dateUtils';
 
+/** Keep only a valid YYYY-MM-DD for API query params (avoids accidental suffixes). */
+const toYmdParam = (raw) => {
+  const t = String(raw ?? '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : '';
+};
+
 export const DATE_FILTER_MODES = Object.freeze({
   MONTH: 'month',
+  PAYMENT_DATE: 'paymentDate',
+  ISSUE_DATE: 'issueDate',
   PRIMARY: 'primary',
   CREATED_DATE: 'createdDate',
 });
+
+/**
+ * When switching Month | Payment date | Issue Date on list UIs, clear stored values
+ * for modes you are leaving so hidden inputs do not keep stale ranges that reappear
+ * when switching back (e.g. Payment date → Month should clear From/To).
+ *
+ * @param {string} nextMode
+ * @param {{ setPaymentFrom: (v: string) => void, setPaymentTo: (v: string) => void, setIssueFrom: (v: string) => void, setIssueTo: (v: string) => void }} setters
+ */
+export function clearInactivePaymentIssueDateModeFields(nextMode, setters) {
+  const { setPaymentFrom, setPaymentTo, setIssueFrom, setIssueTo } = setters;
+  if (nextMode === DATE_FILTER_MODES.MONTH) {
+    setPaymentFrom('');
+    setPaymentTo('');
+    setIssueFrom('');
+    setIssueTo('');
+  } else if (nextMode === DATE_FILTER_MODES.PAYMENT_DATE) {
+    setIssueFrom('');
+    setIssueTo('');
+  } else if (nextMode === DATE_FILTER_MODES.ISSUE_DATE) {
+    setPaymentFrom('');
+    setPaymentTo('');
+  }
+}
 
 export const DEFAULT_DATE_FILTER_MODE = DATE_FILTER_MODES.MONTH;
 
@@ -78,13 +110,17 @@ export const makeDateFilterUtil = ({ primaryParam, primaryLabel = 'Date' } = {})
       return out;
     }
     if (mode === DATE_FILTER_MODES.PRIMARY) {
-      if (primaryFrom) out[fromKey] = primaryFrom;
-      if (primaryTo) out[toKey] = primaryTo;
+      const pf = toYmdParam(primaryFrom);
+      const pt = toYmdParam(primaryTo);
+      if (pf) out[fromKey] = pf;
+      if (pt) out[toKey] = pt;
       return out;
     }
     if (mode === DATE_FILTER_MODES.CREATED_DATE) {
-      if (createdFrom) out.created_date_from = createdFrom;
-      if (createdTo) out.created_date_to = createdTo;
+      const cf = toYmdParam(createdFrom);
+      const ct = toYmdParam(createdTo);
+      if (cf) out.created_date_from = cf;
+      if (ct) out.created_date_to = ct;
       return out;
     }
     return out;
@@ -126,4 +162,67 @@ export const makeDateFilterUtil = ({ primaryParam, primaryLabel = 'Date' } = {})
 export const issueDateFilterUtil = makeDateFilterUtil({
   primaryParam: 'issue_date',
   primaryLabel: 'Issue date',
+});
+
+/**
+ * Shared helper for list pages that need the same visible date modes as
+ * Payment Logs:
+ *
+ *   - mode 'month'       -> payment_date_from / payment_date_to
+ *   - mode 'paymentDate' -> payment_date_from / payment_date_to
+ *   - mode 'issueDate'   -> issue_date_from / issue_date_to
+ */
+export const paymentAndIssueDateFilterUtil = Object.freeze({
+  MODES: DATE_FILTER_MODES,
+  MODE_LABELS: Object.freeze({
+    [DATE_FILTER_MODES.MONTH]: 'Month',
+    [DATE_FILTER_MODES.PAYMENT_DATE]: 'Payment date',
+    [DATE_FILTER_MODES.ISSUE_DATE]: 'Issue Date',
+  }),
+  DEFAULT_MODE: DATE_FILTER_MODES.MONTH,
+  defaultMonth: defaultDateFilterMonth,
+  buildParams: ({
+    mode,
+    month = '',
+    paymentFrom = '',
+    paymentTo = '',
+    issueFrom = '',
+    issueTo = '',
+  } = {}) => {
+    const out = {};
+    if (mode === DATE_FILTER_MODES.MONTH) {
+      const range = issueDateRangeFromManilaMonth(month);
+      if (range.from) out.payment_date_from = range.from;
+      if (range.to) out.payment_date_to = range.to;
+      return out;
+    }
+    if (mode === DATE_FILTER_MODES.PAYMENT_DATE) {
+      const pf = toYmdParam(paymentFrom);
+      const pt = toYmdParam(paymentTo);
+      if (pf) out.payment_date_from = pf;
+      if (pt) out.payment_date_to = pt;
+      return out;
+    }
+    if (mode === DATE_FILTER_MODES.ISSUE_DATE) {
+      const inf = toYmdParam(issueFrom);
+      const int = toYmdParam(issueTo);
+      if (inf) out.issue_date_from = inf;
+      if (int) out.issue_date_to = int;
+      return out;
+    }
+    return out;
+  },
+  hasActiveFilter: ({
+    mode,
+    month = '',
+    paymentFrom = '',
+    paymentTo = '',
+    issueFrom = '',
+    issueTo = '',
+  } = {}) => {
+    if (mode === DATE_FILTER_MODES.MONTH) return Boolean(month);
+    if (mode === DATE_FILTER_MODES.PAYMENT_DATE) return Boolean(paymentFrom || paymentTo);
+    if (mode === DATE_FILTER_MODES.ISSUE_DATE) return Boolean(issueFrom || issueTo);
+    return false;
+  },
 });

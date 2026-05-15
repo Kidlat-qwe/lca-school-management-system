@@ -10,6 +10,7 @@ import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
+import { buildPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import {
   PAYMENT_LOG_DATE_MODES,
@@ -55,7 +56,7 @@ const SuperfinancePaymentLogs = () => {
   const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
-  // Date-filter mode switcher (Month / Payment date / Date created).
+  // Date-filter mode switcher (Month / Payment date / Issue date).
   // Default mode is "month" pre-loaded with the current Manila month so the
   // page boots with a reasonable, narrow range.
   const [dateFilterMode, setDateFilterMode] = useState(DEFAULT_PAYMENT_LOG_DATE_MODE);
@@ -245,10 +246,10 @@ const SuperfinancePaymentLogs = () => {
         params.set('exclude_approval_status', 'Returned,Rejected');
       } else if (filterFinanceApproval === 'pending') {
         params.set('pending_only', '1');
-        params.set('exclude_approval_status', 'Rejected');
+        params.set('exclude_approval_status', 'Returned,Rejected');
       } else {
         params.set('pending_only', '0');
-        params.set('exclude_approval_status', 'Rejected');
+        params.set('exclude_approval_status', 'Returned,Rejected');
       }
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
       const endpoint = useUnifiedEndpoint ? '/payments/finance-unified' : '/payments';
@@ -600,13 +601,15 @@ const SuperfinancePaymentLogs = () => {
 
     return matchesBranch && matchesFinanceApproval;
   });
-  const sortedPayments = sortRows(filteredPayments, sortConfig, {
-    branch: { accessor: (payment) => getBranchName(payment.branch_id) || payment.branch_name || '', type: 'string' },
-    issue_date: { accessor: 'issue_date', type: 'date' },
-    payment_date: { accessor: 'payment_date', type: 'date' },
-    status: { accessor: (payment) => (payment.approval_status || payment.status || 'Pending'), type: 'string' },
-    issued_by: { accessor: (payment) => formatInvoiceIssuedBy(payment), type: 'string' },
-  });
+  const sortedPayments = sortRows(
+    filteredPayments,
+    sortConfig,
+    buildPaymentLogsTableSortAccessors({
+      branchAccessor: (payment) => getBranchName(payment.branch_id) || payment.branch_name || '',
+      issuedByAccessor: formatInvoiceIssuedBy,
+      logTab: financeLogTab,
+    })
+  );
 
   const summaryLineTotal = useMemo(() => {
     const line = (p) => (parseFloat(p.payable_amount) || 0) + (parseFloat(p.tip_amount) || 0);
@@ -1015,7 +1018,7 @@ const SuperfinancePaymentLogs = () => {
                   <input
                     id="superfinance-created-date-from"
                     type="date"
-                    title="Date created from"
+                    title="Issue Date from"
                     value={filterCreatedDateFrom}
                     onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
@@ -1031,7 +1034,7 @@ const SuperfinancePaymentLogs = () => {
                   <input
                     id="superfinance-created-date-to"
                     type="date"
-                    title="Date created to"
+                    title="Issue Date to"
                     value={filterCreatedDateTo}
                     onChange={(e) => setFilterCreatedDateTo(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
@@ -1047,7 +1050,7 @@ const SuperfinancePaymentLogs = () => {
               ? 'Month filter uses payment date. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
-              : 'Date range is inclusive on the record-created date (when the payment row was logged). Leave both empty for all dates.'}
+              : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button type="button" onClick={resetPaymentLogFilters} disabled={!hasPaymentLogFilters} className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">Reset</button>
@@ -1129,43 +1132,33 @@ const SuperfinancePaymentLogs = () => {
               )}
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Invoice
-                  </th>
+                  <SortableHeader label="Invoice" sortKey="invoice" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]">
-                    Student Name
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
+                  <SortableHeader label="Student Name" sortKey="student_name" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]" />
+                  <SortableHeader sortKey="package_item" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <span className="leading-tight">package/<br />item</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    LEVEL TAG
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
-                    Payment Method
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    AMOUNT
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]">
-                    TOTAL AMOUNT
-                  </th>
+                  </SortableHeader>
+                  <SortableHeader label="LEVEL TAG" sortKey="level_tag" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Payment Method" sortKey="payment_method" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]" />
+                  <SortableHeader label="AMOUNT" sortKey="amount" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]" />
+                  <SortableHeader label="TOTAL AMOUNT" sortKey="total_amount" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[8%]" />
                   <SortableHeader label={financeLogTab === 'return' ? 'Return Status' : financeLogTab === 'rejected' ? 'Rejected Status' : 'Status'} sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[14%]" />
                   {financeLogTab !== 'main' ? (
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      {financeLogTab === 'rejected' ? 'Rejected by' : 'Returned by'}
-                    </th>
+                    <SortableHeader
+                      label={financeLogTab === 'rejected' ? 'Rejected by' : 'Returned by'}
+                      sortKey="returned_by"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    />
                   ) : null}
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]">
-                    Reference#
-                  </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <SortableHeader label="Reference#" sortKey="reference" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
+                  <SortableHeader sortKey="ack_receipt" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <span className="block">Acknowledgement</span>
                     <span className="block">Receipt#</span>
-                  </th>
+                  </SortableHeader>
                   <SortableHeader label="Issued By" sortKey="issued_by" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                 </tr>
               </thead>

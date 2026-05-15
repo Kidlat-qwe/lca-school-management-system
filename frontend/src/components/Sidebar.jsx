@@ -37,6 +37,8 @@ const Sidebar = ({ isOpen, onClose }) => {
   // Define all possible menu items
   // Track only the currently expanded menu (accordion behavior - only one open at a time)
   const [expandedMenu, setExpandedMenu] = useState(null);
+  /** When a sidebar child has its own submenu, e.g. `Dashboard:Operational Dashboard` */
+  const [expandedNestedMenu, setExpandedNestedMenu] = useState(null);
 
   const allMenuItems = [
     {
@@ -49,16 +51,27 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Finance'], // Dropdown for Superadmin, Admin, Finance/Superfinance
       children: [
         {
-          name: 'Daily Operational Dashboard',
-          path: `${basePath}/daily-operational-dashboard`,
+          name: 'Operational Dashboard',
           roles: ['Superadmin', 'Admin'],
+          children: [
+            {
+              name: 'Monthly Operational Dashboard',
+              path: `${basePath}/monthly-operational-dashboard`,
+              roles: ['Superadmin', 'Admin'],
+            },
+            {
+              name: 'Daily Operational Dashboard',
+              path: `${basePath}/daily-operational-dashboard`,
+              roles: ['Superadmin', 'Admin'],
+            },
+          ],
         },
         {
           name: 'Financial Dashboard',
           path: `${basePath}/financial-dashboard`,
         },
         {
-          name: 'Operational Dashboard',
+          name: 'Operational summary',
           path: `${basePath}/operational-dashboard`,
           roles: ['Superadmin', 'Admin'],
         },
@@ -419,17 +432,25 @@ const Sidebar = ({ isOpen, onClose }) => {
       // Handle Dashboard children paths for Superadmin, Admin, Finance/Superfinance
       let children = item.children;
       if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance')) {
+        const mapDashboardChild = (child) => {
+          if (child.children?.length) {
+            const nested = child.children
+              .filter((c) => !c.roles || c.roles.includes(userType))
+              .map(mapDashboardChild);
+            return { ...child, children: nested };
+          }
+          let path = child.path;
+          if (child.name === 'Financial Dashboard') path = `${basePath}/financial-dashboard`;
+          if (child.name === 'Daily Operational Dashboard') path = `${basePath}/daily-operational-dashboard`;
+          if (child.name === 'Monthly Operational Dashboard') path = `${basePath}/monthly-operational-dashboard`;
+          if (child.name === 'Operational summary') path = `${basePath}/operational-dashboard`;
+          if (child.name === 'Enrollment Dashboard') path = `${basePath}/enrollment-dashboard`;
+          return { ...child, path };
+        };
         children = item.children
-          ?.filter(child => !child.roles || child.roles.includes(userType))
-          ?.map(child => {
-            if (child.name === 'Financial Dashboard') {
-              return { ...child, path: `${basePath}/financial-dashboard` };
-            }
-            if (child.name === 'Daily Operational Dashboard') {
-              return { ...child, path: `${basePath}/daily-operational-dashboard` };
-            }
-            return child;
-          });
+          ?.filter((child) => !child.roles || child.roles.includes(userType))
+          ?.map(mapDashboardChild)
+          ?.filter((child) => !child.children || child.children.length > 0);
       }
       // Handle Manage Users children paths for Admin
       if (item.name === 'Manage Users' && basePath === '/admin') {
@@ -518,28 +539,158 @@ const Sidebar = ({ isOpen, onClose }) => {
     return location.pathname.startsWith(path);
   };
 
-  const isGroupActive = (children) => children?.some(child => isActive(child.path));
+  const isNodeOrDescendantActive = (node) => {
+    if (!node) return false;
+    if (node.path && isActive(node.path)) return true;
+    return node.children?.some(isNodeOrDescendantActive) ?? false;
+  };
+
+  const isGroupActive = (childList) => childList?.some(isNodeOrDescendantActive);
 
   const toggleMenu = (name) => {
-    // Accordion behavior: if clicking the same menu, close it; otherwise, close others and open this one
-    setExpandedMenu(prev => prev === name ? null : name);
+    setExpandedNestedMenu(null);
+    setExpandedMenu((prev) => (prev === name ? null : name));
   };
 
   // Auto-expand the menu group that contains the active page when location changes
   useEffect(() => {
-    const activeMenuGroup = menuItems.find(item => 
-      item.children && item.children.length > 0 && isGroupActive(item.children)
+    const activeMenuGroup = menuItems.find(
+      (item) => item.children && item.children.length > 0 && isGroupActive(item.children)
     );
-    
+
     if (activeMenuGroup) {
-      // Only set if it's different from current to avoid unnecessary re-renders
-      setExpandedMenu(prev => prev !== activeMenuGroup.name ? activeMenuGroup.name : prev);
+      setExpandedMenu((prev) => (prev !== activeMenuGroup.name ? activeMenuGroup.name : prev));
+      let nestedKey = null;
+      for (const child of activeMenuGroup.children) {
+        if (child.children?.length && isGroupActive(child.children)) {
+          nestedKey = `${activeMenuGroup.name}:${child.name}`;
+          break;
+        }
+      }
+      setExpandedNestedMenu(nestedKey);
     } else {
-      // If no active group, close any expanded menu (optional - keeps last opened menu if you prefer)
-      // setExpandedMenu(null);
+      setExpandedNestedMenu(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+
+  const renderSidebarChildItems = (parentItemName, childList) =>
+    childList.map((child) => {
+      if (child.children?.length > 0) {
+        const nestedKey = `${parentItemName}:${child.name}`;
+        const subActive = isGroupActive(child.children);
+        const isNestedOpen = expandedNestedMenu === nestedKey;
+        return (
+          <div key={nestedKey} className="space-y-1">
+            <button
+              type="button"
+              onClick={() =>
+                setExpandedNestedMenu((prev) => (prev === nestedKey ? null : nestedKey))
+              }
+              className={`
+                flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors
+                ${
+                  subActive
+                    ? 'bg-[#F7C844] text-gray-900 font-medium'
+                    : 'text-gray-600 hover:bg-primary-50'
+                }
+              `}
+            >
+              <span className="flex min-w-0 items-center space-x-2">
+                <svg
+                  className="h-4 w-4 flex-shrink-0"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <span className="truncate">{child.name}</span>
+              </span>
+              {isNestedOpen ? (
+                <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path
+                    fillRule="evenodd"
+                    d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path
+                    fillRule="evenodd"
+                    d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              )}
+            </button>
+            <div className={isNestedOpen ? 'ml-2 space-y-1 border-l border-gray-200 pl-2' : 'hidden'}>
+              {child.children.map((grand) => (
+                <NavLink
+                  key={grand.path}
+                  to={grand.path}
+                  onClick={onClose}
+                  className={`
+                    flex items-center space-x-2 rounded-lg px-3 py-2 text-sm transition-colors
+                    ${
+                      isActive(grand.path)
+                        ? 'bg-[#F7C844] text-gray-900 font-medium'
+                        : 'text-gray-600 hover:bg-primary-50'
+                    }
+                  `}
+                >
+                  <svg
+                    className="h-4 w-4 flex-shrink-0 opacity-70"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  <span className="truncate">{grand.name}</span>
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <NavLink
+          key={child.path}
+          to={child.path}
+          onClick={onClose}
+          className={`
+            flex items-center space-x-2 rounded-lg px-3 py-2 text-sm transition-colors
+            ${
+              isActive(child.path)
+                ? 'bg-[#F7C844] text-gray-900 font-medium'
+                : 'text-gray-600 hover:bg-primary-50'
+            }
+          `}
+        >
+          <svg
+            className="h-4 w-4 flex-shrink-0"
+            fill="currentColor"
+            viewBox="0 0 20 20"
+          >
+            <path
+              fillRule="evenodd"
+              d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span>{child.name}</span>
+        </NavLink>
+      );
+    });
 
   return (
     <aside
@@ -592,30 +743,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                   )}
                 </button>
                 <div className={`${isExpanded ? 'space-y-1 pl-8' : 'hidden'}`}>
-                  {item.children.map((child) => (
-                    <NavLink
-                      key={child.path}
-                      to={child.path}
-                      onClick={onClose}
-                      className={`
-                        flex items-center space-x-2 rounded-lg px-3 py-2 text-sm transition-colors
-                        ${
-                          isActive(child.path)
-                            ? 'bg-[#F7C844] text-gray-900 font-medium'
-                            : 'text-gray-600 hover:bg-primary-50'
-                        }
-                      `}
-                    >
-                      <svg
-                        className="h-4 w-4 flex-shrink-0"
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                      </svg>
-                      <span>{child.name}</span>
-                    </NavLink>
-                  ))}
+                  {renderSidebarChildItems(item.name, item.children)}
                 </div>
               </div>
             );

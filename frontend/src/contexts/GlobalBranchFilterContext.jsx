@@ -8,6 +8,7 @@ const GlobalBranchFilterContext = createContext(null);
 const SUPPORTED_ROUTE_PREFIXES = ['/superadmin/', '/superfinance/'];
 const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'daily-operational-dashboard',
+  'monthly-operational-dashboard',
   'financial-dashboard',
   'operational-dashboard',
   'enrollment-dashboard',

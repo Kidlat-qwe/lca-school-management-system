@@ -20,7 +20,7 @@ import {
   formatDateManila,
   todayManilaYMD,
 } from '../../utils/dateUtils';
-import { issueDateFilterUtil, DATE_FILTER_MODES } from '../../utils/dateFilterModes';
+import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
@@ -30,7 +30,7 @@ import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 
 const ITEMS_PER_PAGE = 10;
 
-const DEFAULT_INVOICE_FILTER_MONTH = issueDateFilterUtil.defaultMonth();
+const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
 
 const getInvoiceDisplayAmount = (invoice) => {
   if (!invoice) return 0;
@@ -54,14 +54,26 @@ const FinanceInvoice = () => {
   const [studentNameSearch, setStudentNameSearch] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  // Date filter mode switcher (Month | Issue date | Date created).
+  // Date filter: Month | Payment date | Issue Date.
   // Default mode = MONTH, default month = current Manila month.
-  const [dateFilterMode, setDateFilterMode] = useState(issueDateFilterUtil.DEFAULT_MODE);
+  const [dateFilterMode, setDateFilterMode] = useState(invoiceDateFilterUtil.DEFAULT_MODE);
   const [filterIssueMonth, setFilterIssueMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
+  const [filterPaymentDateFrom, setFilterPaymentDateFrom] = useState('');
+  const [filterPaymentDateTo, setFilterPaymentDateTo] = useState('');
   const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
   const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
-  const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState('');
-  const [filterCreatedDateTo, setFilterCreatedDateTo] = useState('');
+
+  const handleInvoiceListDateFilterModeChange = (nextMode) => {
+    if (nextMode === dateFilterMode) return;
+    setDateFilterMode(nextMode);
+    clearInactivePaymentIssueDateModeFields(nextMode, {
+      setPaymentFrom: setFilterPaymentDateFrom,
+      setPaymentTo: setFilterPaymentDateTo,
+      setIssueFrom: setFilterIssueDateFrom,
+      setIssueTo: setFilterIssueDateTo,
+    });
+  };
+
   const [sortConfig, setSortConfig] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
@@ -135,9 +147,7 @@ const FinanceInvoice = () => {
     fetchStudents();
   }, []);
 
-  // Server-side filter re-fetch: refires whenever the active branch or any
-  // of the date-filter mode inputs change. Search/student/status are still
-  // applied client-side (so we keep the dropdown's per-status counts).
+  // Server-side list: refetch when branch or date filters change (text/status stay client-side).
   useEffect(() => {
     fetchInvoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,10 +155,10 @@ const FinanceInvoice = () => {
     filterBranch,
     dateFilterMode,
     filterIssueMonth,
+    filterPaymentDateFrom,
+    filterPaymentDateTo,
     filterIssueDateFrom,
     filterIssueDateTo,
-    filterCreatedDateFrom,
-    filterCreatedDateTo,
   ]);
 
   // Fetch package details by package name
@@ -295,13 +305,13 @@ const FinanceInvoice = () => {
       const params = new URLSearchParams();
       if (filterBranch) params.set('branch_id', String(filterBranch));
       params.set('limit', '100');
-      const dateParams = issueDateFilterUtil.buildParams({
+      const dateParams = invoiceDateFilterUtil.buildParams({
         mode: dateFilterMode,
         month: filterIssueMonth,
-        primaryFrom: filterIssueDateFrom,
-        primaryTo: filterIssueDateTo,
-        createdFrom: filterCreatedDateFrom,
-        createdTo: filterCreatedDateTo,
+        paymentFrom: filterPaymentDateFrom,
+        paymentTo: filterPaymentDateTo,
+        issueFrom: filterIssueDateFrom,
+        issueTo: filterIssueDateTo,
       });
       Object.entries(dateParams).forEach(([k, v]) => {
         if (v) params.set(k, v);
@@ -1346,33 +1356,6 @@ const FinanceInvoice = () => {
     (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
     0
   );
-  const dateFilterArgs = {
-    mode: dateFilterMode,
-    month: filterIssueMonth,
-    primaryFrom: filterIssueDateFrom,
-    primaryTo: filterIssueDateTo,
-    createdFrom: filterCreatedDateFrom,
-    createdTo: filterCreatedDateTo,
-  };
-  const hasInvoiceFilters = Boolean(
-    nameSearchTerm ||
-    studentNameSearch ||
-    filterStatus ||
-    issueDateFilterUtil.hasActiveFilter(dateFilterArgs)
-  );
-
-  const resetInvoiceFilters = () => {
-    setNameSearchTerm('');
-    setStudentNameSearch('');
-    setFilterStatus('');
-    setDateFilterMode(issueDateFilterUtil.DEFAULT_MODE);
-    setFilterIssueMonth(DEFAULT_INVOICE_FILTER_MONTH);
-    setFilterIssueDateFrom('');
-    setFilterIssueDateTo('');
-    setFilterCreatedDateFrom('');
-    setFilterCreatedDateTo('');
-    setCurrentPage(1);
-  };
 
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
@@ -1388,10 +1371,10 @@ const FinanceInvoice = () => {
     filterStatus,
     dateFilterMode,
     filterIssueMonth,
+    filterPaymentDateFrom,
+    filterPaymentDateTo,
     filterIssueDateFrom,
     filterIssueDateTo,
-    filterCreatedDateFrom,
-    filterCreatedDateTo,
   ]);
 
   useEffect(() => {
@@ -1647,9 +1630,9 @@ const FinanceInvoice = () => {
               className="inline-flex flex-wrap gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5"
             >
               {[
-                { mode: DATE_FILTER_MODES.MONTH, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
-                { mode: DATE_FILTER_MODES.PRIMARY, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PRIMARY] },
-                { mode: DATE_FILTER_MODES.CREATED_DATE, label: issueDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.CREATED_DATE] },
+                { mode: DATE_FILTER_MODES.MONTH, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
+                { mode: DATE_FILTER_MODES.PAYMENT_DATE, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PAYMENT_DATE] },
+                { mode: DATE_FILTER_MODES.ISSUE_DATE, label: invoiceDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.ISSUE_DATE] },
               ].map(({ mode, label }) => {
                 const isActive = dateFilterMode === mode;
                 return (
@@ -1658,7 +1641,7 @@ const FinanceInvoice = () => {
                     type="button"
                     role="tab"
                     aria-selected={isActive}
-                    onClick={() => setDateFilterMode(mode)}
+                    onClick={() => handleInvoiceListDateFilterModeChange(mode)}
                     className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                       isActive
                         ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
@@ -1679,7 +1662,31 @@ const FinanceInvoice = () => {
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               />
             )}
-            {dateFilterMode === DATE_FILTER_MODES.PRIMARY && (
+            {dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="finance-invoice-payment-from" className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="finance-invoice-payment-from"
+                    type="date"
+                    value={filterPaymentDateFrom}
+                    onChange={(e) => setFilterPaymentDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="finance-invoice-payment-to" className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="finance-invoice-payment-to"
+                    type="date"
+                    value={filterPaymentDateTo}
+                    onChange={(e) => setFilterPaymentDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.ISSUE_DATE && (
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label htmlFor="finance-invoice-issue-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
@@ -1703,76 +1710,33 @@ const FinanceInvoice = () => {
                 </div>
               </div>
             )}
-            {dateFilterMode === DATE_FILTER_MODES.CREATED_DATE && (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label htmlFor="finance-invoice-created-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
-                  <input
-                    id="finance-invoice-created-from"
-                    type="date"
-                    value={filterCreatedDateFrom}
-                    onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="finance-invoice-created-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
-                  <input
-                    id="finance-invoice-created-to"
-                    type="date"
-                    value={filterCreatedDateTo}
-                    onChange={(e) => setFilterCreatedDateTo(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  />
-                </div>
-              </div>
-            )}
           </div>
         </div>
-        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <p className="text-xs text-gray-500">
-              {dateFilterMode === DATE_FILTER_MODES.MONTH
-                ? 'Filtering by invoice issue date (month). Clear to show all dates.'
-                : dateFilterMode === DATE_FILTER_MODES.PRIMARY
-                  ? 'Filtering by invoice issue date (range). Inclusive on both ends.'
-                  : 'Filtering by record-created date (range). Inclusive on both ends.'}
-            </p>
-            {filterStatus === 'Unpaid' && (
-              <button
-                type="button"
-                onClick={() => setFilterStatus('')}
-                aria-pressed={true}
-                title="Clear unpaid filter"
-                className="relative inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 transition-colors hover:bg-red-200"
+        <div className="mt-4 flex flex-col gap-2 border-t border-gray-100 pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          <p className="text-xs text-gray-500">
+            {dateFilterMode === DATE_FILTER_MODES.MONTH
+              ? 'Filtering by invoice payment date (month). Clear to show all dates.'
+              : dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE
+                ? 'Filtering by invoice payment date (range). Inclusive on both ends.'
+                : 'Filtering by invoice issue date (range). Inclusive on both ends.'}
+          </p>
+          {filterStatus === 'Unpaid' && (
+            <button
+              type="button"
+              onClick={() => setFilterStatus('')}
+              aria-pressed={true}
+              title="Clear unpaid filter"
+              className="relative inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 transition-colors hover:bg-red-200"
+            >
+              <span>Unpaid</span>
+              <sup
+                className="ml-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white"
+                aria-label={`${unpaidInvoiceCount} unpaid invoices`}
               >
-                <span>Unpaid</span>
-                <sup
-                  className="ml-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white"
-                  aria-label={`${unpaidInvoiceCount} unpaid invoices`}
-                >
-                  {unpaidInvoiceCount > 99 ? '99+' : unpaidInvoiceCount}
-                </sup>
-              </button>
-            )}
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <button
-              type="button"
-              onClick={resetInvoiceFilters}
-              disabled={!hasInvoiceFilters}
-              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Reset
+                {unpaidInvoiceCount > 99 ? '99+' : unpaidInvoiceCount}
+              </sup>
             </button>
-            <button
-              type="button"
-              onClick={() => setCurrentPage(1)}
-              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-            >
-              Search
-            </button>
-          </div>
+          )}
         </div>
       </div>
 
@@ -1948,6 +1912,8 @@ const FinanceInvoice = () => {
                             : invoice.status === 'Pending'
                             ? 'bg-yellow-100 text-yellow-800'
                             : invoice.status === 'Unpaid'
+                            ? 'bg-gray-200 text-gray-700'
+                            : invoice.status === 'Rejected'
                             ? 'bg-red-100 text-red-800'
                             : invoice.status === 'Overdue'
                             ? 'bg-red-100 text-red-800'
@@ -2920,15 +2886,17 @@ const FinanceInvoice = () => {
                       <div className="mt-1 flex items-center gap-2">
                         <span
                           className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                            selectedInvoiceForDetails.status === 'Paid'
-                              ? 'bg-green-100 text-green-800'
-                              : selectedInvoiceForDetails.status === 'Pending'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : selectedInvoiceForDetails.status === 'Unpaid'
-                              ? 'bg-red-100 text-red-800'
-                              : selectedInvoiceForDetails.status === 'Overdue'
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-gray-100 text-gray-800'
+                              selectedInvoiceForDetails.status === 'Paid'
+                                ? 'bg-green-100 text-green-800'
+                                : selectedInvoiceForDetails.status === 'Pending'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : selectedInvoiceForDetails.status === 'Unpaid'
+                                ? 'bg-gray-200 text-gray-700'
+                                : selectedInvoiceForDetails.status === 'Rejected'
+                                ? 'bg-red-100 text-red-800'
+                                : selectedInvoiceForDetails.status === 'Overdue'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-gray-100 text-gray-800'
                           }`}
                         >
                           {selectedInvoiceForDetails.status || 'Draft'}

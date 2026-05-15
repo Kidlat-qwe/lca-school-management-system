@@ -6,9 +6,18 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   formatDateManila,
   formatDateTimeManila,
-  issueDateRangeFromManilaMonth,
   manilaMonthYYYYMM,
 } from '../../utils/dateUtils';
+import {
+  PAYMENT_LOG_DATE_MODES,
+  PAYMENT_LOG_DATE_MODE_LABELS,
+} from '../../utils/paymentLogDateFilters';
+import {
+  buildDailySummaryListDateQueryParams,
+  defaultDailySummaryFilterMonth,
+  DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE,
+  hasActiveDailySummaryListDateFilter,
+} from '../../utils/dailySummaryListDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
@@ -49,15 +58,12 @@ const AdminDailySummary = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  // Date filtering is mutually exclusive between an explicit From/To range and a
-  // single Month picker (matches the Payment Logs UX). The Month picker defaults
-  // to the current Manila month so the page opens on "This Month" out of the box;
-  // typing in From/To clears the month, picking a month clears From/To.
-  // Range params still target summary_date for End-of-Shift and the
-  // [start_date, end_date] period overlap for Cash Deposit.
-  const [filterDateFrom, setFilterDateFrom] = useState('');
-  const [filterDateTo, setFilterDateTo] = useState('');
-  const [filterMonth, setFilterMonth] = useState(manilaMonthYYYYMM());
+  const [dateFilterMode, setDateFilterMode] = useState(DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(() => defaultDailySummaryFilterMonth());
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState('');
+  const [filterCreatedDateTo, setFilterCreatedDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [sortConfig, setSortConfig] = useState(null);
   const [submittedSummary, setSubmittedSummary] = useState({ count: 0, total_amount: 0 });
@@ -135,17 +141,17 @@ const AdminDailySummary = () => {
         } else if (filterStatus) {
           params.set('status', filterStatus);
         }
-        // Range params differ per tab: EOD uses summary_date_from/_to (single
-        // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
-        const fromParam = isCash ? 'date_from' : 'summary_date_from';
-        const toParam = isCash ? 'date_to' : 'summary_date_to';
-        // Month picker takes precedence over From/To; it expands to the full
-        // Manila month range so backend filters stay date-based.
-        const monthRange = filterMonth ? issueDateRangeFromManilaMonth(filterMonth) : null;
-        const effectiveFrom = monthRange?.from || filterDateFrom;
-        const effectiveTo = monthRange?.to || filterDateTo;
-        if (effectiveFrom) params.set(fromParam, effectiveFrom);
-        if (effectiveTo) params.set(toParam, effectiveTo);
+        const dateParams = buildDailySummaryListDateQueryParams(isCash, {
+          mode: dateFilterMode,
+          month: filterIssueMonth,
+          paymentFrom: filterIssueDateFrom,
+          paymentTo: filterIssueDateTo,
+          createdFrom: filterCreatedDateFrom,
+          createdTo: filterCreatedDateTo,
+        });
+        Object.entries(dateParams).forEach(([key, value]) => {
+          if (value) params.set(key, value);
+        });
         const endpoint = isCash ? '/cash-deposit-summaries' : '/daily-summary-sales';
         const res = await apiRequest(`${endpoint}?${params.toString()}`);
         setRecords(res.data || []);
@@ -171,7 +177,7 @@ const AdminDailySummary = () => {
         setLoading(false);
       }
     },
-    [branchId, isCash, viewTab, filterStatus, filterDateFrom, filterDateTo, filterMonth]
+    [branchId, isCash, viewTab, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo]
   );
 
   useEffect(() => {
@@ -181,18 +187,19 @@ const AdminDailySummary = () => {
   useEffect(() => {
     setPagination((p) => ({ ...p, page: 1 }));
     setFilterStatus('');
-    // Reset to the Month picker's "This Month" default on tab switches so EOD
-    // and Cash Deposit both open on the current month, matching the on-mount UX.
-    setFilterDateFrom('');
-    setFilterDateTo('');
-    setFilterMonth(manilaMonthYYYYMM());
+    setDateFilterMode(DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE);
+    setFilterIssueMonth(defaultDailySummaryFilterMonth());
+    setFilterIssueDateFrom('');
+    setFilterIssueDateTo('');
+    setFilterCreatedDateFrom('');
+    setFilterCreatedDateTo('');
     setOpenActionsMenuId(null);
     setDetailsView({ open: false, record: null });
   }, [summaryKind, viewTab]);
 
   useEffect(() => {
     fetchRecords(1);
-  }, [fetchRecords, summaryKind, viewTab, filterStatus, filterDateFrom, filterDateTo, filterMonth]);
+  }, [fetchRecords, summaryKind, viewTab, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -420,13 +427,13 @@ const AdminDailySummary = () => {
       </div>
 
       {viewTab === VIEW_MAIN && (
-        <div className="flex flex-col gap-3 min-w-0 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-3 sm:gap-y-2">
+          <div className="shrink-0">
+            <label className="mb-0.5 block text-xs font-medium text-gray-600">Status</label>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input-field text-sm w-full sm:w-auto sm:min-w-[160px]"
+              className="input-field py-1.5 text-sm w-full min-w-[8.5rem] sm:w-auto"
             >
               {statusOptions.map((o) => (
                 <option key={o.value || 'all'} value={o.value}>
@@ -435,62 +442,143 @@ const AdminDailySummary = () => {
               ))}
             </select>
           </div>
-          <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-600 mb-1">From</label>
-            <input
-              type="date"
-              value={filterDateFrom}
-              max={filterDateTo || undefined}
-              onChange={(e) => {
-                setFilterDateFrom(e.target.value);
-                if (e.target.value) setFilterMonth('');
-              }}
-              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
-            />
+          <div
+            className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2 sm:gap-y-1 sm:py-1.5 sm:ps-3 sm:pe-2"
+            title={
+              dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
+                ? isCash
+                  ? 'Deposit periods overlapping the selected Manila month. Clear month for all.'
+                  : 'Summary days in the Manila month (same calendar day as paymenttbl.issue_date for that close). Clear month for all.'
+                : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
+                  ? isCash
+                    ? 'Deposits whose period overlaps your date range (inclusive).'
+                    : 'Summary day range (inclusive), aligned with Payment Logs payment date.'
+                  : isCash
+                    ? 'When the deposit summary was submitted (created_at, inclusive).'
+                    : 'Issue date range (inclusive): filters summary_date like Payment Logs Issue Date.'
+            }
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date filter</span>
+              <div
+                role="tablist"
+                aria-label="Daily summary date filter mode"
+                className="inline-flex flex-wrap gap-0.5 rounded border border-gray-200 bg-gray-50 p-px"
+              >
+                {[
+                  { mode: PAYMENT_LOG_DATE_MODES.MONTH, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.MONTH] },
+                  { mode: PAYMENT_LOG_DATE_MODES.PAYMENT_DATE, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.PAYMENT_DATE] },
+                  { mode: PAYMENT_LOG_DATE_MODES.CREATED_DATE, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.CREATED_DATE] },
+                ].map(({ mode, label }) => {
+                  const isActive = dateFilterMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => setDateFilterMode(mode)}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                        isActive
+                          ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-1">
+              {dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH && (
+                <input
+                  type="month"
+                  aria-label="Filter month"
+                  value={filterIssueMonth}
+                  max={manilaMonthYYYYMM()}
+                  onChange={(e) => setFilterIssueMonth(e.target.value)}
+                  className="input-field w-[9.75rem] shrink-0 py-1 text-sm"
+                />
+              )}
+              {dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE && (
+                <>
+                  <input
+                    id="admin-ds-primary-from"
+                    type="date"
+                    aria-label="From"
+                    value={filterIssueDateFrom}
+                    max={filterIssueDateTo || undefined}
+                    onChange={(e) => setFilterIssueDateFrom(e.target.value)}
+                    className="input-field w-[9.75rem] shrink-0 py-1 text-sm"
+                  />
+                  <span className="text-xs text-gray-400" aria-hidden>
+                    –
+                  </span>
+                  <input
+                    id="admin-ds-primary-to"
+                    type="date"
+                    aria-label="To"
+                    value={filterIssueDateTo}
+                    min={filterIssueDateFrom || undefined}
+                    onChange={(e) => setFilterIssueDateTo(e.target.value)}
+                    className="input-field w-[9.75rem] shrink-0 py-1 text-sm"
+                  />
+                </>
+              )}
+              {dateFilterMode === PAYMENT_LOG_DATE_MODES.CREATED_DATE && (
+                <>
+                  <input
+                    id="admin-ds-created-from"
+                    type="date"
+                    aria-label="Issue date from"
+                    value={filterCreatedDateFrom}
+                    max={filterCreatedDateTo || undefined}
+                    onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
+                    className="input-field w-[9.75rem] shrink-0 py-1 text-sm"
+                  />
+                  <span className="text-xs text-gray-400" aria-hidden>
+                    –
+                  </span>
+                  <input
+                    id="admin-ds-created-to"
+                    type="date"
+                    aria-label="Issue date to"
+                    value={filterCreatedDateTo}
+                    min={filterCreatedDateFrom || undefined}
+                    onChange={(e) => setFilterCreatedDateTo(e.target.value)}
+                    className="input-field w-[9.75rem] shrink-0 py-1 text-sm"
+                  />
+                </>
+              )}
+              {(filterStatus ||
+                hasActiveDailySummaryListDateFilter({
+                  mode: dateFilterMode,
+                  month: filterIssueMonth,
+                  paymentFrom: filterIssueDateFrom,
+                  paymentTo: filterIssueDateTo,
+                  createdFrom: filterCreatedDateFrom,
+                  createdTo: filterCreatedDateTo,
+                }) ||
+                dateFilterMode !== DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE) && (
+                <button
+                  type="button"
+                  className="shrink-0 text-[11px] font-semibold text-primary-600 hover:underline sm:ms-0.5"
+                  onClick={() => {
+                    setFilterStatus('');
+                    setDateFilterMode(DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE);
+                    setFilterIssueMonth(defaultDailySummaryFilterMonth());
+                    setFilterIssueDateFrom('');
+                    setFilterIssueDateTo('');
+                    setFilterCreatedDateFrom('');
+                    setFilterCreatedDateTo('');
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
-          <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
-            <input
-              type="date"
-              value={filterDateTo}
-              min={filterDateFrom || undefined}
-              onChange={(e) => {
-                setFilterDateTo(e.target.value);
-                if (e.target.value) setFilterMonth('');
-              }}
-              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
-            />
-          </div>
-          <div className="min-w-0 w-full sm:w-auto">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
-            <input
-              type="month"
-              value={filterMonth}
-              max={manilaMonthYYYYMM()}
-              onChange={(e) => {
-                setFilterMonth(e.target.value);
-                if (e.target.value) {
-                  setFilterDateFrom('');
-                  setFilterDateTo('');
-                }
-              }}
-              className="input-field text-sm w-full sm:w-auto max-w-full min-h-[2.5rem]"
-            />
-          </div>
-          {(filterStatus || filterDateFrom || filterDateTo || filterMonth) && (
-            <button
-              type="button"
-              className="text-sm text-primary-600 hover:underline"
-              onClick={() => {
-                setFilterStatus('');
-                setFilterDateFrom('');
-                setFilterDateTo('');
-                setFilterMonth('');
-              }}
-            >
-              Clear filters
-            </button>
-          )}
         </div>
       )}
 

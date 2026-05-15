@@ -100,6 +100,75 @@ node scripts/diagnoseStudentInstallment.js --help
 - `--name`: Partial match on `full_name`; if multiple students match, script lists them and exits without querying profiles (narrow the name or use `--user-id`).
 - `--json`: Print a single JSON object instead of tables.
 
+### `repairPhaseInstallmentIssueDateMonotonic.js`
+
+Backfills **`invoicestbl.issue_date`** for phase installment invoices (rows whose **`remarks`** contain `TARGET_PHASE:N`) so that, within each **`installmentinvoiceprofiles_id`**, dates never go backwards when phases are sorted by **N** ascending. Use after fixing the AR enrollment code path, or to clean historical rows (e.g. Phase 2 dated before Phase 1).
+
+**Usage:**
+```bash
+cd backend
+
+# Preview only (default — no writes)
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js
+npm run repair:phase-installment-issue-dates
+
+# Only one invoice (loads its profile for phase order; applies at most that row)
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863
+npm run repair:phase-invoice-863
+
+# Apply updates
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --apply
+npm run repair:phase-installment-issue-dates -- --apply
+npm run repair:phase-invoice-863 -- --apply
+# Invoice 863 conflict (issue floor after due): preview then apply with extended due
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --extend-due-when-needed
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --extend-due-when-needed --apply
+# Phase 2 next billing cycle (issue 25th, due 5th of following month)
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --issue-date=2026-06-25 --due-date=2026-07-05
+node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --issue-date=2026-06-25 --due-date=2026-07-05 --apply
+```
+
+**Options:**
+- `--apply`: Run `UPDATE invoicestbl`. Without it, the script only prints planned changes.
+- `--invoice-id=N`: Restrict to invoice `N` only (full profile still scanned for monotonic rule).
+- `--extend-due-when-needed`: **Only with `--invoice-id`.** If the issue fix would be after `due_date`, also set `due_date` to the same day as the new `issue_date` (minimal change). Often **not** the same as the real “25th / 5th next month” cycle; prefer `--issue-date` / `--due-date` when you need the next cycle.
+- `--issue-date=YYYY-MM-DD` and `--due-date=YYYY-MM-DD`: **Together with `--invoice-id`**, set both fields on that row (e.g. Phase 2 = `2026-06-25` / `2026-07-05`). Incompatible with `--extend-due-when-needed`.
+- `--help`, `-h`: Usage text.
+
+Rows where the required floor would be **after** `due_date` are skipped and logged as a conflict.
+
+### `repairInstallmentQueueExplicitNextDates.js`
+
+Sets **`installmentinvoicestbl.next_generation_date`** and **`next_invoice_month`** for a single open queue row. The Generate Invoice modal and the **Next generation** / **Next month** list columns use these values (with the frontend deriving issue/due/month from the generation anchor).
+
+**Example (July / August anchor — confirm `profile_id` from your DB, e.g. via `diagnoseStudentInstallment.js`):**
+
+```bash
+cd backend
+node scripts/repairInstallmentQueueExplicitNextDates.js \
+  --profile-id=323 \
+  --next-generation-date=2026-07-25 \
+  --next-invoice-month=2026-08-01
+node scripts/repairInstallmentQueueExplicitNextDates.js \
+  --profile-id=323 \
+  --next-generation-date=2026-07-25 \
+  --next-invoice-month=2026-08-01 \
+  --apply
+```
+
+**Resolve by name + class instead of profile id:**
+
+```bash
+node scripts/repairInstallmentQueueExplicitNextDates.js \
+  --student-name="Princess Morianne" \
+  --class-name="VMM_Nursery" \
+  --next-generation-date=2026-07-25 \
+  --next-invoice-month=2026-08-01 \
+  --apply
+```
+
+**Options:** `--profile-id=N` **or** `--student-name=` + `--class-name=` (ILIKE substrings); **`--installmentinvoicedtl-id=N`** alone (or with `--profile-id` to verify); `--next-generation-date=YYYY-MM-DD`; `--next-invoice-month=YYYY-MM-DD`; `--apply`. If several open rows match the same profile, the script updates the **latest** (`installmentinvoicedtl_id` DESC) and prints a warning with the full list—use **`--installmentinvoicedtl-id=316`** to force one row.
+
 ### Installment invoice list / NULL `status` (migration `105`)
 
 If Finance **Installment Invoice Logs** missed students because only the first 100 API rows loaded, deploy the frontend/backend changes that paginate until all rows are fetched and return `pagination.total`.

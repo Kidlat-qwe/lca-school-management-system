@@ -30,7 +30,10 @@ const findOverlappingCashDepositSummary = async ({ branchId, startDate, endDate 
 
 /**
  * Returns the cash payments for [startDate, endDate] in a branch that are NOT
- * already covered by any Submitted/Approved cash deposit summary.
+ * already covered by any Submitted/Approved cash deposit summary **whose
+ * declared period (start_date–end_date) contains the payment's issue_date**
+ * and whose snapshot JSON lists that payment_id. This avoids orphan snapshot
+ * lines (e.g. payment date corrected after submit) blocking a new deposit.
  *
  * @param {object} args
  * @param {number} args.branchId
@@ -95,6 +98,8 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate, excludeSum
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
          WHERE c.branch_id = p.branch_id
            AND c.status IN ('Submitted', 'Approved')${excludeClause}
+           AND p.issue_date >= c.start_date::date
+           AND p.issue_date <= c.end_date::date
            AND deposited.payment_row ? 'payment_id'
            AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
            AND (deposited.payment_row->>'payment_id')::int = p.payment_id
@@ -305,6 +310,8 @@ router.get(
              ) deposited(payment_row)
              WHERE c.branch_id = p.branch_id
                AND c.status IN ('Submitted', 'Approved')
+               AND p.issue_date >= c.start_date::date
+               AND p.issue_date <= c.end_date::date
                AND deposited.payment_row ? 'payment_id'
                AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
                AND (deposited.payment_row->>'payment_id')::int = p.payment_id
@@ -426,6 +433,14 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('status')
       .optional()
       .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
@@ -462,6 +477,20 @@ router.get(
       const useRange = Boolean(dateFrom || dateTo);
       const legacyDate = !useRange && date ? date : null;
 
+      const createdDateFrom = req.query.created_date_from
+        ? String(req.query.created_date_from).trim().slice(0, 10)
+        : '';
+      const createdDateTo = req.query.created_date_to
+        ? String(req.query.created_date_to).trim().slice(0, 10)
+        : '';
+      const useCreatedRange = Boolean(createdDateFrom || createdDateTo);
+      if (useCreatedRange && createdDateFrom && createdDateTo && createdDateFrom > createdDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
+        });
+      }
+
       let sql = `
         SELECT c.cash_deposit_summary_id, c.branch_id,
                TO_CHAR(c.start_date, 'YYYY-MM-DD') AS start_date,
@@ -490,7 +519,18 @@ router.get(
         params.push(branch_id);
       }
 
-      if (useRange) {
+      if (useCreatedRange) {
+        if (createdDateFrom) {
+          pc++;
+          sql += ` AND c.created_at::date >= $${pc}::date`;
+          params.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          pc++;
+          sql += ` AND c.created_at::date <= $${pc}::date`;
+          params.push(createdDateTo);
+        }
+      } else if (useRange) {
         // Period overlap: include rows whose [start_date, end_date] window
         // intersects the requested [dateFrom, dateTo] range.
         if (dateTo) {
@@ -538,7 +578,18 @@ router.get(
         countParams.push(branch_id);
       }
 
-      if (useRange) {
+      if (useCreatedRange) {
+        if (createdDateFrom) {
+          cc++;
+          countSql += ` AND c.created_at::date >= $${cc}::date`;
+          countParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          cc++;
+          countSql += ` AND c.created_at::date <= $${cc}::date`;
+          countParams.push(createdDateTo);
+        }
+      } else if (useRange) {
         if (dateTo) {
           cc++;
           countSql += ` AND c.start_date <= $${cc}::date`;
@@ -583,7 +634,18 @@ router.get(
         submittedSql += ` AND c.branch_id = $${sc}`;
         submittedParams.push(branch_id);
       }
-      if (useRange) {
+      if (useCreatedRange) {
+        if (createdDateFrom) {
+          sc++;
+          submittedSql += ` AND c.created_at::date >= $${sc}::date`;
+          submittedParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          sc++;
+          submittedSql += ` AND c.created_at::date <= $${sc}::date`;
+          submittedParams.push(createdDateTo);
+        }
+      } else if (useRange) {
         if (dateTo) {
           sc++;
           submittedSql += ` AND c.start_date <= $${sc}::date`;
@@ -617,7 +679,18 @@ router.get(
         filteredSql += ` AND c.branch_id = $${fc}`;
         filteredParams.push(branch_id);
       }
-      if (useRange) {
+      if (useCreatedRange) {
+        if (createdDateFrom) {
+          fc++;
+          filteredSql += ` AND c.created_at::date >= $${fc}::date`;
+          filteredParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          fc++;
+          filteredSql += ` AND c.created_at::date <= $${fc}::date`;
+          filteredParams.push(createdDateTo);
+        }
+      } else if (useRange) {
         if (dateTo) {
           fc++;
           filteredSql += ` AND c.start_date <= $${fc}::date`;

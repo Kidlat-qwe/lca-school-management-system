@@ -18,6 +18,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import { buildPaymentLogDateParams, PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
@@ -64,6 +65,8 @@ const AdminFinancialDashboard = () => {
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
 
   const [metrics, setMetrics] = useState(null);
+  /** Same scope as admin Payment Logs main tab total (payable + tips, filterTotalLineAmount). */
+  const [totalPaymentsAmount, setTotalPaymentsAmount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // Default to the current Manila month so the dashboard shows "this month" on first paint
@@ -75,19 +78,48 @@ const AdminFinancialDashboard = () => {
   }, [userInfo]);
 
   const fetchDashboardData = async () => {
-    if (!adminBranchId) return;
+    if (!adminBranchId) {
+      setLoading(false);
+      setTotalPaymentsAmount(null);
+      return;
+    }
     try {
       setLoading(true);
       setError('');
-      const params = new URLSearchParams();
-      params.append('branch_id', String(adminBranchId));
+      const dashParams = new URLSearchParams();
+      dashParams.append('branch_id', String(adminBranchId));
       if (selectedMonth) {
-        params.append('month', selectedMonth);
+        dashParams.append('month', selectedMonth);
       }
-      const response = await apiRequest(`/dashboard?${params.toString()}`);
-      setMetrics(response.data);
+
+      const payParams = new URLSearchParams({ limit: '1', page: '1' });
+      payParams.set('branch_id', String(adminBranchId));
+      const monthKey = selectedMonth || CURRENT_MONTH;
+      const dateParams = buildPaymentLogDateParams({
+        mode: PAYMENT_LOG_DATE_MODES.MONTH,
+        month: monthKey,
+        paymentFrom: '',
+        paymentTo: '',
+        createdFrom: '',
+        createdTo: '',
+      });
+      Object.entries(dateParams).forEach(([k, v]) => payParams.set(k, v));
+      payParams.set('status', 'Completed');
+      payParams.set('exclude_approval_status', 'Returned,Rejected');
+
+      const [dashResponse, payResponse] = await Promise.all([
+        apiRequest(`/dashboard?${dashParams.toString()}`),
+        apiRequest(`/payments?${payParams.toString()}`),
+      ]);
+      setMetrics(dashResponse.data);
+      if (payResponse.filterTotalLineAmount != null && payResponse.filterTotalLineAmount !== undefined) {
+        setTotalPaymentsAmount(Number(payResponse.filterTotalLineAmount));
+      } else {
+        setTotalPaymentsAmount(0);
+      }
     } catch (err) {
       setError(err.message || 'Unable to load dashboard data right now.');
+      setTotalPaymentsAmount(null);
     } finally {
       setLoading(false);
     }
@@ -104,10 +136,6 @@ const AdminFinancialDashboard = () => {
   const invoiceTrend = useMemo(() => metrics?.invoice_trend || [], [metrics]);
   const invoiceStatus = useMemo(() => metrics?.invoice_status || [], [metrics]);
   const reservationStatus = useMemo(() => metrics?.reservation_status || [], [metrics]);
-
-  const totalInvoiceAmount = useMemo(() => {
-    return (invoiceStatus || []).reduce((sum, row) => sum + (Number(row.total_amount) || 0), 0);
-  }, [invoiceStatus]);
 
   const crossingProcedures = useMemo(
     () => metrics?.crossing_procedures || { total_violations: 0, violations: [] },
@@ -133,6 +161,19 @@ const AdminFinancialDashboard = () => {
       },
     [metrics]
   );
+
+  const totalPaymentsCount = useMemo(() => {
+    const v = Number(metrics?.payment_verification?.verified_count) || 0;
+    const u = Number(metrics?.payment_verification?.unverified_count) || 0;
+    return v + u;
+  }, [metrics]);
+
+  const totalPaymentsDisplay = useMemo(() => {
+    if (!adminBranchId) return '—';
+    if (loading && totalPaymentsAmount == null) return '…';
+    if (totalPaymentsAmount == null || Number.isNaN(Number(totalPaymentsAmount))) return '—';
+    return formatCurrency(totalPaymentsAmount);
+  }, [adminBranchId, loading, totalPaymentsAmount]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
@@ -186,10 +227,12 @@ const AdminFinancialDashboard = () => {
             iconName="users"
           />
           <StatsCard
-            title="Teachers (Branch)"
-            value={(totals.total_teachers || 0).toLocaleString()}
+            title="Total Payments"
+            value={totalPaymentsCount.toLocaleString()}
+            subtitle="Completed payments in selected month"
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-            iconName="academicCap"
+            iconName="currency"
+            onClick={() => navigate('/admin/payment-logs')}
           />
           <StatsCard
             title="Active Classes"
@@ -198,11 +241,11 @@ const AdminFinancialDashboard = () => {
             iconName="bookOpen"
           />
           <StatsCard
-            title="Total Invoice Amount"
-            value={formatCurrency(totalInvoiceAmount)}
-            subtitle="Sum by status: invoice balance plus tips from completed payments"
+            title="Total Payments"
+            value={totalPaymentsDisplay}
             accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
             iconName="creditCard"
+            onClick={() => navigate('/admin/payment-logs')}
           />
         </div>
 

@@ -1155,9 +1155,9 @@ router.get(
         }
       }
 
-      // Optional filter on the record-creation date (when the payment row was
-      // logged into the system, p.created_at). Distinct from the customer
-      // payment date above; surfaced as the "Date created" mode in the UI.
+      // Optional filter on payment issue date (p.issue_date). Same business date as
+      // the Payment Logs "Issue Date" column; query params remain created_date_from/to
+      // for backward compatibility with existing clients.
       const createdFrom = req.query.created_date_from
         ? String(req.query.created_date_from).trim().slice(0, 10)
         : '';
@@ -1173,12 +1173,12 @@ router.get(
         }
         if (createdFrom) {
           paramCount++;
-          sql += ` AND p.created_at::date >= $${paramCount}::date`;
+          sql += ` AND p.issue_date >= $${paramCount}::date`;
           params.push(createdFrom);
         }
         if (createdTo) {
           paramCount++;
-          sql += ` AND p.created_at::date <= $${paramCount}::date`;
+          sql += ` AND p.issue_date <= $${paramCount}::date`;
           params.push(createdTo);
         }
       }
@@ -1385,12 +1385,12 @@ router.get(
       if (createdFrom || createdTo) {
         if (createdFrom) {
           countParamCount++;
-          countSql += ` AND p.created_at::date >= $${countParamCount}::date`;
+          countSql += ` AND p.issue_date >= $${countParamCount}::date`;
           countParams.push(createdFrom);
         }
         if (createdTo) {
           countParamCount++;
-          countSql += ` AND p.created_at::date <= $${countParamCount}::date`;
+          countSql += ` AND p.issue_date <= $${countParamCount}::date`;
           countParams.push(createdTo);
         }
       }
@@ -1489,14 +1489,20 @@ router.get(
         countSql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
       }
 
-      const countResult = await query(countSql, countParams);
-      const total = parseInt(countResult.rows[0].total);
-
-      const sumSql = countSql.replace(
+      // acknowledgement_receiptstbl can produce multiple join rows per payment; COUNT/SUM must
+      // be per payment_id so pagination totals and line amounts match the visible row set.
+      const countInnerCore = countSql.replace(
         /SELECT COUNT\(\*\) as total/i,
-        'SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0)::numeric AS total_line_amount'
+        'SELECT p.payment_id, MAX(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) AS line_amt',
       );
-      const sumResult = await query(sumSql, countParams);
+      const countSqlDeduped = `SELECT COUNT(*)::bigint AS total FROM (${countInnerCore} GROUP BY p.payment_id) _cnt`;
+      const sumSqlDeduped = `SELECT COALESCE(SUM(line_amt), 0)::numeric AS total_line_amount FROM (${countInnerCore} GROUP BY p.payment_id) _sum`;
+
+      const [countResult, sumResult] = await Promise.all([
+        query(countSqlDeduped, countParams),
+        query(sumSqlDeduped, countParams),
+      ]);
+      const total = parseInt(countResult.rows[0].total, 10) || 0;
       const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
 
       res.json({
@@ -1704,12 +1710,12 @@ router.get(
       if (useCreatedDateRange) {
         if (createdFrom) {
           payPc++;
-          paySql += ` AND p.created_at::date >= $${payPc}::date`;
+          paySql += ` AND p.issue_date >= $${payPc}::date`;
           payParams.push(createdFrom);
         }
         if (createdTo) {
           payPc++;
-          paySql += ` AND p.created_at::date <= $${payPc}::date`;
+          paySql += ` AND p.issue_date <= $${payPc}::date`;
           payParams.push(createdTo);
         }
       }
@@ -1718,8 +1724,9 @@ router.get(
         paySql += ` AND p.status = 'Completed'
                     AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned', 'Rejected'))`;
       } else {
-        // "All" queue: same completed-payment scope as Financial Dashboard total revenue (payment date range).
-        paySql += ` AND p.status = 'Completed'`;
+        // "All" queue: completed payments Finance has not Returned/Rejected (matches Payment Logs + dashboard totals).
+        paySql += ` AND p.status = 'Completed'
+                    AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`;
       }
 
       if (pmFilter && pmFilter !== 'Acknowledgement Receipt') {
@@ -1841,12 +1848,12 @@ router.get(
       if (useCreatedDateRange) {
         if (createdFrom) {
           arPc++;
-          arSql += ` AND ar.created_at::date >= $${arPc}::date`;
+          arSql += ` AND ar.issue_date >= $${arPc}::date`;
           arParams.push(createdFrom);
         }
         if (createdTo) {
           arPc++;
-          arSql += ` AND ar.created_at::date <= $${arPc}::date`;
+          arSql += ` AND ar.issue_date <= $${arPc}::date`;
           arParams.push(createdTo);
         }
       }
@@ -1923,14 +1930,11 @@ router.get(
       const total = merged.length;
       const pageData = merged.slice(offset, offset + limitNum).map(({ sort_id, ...rest }) => rest);
 
-      // Financial Dashboard-style "total revenue" for the list header:
-      // - exclude Returned payments (finance returned-to-branch)
-      // - exclude unapplied AR rows (awaiting attachment), since those are tracked separately on dashboard
-      const filterTotalLineAmount = paymentRows.reduce((s, r) => {
-        const approval = String(r.approval_status ?? '').trim();
-        if (approval === 'Returned') return s;
-        return s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0);
-      }, 0);
+      // List header total: payment rows only (unapplied AR rows are omitted; use AR dashboard cards for those).
+      const filterTotalLineAmount = paymentRows.reduce(
+        (s, r) => s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0),
+        0,
+      );
 
       return res.json({
         success: true,
@@ -1951,35 +1955,69 @@ router.get(
 
 /**
  * GET /api/sms/payments/cash-deposit-summary
- * All Cash payments (payment_method = 'Cash') in an issue_date range
- * (inclusive) used by the branch admin's "Deposit Cash" submission flow.
- * Restricted to literal physical Cash because the deposit feature reconciles
- * cash on hand only; non-cash methods (online banking, e-wallets, credit
- * card) are already digital and have no cash to deposit.
- * Non-superadmin users are limited to their branch. Totals use Completed
- * payments only for the "deposit" amount.
+ * Cash payment lines for the branch admin "Deposit Cash" preview, filtered by
+ * the same **payment date** semantics as Payment Logs (`payment_date_from` /
+ * `payment_date_to` map to `PAYMENT_LOG_BUSINESS_DATE_SQL` / `paymenttbl.issue_date`).
+ *
+ * Pass **either** `payment_date_from` + `payment_date_to` **or** `start_date` +
+ * `end_date` (legacy aliases; same inclusive range). If both pairs are sent,
+ * `payment_date_*` wins.
+ *
+ * Restricted to Cash; excludes finance-rejected rows; splits pending vs
+ * `already_deposited_payments` using cash_deposit_summary snapshots.
  */
 router.get(
   '/cash-deposit-summary',
   [
-    queryValidator('start_date').isISO8601().withMessage('start_date must be YYYY-MM-DD'),
-    queryValidator('end_date').isISO8601().withMessage('end_date must be YYYY-MM-DD'),
+    queryValidator('start_date').optional().isISO8601().withMessage('start_date must be YYYY-MM-DD'),
+    queryValidator('end_date').optional().isISO8601().withMessage('end_date must be YYYY-MM-DD'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { start_date: startDate, end_date: endDate } = req.query;
-      const start = String(startDate).trim().slice(0, 10);
-      const end = String(endDate).trim().slice(0, 10);
-      if (start > end) {
+      const sliceYmd = (v) => (v != null ? String(v).trim().slice(0, 10) : '');
+      const payFrom = sliceYmd(req.query.payment_date_from);
+      const payTo = sliceYmd(req.query.payment_date_to);
+      const legacyStart = sliceYmd(req.query.start_date);
+      const legacyEnd = sliceYmd(req.query.end_date);
+      const ymdOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+      let start;
+      let end;
+      if (ymdOk(payFrom) && ymdOk(payTo)) {
+        start = payFrom;
+        end = payTo;
+      } else if (ymdOk(legacyStart) && ymdOk(legacyEnd)) {
+        start = legacyStart;
+        end = legacyEnd;
+      } else {
         return res.status(400).json({
           success: false,
-          message: 'start_date must be on or before end_date',
+          message:
+            'Provide payment_date_from and payment_date_to (same as Payment Logs), or start_date and end_date (YYYY-MM-DD each).',
         });
       }
 
-      let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
+      if (start > end) {
+        return res.status(400).json({
+          success: false,
+          message: 'Payment date range: from must be on or before to.',
+        });
+      }
+
+      const paymentDateSql = PAYMENT_LOG_BUSINESS_DATE_SQL;
+
+      const selectCols = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
                         p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount,
+                        COALESCE(p.tip_amount, 0) AS tip_amount,
                         TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
@@ -1996,45 +2034,78 @@ router.get(
                         i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
-                        ar.prospect_student_name as ar_prospect_student_name
-                 FROM paymenttbl p
+                        ar.prospect_student_name as ar_prospect_student_name`;
+
+      const joins = `FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
                  LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
-                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id
-                 WHERE p.issue_date >= $1::date AND p.issue_date <= $2::date
+                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id`;
+
+      const baseWhere = `WHERE ${paymentDateSql} >= $1::date AND ${paymentDateSql} <= $2::date
                    AND LOWER(TRIM(p.payment_method)) = 'cash'
-                   AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
-                   AND NOT EXISTS (
+                   AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`;
+
+      const notYetDepositedClause = `AND NOT EXISTS (
                      SELECT 1
                      FROM cash_deposit_summarytbl c
                      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
                      WHERE c.branch_id = p.branch_id
                        AND c.status IN ('Submitted', 'Approved')
+                       AND p.issue_date >= c.start_date::date
+                       AND p.issue_date <= c.end_date::date
                        AND deposited.payment_row ? 'payment_id'
                        AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
                        AND (deposited.payment_row->>'payment_id')::int = p.payment_id
                    )`;
+
       const params = [start, end];
       let paramCount = 2;
-
+      let branchClause = '';
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
-        sql += ` AND p.branch_id = $${paramCount}`;
+        branchClause = ` AND p.branch_id = $${paramCount}`;
         params.push(req.user.branchId);
       }
 
-      sql += ` ORDER BY p.issue_date ASC, p.payment_id ASC`;
+      let sql = `${selectCols}
+                 ${joins}
+                 ${baseWhere}
+                 ${notYetDepositedClause}${branchClause}
+                 ORDER BY ${paymentDateSql} ASC, p.payment_id ASC`;
 
       const result = await query(sql, params);
 
-      const payments = [];
-      let totalCompleted = 0;
-      let totalAll = 0;
-      let completedCount = 0;
+      let sqlAlready = `${selectCols},
+                        dep.cash_deposit_summary_id AS deposit_summary_id,
+                        dep.deposit_status AS deposit_summary_status,
+                        dep.deposit_start AS deposit_summary_start_date,
+                        dep.deposit_end AS deposit_summary_end_date
+                 ${joins}
+                 INNER JOIN LATERAL (
+                   SELECT c.cash_deposit_summary_id,
+                          c.status AS deposit_status,
+                          TO_CHAR(c.start_date, 'YYYY-MM-DD') AS deposit_start,
+                          TO_CHAR(c.end_date, 'YYYY-MM-DD') AS deposit_end
+                   FROM cash_deposit_summarytbl c
+                   CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
+                   WHERE c.branch_id = p.branch_id
+                     AND c.status IN ('Submitted', 'Approved')
+                     AND p.issue_date >= c.start_date::date
+                     AND p.issue_date <= c.end_date::date
+                     AND deposited.payment_row ? 'payment_id'
+                     AND (deposited.payment_row->>'payment_id') ~ '^[0-9]+$'
+                     AND (deposited.payment_row->>'payment_id')::int = p.payment_id
+                   ORDER BY c.submitted_at DESC NULLS LAST, c.cash_deposit_summary_id DESC
+                   LIMIT 1
+                 ) dep ON true
+                 ${baseWhere}${branchClause}
+                 ORDER BY ${paymentDateSql} ASC, p.payment_id ASC`;
 
-      for (const row of result.rows) {
+      const alreadyResult = await query(sqlAlready, params);
+
+      const mapCashDepositRow = (row) => {
         let studentName = row.student_name;
         let studentEmail = row.student_email;
         const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
@@ -2043,31 +2114,53 @@ router.get(
           studentName = prospectName;
           studentEmail = null;
         }
-
-        const amount = parseFloat(row.payable_amount) || 0;
-        totalAll += amount;
-        if (row.status === 'Completed') {
-          totalCompleted += amount;
-          completedCount += 1;
-        }
-
-        payments.push({
+        const out = {
           ...row,
           student_name: studentName,
           student_email: studentEmail,
-        });
+        };
+        if (row.deposit_summary_id != null) {
+          out.deposit_summary_id = row.deposit_summary_id;
+          out.deposit_summary_status = row.deposit_summary_status;
+          out.deposit_summary_start_date = row.deposit_summary_start_date;
+          out.deposit_summary_end_date = row.deposit_summary_end_date;
+        }
+        return out;
+      };
+
+      const payments = [];
+      let totalCompleted = 0;
+      let totalAll = 0;
+      let completedCount = 0;
+
+      for (const row of result.rows) {
+        const mapped = mapCashDepositRow(row);
+        const lineAmount =
+          (parseFloat(mapped.payable_amount) || 0) + (parseFloat(mapped.tip_amount) || 0);
+        totalAll += lineAmount;
+        if (mapped.status === 'Completed') {
+          totalCompleted += lineAmount;
+          completedCount += 1;
+        }
+        payments.push(mapped);
       }
+
+      const alreadyDepositedPayments = (alreadyResult.rows || []).map((row) => mapCashDepositRow(row));
 
       res.json({
         success: true,
         data: {
           start_date: start,
           end_date: end,
+          payment_date_from: start,
+          payment_date_to: end,
           payment_count: payments.length,
           completed_cash_count: completedCount,
           total_cash_all_amount: Math.round(totalAll * 100) / 100,
           total_cash_deposit_amount: Math.round(totalCompleted * 100) / 100,
           payments,
+          already_deposited_payments: alreadyDepositedPayments,
+          already_deposited_count: alreadyDepositedPayments.length,
         },
       });
     } catch (error) {

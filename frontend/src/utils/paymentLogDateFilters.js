@@ -7,9 +7,9 @@
  *   - "month"        → single YYYY-MM picker (defaults to current Manila month).
  *                      Translated to payment_date_from / payment_date_to.
  *   - "paymentDate"  → explicit From / To range on payment_date (p.issue_date).
- *   - "createdDate"  → explicit From / To range on the record-created date
- *                      (p.created_at, served by the new `created_date_from/to`
- *                      backend params).
+ *   - "createdDate"  → explicit From / To range on payment **issue date** (same column as
+ *                      the table header "Issue Date"; API params `created_date_from/to`
+ *                      filter `p.issue_date` / `ar.issue_date` for parity with this label).
  *
  * Keeping the mode <-> param translation in one place avoids drift between
  * the four pages and the export-paths.
@@ -26,7 +26,7 @@ export const PAYMENT_LOG_DATE_MODES = Object.freeze({
 export const PAYMENT_LOG_DATE_MODE_LABELS = Object.freeze({
   [PAYMENT_LOG_DATE_MODES.MONTH]: 'Month',
   [PAYMENT_LOG_DATE_MODES.PAYMENT_DATE]: 'Payment date',
-  [PAYMENT_LOG_DATE_MODES.CREATED_DATE]: 'Date created',
+  [PAYMENT_LOG_DATE_MODES.CREATED_DATE]: 'Issue Date',
 });
 
 /**

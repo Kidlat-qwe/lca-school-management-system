@@ -15,6 +15,12 @@ import path from 'path';
 
 const router = express.Router();
 
+/** Strict YYYY-MM-DD from query string; strips garbage (e.g. devtools artifacts) after the date. */
+const parseYmdQuery = (raw) => {
+  const s = raw != null ? String(raw).trim().slice(0, 10) : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+};
+
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
@@ -29,10 +35,10 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
+    queryValidator('payment_date_from').optional().isISO8601().withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to').optional().isISO8601().withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
     queryValidator('issue_date_to').optional().isISO8601().withMessage('issue_date_to must be YYYY-MM-DD'),
-    queryValidator('created_date_from').optional().isISO8601().withMessage('created_date_from must be YYYY-MM-DD'),
-    queryValidator('created_date_to').optional().isISO8601().withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
@@ -123,12 +129,12 @@ router.get(
       }
 
       const { branch_id, status } = req.query;
-      const issueDateFrom = req.query.issue_date_from ? String(req.query.issue_date_from).trim().slice(0, 10) : '';
-      const issueDateTo = req.query.issue_date_to ? String(req.query.issue_date_to).trim().slice(0, 10) : '';
+      const paymentDateFrom = parseYmdQuery(req.query.payment_date_from);
+      const paymentDateTo = parseYmdQuery(req.query.payment_date_to);
+      const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
+      const issueDateFrom = parseYmdQuery(req.query.issue_date_from);
+      const issueDateTo = parseYmdQuery(req.query.issue_date_to);
       const useIssueRange = Boolean(issueDateFrom || issueDateTo);
-      const createdDateFrom = req.query.created_date_from ? String(req.query.created_date_from).trim().slice(0, 10) : '';
-      const createdDateTo = req.query.created_date_to ? String(req.query.created_date_to).trim().slice(0, 10) : '';
-      const useCreatedRange = Boolean(createdDateFrom || createdDateTo);
 
       let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
@@ -174,6 +180,35 @@ router.get(
         params.push(status);
       }
 
+      if (usePaymentRange) {
+        if (paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
+          return res.status(400).json({
+            success: false,
+            message: 'payment_date_from must be on or before payment_date_to',
+          });
+        }
+        const paymentDateClauses = [
+          `p.invoice_id = i.invoice_id`,
+          `p.status = 'Completed'`,
+          `COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
+        ];
+        if (paymentDateFrom) {
+          paramCount++;
+          paymentDateClauses.push(`p.issue_date >= $${paramCount}::date`);
+          params.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          paramCount++;
+          paymentDateClauses.push(`p.issue_date <= $${paramCount}::date`);
+          params.push(paymentDateTo);
+        }
+        sql += ` AND EXISTS (
+          SELECT 1
+          FROM paymenttbl p
+          WHERE ${paymentDateClauses.join(' AND ')}
+        )`;
+      }
+
       if (useIssueRange) {
         if (issueDateFrom && issueDateTo && issueDateFrom > issueDateTo) {
           return res.status(400).json({
@@ -190,25 +225,6 @@ router.get(
           paramCount++;
           sql += ` AND i.issue_date <= $${paramCount}::date`;
           params.push(issueDateTo);
-        }
-      }
-
-      if (useCreatedRange) {
-        if (createdDateFrom && createdDateTo && createdDateFrom > createdDateTo) {
-          return res.status(400).json({
-            success: false,
-            message: 'created_date_from must be on or before created_date_to',
-          });
-        }
-        if (createdDateFrom) {
-          paramCount++;
-          sql += ` AND i.created_at::date >= $${paramCount}::date`;
-          params.push(createdDateFrom);
-        }
-        if (createdDateTo) {
-          paramCount++;
-          sql += ` AND i.created_at::date <= $${paramCount}::date`;
-          params.push(createdDateTo);
         }
       }
 
@@ -2470,9 +2486,16 @@ router.get(
 
       // Get invoices where the student is linked
       const invoicesResult = await query(
-        `SELECT DISTINCT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
-                TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
-                TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date, 
+        `SELECT DISTINCT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks,
+                TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date,
+                TO_CHAR(i.due_date, 'YYYY-MM-DD') as due_date,
+                (
+                  SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
+                  FROM paymenttbl p
+                  WHERE p.invoice_id = i.invoice_id
+                    AND p.status = 'Completed'
+                    AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+                ) AS last_payment_date,
                 i.created_by,
                 i.invoice_ar_number
          FROM invoicestbl i

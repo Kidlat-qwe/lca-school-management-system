@@ -3,6 +3,12 @@ import { query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
+import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
+import {
+  ackReceiptHasPairedAckReceiptIdColumn,
+  AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
+  AR_LIST_LINE_AMOUNT_SUM_SQL,
+} from '../lib/ackReceiptPairedColumn.js';
 
 const router = express.Router();
 
@@ -578,6 +584,12 @@ router.get(
       const branchParams = branchFilter ? [branchFilter] : [];
       const branchWhereClause = branchFilter ? 'WHERE b.branch_id = $1' : '';
 
+      const hidePairedLeaders = await ackReceiptHasPairedAckReceiptIdColumn(query);
+      const arLineSumExpr = hidePairedLeaders
+        ? AR_LIST_LINE_AMOUNT_SUM_SQL
+        : 'COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)';
+      const arExtraWhere = hidePairedLeaders ? AR_LIST_EXCLUDE_PAIRED_LEADER_SQL : '';
+
       const [branchesResult, branchMetricsResult, salesTrendResult] = await Promise.all([
         query(
           `
@@ -597,54 +609,35 @@ router.get(
               FROM branchestbl b
               ${branchWhereClause}
             ),
-            daily_enrolled_students AS (
-              SELECT DISTINCT
-                c.branch_id,
-                cs.student_id
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
-            ),
             new_enrollees AS (
               SELECT
-                des.branch_id,
-                COUNT(*)::bigint AS new_enrollees
-              FROM daily_enrolled_students des
-              WHERE NOT EXISTS (
-                SELECT 1
-                FROM paymenttbl p_hist
-                WHERE p_hist.student_id = des.student_id
-                  AND p_hist.status = 'Completed'
-                  AND COALESCE(p_hist.approval_status, 'Pending') <> 'Rejected'
-                  AND p_hist.issue_date < $${branchParams.length + 1}::date
-              )
-              GROUP BY des.branch_id
+                c.branch_id,
+                COUNT(DISTINCT cs.student_id)::bigint AS new_enrollees
+              FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE cs.program_enrollment_status = 'new'
+                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
+              GROUP BY c.branch_id
             ),
             daily_sales AS (
               SELECT
                 p.branch_id,
                 COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS daily_sales_amount
               FROM paymenttbl p
-              LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-              LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
               WHERE p.status = 'Completed'
-                AND COALESCE(ar.issue_date, p.issue_date) = $${branchParams.length + 1}::date
-                AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+                AND p.issue_date = $${branchParams.length + 1}::date
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               GROUP BY p.branch_id
             ),
             ar_sales AS (
-              -- Only count acknowledgement receipts that have already cleared
-              -- finance verification. Submitted, Pending, Returned and Rejected
-              -- acknowledgement receipts must NOT contribute to dashboard totals.
               SELECT
                 ar.branch_id,
                 COUNT(*)::bigint AS ar_sales_count,
-                COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_sales_amount
+                COALESCE(SUM(${arLineSumExpr}), 0) AS ar_sales_amount
               FROM acknowledgement_receiptstbl ar
               WHERE ar.issue_date = $${branchParams.length + 1}::date
-                AND COALESCE(ar.status, 'Submitted') IN ('Verified', 'Paid')
-                AND ar.payment_id IS NULL
-                AND ar.invoice_id IS NULL
+                AND (ar.status IS NULL OR ar.status <> 'Returned')
+                ${arExtraWhere}
               GROUP BY ar.branch_id
             ),
             merchandise_release AS (
@@ -663,24 +656,19 @@ router.get(
               ) AS item(merchandise_id INTEGER, quantity TEXT) ON TRUE
               WHERE p.status = 'Completed'
                 AND p.issue_date = $${branchParams.length + 1}::date
-                AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
                 AND ar.ar_type = 'Merchandise'
               GROUP BY p.branch_id
             ),
             re_enrollment AS (
               SELECT
-                des.branch_id,
-                COUNT(*)::bigint AS re_enrollment_count
-              FROM daily_enrolled_students des
-              WHERE EXISTS (
-                SELECT 1
-                FROM paymenttbl p_hist
-                WHERE p_hist.student_id = des.student_id
-                  AND p_hist.status = 'Completed'
-                  AND COALESCE(p_hist.approval_status, 'Pending') <> 'Rejected'
-                  AND p_hist.issue_date < $${branchParams.length + 1}::date
-              )
-              GROUP BY des.branch_id
+                c.branch_id,
+                COUNT(DISTINCT cs.student_id)::bigint AS re_enrollment_count
+              FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE cs.program_enrollment_status IN ('re_enrolled', 'upsell')
+                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
+              GROUP BY c.branch_id
             ),
             dropped_unenrolled AS (
               SELECT
@@ -714,7 +702,7 @@ router.get(
               FROM paymenttbl p
               WHERE p.status = 'Completed'
                 AND p.issue_date = $${branchParams.length + 1}::date
-                AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Rejected'))
+                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Approved', 'Rejected', 'Returned')
               GROUP BY p.branch_id
             ),
             ar_verified AS (
@@ -779,18 +767,16 @@ router.get(
         query(
           `
             SELECT
-              COALESCE(ar.issue_date, p.issue_date)::text AS issue_date,
+              p.issue_date::text AS issue_date,
               COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total_amount
             FROM paymenttbl p
-            LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-            LEFT JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
             WHERE p.status = 'Completed'
-              AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
-              AND COALESCE(ar.issue_date, p.issue_date) >= $${branchParams.length + 1}::date - INTERVAL '6 days'
-              AND COALESCE(ar.issue_date, p.issue_date) <= $${branchParams.length + 1}::date
+              AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
+              AND p.issue_date >= $${branchParams.length + 1}::date - INTERVAL '6 days'
+              AND p.issue_date <= $${branchParams.length + 1}::date
               ${branchFilter ? 'AND p.branch_id = $1' : ''}
-            GROUP BY COALESCE(ar.issue_date, p.issue_date)
-            ORDER BY COALESCE(ar.issue_date, p.issue_date) ASC
+            GROUP BY p.issue_date
+            ORDER BY p.issue_date ASC
           `,
           [...branchParams, summaryDate]
         ),
@@ -928,6 +914,43 @@ router.get(
       });
     } catch (error) {
       console.error('Error fetching daily operational dashboard:', error);
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/monthly-operational',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('summary_month').optional().matches(/^\d{4}-\d{2}$/).withMessage('summary_month must be YYYY-MM'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const isAdmin = req.user.userType === 'Admin';
+      const branchFilter = isAdmin
+        ? (req.user.branchId || null)
+        : (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null);
+      const summaryMonth = req.query.summary_month || getCurrentManilaMonthKey();
+      const parsed = parseMonthRange(summaryMonth);
+      if (!parsed) {
+        return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+      }
+      if (parsed.key > getCurrentManilaMonthKey()) {
+        return res.status(400).json({ success: false, message: 'summary_month cannot be in the future' });
+      }
+      const data = await loadMonthlyOperationalDashboardPayload({
+        branchFilter,
+        summaryMonth,
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error?.message === 'INVALID_MONTH') {
+        return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+      }
+      console.error('Error fetching monthly operational dashboard:', error);
       next(error);
     }
   }
