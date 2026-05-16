@@ -315,7 +315,7 @@ const StudentInvoice = () => {
     if (dateFilterMode === DATE_FILTER_MODES.MONTH) {
       const range = getMonthRange(filterIssueMonth);
       matchesDate = range.from || range.to
-        ? isYmdInRange(invoice.last_payment_date, range.from, range.to)
+        ? isYmdInRange(invoice.issue_date, range.from, range.to)
         : true;
     } else if (dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE) {
       matchesDate = isYmdInRange(invoice.last_payment_date, filterPaymentDateFrom, filterPaymentDateTo);

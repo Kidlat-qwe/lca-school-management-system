@@ -1,3 +1,5 @@
+import { PROGRAM_ENROLLMENT_STATUS_ITEMS } from '../../utils/programEnrollmentStatus';
+
 const TAB_STUDENT_STATUS = 'student_status';
 const TAB_PROGRAM_PAYMENT_STATUS = 'program_payment_status';
 const TAB_PROGRAM_ENROLLMENT_STATUS = 'program_enrollment_status';
@@ -43,50 +45,7 @@ const LEGEND_BY_TAB = {
       description: 'Invoice has been fully paid.',
     },
   ],
-  [TAB_PROGRAM_ENROLLMENT_STATUS]: [
-    {
-      key: 'reserved',
-      label: 'Reserved',
-      tone: 'bg-amber-100 text-amber-800',
-      description: 'Slot is reserved but enrollment is not finalized yet.',
-    },
-    {
-      key: 'pending_enrollment',
-      label: 'Pending enrollment',
-      tone: 'bg-amber-100 text-amber-800',
-      description: 'Enrollment processing is ongoing (requirements/payment pending).',
-    },
-    {
-      key: 'new',
-      label: 'New',
-      tone: 'bg-green-100 text-green-800',
-      description: 'Student enrolled for the first time.',
-    },
-    {
-      key: 're_enrolled',
-      label: 'Re-enrolled',
-      tone: 'bg-green-100 text-green-800',
-      description: 'Returning student enrolled again.',
-    },
-    {
-      key: 'upsell',
-      label: 'Upsell',
-      tone: 'bg-green-100 text-green-800',
-      description: 'Student moved to an additional or higher program.',
-    },
-    {
-      key: 'dropped',
-      label: 'Dropped',
-      tone: 'bg-gray-100 text-gray-800',
-      description: 'Student was removed before completing the program.',
-    },
-    {
-      key: 'completed',
-      label: 'Completed',
-      tone: 'bg-green-100 text-green-800',
-      description: 'Student completed the enrolled program.',
-    },
-  ],
+  [TAB_PROGRAM_ENROLLMENT_STATUS]: PROGRAM_ENROLLMENT_STATUS_ITEMS,
 };
 
 const StatusLegend = ({ tab }) => {

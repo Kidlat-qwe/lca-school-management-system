@@ -53,7 +53,7 @@ async function main() {
          WHERE student_id = $1
            AND class_id = $2
            AND phase_number = $3
-           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
            AND removed_at IS NULL
          LIMIT 1`,
         [student_id, class_id, target_phase]

@@ -8,8 +8,23 @@ import { insertInvoiceWithArNumber } from './invoiceArNumber.js';
 const INV_DESCRIPTION_PATTERN = /^INV-\d+$/i;
 
 const parseTargetPhase = (remarks) => {
-  const match = String(remarks || '').match(/TARGET_PHASE:(\d+)/i);
-  return match ? parseInt(match[1], 10) : null;
+  const text = String(remarks || '');
+  const targetMatch = text.match(/TARGET_PHASE:(\d+)/i);
+  if (targetMatch) return parseInt(targetMatch[1], 10);
+
+  const rejoinMatch = text.match(/REJOIN_PHASE:(\d+)/i);
+  if (rejoinMatch) return parseInt(rejoinMatch[1], 10);
+
+  const startMatch = text.match(/PHASE_START:(\d+)/i);
+  const endMatch = text.match(/PHASE_END:(\d+)/i);
+  if (startMatch) {
+    const start = parseInt(startMatch[1], 10);
+    const end = endMatch ? parseInt(endMatch[1], 10) : start;
+    if (Number.isFinite(start) && Number.isFinite(end) && start === end) {
+      return start;
+    }
+  }
+  return null;
 };
 
 const isMeaningfulInvoiceDescription = (invoiceRow) => {

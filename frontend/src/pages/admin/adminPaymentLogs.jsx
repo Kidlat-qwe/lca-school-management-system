@@ -2033,7 +2033,7 @@ const AdminPaymentLogs = () => {
 
             <div className="px-5 py-3 border-t border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <p className="text-xs text-gray-500">
-                After you confirm this period, submit it so Superadmin can review the actual office cash deposit.
+                After you confirm this period, submit it for Superfinance to verify the office cash deposit.
               </p>
               <div className="flex justify-end gap-2">
                 <button
@@ -3313,7 +3313,7 @@ const AdminPaymentLogs = () => {
                     Please complete the <span className="font-semibold">Reference Number</span> and{' '}
                     <span className="font-semibold">Deposit Proof Image</span> in the form below,
                     then click <span className="font-semibold">Submit for Confirmation</span> so
-                    Superadmin can verify the office cash deposit.
+                    Superfinance will verify the office cash deposit.
                   </p>
                   {thresholdAlert.startDate && thresholdAlert.endDate && (
                     <p className="mt-2 text-sm text-gray-500">

@@ -6,6 +6,7 @@ export const parseDailySummaryPaymentsResponse = (res) => {
   const d = res?.data;
   if (d && typeof d === 'object' && !Array.isArray(d) && Array.isArray(d.payments)) {
     return {
+      summary: d.summary || null,
       payments: d.payments || [],
       arReceipts: d.ar_receipts || [],
       totals: d.totals || null,
@@ -21,6 +22,7 @@ export const parseDailySummaryPaymentsResponse = (res) => {
     };
   }
   return {
+    summary: null,
     payments: [],
     arReceipts: [],
     totals: null,
@@ -33,6 +35,7 @@ export const parseCashDepositPaymentsResponse = (res) => {
   const d = res?.data;
   if (d && typeof d === 'object' && !Array.isArray(d) && Array.isArray(d.payments)) {
     return {
+      summary: d.summary || null,
       payments: d.payments || [],
       totals: d.totals || null,
       submittedSnapshot: d.submitted_snapshot || null,
@@ -41,5 +44,5 @@ export const parseCashDepositPaymentsResponse = (res) => {
   if (Array.isArray(d)) {
     return { payments: d, totals: null, submittedSnapshot: null };
   }
-  return { payments: [], totals: null, submittedSnapshot: null };
+  return { summary: null, payments: [], totals: null, submittedSnapshot: null };
 };

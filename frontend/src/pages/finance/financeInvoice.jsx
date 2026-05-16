@@ -1833,11 +1833,18 @@ const FinanceInvoice = () => {
                           </span>
                         )}
                       </div>
-                      {(invoice.display_description || invoice.invoice_description) && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          {(invoice.display_description || invoice.invoice_description).replace(/\s*-\s*AR\s+[A-Za-z0-9-]+/i, '')}
-                        </div>
-                      )}
+                      {(() => {
+                        const invLabel = `INV-${invoice.invoice_id}`;
+                        const secondary = String(
+                          invoice.display_description || invoice.invoice_description || ''
+                        )
+                          .replace(/\s*-\s*AR\s+[A-Za-z0-9-]+/i, '')
+                          .trim();
+                        if (!secondary || secondary.toUpperCase() === invLabel.toUpperCase()) {
+                          return null;
+                        }
+                        return <div className="text-xs text-gray-500 mt-1">{secondary}</div>;
+                      })()}
                       {invoice.reservation && (
                         <div className="mt-2 flex items-center gap-2">
                           <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 border border-blue-200">

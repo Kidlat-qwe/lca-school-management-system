@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
+import { formatProgramEnrollmentStatus } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 
 /**
@@ -54,6 +55,9 @@ const statusBadgeClass = (status) => {
     case 'partially paid':
       return 'bg-blue-50 text-blue-700 border border-blue-200';
     default:
+      if (String(status || '').toLowerCase().includes('skipped')) {
+        return 'bg-slate-100 text-slate-700 border border-slate-200';
+      }
       return 'bg-blue-50 text-blue-700 border border-blue-200';
   }
 };
@@ -387,7 +391,22 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     const paidDisplay = paid + phaseStartOffset;
     const generatedDisplay = generated + phaseStartOffset;
     const percent = Math.min(100, Math.max(0, Math.round((paid / reference) * 100)));
-    const complete = total != null && total > 0 ? paid >= total : false;
+    const denomPlan =
+      totals?.plan_slots_total != null && totals.plan_slots_total > 0
+        ? Number(totals.plan_slots_total)
+        : total != null && total > 0
+          ? total
+          : phases.length || 0;
+    const addressed =
+      totals?.plan_slots_addressed != null
+        ? Number(totals.plan_slots_addressed)
+        : phases.filter((p) => p.plan_slot_addressed).length;
+    const planComplete =
+      totals?.plan_complete === true ||
+      (denomPlan > 0 && addressed >= denomPlan);
+    const planPercent =
+      denomPlan > 0 ? Math.min(100, Math.round((addressed / denomPlan) * 100)) : 0;
+    const complete = planComplete;
     return {
       total,
       generated,
@@ -395,13 +414,24 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
       paidDisplay,
       generatedDisplay,
       percent,
+      planPercent,
+      addressed,
+      denomPlan,
+      planComplete,
       complete,
       denominator,
     };
-  }, [profile, phases, phaseStartOffset]);
+  }, [profile, phases, phaseStartOffset, totals]);
 
   /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
   const firstPayAction = useMemo(() => {
+    const priorPlanSlotsOk = (upToIndex) =>
+      phases.slice(0, upToIndex).every((prev) => {
+        if (prev.plan_slot_addressed === true) return true;
+        const s = String(prev.status || '').toLowerCase();
+        return s.includes('skipped');
+      });
+
     for (let i = 0; i < phases.length; i += 1) {
       const p = phases[i];
       const out =
@@ -413,11 +443,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
       if (p.is_generated && p.invoice_id && !cancelled && st !== 'paid' && out > 0.009) {
         return { index: i, mode: 'invoice', outstanding: out };
       }
-      if (!p.is_generated && p.status === 'Not Generated') {
-        const prevPaid = phases.slice(0, i).every(
-          (prev) => String(prev.status || '').toLowerCase() === 'paid',
-        );
-        if (prevPaid) {
+      const notGen = p.status === 'Not Generated';
+      if (!p.is_generated && notGen) {
+        if (priorPlanSlotsOk(i)) {
           return { index: i, mode: 'advance' };
         }
         return null;
@@ -493,6 +521,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                 <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm font-medium text-gray-800">
                   <span>
                     <span className="text-emerald-700 font-semibold">
+                      {phaseProgress.addressed}
+                    </span>
+                    {' / '}
+                    {phaseProgress.denomPlan} phases complete
+                  </span>
+                  <span>
+                    <span className="text-emerald-700 font-semibold">
                       {phaseProgress.paidDisplay}
                     </span>
                     {' / '}
@@ -505,7 +540,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                     {' / '}
                     {phaseProgress.denominator} generated
                   </span>
-                  {phaseProgress.complete && (
+                  {phaseProgress.planComplete && (
                     <span className="text-xs font-semibold text-green-700">
                       Completed
                     </span>
@@ -516,13 +551,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                   role="progressbar"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={phaseProgress.percent}
+                  aria-valuenow={phaseProgress.planPercent}
                 >
                   <div
                     className={`h-full rounded-full transition-all ${
-                      phaseProgress.complete ? 'bg-emerald-500' : 'bg-blue-500'
+                      phaseProgress.planComplete ? 'bg-emerald-500' : 'bg-blue-500'
                     }`}
-                    style={{ width: `${phaseProgress.percent}%` }}
+                    style={{ width: `${phaseProgress.planPercent}%` }}
                   />
                 </div>
               </div>
@@ -619,10 +654,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                 WebkitOverflowScrolling: 'touch',
               }}
             >
-              <table style={{ width: '100%', minWidth: '860px' }} className="divide-y divide-gray-200">
+              <table style={{ width: '100%', minWidth: '1000px' }} className="divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Phase</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Enrollment</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Billing</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Inv. ID</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">AR#</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Issued</th>
@@ -637,7 +674,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {phases.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-sm text-gray-500">
+                      <td colSpan={12} className="px-3 py-8 text-center text-sm text-gray-500">
                         No phase records found.
                       </td>
                     </tr>
@@ -645,6 +682,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                     phases.map((phase, idx) => {
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
                       const isNotGenerated = phase.status === 'Not Generated';
+                      const billingLabel =
+                        phase.billing_kind === 'skipped_gap'
+                          ? 'Skipped — no invoice'
+                          : !phase.is_generated
+                            ? '\u2014'
+                            : phase.is_rejoin_invoice
+                              ? 'Rejoin'
+                              : Number(phase.phase_number) === 1
+                                ? 'Auto-generated'
+                                : 'Generated';
                       const outstanding =
                         phase.is_generated && phase.amount != null
                           ? Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0))
@@ -664,6 +711,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                         >
                           <td className="px-2 py-2.5 text-sm text-gray-900 font-medium whitespace-nowrap">
                             Phase {absolutePhase}
+                          </td>
+                          <td className="px-2 py-2.5 text-sm text-gray-700 max-w-[140px]">
+                            {phase.program_enrollment_status
+                              ? formatProgramEnrollmentStatus(phase.program_enrollment_status)
+                              : '\u2014'}
+                          </td>
+                          <td className="px-2 py-2.5 text-xs text-gray-600 whitespace-nowrap" title="Installment invoice slot">
+                            {billingLabel}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 whitespace-nowrap">
                             {phase.invoice_id != null ? phase.invoice_id : '\u2014'}

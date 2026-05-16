@@ -5,7 +5,11 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
-import { determineEnrollmentStatus as detEnrollmentStatus, ensurePendingEnrollmentAfterDownpaymentPaid } from '../utils/enrollmentStatus.js';
+import {
+  determineEnrollmentStatus as detEnrollmentStatus,
+  determineRejoinAwarePhaseStatus,
+  ensurePendingEnrollmentAfterDownpaymentPaid,
+} from '../utils/enrollmentStatus.js';
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
@@ -2461,7 +2465,7 @@ router.post(
                      WHERE student_id = $1
                        AND class_id = $2
                        AND phase_number = $3
-                       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                        AND removed_at IS NULL
                      LIMIT 1`,
                     [sid, class_id, enrollPhase]
@@ -2480,9 +2484,16 @@ router.post(
                       [sid, class_id, enrollPhase]
                     );
 
-                    // Business rule: first paid installment phase after downpayment is "new".
+                    // Business rule: first paid installment phase after downpayment is "new",
+                    // unless it is the first comeback phase after a dropped gap.
                     // Later phases are handled by payments.js and marked "re_enrolled".
-                    const arEnrollStatus = 'new';
+                    const arEnrollStatus = await determineRejoinAwarePhaseStatus({
+                      db: { query: dbQuery },
+                      studentId: sid,
+                      classId: class_id,
+                      phaseNumber: enrollPhase,
+                      defaultStatus: 'new',
+                    });
 
                     if (removedEnrollment.rows.length > 0) {
                       await dbQuery(

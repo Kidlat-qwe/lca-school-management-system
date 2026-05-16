@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
@@ -25,6 +25,12 @@ import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAt
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import {
+  canSuperfinanceVerifyCashDeposit,
+  cashDepositStatusBadgeClass,
+  formatCashDepositStatus,
+  isSuperfinanceUser,
+} from '../../utils/cashDepositStatus';
+import {
   isFinanceReturnedSummaryStatus,
   parseCashDepositPaymentsResponse,
   parseDailySummaryPaymentsResponse,
@@ -38,8 +44,18 @@ const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
 const PIE_COLORS = ['#16A34A', '#2563EB', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#6366F1', '#EC4899'];
 
+const paymentLogRowKey = (payment, index, prefix) => {
+  const id = payment?.payment_id;
+  if (id != null && id !== '') return `${prefix}-${id}`;
+  const invoiceId = payment?.invoice_id;
+  const issueDate = payment?.issue_date || '';
+  const ref = payment?.reference_number || '';
+  return `${prefix}-${index}-${invoiceId || 'na'}-${issueDate}-${ref}`;
+};
+
 const DailySummarySalesApprovalPage = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [activeTab, setActiveTab] = useState(TAB_END_OF_SHIFT);
@@ -69,12 +85,11 @@ const DailySummarySalesApprovalPage = () => {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const openedNotificationDetailRef = useRef(null);
-  const openedNotificationFallbackRef = useRef('');
 
   const isCashDepositTab = activeTab === TAB_CASH_DEPOSIT;
   const currentUserType = userInfo?.user_type || userInfo?.userType || '';
   const canVerifyEndOfShift = ['Superadmin', 'Finance', 'Superfinance'].includes(currentUserType);
-  const canVerifyCashDeposit = currentUserType === 'Finance' || currentUserType === 'Superfinance';
+  const canVerifyCashDeposit = isSuperfinanceUser(userInfo);
   const canVerifySummary = isCashDepositTab ? canVerifyCashDeposit : canVerifyEndOfShift;
   const recordIdField = isCashDepositTab ? 'cash_deposit_summary_id' : 'daily_summary_id';
   const itemLabel = isCashDepositTab ? 'cash deposit summaries' : 'summaries';
@@ -109,9 +124,17 @@ const DailySummarySalesApprovalPage = () => {
       if (filterStatus) params.set('status', filterStatus);
       // Range params differ per tab: EOD uses summary_date_from/_to (single
       // calendar day per row), Cash Deposit uses date_from/_to (period overlap).
+      // Cash deposit + month mode: never request with a blank month (avoids empty overlap → bad rows).
+      const monthForRange =
+        isCashDepositTab &&
+        dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH &&
+        !String(filterIssueMonth || '').trim()
+          ? manilaMonthYYYYMM()
+          : filterIssueMonth;
+
       const dateParams = buildDailySummaryListDateQueryParams(isCashDepositTab, {
         mode: dateFilterMode,
-        month: filterIssueMonth,
+        month: monthForRange,
         paymentFrom: filterIssueDateFrom,
         paymentTo: filterIssueDateTo,
         createdFrom: filterCreatedDateFrom,
@@ -150,6 +173,47 @@ const DailySummarySalesApprovalPage = () => {
     }
   }, [effectiveBranchFilter, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo, isCashDepositTab]);
 
+  const closeDetailModal = useCallback(() => {
+    setDetailModal({ open: false, record: null });
+    openedNotificationDetailRef.current = null;
+
+    const params = new URLSearchParams(location.search);
+    const hadNotificationDeepLink =
+      params.get('fromNotification') === '1' ||
+      Boolean(params.get('cashDepositSummaryId')) ||
+      Boolean(params.get('dailySummaryId'));
+
+    const monthWasEmpty =
+      dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH && !String(filterIssueMonth || '').trim();
+
+    if (monthWasEmpty) {
+      setFilterIssueMonth(defaultDailySummaryFilterMonth());
+    }
+
+    if (hadNotificationDeepLink) {
+      params.delete('fromNotification');
+      params.delete('notificationTs');
+      params.delete('cashDepositSummaryId');
+      params.delete('dailySummaryId');
+      params.delete('notificationTab');
+      const qs = params.toString();
+      navigate(qs ? `${location.pathname}?${qs}` : location.pathname, { replace: true });
+    }
+
+    // Stripping the URL does not change filter deps, so refetch when we only removed notification params.
+    if (hadNotificationDeepLink && !monthWasEmpty) {
+      void fetchRecords(pagination.page);
+    }
+  }, [
+    dateFilterMode,
+    filterIssueMonth,
+    location.pathname,
+    location.search,
+    navigate,
+    fetchRecords,
+    pagination.page,
+  ]);
+
   useEffect(() => {
     setOpenMenuId(null);
     setDetailModal({ open: false, record: null });
@@ -165,14 +229,13 @@ const DailySummarySalesApprovalPage = () => {
     const notificationTab = params.get('notificationTab');
     const fromNotification = params.get('fromNotification') === '1';
 
+    // Do not clear opened-notification ref on every search change — it breaks deep-link
+    // dedupe and can race with the open-modal effect. Clear when not a notification entry.
+    if (!fromNotification) {
+      openedNotificationDetailRef.current = null;
+    }
+
     if (fromNotification) {
-      setFilterStatus('');
-      setDateFilterMode(DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE);
-      setFilterIssueMonth('');
-      setFilterIssueDateFrom('');
-      setFilterIssueDateTo('');
-      setFilterCreatedDateFrom('');
-      setFilterCreatedDateTo('');
       setOpenMenuId(null);
     }
 
@@ -193,66 +256,49 @@ const DailySummarySalesApprovalPage = () => {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== TAB_CASH_DEPOSIT || loading || records.length === 0) return;
+    if (loading) return;
 
     const params = new URLSearchParams(location.search);
-    const targetIdRaw = params.get('cashDepositSummaryId');
+    if (params.get('fromNotification') !== '1') return;
+
+    const targetIdRaw = isCashDepositTab
+      ? params.get('cashDepositSummaryId')
+      : params.get('dailySummaryId');
     if (!targetIdRaw) return;
 
     const targetId = Number(targetIdRaw);
     if (!Number.isFinite(targetId)) return;
     if (openedNotificationDetailRef.current === targetId) return;
 
-    const targetRecord = records.find((record) => Number(record.cash_deposit_summary_id) === targetId);
-    if (!targetRecord) return;
+    let cancelled = false;
 
-    setDetailModal({ open: true, record: targetRecord });
-    openedNotificationDetailRef.current = targetId;
-  }, [activeTab, loading, records, location.search]);
+    const openFromNotification = async () => {
+      let targetRecord = records.find((record) => Number(record[recordIdField]) === targetId);
 
-  useEffect(() => {
-    if (activeTab !== TAB_END_OF_SHIFT || loading || records.length === 0) return;
+      if (!targetRecord) {
+        try {
+          const data = await fetchRecordDetails(targetId);
+          if (cancelled) return;
+          if (data?.summary) {
+            targetRecord = data.summary;
+          }
+        } catch {
+          return;
+        }
+      }
 
-    const params = new URLSearchParams(location.search);
-    const targetIdRaw = params.get('dailySummaryId');
-    if (!targetIdRaw) return;
+      if (!targetRecord || cancelled) return;
 
-    const targetId = Number(targetIdRaw);
-    if (!Number.isFinite(targetId)) return;
-    if (openedNotificationDetailRef.current === targetId) return;
+      openedNotificationDetailRef.current = targetId;
+      setDetailModal({ open: true, record: targetRecord });
+    };
 
-    const targetRecord = records.find((record) => Number(record.daily_summary_id) === targetId);
-    if (!targetRecord) return;
+    openFromNotification();
 
-    setDetailModal({ open: true, record: targetRecord });
-    openedNotificationDetailRef.current = targetId;
-  }, [activeTab, loading, records, location.search]);
-
-  useEffect(() => {
-    if (loading || records.length === 0) return;
-
-    const params = new URLSearchParams(location.search);
-    const fromNotification = params.get('fromNotification') === '1';
-    if (!fromNotification) return;
-
-    const notificationTab = params.get('notificationTab');
-    const targetDailySummaryId = params.get('dailySummaryId');
-    const targetCashDepositId = params.get('cashDepositSummaryId');
-
-    // If an explicit target ID exists, the dedicated effects above handle opening.
-    if (targetDailySummaryId || targetCashDepositId) return;
-
-    const shouldOpenEod = notificationTab === TAB_END_OF_SHIFT && activeTab === TAB_END_OF_SHIFT;
-    const shouldOpenCash = notificationTab === TAB_CASH_DEPOSIT && activeTab === TAB_CASH_DEPOSIT;
-    if (!shouldOpenEod && !shouldOpenCash) return;
-
-    const notificationTs = params.get('notificationTs') || '';
-    const dedupeKey = `${notificationTab}:${notificationTs}`;
-    if (openedNotificationFallbackRef.current === dedupeKey) return;
-
-    setDetailModal({ open: true, record: records[0] });
-    openedNotificationFallbackRef.current = dedupeKey;
-  }, [activeTab, loading, records, location.search]);
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, records, location.search, isCashDepositTab, recordIdField, fetchRecordDetails]);
 
   useEffect(() => {
     if (!detailModal.open || !detailModal.record?.[recordIdField]) {
@@ -331,7 +377,7 @@ const DailySummarySalesApprovalPage = () => {
         body: JSON.stringify({ approve: false, remarks: remarks.trim() || undefined }),
       });
       setRejectModal({ open: false, id: null, remarks: '' });
-      setDetailModal({ open: false, record: null });
+      closeDetailModal();
       await fetchRecords(pagination.page);
     } catch (err) {
       appAlert(err.response?.data?.message || err.message || 'Failed to reject');
@@ -341,6 +387,15 @@ const DailySummarySalesApprovalPage = () => {
   };
 
   const statusBadge = (status) => {
+    if (isCashDepositTab) {
+      return (
+        <span
+          className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${cashDepositStatusBadgeClass(status)}`}
+        >
+          {formatCashDepositStatus(status)}
+        </span>
+      );
+    }
     const classes = {
       Submitted: 'bg-yellow-100 text-yellow-800',
       Approved: 'bg-green-100 text-green-800',
@@ -398,8 +453,16 @@ const DailySummarySalesApprovalPage = () => {
   };
 
   const selectedRecord = records.find((record) => record[recordIdField] === openMenuId) || null;
-  const canActOnRecord = (record) =>
-    canVerifySummary && record && ['Submitted', 'Returned', 'Rejected'].includes(String(record.status || ''));
+  const canActOnRecord = (record) => {
+    if (!record) return false;
+    if (isCashDepositTab) {
+      return canVerifyCashDeposit && canSuperfinanceVerifyCashDeposit(record.status);
+    }
+    return (
+      canVerifySummary &&
+      ['Submitted', 'Returned', 'Rejected'].includes(String(record.status || ''))
+    );
+  };
   const livePayments = detailData?.payments || [];
   const detailArReceipts = detailData?.arReceipts || [];
   const detailTotals = detailData?.totals;
@@ -547,8 +610,8 @@ const DailySummarySalesApprovalPage = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
-          Branch admin submissions appear here as Submitted. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
-          Cash deposit: Finance or Superfinance can verify or reject.
+          Branch admin cash deposits appear as Pending until Superfinance verifies. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
+          Cash deposit: Superfinance only can verify or reject.
         </p>
       </div>
 
@@ -597,7 +660,7 @@ const DailySummarySalesApprovalPage = () => {
               className="input-field py-1.5 text-sm w-full min-w-[8.5rem] sm:w-auto"
             >
               <option value="">All</option>
-              <option value="Submitted">Submitted</option>
+              <option value="Pending">Pending</option>
               <option value="Approved">Verified</option>
               <option value="Returned">Returned</option>
             </select>
@@ -770,7 +833,7 @@ const DailySummarySalesApprovalPage = () => {
         className="overflow-x-auto rounded-lg"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
       >
-        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '980px' : '900px' }}>
+        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '1100px' : '900px' }}>
           <thead className="bg-gray-50">
             <tr>
               <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-semibold text-gray-700" />
@@ -790,28 +853,26 @@ const DailySummarySalesApprovalPage = () => {
                 <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-semibold text-gray-700" />
               ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Submitted By</th>
-              {!isCashDepositTab ? (
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Approved By</th>
-              ) : null}
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Approved By</th>
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
                   Loading...
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
                   {isCashDepositTab ? 'No cash deposit summaries found.' : 'No daily summaries found.'}
                 </td>
               </tr>
             ) : (
-              sortedRecords.map((record) => (
-                <tr key={record[recordIdField]}>
+              sortedRecords.map((record, rowIndex) => (
+                <tr key={record[recordIdField] ?? `summary-row-${rowIndex}`}>
                   <td className="px-4 py-3 text-sm text-gray-900">{record.branch_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-900">{formatPeriod(record)}</td>
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">
@@ -829,9 +890,7 @@ const DailySummarySalesApprovalPage = () => {
                     <td className="px-4 py-3">{statusBadge(record.status)}</td>
                   ) : null}
                   <td className="px-4 py-3 text-sm text-gray-600">{record.submitted_by_name || '-'}</td>
-                  {!isCashDepositTab ? (
-                    <td className="px-4 py-3 text-sm text-gray-600">{summaryVerificationActorLabel(record)}</td>
-                  ) : null}
+                  <td className="px-4 py-3 text-sm text-gray-600">{summaryVerificationActorLabel(record)}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap align-middle">
                     <div className="inline-flex items-center justify-end">
                       <button
@@ -868,9 +927,10 @@ const DailySummarySalesApprovalPage = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setOpenMenuId(null)} />
+            <div key="actions-menu-overlay" className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setOpenMenuId(null)} />
             <div
-              className="fixed z-[9999] w-44 bg-white rounded-md shadow-lg border border-gray-200 text-left py-1"
+              key="actions-menu-panel"
+              className="fixed z-[9999] w-48 bg-white rounded-md shadow-lg border border-gray-200 text-left py-1"
               style={{ top: menuPosition.top, right: menuPosition.right }}
             >
               <button
@@ -885,6 +945,36 @@ const DailySummarySalesApprovalPage = () => {
               >
                 View details
               </button>
+              {selectedRecord && canActOnRecord(selectedRecord) ? (
+                <>
+                  <button
+                    key="action-verify"
+                    type="button"
+                    onClick={() => {
+                      setVerifyModal({ open: true, record: selectedRecord });
+                      setOpenMenuId(null);
+                    }}
+                    className="block w-full px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 text-left"
+                  >
+                    Verify
+                  </button>
+                  <button
+                    key="action-reject"
+                    type="button"
+                    onClick={() => {
+                      setRejectModal({
+                        open: true,
+                        id: selectedRecord[recordIdField],
+                        remarks: '',
+                      });
+                      setOpenMenuId(null);
+                    }}
+                    className="block w-full px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 text-left"
+                  >
+                    Reject
+                  </button>
+                </>
+              ) : null}
             </div>
           </>,
           document.body
@@ -1003,12 +1093,12 @@ const DailySummarySalesApprovalPage = () => {
                           </td>
                         </tr>
                       ) : (
-                        verifyPayments.map((payment) => {
+                        verifyPayments.map((payment, paymentIndex) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
                           const collected = payable + tip;
                           return (
-                          <tr key={`verify-cash-${payment.payment_id}`} className="hover:bg-gray-50/80">
+                          <tr key={paymentLogRowKey(payment, paymentIndex, 'verify-cash')} className="hover:bg-gray-50/80">
                             <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
                               {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                             </td>
@@ -1069,7 +1159,7 @@ const DailySummarySalesApprovalPage = () => {
                           </td>
                         </tr>
                       ) : (
-                        verifyPayments.map((payment) => {
+                        verifyPayments.map((payment, paymentIndex) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
                           const amount = getPaymentLogTableAmountColumn(payment);
@@ -1077,7 +1167,7 @@ const DailySummarySalesApprovalPage = () => {
                           const invTotal = payment.invoice_document_total;
                           const attUrl = (payment.payment_attachment_url || '').trim();
                           return (
-                            <tr key={payment.payment_id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
+                            <tr key={paymentLogRowKey(payment, paymentIndex, 'verify-eod')} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
                               <td className="py-2 ps-4 pe-2 font-medium text-gray-900 truncate align-top">
                                 {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                               </td>
@@ -1241,7 +1331,7 @@ const DailySummarySalesApprovalPage = () => {
         createPortal(
           <div
             className="fixed inset-0 z-[9999] flex items-stretch justify-center backdrop-blur-sm bg-black/5 p-2 sm:items-center sm:p-4"
-            onClick={() => !approvingId && setDetailModal({ open: false, record: null })}
+            onClick={() => !approvingId && closeDetailModal()}
           >
           <div
             className={`bg-white rounded-t-xl sm:rounded-xl shadow-xl w-full max-h-[min(92dvh,92vh)] flex flex-col overflow-hidden min-w-0 my-auto sm:my-0 ${
@@ -1262,7 +1352,7 @@ const DailySummarySalesApprovalPage = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setDetailModal({ open: false, record: null })}
+                onClick={closeDetailModal}
                 disabled={!!approvingId}
                 className="self-end text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto order-1 sm:order-2"
                 aria-label="Close details"
@@ -1372,7 +1462,7 @@ const DailySummarySalesApprovalPage = () => {
                             <PieChart>
                               <Pie data={detailMethodPieData} dataKey="value" nameKey="name" outerRadius={64} innerRadius={32}>
                                 {detailMethodPieData.map((entry, idx) => (
-                                  <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                  <Cell key={`method-pie-${idx}-${entry.name}`} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
                                 ))}
                               </Pie>
                               <Tooltip formatter={(value) => formatCurrency(value)} />
@@ -1381,7 +1471,7 @@ const DailySummarySalesApprovalPage = () => {
                         </div>
                         <div className="space-y-1 text-xs">
                           {detailMethodPieData.map((entry, idx) => (
-                            <div key={entry.name} className="flex items-center justify-between">
+                            <div key={`pie-legend-${idx}-${entry.name}`} className="flex items-center justify-between">
                               <div className="flex items-center gap-2 min-w-0">
                                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
                                 <span className="truncate text-gray-700">{entry.name}</span>
@@ -1404,7 +1494,7 @@ const DailySummarySalesApprovalPage = () => {
                             <PieChart>
                               <Pie data={detailLevelPieData} dataKey="value" nameKey="name" outerRadius={64} innerRadius={32}>
                                 {detailLevelPieData.map((entry, idx) => (
-                                  <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                  <Cell key={`level-pie-${idx}-${entry.name}`} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
                                 ))}
                               </Pie>
                               <Tooltip formatter={(value) => formatCurrency(value)} />
@@ -1413,7 +1503,7 @@ const DailySummarySalesApprovalPage = () => {
                         </div>
                         <div className="space-y-1 text-xs">
                           {detailLevelPieData.map((entry, idx) => (
-                            <div key={entry.name} className="flex items-center justify-between">
+                            <div key={`pie-legend-${idx}-${entry.name}`} className="flex items-center justify-between">
                               <div className="flex items-center gap-2 min-w-0">
                                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
                                 <span className="truncate text-gray-700">{entry.name}</span>
@@ -1474,12 +1564,12 @@ const DailySummarySalesApprovalPage = () => {
                           </td>
                         </tr>
                       ) : (
-                        detailPayments.map((payment) => {
+                        detailPayments.map((payment, paymentIndex) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
                           const collected = payable + tip;
                           return (
-                          <tr key={`cash-detail-${payment.payment_id}`} className="hover:bg-gray-50/80">
+                          <tr key={paymentLogRowKey(payment, paymentIndex, 'cash-detail')} className="hover:bg-gray-50/80">
                             <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
                               {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                             </td>
@@ -1545,7 +1635,7 @@ const DailySummarySalesApprovalPage = () => {
                           </td>
                         </tr>
                       ) : (
-                        detailPayments.map((payment) => {
+                        detailPayments.map((payment, paymentIndex) => {
                           const tip = Number(payment.tip_amount) || 0;
                           const payable = Number(payment.payable_amount) || 0;
                           const amount = getPaymentLogTableAmountColumn(payment);
@@ -1553,7 +1643,7 @@ const DailySummarySalesApprovalPage = () => {
                           const invTotal = payment.invoice_document_total;
                           const attUrl = (payment.payment_attachment_url || '').trim();
                           return (
-                            <tr key={payment.payment_id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
+                            <tr key={paymentLogRowKey(payment, paymentIndex, 'eod-detail')} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50/80">
                               <td className="py-2 ps-4 pe-2 font-medium text-gray-900 truncate align-top">
                                 {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                               </td>
@@ -1722,7 +1812,7 @@ const DailySummarySalesApprovalPage = () => {
             <div className="px-4 py-3 border-t border-gray-100 flex flex-col-reverse gap-2 bg-white shrink-0 sm:px-5 sm:flex-row sm:items-center sm:justify-end">
               <button
                 type="button"
-                onClick={() => setDetailModal({ open: false, record: null })}
+                onClick={closeDetailModal}
                 disabled={!!approvingId}
                 className="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
               >
@@ -1748,7 +1838,7 @@ const DailySummarySalesApprovalPage = () => {
                     type="button"
                     onClick={async () => {
                       const verified = await handleVerify(detailModal.record[recordIdField]);
-                      if (verified) setDetailModal({ open: false, record: null });
+                      if (verified) closeDetailModal();
                     }}
                     disabled={!!approvingId}
                     className="w-full px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"

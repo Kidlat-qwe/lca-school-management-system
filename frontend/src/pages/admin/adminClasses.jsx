@@ -13,6 +13,12 @@ import {
   getArListLineTotal,
   getArListPackagePrimaryLabel,
 } from '../../utils/acknowledgementReceiptDisplay';
+import {
+  formatProgramEnrollmentStatus,
+  pickGroupedProgramEnrollmentStatus,
+  programEnrollmentStatusBadgeClass,
+  studentHasActivePhaseEnrollment,
+} from '../../utils/programEnrollmentStatus';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -198,6 +204,11 @@ const AdminClasses = () => {
   const [changePackagePreview, setChangePackagePreview] = useState(null);
   const [loadingChangePackagePreview, setLoadingChangePackagePreview] = useState(false);
   const [changePackageSubmitting, setChangePackageSubmitting] = useState(false);
+  const [isRejoinModalOpen, setIsRejoinModalOpen] = useState(false);
+  const [studentToRejoin, setStudentToRejoin] = useState(null);
+  const [rejoinSourceClass, setRejoinSourceClass] = useState(null);
+  const [rejoinPhaseNumber, setRejoinPhaseNumber] = useState('');
+  const [rejoinSubmitting, setRejoinSubmitting] = useState(false);
   const [showInstallmentSettings, setShowInstallmentSettings] = useState(false);
   const [installmentScopeSettings, setInstallmentScopeSettings] = useState({
     phase_start: '',
@@ -894,6 +905,18 @@ const initializePackageMerchSelections = useCallback(
     setViewStudentMenuTarget(null);
   };
 
+  /** Rejoin invoice only applies to students who actually have a dropped program enrollment phase. */
+  const studentHasDroppedPhaseForRejoin = (student) => {
+    if (!student) return false;
+    const rows = student.phaseEnrollmentRows;
+    if (rows?.length) {
+      return rows.some(
+        (row) => String(row.program_enrollment_status || '').trim().toLowerCase() === 'dropped'
+      );
+    }
+    return String(student.program_enrollment_status || '').trim().toLowerCase() === 'dropped';
+  };
+
   const handleViewStudentActionMenuClick = (student, menuKey, event) => {
     const button = event.currentTarget;
     const rect = button.getBoundingClientRect();
@@ -1061,7 +1084,7 @@ const initializePackageMerchSelections = useCallback(
           program_name: selectedClassForDetails?.program_name || null,
         },
         students: filteredStudents.map(student => ({
-          student_id: student.student_id,
+          student_id: student.user_id ?? student.student_id,
           full_name: student.full_name,
           profile_picture_url: student.profile_picture_url,
           phase_number: student.phase_number,
@@ -1506,6 +1529,25 @@ const initializePackageMerchSelections = useCallback(
     setClassSessions([]);
   };
 
+  const formatPhasesDisplay = (phases) => {
+    if (!phases || phases.length === 0) return 'No Phase';
+    if (phases.length === 1) return `Phase ${phases[0]}`;
+
+    const sortedPhases = [...phases].sort((a, b) => a - b);
+    let isConsecutive = true;
+    for (let i = 1; i < sortedPhases.length; i++) {
+      if (sortedPhases[i] !== sortedPhases[i - 1] + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+
+    if (isConsecutive) {
+      return `Phase ${sortedPhases[0]}-${sortedPhases[sortedPhases.length - 1]}`;
+    }
+    return `Phases ${sortedPhases.join(', ')}`;
+  };
+
   const handleUnenrollStudent = async (student) => {
     if (!selectedClassForEnrollment) return;
 
@@ -1525,44 +1567,13 @@ const initializePackageMerchSelections = useCallback(
       destructive: true,
     });
 
-    if (reason === null) {
-      return;
-    }
+    if (reason === null) return;
 
     try {
       setLoadingEnrolledStudents(true);
 
-      const enrollmentResponse = await apiRequest(`/students/class/${classId}`);
-      const allStudents = enrollmentResponse.data || [];
-
-      const enrollmentIds = allStudents
-        .filter(s => s.user_id === student.user_id && s.classstudent_id)
-        .map(s => s.classstudent_id);
-
-      if (enrollmentIds.length > 0) {
-        // Enrolled: delete class enrollments; backend also deactivates installment profile so student is fully removed
-        const unenrollPromises = enrollmentIds.map(enrollmentId =>
-          apiRequest(`/students/unenroll/${enrollmentId}`, {
-            method: 'DELETE',
-          }).then(response => ({ success: true, enrollmentId, response })).catch(err => {
-            console.error(`Error unenrolling enrollment ${enrollmentId}:`, err);
-            return { success: false, enrollmentId, error: err.message || err.response?.data?.message || 'Unknown error' };
-          })
-        );
-        const results = await Promise.all(unenrollPromises);
-        const successCount = results.filter(r => r.success === true).length;
-        const failCount = results.filter(r => r.success === false).length;
-        if (successCount > 0) {
-          appAlert(`Student ${studentName} has been unenrolled and removed from the class.${failCount > 0 ? `\n\nNote: ${failCount} enrollment(s) could not be removed.` : ''}`);
-          await fetchEnrolledStudents(classId);
-        } else {
-          appAlert('Failed to unenroll student. Please try again.');
-        }
-        return;
-      }
-
       if (isPending) {
-        // Pending (installment, downpayment paid, not yet in classstudentstbl): remove via deactivating installment profile
+        // Pending students only have a downpayment profile — no active phase rows.
         const res = await apiRequest(`/students/class/${classId}/pending/${student.user_id}`, { method: 'DELETE' });
         if (res?.success) {
           appAlert(`${studentName} has been removed from the class.`);
@@ -1573,7 +1584,19 @@ const initializePackageMerchSelections = useCallback(
         return;
       }
 
-      appAlert('No active enrollment or pending record found for this student.');
+      // For enrolled students: use the dedicated drop endpoint which preserves historical
+      // phase statuses (new/re_enrolled/etc.) and inserts a "dropped" marker for the
+      // next unpaid phase so the Rejoin flow works correctly.
+      const res = await apiRequest(`/students/class/${classId}/drop/${student.user_id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      });
+      if (res?.success) {
+        appAlert(`Student ${studentName} has been unenrolled and removed from the class.`);
+        await fetchEnrolledStudents(classId);
+      } else {
+        appAlert(res?.message || 'Failed to unenroll student. Please try again.');
+      }
     } catch (err) {
       console.error('Error unenrolling/removing student:', err);
       const msg = err.response?.data?.message || err.message || 'Failed to unenroll student. Please try again.';
@@ -1601,52 +1624,64 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
-      // Hide unenrolled/removed rows in the Manage Enrolled Students modal.
-      const visibleEnrolledStudents = enrolledStudents.filter((student) => {
-        const status = String(student.program_enrollment_status || '').trim().toLowerCase();
-        const studentType = String(student.student_type || '').trim().toLowerCase();
-        return status !== 'dropped' && studentType !== 'unenrolled';
-      });
-
-      // Group enrolled students by student_id to show only unique students
-      // Collect all phases for each student and keep the earliest enrollment info
-      const uniqueEnrolledStudents = visibleEnrolledStudents.reduce((acc, student) => {
-        const existing = acc.find(s => s.user_id === student.user_id);
+      // One row per student; combine phase enrollments (e.g. Phase 1–2, single status badge).
+      const uniqueEnrolledStudents = enrolledStudents.reduce((acc, student) => {
+        const phaseRow = {
+          classstudent_id: student.classstudent_id,
+          phase_number: student.phase_number,
+          program_enrollment_status: student.program_enrollment_status,
+          removed_at: student.removed_at,
+        };
+        const existing = acc.find((s) => s.user_id === student.user_id);
         if (!existing) {
-          // First time seeing this student - initialize with phases array
           acc.push({
             ...student,
-            student_type: student.student_type || 'enrolled', // Preserve student_type from API (enrolled or pending)
-            phases: [student.phase_number],
+            student_type: student.student_type || 'enrolled',
+            phases: student.phase_number != null ? [student.phase_number] : [],
+            phaseEnrollmentRows: [phaseRow],
             highestPhase: student.phase_number,
             earliestEnrollment: student.enrolled_at,
-            enrolledBy: student.enrolled_by
+            enrolledBy: student.enrolled_by,
           });
         } else {
-          // Student already exists - add phase if not already included
-          if (!existing.phases.includes(student.phase_number)) {
+          if (student.phase_number != null && !existing.phases.includes(student.phase_number)) {
             existing.phases.push(student.phase_number);
-            existing.phases.sort((a, b) => a - b); // Sort phases ascending
+            existing.phases.sort((a, b) => a - b);
           }
-          // Update highest phase
+          existing.phaseEnrollmentRows.push(phaseRow);
           if (student.phase_number > existing.highestPhase) {
             existing.highestPhase = student.phase_number;
           }
-          // Keep earliest enrollment date and original enrolled_by
-          if (student.enrolled_at && existing.earliestEnrollment &&
-              new Date(student.enrolled_at) < new Date(existing.earliestEnrollment)) {
+          if (
+            student.enrolled_at &&
+            existing.earliestEnrollment &&
+            new Date(student.enrolled_at) < new Date(existing.earliestEnrollment)
+          ) {
             existing.earliestEnrollment = student.enrolled_at;
             existing.enrolledBy = student.enrolled_by;
+          }
+          if (student.student_type === 'enrolled' && existing.student_type === 'pending') {
+            existing.student_type = 'enrolled';
           }
         }
         return acc;
       }, []);
-      
-      // Format phases display for each enrolled student
-      uniqueEnrolledStudents.forEach(student => {
-        student.phasesDisplay = student.phases.length > 1 
-          ? `Phases ${student.phases.join(', ')}`
-          : `Phase ${student.phases[0]}`;
+
+      uniqueEnrolledStudents.forEach((student) => {
+        student.phasesDisplay = formatPhasesDisplay(student.phases);
+        if (student.phaseEnrollmentRows?.length) {
+          student.program_enrollment_status = pickGroupedProgramEnrollmentStatus(
+            student.phaseEnrollmentRows
+          );
+          const hasActive = studentHasActivePhaseEnrollment(student.phaseEnrollmentRows);
+          const allDropped = student.phaseEnrollmentRows.every((row) => {
+            const status = String(row.program_enrollment_status || '').trim().toLowerCase();
+            return status === 'dropped' || row.removed_at != null;
+          });
+          if (!hasActive && allDropped) {
+            student.student_type = 'unenrolled';
+          }
+        }
       });
       
       // Helper function to check if a reserved student should be counted towards class capacity
@@ -1816,7 +1851,7 @@ const initializePackageMerchSelections = useCallback(
         if (status === 'completed') return true;
         // Exclude delinquent/removed students from capacity counts.
         if (student.shouldCount === false) return false;
-        if (student.program_enrollment_status && !['new', 're_enrolled', 'upsell', 'completed'].includes(student.program_enrollment_status)) return false;
+        if (student.program_enrollment_status && !['new', 're_enrolled', 'upsell', 'rejoin', 'completed'].includes(student.program_enrollment_status)) return false;
         return true;
       }
       if (student.student_type === 'reserved') {
@@ -1845,7 +1880,7 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
-      // Hide unenrolled/removed rows in View Students as well for consistency.
+      // Hide unenrolled/removed rows in View Students; Manage modal keeps them for Rejoin.
       const visibleEnrolledStudents = enrolledStudents.filter((student) => {
         const status = String(student.program_enrollment_status || '').trim().toLowerCase();
         const studentType = String(student.student_type || '').trim().toLowerCase();
@@ -2912,6 +2947,58 @@ const initializePackageMerchSelections = useCallback(
     setChangePackageSubmitting(false);
   };
 
+  const getClassMaxPhase = (classItem) => {
+    const value = Number(classItem?.number_of_phase);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
+  };
+
+  const openRejoinModal = (student, sourceClassOverride = null) => {
+    const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
+    if (!student || !sourceClass) return;
+    closeViewStudentActionMenu();
+    const phases = Array.isArray(student.phases)
+      ? student.phases.map((phase) => Number(phase)).filter((phase) => Number.isFinite(phase))
+      : [];
+    const suggestedPhase = Math.min(
+      getClassMaxPhase(sourceClass),
+      Math.max(...phases, 0) + 1 || 1
+    );
+    setStudentToRejoin(student);
+    setRejoinSourceClass(sourceClass);
+    setRejoinPhaseNumber(String(suggestedPhase));
+    setIsRejoinModalOpen(true);
+  };
+
+  const closeRejoinModal = () => {
+    setIsRejoinModalOpen(false);
+    setStudentToRejoin(null);
+    setRejoinSourceClass(null);
+    setRejoinPhaseNumber('');
+    setRejoinSubmitting(false);
+  };
+
+  const handleCreateRejoinInvoice = async () => {
+    if (!studentToRejoin || !rejoinSourceClass || !rejoinPhaseNumber) return;
+    setRejoinSubmitting(true);
+    try {
+      const response = await apiRequest(`/classes/${rejoinSourceClass.class_id}/students/${studentToRejoin.user_id}/rejoin-invoice`, {
+        method: 'POST',
+        body: JSON.stringify({ phase_number: Number(rejoinPhaseNumber) }),
+      });
+      const sourceClassId = rejoinSourceClass.class_id;
+      closeRejoinModal();
+      if (selectedClassForEnrollment?.class_id === sourceClassId) {
+        await fetchEnrolledStudents(sourceClassId);
+      }
+      appAlert(response.message || 'Rejoin invoice created successfully.');
+    } catch (err) {
+      console.error('Error creating rejoin invoice:', err);
+      appAlert(err.response?.data?.message || err.message || 'Failed to create rejoin invoice.');
+    } finally {
+      setRejoinSubmitting(false);
+    }
+  };
+
   const fetchPackageChangePreview = async (targetPackage) => {
     if (!targetPackage || !changePackageSourceClass || !studentToChangePackage) return;
 
@@ -3146,6 +3233,7 @@ const initializePackageMerchSelections = useCallback(
     setAckSearchTerm('');
     setDebouncedAckSearch('');
     setSelectedAckReceipt(null);
+    closeRejoinModal();
     setInstallmentScopeSettings({
       phase_start: '',
       phase_end: '',
@@ -3953,9 +4041,29 @@ const initializePackageMerchSelections = useCallback(
   const handlePackageMerchSelectionChange = (typeName, item) => {
     setPackageMerchSelections(prev => {
       const currentSelections = prev[typeName] || [];
-      const exists = currentSelections.some(selection => selection.merchandise_id === item.merchandise_id);
+      const hasSize = item.size != null && String(item.size).trim() !== '';
+      const itemCategory = getUniformCategory(item);
+
+      // Sized merchandise (uniforms): one selection per Top/Bottom slot — replace prior size
+      if (hasSize) {
+        const filtered = currentSelections.filter((selection) => {
+          if (selection.merchandise_id === item.merchandise_id) return false;
+          const prevMeta = merchandise.find((m) => m.merchandise_id === selection.merchandise_id);
+          if (!prevMeta || prevMeta.merchandise_name !== typeName) return true;
+          if (!itemCategory || itemCategory === 'General') return false;
+          const prevCategory = getUniformCategory(prevMeta);
+          return prevCategory !== itemCategory;
+        });
+        return {
+          ...prev,
+          [typeName]: [...filtered, { merchandise_id: item.merchandise_id, size: item.size || null }],
+        };
+      }
+
+      // Non-sized lines: checkbox toggle
+      const exists = currentSelections.some((selection) => selection.merchandise_id === item.merchandise_id);
       const updatedList = exists
-        ? currentSelections.filter(selection => selection.merchandise_id !== item.merchandise_id)
+        ? currentSelections.filter((selection) => selection.merchandise_id !== item.merchandise_id)
         : [...currentSelections, { merchandise_id: item.merchandise_id, size: item.size || null }];
       return {
         ...prev,
@@ -9654,15 +9762,21 @@ setFormData({
                             const isReserved = student.student_type === 'reserved';
                             const isPending = student.student_type === 'pending';
                             const enrolledProgramStatus = String(student.program_enrollment_status || '').trim().toLowerCase();
-                            const isCompletedEnrollment = !isReserved && !isPending && enrolledProgramStatus === 'completed';
+                            const hasActivePhase = student.phaseEnrollmentRows
+                              ? studentHasActivePhaseEnrollment(student.phaseEnrollmentRows)
+                              : ['new', 're_enrolled', 'upsell', 'rejoin'].includes(enrolledProgramStatus) &&
+                                !student.removed_at;
+                            const isCompletedEnrollment =
+                              !isReserved && !isPending && enrolledProgramStatus === 'completed';
                             const isRemovedEnrollment =
                               !isReserved &&
                               !isPending &&
-                              (enrolledProgramStatus === 'dropped' || String(student.student_type || '').trim().toLowerCase() === 'unenrolled');
-                            if (isRemovedEnrollment) return null;
-                            const uniqueKey = isReserved 
-                              ? `reserved-${student.reservation_id}` 
-                              : `enrolled-${student.classstudent_id || student.user_id}`;
+                              !hasActivePhase &&
+                              (enrolledProgramStatus === 'dropped' ||
+                                String(student.student_type || '').trim().toLowerCase() === 'unenrolled');
+                            const uniqueKey = isReserved
+                              ? `reserved-${student.reservation_id}`
+                              : `enrolled-${student.user_id}`;
 
                             // For enrolled students, try to find their reservation
                             // For reserved students, use their own data
@@ -9707,7 +9821,7 @@ setFormData({
                                     <span>{student.full_name}</span>
                                     {isRemovedEnrollment && (
                                       <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-800">
-                                        Removed (Delinquent)
+                                        Not enrolled
                                       </span>
                                     )}
                                   </div>
@@ -9749,13 +9863,35 @@ setFormData({
                                   <div className="text-sm text-gray-900">{reservationFee}</div>
                                 </td>
                                 <td className="px-4 py-4 whitespace-nowrap">
-                                  {isRemovedEnrollment ? (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                      Removed
+                                  {isReserved ? (
+                                    reservationStatus ? (
+                                      <span
+                                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                                          reservationStatus === 'Fee Paid'
+                                            ? 'bg-green-100 text-green-800'
+                                            : reservationStatus === 'Upgraded'
+                                            ? 'bg-blue-100 text-blue-800'
+                                            : reservationStatus === 'Cancelled'
+                                            ? 'bg-red-100 text-red-800'
+                                            : 'bg-yellow-100 text-yellow-800'
+                                        }`}
+                                      >
+                                        {reservationStatus}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                                        Reserved
+                                      </span>
+                                    )
+                                  ) : isPending ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                                      Pending enrollment
                                     </span>
-                                  ) : !isReserved && !isPending && enrolledProgramStatus === 'completed' ? (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                                      Completed
+                                  ) : student.program_enrollment_status ? (
+                                    <span
+                                      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${programEnrollmentStatusBadgeClass(student.program_enrollment_status)}`}
+                                    >
+                                      {formatProgramEnrollmentStatus(student.program_enrollment_status)}
                                     </span>
                                   ) : reservationStatus ? (
                                     <span
@@ -9779,8 +9915,23 @@ setFormData({
                                   <div className="text-sm text-gray-500">{dueDate}</div>
                                 </td>
                                 <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
-                                  {isRemovedEnrollment ? (
-                                    <span className="text-sm text-gray-400">-</span>
+                                  {isRemovedEnrollment && studentHasDroppedPhaseForRejoin(student) ? (
+                                    <div className="view-student-action-menu-container relative inline-block">
+                                      <button
+                                        type="button"
+                                        onClick={(event) => handleViewStudentActionMenuClick(student, uniqueKey, event)}
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                                        aria-haspopup="menu"
+                                        aria-expanded={openViewStudentMenuKey === uniqueKey}
+                                        title="Actions"
+                                      >
+                                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                          <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM18 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  ) : isRemovedEnrollment ? (
+                                    <span className="text-sm text-gray-400">—</span>
                                   ) : isReserved ? (
                                     (() => {
                                       const resObj = enrollReservedStudents.find(
@@ -13863,7 +14014,7 @@ setFormData({
         document.body
       )}
 
-      {openViewStudentMenuKey && viewStudentMenuTarget && selectedClassForView && createPortal(
+      {openViewStudentMenuKey && viewStudentMenuTarget && (selectedClassForView || selectedClassForEnrollment) && createPortal(
         <>
           <div
             className="fixed inset-0 z-[10000] bg-transparent"
@@ -13879,7 +14030,19 @@ setFormData({
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="py-1">
-              {viewStudentMenuTarget.student_type === 'reserved' ? (
+              {studentHasDroppedPhaseForRejoin(viewStudentMenuTarget) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = viewStudentMenuTarget;
+                    closeViewStudentActionMenu();
+                    openRejoinModal(target, selectedClassForEnrollment || selectedClassForView);
+                  }}
+                  className="block w-full px-4 py-2 text-left text-sm text-emerald-700 hover:bg-emerald-50 transition-colors"
+                >
+                  Rejoin
+                </button>
+              ) : viewStudentMenuTarget.student_type === 'reserved' ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -13936,6 +14099,66 @@ setFormData({
             </div>
           </div>
         </>,
+        document.body
+      )}
+
+      {isRejoinModalOpen && studentToRejoin && rejoinSourceClass && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/10 p-4 backdrop-blur-sm"
+          onClick={closeRejoinModal}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Create Rejoin Invoice</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                {studentToRejoin.full_name} will rejoin after the generated invoice is paid.
+              </p>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="rejoin_phase_number" className="mb-1 block text-sm font-medium text-gray-700">
+                  Target phase
+                </label>
+                <select
+                  id="rejoin_phase_number"
+                  value={rejoinPhaseNumber}
+                  onChange={(e) => setRejoinPhaseNumber(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  {Array.from({ length: getClassMaxPhase(rejoinSourceClass) }, (_, index) => index + 1).map((phase) => (
+                    <option key={phase} value={phase}>
+                      Phase {phase}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                This creates an unpaid invoice first. The student will not count as enrolled until payment is completed.
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeRejoinModal}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                disabled={rejoinSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateRejoinInvoice}
+                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={rejoinSubmitting || !rejoinPhaseNumber}
+              >
+                {rejoinSubmitting ? 'Creating...' : 'Create invoice'}
+              </button>
+            </div>
+          </div>
+        </div>,
         document.body
       )}
 

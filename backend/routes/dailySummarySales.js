@@ -650,7 +650,7 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
                     WHERE cs.student_id = p.student_id
                     ORDER BY
                       CASE
-                        WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell') AND cs.removed_at IS NULL THEN 0
+                        WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin') AND cs.removed_at IS NULL THEN 0
                         ELSE 1
                       END,
                       cs.classstudent_id DESC
@@ -1455,10 +1455,18 @@ router.get(
       const userBranchId = req.user.branchId;
 
       const summaryRes = await query(
-        `SELECT daily_summary_id, branch_id, summary_date,
-                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
-                total_amount, payment_count
-         FROM daily_summary_salestbl WHERE daily_summary_id = $1`,
+        `SELECT d.daily_summary_id, d.branch_id, d.summary_date,
+                TO_CHAR(d.summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                d.total_amount, d.payment_count, d.status,
+                d.submitted_by, d.submitted_at, d.approved_by, d.approved_at, d.remarks,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                sub.full_name AS submitted_by_name,
+                app.full_name AS approved_by_name
+         FROM daily_summary_salestbl d
+         LEFT JOIN branchestbl b ON d.branch_id = b.branch_id
+         LEFT JOIN userstbl sub ON d.submitted_by = sub.user_id
+         LEFT JOIN userstbl app ON d.approved_by = app.user_id
+         WHERE d.daily_summary_id = $1`,
         [id]
       );
       if (summaryRes.rows.length === 0) {
@@ -1497,6 +1505,7 @@ router.get(
       res.json({
         success: true,
         data: {
+          summary,
           payments: paymentsNormalized,
           ar_receipts,
           totals: {

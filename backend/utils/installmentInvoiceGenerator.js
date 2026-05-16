@@ -102,7 +102,7 @@ const buildFixedInstallmentCycleDates = (generationAnchor, frequency) => {
  * Generate invoice from installment invoice
  * @param {Object} installmentInvoice - Installment invoice record from installmentinvoicestbl
  * @param {Object} profile - Installment invoice profile from installmentinvoiceprofilestbl
- * @param {{ reuseInvoiceArNumber?: string, ack_receipt_id?: number }|null} enrollmentAckReuse - When enrolling with a prepaid package AR (no downpayment invoice), reuse that AR# on the first generated phase invoice.
+ * @param {{ reuseInvoiceArNumber?: string, ack_receipt_id?: number, enrollmentInvoiceIssueYmd?: string }|null} enrollmentAckReuse - Prepaid AR reuse options; optional `enrollmentInvoiceIssueYmd` (YYYY-MM-DD) sets the first auto-generated invoice's issue_date to the enrollment day (local).
  * @returns {Object} Created invoice data
  */
 export const generateInvoiceFromInstallment = async (
@@ -196,23 +196,46 @@ export const generateInvoiceFromInstallment = async (
       }
     }
     
+    const profileGeneratedCount = parseInt(profile.generated_count, 10) || 0;
+    const rawEnrollmentIssue = enrollmentAckReuse?.enrollmentInvoiceIssueYmd;
+    const enrollmentInvoiceIssueYmd =
+      rawEnrollmentIssue != null && String(rawEnrollmentIssue).trim() !== ''
+        ? String(rawEnrollmentIssue).trim().slice(0, 10)
+        : '';
+    const enrollmentIssueForFirst =
+      profileGeneratedCount === 0 && /^\d{4}-\d{2}-\d{2}$/.test(enrollmentInvoiceIssueYmd)
+        ? enrollmentInvoiceIssueYmd
+        : null;
+
     const phaseSchedule = isPhaseInstallmentProfile(profile)
       ? await buildPhaseInstallmentSchedule({
           db: client,
           profile,
           generatedCountOverride: profile.generated_count || 0,
-          issueDateOverride: installmentInvoice.next_generation_date,
+          issueDateOverride: enrollmentIssueForFirst,
         })
       : null;
 
-    // Fixed cadence for all auto-generated installment invoices.
+    // Fixed cadence for non-phase auto-generated installment invoices (25th anchor).
     const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
     const generationAnchor = typeof installmentInvoice.next_generation_date === 'string'
       ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
       : new Date(installmentInvoice.next_generation_date || new Date());
     const cycle = buildFixedInstallmentCycleDates(generationAnchor, frequency);
-    const issueDate = cycle.issueDate;
-    const dueDate = cycle.dueDate;
+    let issueDate = cycle.issueDate;
+    let dueDate = cycle.dueDate;
+
+    if (phaseSchedule?.current_issue_date && phaseSchedule?.current_due_date) {
+      const pi = parseYmdToLocalNoon(phaseSchedule.current_issue_date);
+      const pd = parseYmdToLocalNoon(phaseSchedule.current_due_date);
+      if (pi && pd) {
+        issueDate = pi;
+        dueDate = pd;
+      }
+    } else if (enrollmentIssueForFirst) {
+      const e = parseYmdToLocalNoon(enrollmentIssueForFirst);
+      if (e) issueDate = e;
+    }
     
     // Calculate final invoice amount after promo discount
     const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;

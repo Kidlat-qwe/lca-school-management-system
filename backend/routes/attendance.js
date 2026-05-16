@@ -52,9 +52,8 @@ router.get(
       const session = sessionCheck.rows[0];
 
       // Get enrolled students for this class AND this specific phase
-      // Only show students who are enrolled in the session's phase_number
-      // Note: A student can have multiple rows in classstudentstbl (e.g. per phase),
-      // so we filter by phase_number to only get students enrolled in this phase
+      // Include "completed" so students who finished the phase still appear in attendance
+      // (matches class session enrollment counts that include completed rows).
       const studentsResult = await query(
         `SELECT 
           u.user_id as student_id,
@@ -66,7 +65,7 @@ router.get(
          INNER JOIN userstbl u ON cs_enroll.student_id = u.user_id
          WHERE cs_enroll.class_id = $1
            AND cs_enroll.phase_number = $2
-           AND cs_enroll.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           AND cs_enroll.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
            AND cs_enroll.removed_at IS NULL
          ORDER BY cs_enroll.enrolled_at DESC`,
         [session.class_id, session.phase_number]
@@ -155,9 +154,9 @@ router.post(
       const { attendance } = req.body;
       const markedBy = req.user.userId;
 
-      // Verify session exists and get scheduled date
+      // Verify session exists and get scheduled date + phase for enrollment validation
       const sessionCheck = await client.query(
-        `SELECT classsession_id, class_id, scheduled_date, status 
+        `SELECT classsession_id, class_id, phase_number, scheduled_date, status 
          FROM classsessionstbl 
          WHERE classsession_id = $1`,
         [sessionId]
@@ -209,7 +208,7 @@ router.post(
          WHERE cs.class_id = $1
            AND cs.phase_number = $2
            AND cs.student_id = ANY($3::int[])
-           AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
            AND cs.removed_at IS NULL`,
         [session.class_id, session.phase_number, studentIds]
       );

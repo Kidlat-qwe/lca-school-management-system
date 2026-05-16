@@ -262,7 +262,7 @@ export const processInstallmentDelinquencies = async () => {
                    removed_by = $2
                WHERE class_id = $3
                  AND student_id = $4
-                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
+                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
               [
                 `Installment delinquency (>= ${
                   Number.isFinite(finalDropoffDays)

@@ -10,7 +10,16 @@ import {
 } from '../utils/emailService.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule, getPhaseDueDateYmd } from '../utils/phaseInstallmentUtils.js';
-import { ensurePendingEnrollmentAfterDownpaymentPaid, removePendingEnrollmentPlaceholderForProfile } from '../utils/enrollmentStatus.js';
+import {
+  PROGRAM_ENROLLMENT_STATUS,
+  determineRejoinAwarePhaseStatus,
+  ensurePendingEnrollmentAfterDownpaymentPaid,
+  isRejoinClassInvoice,
+  parseInstallmentProfileIdFromRemarks,
+  parseRejoinPhaseFromRemarks,
+  removePendingEnrollmentPlaceholderForProfile,
+  syncInstallmentProfileAfterRejoinPayment,
+} from '../utils/enrollmentStatus.js';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../utils/paymentConfirmationEmailService.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
@@ -31,9 +40,114 @@ const router = express.Router();
 const PAYMENT_LOG_BUSINESS_DATE_SQL = `p.issue_date`;
 const AR_PAYMENT_BUSINESS_DATE_SQL = `ar.issue_date`;
 
-const getFullPaymentPhaseEnrollmentStatus = (phaseNumber, phaseStart) => (
-  Number(phaseNumber) === Number(phaseStart) ? 'new' : 're_enrolled'
-);
+const getFullPaymentPhaseEnrollmentStatus = async ({ client, studentId, classId, phaseNumber, phaseStart }) => {
+  const defaultStatus =
+    Number(phaseNumber) === Number(phaseStart)
+      ? PROGRAM_ENROLLMENT_STATUS.NEW
+      : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
+
+  return determineRejoinAwarePhaseStatus({
+    db: client,
+    studentId,
+    classId,
+    phaseNumber,
+    defaultStatus,
+  });
+};
+
+const enrollStudentForFullPaymentPhases = async ({
+  client,
+  studentId,
+  classId,
+  phaseStart,
+  phaseEnd,
+  sourceLabel,
+}) => {
+  let insertedOrReactivated = 0;
+  for (let phase = phaseStart; phase <= phaseEnd; phase++) {
+    const activePhase = await client.query(
+      `SELECT classstudent_id
+       FROM classstudentstbl
+       WHERE student_id = $1
+         AND class_id = $2
+         AND phase_number = $3
+         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+         AND removed_at IS NULL
+       LIMIT 1`,
+      [studentId, classId, phase]
+    );
+    if (activePhase.rows.length > 0) continue;
+
+    const fullPayStatus = await getFullPaymentPhaseEnrollmentStatus({
+      client,
+      studentId,
+      classId,
+      phaseNumber: phase,
+      phaseStart,
+    });
+
+    const droppedPhase = await client.query(
+      `SELECT classstudent_id
+       FROM classstudentstbl
+       WHERE student_id = $1
+         AND class_id = $2
+         AND phase_number = $3
+         AND program_enrollment_status = 'dropped'
+       ORDER BY removed_at DESC NULLS LAST, classstudent_id DESC
+       LIMIT 1`,
+      [studentId, classId, phase]
+    );
+
+    if (droppedPhase.rows.length > 0) {
+      await client.query(
+        `UPDATE classstudentstbl
+         SET program_enrollment_status = $1,
+             removed_at = NULL,
+             removed_reason = NULL,
+             removed_by = NULL,
+             enrolled_by = $2,
+             enrolled_at = CURRENT_TIMESTAMP
+         WHERE classstudent_id = $3`,
+        [fullPayStatus, sourceLabel, droppedPhase.rows[0].classstudent_id]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [studentId, classId, sourceLabel, phase, fullPayStatus]
+      );
+    }
+
+    insertedOrReactivated += 1;
+  }
+
+  return insertedOrReactivated;
+};
+
+/** After a rejoin class invoice is paid, sync installment billing to the rejoin phase (skip dropped gaps). */
+const syncInstallmentProfileForRejoinInvoice = async ({ client, invoice, studentId }) => {
+  if (!invoice?.remarks || !isRejoinClassInvoice(invoice.remarks)) return;
+
+  const profileId =
+    invoice.installmentinvoiceprofiles_id != null
+      ? parseInt(invoice.installmentinvoiceprofiles_id, 10)
+      : parseInstallmentProfileIdFromRemarks(invoice.remarks);
+  const rejoinPhase = parseRejoinPhaseFromRemarks(invoice.remarks);
+  if (!profileId || !rejoinPhase) return;
+
+  const synced = await syncInstallmentProfileAfterRejoinPayment(
+    client,
+    profileId,
+    studentId,
+    rejoinPhase
+  );
+  if (synced) {
+    console.log(
+      `✅ Rejoin: synced installment profile ${synced.installmentinvoiceprofiles_id} ` +
+        `(generated_count=${synced.generated_count ?? 0}, billing resumes after phase ${rejoinPhase})`
+    );
+  }
+};
 
 /**
  * Rejected tab lists payment rows with status/approval Rejected. Once the branch records a new
@@ -164,19 +278,35 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
   const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start, 10) : 1;
   const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
   const maxPhase = totalPhases ? (phaseStart + totalPhases - 1) : null;
-  let targetPhase = phaseStart + paidInstallmentCount - 1;
+
+  // For rejoin plans a dropped phase has no invoice, so paidInstallmentCount
+  // undercounts the actual billing position (e.g. 4 paid invoices for phases 1,2,4,5
+  // in a 5-phase plan where phase 3 was dropped). The profile's generated_count is
+  // already advanced past skipped phases by alignInstallmentProfileForRejoinInvoice /
+  // syncInstallmentProfileAfterRejoinPayment, so use it as a floor.
+  const storedGeneratedCount = profile.generated_count != null
+    ? parseInt(profile.generated_count, 10)
+    : 0;
+  const effectiveProgressCount = Math.max(paidInstallmentCount, storedGeneratedCount);
+
+  let targetPhase = phaseStart + effectiveProgressCount - 1;
   if (maxPhase !== null) {
     targetPhase = Math.min(targetPhase, maxPhase);
   }
   const markCompletedIfFullyPaid = async () => {
-    if (!(totalPhases !== null && totalPhases > 0 && paidInstallmentCount >= totalPhases)) return;
+    // Use targetPhase vs maxPhase instead of raw paidInstallmentCount vs totalPhases
+    // so that rejoin plans (where a dropped phase was skipped) are handled correctly.
+    if (!(maxPhase !== null && targetPhase >= maxPhase)) return;
     const keepFirstPhaseNewResult = await client.query(
       `UPDATE classstudentstbl
-       SET program_enrollment_status = 'new'
+       SET program_enrollment_status = CASE
+             WHEN program_enrollment_status = 'rejoin' THEN 'rejoin'
+             ELSE 'new'
+           END
        WHERE student_id = $1
          AND class_id = $2
          AND phase_number = $3
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
          AND removed_at IS NULL`,
       [studentId, profile.class_id, phaseStart]
     );
@@ -197,7 +327,7 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
        WHERE student_id = $1
          AND class_id = $2
          AND phase_number = $3
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
          AND removed_at IS NULL`,
       [studentId, profile.class_id, targetPhase]
     );
@@ -213,7 +343,17 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
   // Business rule:
   // - first paid installment phase after downpayment => new
   // - subsequent paid phases (phase 2+) => re_enrolled
-  const installmentEnrollStatus = paidInstallmentCount <= 1 ? 'new' : 're_enrolled';
+  const installmentDefaultStatus =
+    paidInstallmentCount <= 1
+      ? PROGRAM_ENROLLMENT_STATUS.NEW
+      : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
+  const installmentEnrollStatus = await determineRejoinAwarePhaseStatus({
+    db: client,
+    studentId,
+    classId: profile.class_id,
+    phaseNumber: targetPhase,
+    defaultStatus: installmentDefaultStatus,
+  });
 
   const promoted = await client.query(
     `UPDATE classstudentstbl
@@ -240,7 +380,7 @@ const syncInstallmentEnrollmentForPaidInvoice = async ({
      WHERE student_id = $1
        AND class_id = $2
        AND phase_number = $3
-       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
        AND removed_at IS NULL`,
     [studentId, profile.class_id, targetPhase]
   );
@@ -2052,7 +2192,7 @@ router.get(
                      FROM cash_deposit_summarytbl c
                      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
                      WHERE c.branch_id = p.branch_id
-                       AND c.status IN ('Submitted', 'Approved')
+                       AND c.status IN ('Pending', 'Submitted', 'Approved')
                        AND p.issue_date >= c.start_date::date
                        AND p.issue_date <= c.end_date::date
                        AND deposited.payment_row ? 'payment_id'
@@ -2091,7 +2231,7 @@ router.get(
                    FROM cash_deposit_summarytbl c
                    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
                    WHERE c.branch_id = p.branch_id
-                     AND c.status IN ('Submitted', 'Approved')
+                     AND c.status IN ('Pending', 'Submitted', 'Approved')
                      AND p.issue_date >= c.start_date::date
                      AND p.issue_date <= c.end_date::date
                      AND deposited.payment_row ? 'payment_id'
@@ -2632,6 +2772,29 @@ router.post(
       // If yes, mark downpayment as paid and create first installment invoice record
       if (newInvoiceStatus === 'Paid' && invoice.installmentinvoiceprofiles_id) {
         try {
+          if (isRejoinClassInvoice(invoice.remarks)) {
+            let rejoinClassId = null;
+            if (invoice.remarks && invoice.remarks.includes('CLASS_ID:')) {
+              const classMatch = invoice.remarks.match(/CLASS_ID:(\d+)/);
+              if (classMatch) rejoinClassId = parseInt(classMatch[1], 10);
+            }
+            const rejoinPhase = parseRejoinPhaseFromRemarks(invoice.remarks);
+            if (rejoinClassId && rejoinPhase) {
+              await enrollStudentForFullPaymentPhases({
+                client,
+                studentId: student_id,
+                classId: rejoinClassId,
+                phaseStart: rejoinPhase,
+                phaseEnd: rejoinPhase,
+                sourceLabel: 'System (Auto-enrolled via rejoin payment)',
+              });
+              await syncInstallmentProfileForRejoinInvoice({
+                client,
+                invoice,
+                studentId: student_id,
+              });
+            }
+          } else {
               // Get installment invoice profile to check if this is a downpayment invoice
               const profileResult = await client.query(
                 `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count, 
@@ -2730,6 +2893,7 @@ router.post(
               }
             }
           }
+          }
         } catch (phaseError) {
           // Log error but don't fail payment processing
           console.error('Error processing installment payment:', phaseError);
@@ -2790,37 +2954,24 @@ router.post(
               if (phaseEnd > totalPhases) phaseEnd = totalPhases;
               if (phaseEnd < phaseStart) phaseEnd = phaseStart;
               
-              // Check if student is already enrolled in this class
-              const existingEnrollmentCheck = await client.query(
-                `SELECT classstudent_id, phase_number 
-                 FROM classstudentstbl 
-                 WHERE student_id = $1
-                   AND class_id = $2
-                   AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
-                   AND removed_at IS NULL
-                 ORDER BY phase_number DESC`,
-                [student_id, classId]
-              );
-              
-              // If student is not enrolled, enroll in all phases for full payment
-              if (existingEnrollmentCheck.rows.length === 0) {
-                for (let phase = phaseStart; phase <= phaseEnd; phase++) {
-                  const fullPayStatus = getFullPaymentPhaseEnrollmentStatus(phase, phaseStart);
-                  await client.query(
-                    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-                     VALUES ($1, $2, $3, $4, $5)`,
-                    [
-                      student_id,
-                      classId,
-                      'System (Auto-enrolled via full payment)',
-                      phase,
-                      fullPayStatus,
-                    ]
-                  );
-                }
-                
-                console.log(`✅ Full payment: Auto-enrolled student ${student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId} after payment (first phase new, later phases re_enrolled)`);
+              const changedPhaseRows = await enrollStudentForFullPaymentPhases({
+                client,
+                studentId: student_id,
+                classId,
+                phaseStart,
+                phaseEnd,
+                sourceLabel: 'System (Auto-enrolled via full payment)',
+              });
+
+              if (changedPhaseRows > 0) {
+                console.log(`✅ Full payment: Auto-enrolled/reactivated ${changedPhaseRows} phase row(s) for student ${student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId} after payment`);
               }
+
+              await syncInstallmentProfileForRejoinInvoice({
+                client,
+                invoice,
+                studentId: student_id,
+              });
             }
           }
         } catch (fullPaymentError) {
@@ -3234,37 +3385,24 @@ router.put(
                   if (phaseEnd > totalPhases) phaseEnd = totalPhases;
                   if (phaseEnd < phaseStart) phaseEnd = phaseStart;
                   
-                  // Check if student is already enrolled in this class
-                  const existingEnrollmentCheck = await client.query(
-                    `SELECT classstudent_id, phase_number 
-                     FROM classstudentstbl 
-                     WHERE student_id = $1
-                       AND class_id = $2
-                       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
-                       AND removed_at IS NULL
-                     ORDER BY phase_number DESC`,
-                    [payment.student_id, classId]
-                  );
-                  
-                  // If student is not enrolled, enroll in the applicable phases for full payment
-                  if (existingEnrollmentCheck.rows.length === 0) {
-                    for (let phase = phaseStart; phase <= phaseEnd; phase++) {
-                      const fullPayStatusUpd = getFullPaymentPhaseEnrollmentStatus(phase, phaseStart);
-                      await client.query(
-                        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-                         VALUES ($1, $2, $3, $4, $5)`,
-                        [
-                          payment.student_id,
-                          classId,
-                          'System (Auto-enrolled via full payment)',
-                          phase,
-                          fullPayStatusUpd,
-                        ]
-                      );
-                    }
-                    
-                    console.log(`✅ Full payment: Auto-enrolled student ${payment.student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId} after payment update (first phase new, later phases re_enrolled)`);
+                  const changedPhaseRows = await enrollStudentForFullPaymentPhases({
+                    client,
+                    studentId: payment.student_id,
+                    classId,
+                    phaseStart,
+                    phaseEnd,
+                    sourceLabel: 'System (Auto-enrolled via full payment)',
+                  });
+
+                  if (changedPhaseRows > 0) {
+                    console.log(`✅ Full payment: Auto-enrolled/reactivated ${changedPhaseRows} phase row(s) for student ${payment.student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId} after payment update`);
                   }
+
+                  await syncInstallmentProfileForRejoinInvoice({
+                    client,
+                    invoice,
+                    studentId: payment.student_id,
+                  });
                 }
               }
             } catch (fullPaymentError) {
@@ -3277,6 +3415,29 @@ router.put(
           // If yes, check if it's a downpayment invoice or regular installment invoice
           if (newInvoiceStatus === 'Paid' && invoice.installmentinvoiceprofiles_id) {
             try {
+              if (isRejoinClassInvoice(invoice.remarks)) {
+                let rejoinClassId = null;
+                if (invoice.remarks && invoice.remarks.includes('CLASS_ID:')) {
+                  const classMatch = invoice.remarks.match(/CLASS_ID:(\d+)/);
+                  if (classMatch) rejoinClassId = parseInt(classMatch[1], 10);
+                }
+                const rejoinPhase = parseRejoinPhaseFromRemarks(invoice.remarks);
+                if (rejoinClassId && rejoinPhase) {
+                  await enrollStudentForFullPaymentPhases({
+                    client,
+                    studentId: payment.student_id,
+                    classId: rejoinClassId,
+                    phaseStart: rejoinPhase,
+                    phaseEnd: rejoinPhase,
+                    sourceLabel: 'System (Auto-enrolled via rejoin payment)',
+                  });
+                  await syncInstallmentProfileForRejoinInvoice({
+                    client,
+                    invoice,
+                    studentId: payment.student_id,
+                  });
+                }
+              } else {
               // Get installment invoice profile to check if this is a downpayment invoice
               const profileResult = await client.query(
                 `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
@@ -3376,6 +3537,7 @@ router.put(
                     });
                   }
                 }
+              }
               }
             } catch (phaseError) {
               // Log error but don't fail payment update

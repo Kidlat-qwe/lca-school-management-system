@@ -29,6 +29,10 @@ import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
+import {
+  cashDepositStatusBadgeClass,
+  formatCashDepositStatus,
+} from '../../utils/cashDepositStatus';
 
 const TAB_EOD = 'eod';
 const TAB_CASH = 'cash';
@@ -37,12 +41,27 @@ const VIEW_RETURN = 'return';
 
 const isReturnedSummaryStatus = (status) => status === 'Returned' || status === 'Rejected';
 
-const statusBadge = (status) => {
+const statusBadge = (status, isCashDeposit = false) => {
+  if (isCashDeposit) return cashDepositStatusBadgeClass(status);
   const s = String(status || '');
   if (s === 'Approved') return 'bg-emerald-100 text-emerald-800';
   if (s === 'Submitted') return 'bg-amber-100 text-amber-800';
   if (isReturnedSummaryStatus(s)) return 'bg-red-100 text-red-800';
   return 'bg-gray-100 text-gray-700';
+};
+
+const formatSummaryStatusLabel = (status, isCashDeposit = false) => {
+  if (isCashDeposit) return formatCashDepositStatus(status);
+  return isReturnedSummaryStatus(status) ? 'Returned' : status || '-';
+};
+
+const paymentLogRowKey = (payment, index, prefix) => {
+  const id = payment?.payment_id;
+  if (id != null && id !== '') return `${prefix}-${id}`;
+  const invoiceId = payment?.invoice_id;
+  const issueDate = payment?.issue_date || '';
+  const ref = payment?.reference_number || '';
+  return `${prefix}-${index}-${invoiceId || 'na'}-${issueDate}-${ref}`;
 };
 
 const AdminDailySummary = () => {
@@ -347,11 +366,11 @@ const AdminDailySummary = () => {
   const statusOptions = useMemo(
     () => [
       { value: '', label: 'All statuses' },
-      { value: 'Submitted', label: 'Submitted' },
-      { value: 'Approved', label: 'Approved' },
+      { value: isCash ? 'Pending' : 'Submitted', label: isCash ? 'Pending' : 'Submitted' },
+      { value: 'Approved', label: isCash ? 'Verified' : 'Approved' },
       { value: 'Returned', label: 'Returned' },
     ],
-    []
+    [isCash]
   );
 
   return (
@@ -619,8 +638,8 @@ const AdminDailySummary = () => {
                   </td>
                 </tr>
               ) : (
-                sortedRecords.map((row) => (
-                  <tr key={row.daily_summary_id} className="hover:bg-gray-50">
+                sortedRecords.map((row, rowIndex) => (
+                  <tr key={row.daily_summary_id ?? `eod-row-${rowIndex}`} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">
                       {row.summary_date ? formatDateManila(row.summary_date) : '-'}
                     </td>
@@ -629,8 +648,8 @@ const AdminDailySummary = () => {
                     </td>
                     <td className="px-3 py-2 text-sm text-right text-gray-700">{endOfShiftListPaymentCount(row)}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(row.status)}`}>
-                        {isReturnedSummaryStatus(row.status) ? 'Returned' : row.status || '-'}
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(row.status, isCash)}`}>
+                        {formatSummaryStatusLabel(row.status, isCash)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
@@ -682,8 +701,8 @@ const AdminDailySummary = () => {
                   </td>
                 </tr>
               ) : (
-                sortedRecords.map((row) => (
-                  <tr key={row.cash_deposit_summary_id} className="hover:bg-gray-50">
+                sortedRecords.map((row, rowIndex) => (
+                  <tr key={row.cash_deposit_summary_id ?? `cash-row-${rowIndex}`} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">
                       {row.start_date && row.end_date
                         ? `${formatDateManila(row.start_date)} – ${formatDateManila(row.end_date)}`
@@ -699,8 +718,8 @@ const AdminDailySummary = () => {
                       {row.reference_number || '—'}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(row.status)}`}>
-                        {isReturnedSummaryStatus(row.status) ? 'Returned' : row.status || '-'}
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadge(row.status, isCash)}`}>
+                        {formatSummaryStatusLabel(row.status, isCash)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">
@@ -746,8 +765,9 @@ const AdminDailySummary = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setOpenActionsMenuId(null)} />
+            <div key="actions-menu-overlay" className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setOpenActionsMenuId(null)} />
             <div
+              key="actions-menu-panel"
               className="fixed z-[9999] w-44 bg-white rounded-md shadow-lg border border-gray-200 text-left py-1"
               style={{ top: actionsMenuPosition.top, right: actionsMenuPosition.right }}
             >
@@ -918,8 +938,8 @@ const AdminDailySummary = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 bg-white">
-                          {eodResubmitDetail.payments.map((p) => (
-                            <tr key={p.payment_id}>
+                          {eodResubmitDetail.payments.map((p, paymentIndex) => (
+                            <tr key={paymentLogRowKey(p, paymentIndex, 'eod-resubmit')}>
                               <td className="px-3 py-2 text-sm text-gray-900">{p.student_name || '—'}</td>
                               <td className="px-3 py-2 text-sm text-gray-700">
                                 {p.invoice_description || (p.invoice_id ? `INV-${p.invoice_id}` : '—')}
@@ -963,8 +983,8 @@ const AdminDailySummary = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 bg-white">
-                          {eodResubmitDetail.ar_receipts.map((a) => (
-                            <tr key={a.ack_receipt_id}>
+                          {eodResubmitDetail.ar_receipts.map((a, arIndex) => (
+                            <tr key={a.ack_receipt_id != null ? `ar-${a.ack_receipt_id}` : `ar-row-${arIndex}`}>
                               <td className="px-3 py-2 text-sm text-gray-800">{a.ack_receipt_number || a.ack_receipt_id}</td>
                               <td className="px-3 py-2 text-sm text-gray-700">{a.prospect_student_name || '—'}</td>
                               <td className="px-3 py-2 text-sm text-gray-600">{a.payment_method || '—'}</td>
@@ -1120,7 +1140,7 @@ const AdminDailySummary = () => {
                         </thead>
                         <tbody className="divide-y divide-gray-100 bg-white">
                           {cashModalRows.map((p, idx) => (
-                            <tr key={p.payment_id || `cash-row-${idx}`}>
+                            <tr key={paymentLogRowKey(p, idx, 'cash-resubmit')}>
                               <td className="px-3 py-2 text-sm text-gray-900">{p.student_name || '—'}</td>
                               <td className="px-3 py-2 text-sm text-gray-700">
                                 {p.invoice_description || (p.invoice_id ? `INV-${p.invoice_id}` : '—')}

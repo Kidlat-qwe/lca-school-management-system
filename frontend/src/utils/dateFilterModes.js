@@ -166,9 +166,11 @@ export const issueDateFilterUtil = makeDateFilterUtil({
 
 /**
  * Shared helper for list pages that need the same visible date modes as
- * Payment Logs:
+ * Payment Logs on the surface (Month | Payment date | Issue Date), while
+ * allowing invoice-style lists to scope **Month** by document issue date so
+ * unpaid rows still appear.
  *
- *   - mode 'month'       -> payment_date_from / payment_date_to
+ *   - mode 'month'       -> issue_date_from / issue_date_to (Manila calendar month)
  *   - mode 'paymentDate' -> payment_date_from / payment_date_to
  *   - mode 'issueDate'   -> issue_date_from / issue_date_to
  */
@@ -192,8 +194,8 @@ export const paymentAndIssueDateFilterUtil = Object.freeze({
     const out = {};
     if (mode === DATE_FILTER_MODES.MONTH) {
       const range = issueDateRangeFromManilaMonth(month);
-      if (range.from) out.payment_date_from = range.from;
-      if (range.to) out.payment_date_to = range.to;
+      if (range.from) out.issue_date_from = range.from;
+      if (range.to) out.issue_date_to = range.to;
       return out;
     }
     if (mode === DATE_FILTER_MODES.PAYMENT_DATE) {

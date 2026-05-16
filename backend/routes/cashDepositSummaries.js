@@ -7,6 +7,11 @@ import { getEffectiveSettings } from '../utils/settingsService.js';
 
 const router = express.Router();
 
+/** Rows that reserve cash payments (submitted, awaiting verify, or verified). */
+const CASH_DEPOSIT_RESERVED_STATUSES = ['Pending', 'Submitted', 'Approved'];
+/** Awaiting Superfinance verify (Submitted kept for legacy rows). */
+const CASH_DEPOSIT_PENDING_VERIFY_STATUSES = ['Pending', 'Submitted'];
+
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
@@ -97,7 +102,7 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate, excludeSum
          FROM cash_deposit_summarytbl c
          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.cash_payment_snapshot, '[]'::jsonb)) deposited(payment_row)
          WHERE c.branch_id = p.branch_id
-           AND c.status IN ('Submitted', 'Approved')${excludeClause}
+           AND c.status IN ('Pending', 'Submitted', 'Approved')${excludeClause}
            AND p.issue_date >= c.start_date::date
            AND p.issue_date <= c.end_date::date
            AND deposited.payment_row ? 'payment_id'
@@ -193,9 +198,9 @@ const createCashDepositSubmissionNotification = async ({
     `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
      VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
     [
-      'Cash Deposit Summary Submitted',
+      'Cash Deposit Summary Pending Verification',
       body,
-      ['Finance'],
+      ['All'],
       branchId,
       createdBy,
       'daily-summary-sales',
@@ -203,22 +208,25 @@ const createCashDepositSubmissionNotification = async ({
     ]
   );
 
-  // Explicitly notify all Superadmin users as targeted bell notifications.
-  const superadminRes = await query(
-    `SELECT user_id FROM userstbl WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+  const notifyUserTypes = ['superfinance', 'superadmin'];
+  const notifyUsersRes = await query(
+    `SELECT user_id, LOWER(TRIM(user_type)) AS user_type
+     FROM userstbl
+     WHERE LOWER(TRIM(user_type)) = ANY($1::text[])`,
+    [notifyUserTypes]
   );
-  const superadminIds = (superadminRes.rows || [])
+  const notifyUserIds = (notifyUsersRes.rows || [])
     .map((row) => row.user_id)
     .filter((id) => id != null && Number(id) !== Number(createdBy));
 
-  if (superadminIds.length > 0) {
+  if (notifyUserIds.length > 0) {
     await Promise.all(
-      superadminIds.map((targetUserId) =>
+      notifyUserIds.map((targetUserId) =>
         query(
           `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
            VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
           [
-            'Cash Deposit Summary Submitted',
+            'Cash Deposit Summary Pending Verification',
             body,
             ['All'],
             branchId,
@@ -309,7 +317,7 @@ router.get(
                COALESCE(c.cash_payment_snapshot, '[]'::jsonb)
              ) deposited(payment_row)
              WHERE c.branch_id = p.branch_id
-               AND c.status IN ('Submitted', 'Approved')
+               AND c.status IN ('Pending', 'Submitted', 'Approved')
                AND p.issue_date >= c.start_date::date
                AND p.issue_date <= c.end_date::date
                AND deposited.payment_row ? 'payment_id'
@@ -381,7 +389,7 @@ router.get(
                   TO_CHAR(MAX(end_date) + INTERVAL '1 day', 'YYYY-MM-DD') AS next_uncovered_start_date
            FROM cash_deposit_summarytbl
            WHERE branch_id = $1
-             AND status IN ('Submitted', 'Approved')`,
+             AND status IN ('Pending', 'Submitted', 'Approved')`,
           [userBranchId]
         ),
         query(
@@ -443,8 +451,8 @@ router.get(
       .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('status')
       .optional()
-      .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
-      .withMessage('status must be Submitted, Approved, Rejected, or Returned'),
+      .isIn(['Pending', 'Submitted', 'Approved', 'Rejected', 'Returned'])
+      .withMessage('status must be Pending, Approved, Rejected, or Returned'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be positive'),
     // Cap raised from 100 -> 500 because the branch admin's "Deposit Cash"
     // modal requests `limit=200` to load the FULL list of prior deposit
@@ -552,6 +560,8 @@ router.get(
       if (status) {
         if (status === 'Returned') {
           sql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else if (status === 'Pending') {
+          sql += ` AND c.status IN ('Pending', 'Submitted')`;
         } else {
           pc++;
           sql += ` AND c.status = $${pc}`;
@@ -609,6 +619,8 @@ router.get(
       if (status) {
         if (status === 'Returned') {
           countSql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else if (status === 'Pending') {
+          countSql += ` AND c.status IN ('Pending', 'Submitted')`;
         } else {
           cc++;
           countSql += ` AND c.status = $${cc}`;
@@ -709,6 +721,8 @@ router.get(
       if (status) {
         if (status === 'Returned') {
           filteredSql += ` AND c.status IN ('Returned', 'Rejected')`;
+        } else if (status === 'Pending') {
+          filteredSql += ` AND c.status IN ('Pending', 'Submitted')`;
         } else {
           fc++;
           filteredSql += ` AND c.status = $${fc}`;
@@ -808,7 +822,7 @@ router.post(
            branch_id, start_date, end_date, total_deposit_amount, total_cash_amount,
            payment_count, completed_cash_count, status, submitted_by, reference_number, deposit_attachment_url, cash_payment_snapshot
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Submitted', $8, $9, $10, $11::jsonb)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8, $9, $10, $11::jsonb)
          RETURNING cash_deposit_summary_id, branch_id,
                    TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                    TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
@@ -842,7 +856,7 @@ router.post(
 
       res.status(201).json({
         success: true,
-        message: 'Cash deposit summary submitted successfully',
+        message: 'Cash deposit summary submitted and is pending Superfinance verification',
         data: insertRes.rows[0],
       });
     } catch (error) {
@@ -851,9 +865,13 @@ router.post(
   }
 );
 
+const isSuperfinanceOperator = (userType, branchId) =>
+  userType === 'Superfinance' ||
+  (userType === 'Finance' && (branchId === null || branchId === undefined));
+
 router.put(
   '/:id/approve',
-  requireRole('Finance'),
+  requireRole('Finance', 'Superfinance'),
   [
     param('id').isInt().withMessage('id must be an integer'),
     body('approve').optional().isBoolean().withMessage('approve must be boolean'),
@@ -867,22 +885,10 @@ router.put(
       const userType = req.user.userType;
       const userBranchId = req.user.branchId;
 
-      if (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined) {
-        const branchCheck = await query(
-          'SELECT branch_id FROM cash_deposit_summarytbl WHERE cash_deposit_summary_id = $1',
-          [id]
-        );
-        const targetBranchId = branchCheck.rows[0]?.branch_id;
-        if (targetBranchId && Number(targetBranchId) !== Number(userBranchId)) {
-          return res.status(403).json({
-            success: false,
-            message: 'You can only verify cash deposit summaries for your assigned branch',
-          });
-        }
-      } else if (userType !== 'Finance' && userType !== 'Superfinance') {
+      if (!isSuperfinanceOperator(userType, userBranchId)) {
         return res.status(403).json({
           success: false,
-          message: 'Only Finance and Superfinance can verify cash deposit summaries',
+          message: 'Only Superfinance can verify cash deposit summaries',
         });
       }
 
@@ -899,7 +905,7 @@ router.put(
       }
 
       const record = checkRes.rows[0];
-      const allowedVerifyStatuses = ['Submitted', 'Returned', 'Rejected'];
+      const allowedVerifyStatuses = [...CASH_DEPOSIT_PENDING_VERIFY_STATUSES, 'Returned', 'Rejected'];
       if (!allowedVerifyStatuses.includes(record.status)) {
         return res.status(400).json({
           success: false,
@@ -1058,7 +1064,7 @@ router.put(
              cash_payment_snapshot = $5::jsonb,
              reference_number = $6,
              deposit_attachment_url = $7,
-             status = 'Submitted',
+             status = 'Pending',
              approved_by = NULL,
              approved_at = NULL,
              updated_at = CURRENT_TIMESTAMP
@@ -1102,13 +1108,21 @@ router.get(
       const userBranchId = req.user.branchId;
 
       const summaryRes = await query(
-        `SELECT cash_deposit_summary_id, branch_id,
-                TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
-                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
-                total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
-                COALESCE(cash_payment_snapshot, '[]'::jsonb) AS cash_payment_snapshot
-         FROM cash_deposit_summarytbl
-         WHERE cash_deposit_summary_id = $1`,
+        `SELECT c.cash_deposit_summary_id, c.branch_id,
+                TO_CHAR(c.start_date, 'YYYY-MM-DD') AS start_date,
+                TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
+                c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
+                c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
+                c.reference_number, c.deposit_attachment_url,
+                COALESCE(c.cash_payment_snapshot, '[]'::jsonb) AS cash_payment_snapshot,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                sub.full_name AS submitted_by_name,
+                app.full_name AS approved_by_name
+         FROM cash_deposit_summarytbl c
+         LEFT JOIN branchestbl b ON c.branch_id = b.branch_id
+         LEFT JOIN userstbl sub ON c.submitted_by = sub.user_id
+         LEFT JOIN userstbl app ON c.approved_by = app.user_id
+         WHERE c.cash_deposit_summary_id = $1`,
         [id]
       );
 
@@ -1154,6 +1168,7 @@ router.get(
       res.json({
         success: true,
         data: {
+          summary,
           payments: snapshot.payments || [],
           totals: {
             total_deposit_amount: snapshot.total_deposit_amount,

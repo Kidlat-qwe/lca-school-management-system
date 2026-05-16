@@ -18,6 +18,7 @@ import {
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from '../utils/programPaymentStatusService.js';
+import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
 
 const router = express.Router();
 
@@ -36,16 +37,30 @@ const enrichInstallmentInvoiceRow = async (row) => {
   const totalPhases = row.total_phases != null ? parseInt(row.total_phases, 10) : null;
   const phaseStart = row.phase_start != null ? parseInt(row.phase_start, 10) : 1;
   const paidPhases = parseInt(row.paid_phases || 0, 10) || 0;
-  const generatedPhases = parseInt(row.generated_phases || row.generated_count || 0, 10) || 0;
+  const generatedPhases = parseInt(row.generated_phases || 0, 10) || 0;
+  // profile-level generated_count is already advanced past skipped dropped phases
+  // (by alignInstallmentProfileForRejoinInvoice / syncInstallmentProfileAfterRejoinPayment),
+  // so it is the most reliable billing-position floor when phases were dropped.
+  const profileGeneratedCount = parseInt(row.generated_count || 0, 10) || 0;
   const lastEnrolledPhaseNumber = row.last_enrolled_phase_number != null
     ? parseInt(row.last_enrolled_phase_number, 10)
     : null;
-  // Billing progress for the Installment Invoice Logs should reflect billing records only,
-  // not historical class enrollment phase. This keeps it consistent with Invoice page data.
-  const billingPhaseProgress = Math.max(paidPhases, generatedPhases, 0);
+  const phaseStartOffset = Math.max(0, (phaseStart || 1) - 1);
+  const billedPhaseProgress = Math.max(paidPhases, generatedPhases, profileGeneratedCount, 0);
+  const lastEnrolledRelativeProgress =
+    lastEnrolledPhaseNumber != null
+      ? Math.max(0, lastEnrolledPhaseNumber - phaseStartOffset)
+      : 0;
+  // Rejoin can skip a dropped phase (e.g. paid/billed phases 1, 2, 4). The log
+  // should show the absolute phase reached, not only the count of invoice rows.
+  const billingPhaseProgress = Math.max(billedPhaseProgress, lastEnrolledRelativeProgress);
   const displayPhaseProgress = totalPhases != null
     ? Math.min(billingPhaseProgress, totalPhases)
     : billingPhaseProgress;
+  const scheduleGeneratedCount = Math.max(
+    parseInt(row.generated_count || 0, 10) || 0,
+    displayPhaseProgress
+  );
 
   const phaseProgressComplete =
     totalPhases != null &&
@@ -81,7 +96,6 @@ const enrichInstallmentInvoiceRow = async (row) => {
   // (e.g. 6 / 10) instead of the relative profile-local numbers (1 / 5).
   // For profiles starting at phase 1 (or with no phase_start) the absolute
   // numbers equal the relative numbers, so the display is unchanged.
-  const phaseStartOffset = Math.max(0, (phaseStart || 1) - 1);
   const phaseProgressNumerator = displayPhaseProgress + phaseStartOffset;
   const phaseProgressDenominator =
     totalPhases != null ? totalPhases + phaseStartOffset : null;
@@ -103,7 +117,7 @@ const enrichInstallmentInvoiceRow = async (row) => {
     const schedule = await buildPhaseInstallmentSchedule({
       db: { query },
       profile,
-      generatedCountOverride: row.generated_count || 0,
+      generatedCountOverride: scheduleGeneratedCount,
       issueDateOverride: row.next_generation_date || null,
     });
 
@@ -1118,7 +1132,7 @@ router.get(
                    WHERE cs.student_id = ip.student_id
                      AND cs.class_id = ip.class_id
                      AND cs.removed_at IS NULL
-                     AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                     AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                  ) THEN true
                  ELSE ip.is_active
                END as profile_is_active,
@@ -1188,7 +1202,7 @@ router.get(
                    WHERE cs.student_id = ip.student_id
                      AND cs.class_id = ip.class_id
                      AND cs.removed_at IS NULL
-                     AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                     AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                  ) THEN true
                  ELSE ip.is_active
                END as profile_is_active,
@@ -1318,7 +1332,7 @@ router.get(
                     WHERE cs.student_id = ip.student_id
                       AND cs.class_id = ip.class_id
                       AND cs.removed_at IS NULL
-                      AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                      AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                   ) THEN true
                   ELSE ip.is_active
                 END as profile_is_active,
@@ -1567,7 +1581,7 @@ router.post(
              WHERE cs.student_id = $1
                AND cs.class_id = $2
                AND cs.removed_at IS NULL
-               AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+               AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
              LIMIT 1`,
             [installmentInvoice.student_id, installmentInvoice.class_id]
           );
@@ -2093,10 +2107,23 @@ router.post(
           [profile.student_id, profile.class_id, absolutePhaseNumber]
         );
         if (existsRes.rows.length === 0) {
+          const phaseEnrollmentStatus = await determineRejoinAwarePhaseStatus({
+            db: client,
+            studentId: profile.student_id,
+            classId: profile.class_id,
+            phaseNumber: absolutePhaseNumber,
+            defaultStatus: 're_enrolled',
+          });
           await client.query(
             `INSERT INTO classstudentstbl (student_id, class_id, phase_number, enrolled_at, program_enrollment_status, enrolled_by)
-             VALUES ($1, $2, $3, NOW(), 're_enrolled', $4)`,
-            [profile.student_id, profile.class_id, absolutePhaseNumber, String(creatorUserId || 'system')]
+             VALUES ($1, $2, $3, NOW(), $4, $5)`,
+            [
+              profile.student_id,
+              profile.class_id,
+              absolutePhaseNumber,
+              phaseEnrollmentStatus,
+              String(creatorUserId || 'system'),
+            ]
           );
         }
       }
@@ -2221,12 +2248,15 @@ router.post(
             AND paid_phases >= total_phases
         )
         UPDATE classstudentstbl cs
-        SET program_enrollment_status = 'new'
+        SET program_enrollment_status = CASE
+              WHEN cs.program_enrollment_status = 'rejoin' THEN 'rejoin'
+              ELSE 'new'
+            END
         FROM completed_profiles cp
         WHERE cs.student_id = cp.student_id
           AND cs.class_id = cp.class_id
           AND cs.phase_number = cp.phase_start
-          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
           AND cs.removed_at IS NULL
         RETURNING cs.classstudent_id
       `);
@@ -2269,7 +2299,7 @@ router.post(
           AND cs.class_id = cp.class_id
           AND cs.phase_number > cp.phase_start
           AND cs.phase_number < cp.final_phase
-          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
           AND cs.removed_at IS NULL
         RETURNING cs.classstudent_id
       `);
@@ -2310,7 +2340,7 @@ router.post(
         WHERE cs.student_id = cp.student_id
           AND cs.class_id = cp.class_id
           AND cs.phase_number = cp.final_phase
-          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
           AND cs.removed_at IS NULL
         RETURNING cs.classstudent_id
       `);
@@ -2326,7 +2356,7 @@ router.post(
             MIN(cs.phase_number) OVER (PARTITION BY cs.student_id, cs.class_id) AS first_phase
           FROM classstudentstbl cs
           JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
             AND cs.removed_at IS NULL
             AND c.end_date IS NOT NULL
             AND c.end_date < CURRENT_DATE
@@ -2337,7 +2367,10 @@ router.post(
             )
         )
         UPDATE classstudentstbl cs
-        SET program_enrollment_status = 'new'
+        SET program_enrollment_status = CASE
+              WHEN cs.program_enrollment_status = 'rejoin' THEN 'rejoin'
+              ELSE 'new'
+            END
         FROM full_payment_rows fpr
         WHERE cs.classstudent_id = fpr.classstudent_id
           AND cs.phase_number = fpr.first_phase
@@ -2352,7 +2385,7 @@ router.post(
             MAX(cs.phase_number) OVER (PARTITION BY cs.student_id, cs.class_id) AS final_phase
           FROM classstudentstbl cs
           JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
             AND cs.removed_at IS NULL
             AND c.end_date IS NOT NULL
             AND c.end_date < CURRENT_DATE
@@ -2377,7 +2410,7 @@ router.post(
             MAX(cs.phase_number) OVER (PARTITION BY cs.student_id, cs.class_id) AS final_phase
           FROM classstudentstbl cs
           JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
+          WHERE cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
             AND cs.removed_at IS NULL
             AND c.end_date IS NOT NULL
             AND c.end_date < CURRENT_DATE

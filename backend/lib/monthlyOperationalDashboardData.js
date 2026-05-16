@@ -133,6 +133,17 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
                 AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${endIdx}::date
               GROUP BY c.branch_id
             ),
+            rejoin_enrollment AS (
+              SELECT
+                c.branch_id,
+                COUNT(DISTINCT cs.student_id)::bigint AS rejoin_count
+              FROM classstudentstbl cs
+              INNER JOIN classestbl c ON cs.class_id = c.class_id
+              WHERE cs.program_enrollment_status = 'rejoin'
+                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${startIdx}::date
+                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${endIdx}::date
+              GROUP BY c.branch_id
+            ),
             dropped_unenrolled AS (
               SELECT
                 c.branch_id,
@@ -141,8 +152,14 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
               INNER JOIN classestbl c ON cs.class_id = c.class_id
               WHERE cs.program_enrollment_status = 'dropped'
                 AND cs.removed_at IS NOT NULL
-                AND cs.enrolled_at IS NOT NULL
-                AND cs.enrolled_at < cs.removed_at
+                AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+                AND (
+                  (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)
+                  OR (
+                    cs.enrolled_at IS NULL
+                    AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
+                  )
+                )
                 AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $${startIdx}::date
                 AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $${endIdx}::date
               GROUP BY c.branch_id
@@ -205,6 +222,7 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
               COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
               COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
               COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
+              COALESCE(rj.rejoin_count, 0)::bigint AS rejoin_count,
               COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count,
               COALESCE(pv.pay_verified_count, 0)::bigint AS pay_verified_count,
               COALESCE(pv.pay_verified_amount, 0) AS pay_verified_amount,
@@ -220,6 +238,7 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
             LEFT JOIN ar_sales ars ON ars.branch_id = bs.branch_id
             LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
             LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
+            LEFT JOIN rejoin_enrollment rj ON rj.branch_id = bs.branch_id
             LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
             LEFT JOIN pay_verified pv ON pv.branch_id = bs.branch_id
             LEFT JOIN pay_unverified puv ON puv.branch_id = bs.branch_id
@@ -306,6 +325,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     merchandise_released_count: parseInt(row.merchandise_released_count, 10) || 0,
     merchandise_released_quantity: parseFloat(row.merchandise_released_quantity) || 0,
     re_enrollment_count: parseInt(row.re_enrollment_count, 10) || 0,
+    rejoin_count: parseInt(row.rejoin_count, 10) || 0,
     dropped_unenrolled_count: parseInt(row.dropped_unenrolled_count, 10) || 0,
     pay_verified_count: parseInt(row.pay_verified_count, 10) || 0,
     pay_verified_amount: parseFloat(row.pay_verified_amount) || 0,
@@ -326,6 +346,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
       merchandise_released_count: acc.merchandise_released_count + row.merchandise_released_count,
       merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
       re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
+      rejoin_count: acc.rejoin_count + row.rejoin_count,
       dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
       pay_verified_count: acc.pay_verified_count + row.pay_verified_count,
       pay_verified_amount: acc.pay_verified_amount + row.pay_verified_amount,
@@ -342,6 +363,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         row.ar_sales_amount > 0 ||
         row.merchandise_released_count > 0 ||
         row.re_enrollment_count > 0 ||
+        row.rejoin_count > 0 ||
         row.dropped_unenrolled_count > 0
           ? 1
           : 0),
@@ -354,6 +376,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
       merchandise_released_count: 0,
       merchandise_released_quantity: 0,
       re_enrollment_count: 0,
+      rejoin_count: 0,
       dropped_unenrolled_count: 0,
       pay_verified_count: 0,
       pay_verified_amount: 0,
@@ -399,6 +422,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         merchandise_released_count: row.merchandise_released_count,
         merchandise_released_quantity: row.merchandise_released_quantity,
         re_enrollment_count: row.re_enrollment_count,
+        rejoin_count: row.rejoin_count,
         dropped_unenrolled_count: row.dropped_unenrolled_count,
         pay_verified_count: row.pay_verified_count,
         pay_verified_amount: row.pay_verified_amount,
@@ -414,6 +438,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         { name: 'Acknowledgement Receipt Sales', value: totals.ar_sales_count },
         { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
         { name: 'Re-enrollment', value: totals.re_enrollment_count },
+        { name: 'Rejoin', value: totals.rejoin_count },
         { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
       ],
       sales_last_6_months: salesLast6Months,

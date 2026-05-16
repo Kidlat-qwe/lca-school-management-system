@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import StatusLegend from '../../components/reports/StatusLegend';
+import {
+  formatProgramEnrollmentStatus,
+  PROGRAM_ENROLLMENT_STATUS_FILTER_OPTIONS,
+  programEnrollmentStatusBadgeClass,
+} from '../../utils/programEnrollmentStatus';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 
 const TAB_STUDENT_STATUS = 'student_status';
@@ -44,16 +49,7 @@ const TAB_CONFIG = {
     title: 'Report - Program Enrollment Status',
     description: 'Rows from classstudentstbl using program_enrollment_status.',
     itemLabel: 'enrollment rows',
-    statusOptions: [
-      { value: 'all', label: 'All' },
-      { value: 'reserved', label: 'Reserved' },
-      { value: 'pending_enrollment', label: 'Pending enrollment' },
-      { value: 'new', label: 'New' },
-      { value: 're_enrolled', label: 'Re-enrolled' },
-      { value: 'upsell', label: 'Upsell' },
-      { value: 'dropped', label: 'Dropped' },
-      { value: 'completed', label: 'Completed' },
-    ],
+    statusOptions: PROGRAM_ENROLLMENT_STATUS_FILTER_OPTIONS,
   },
 };
 
@@ -74,7 +70,7 @@ const formatDateTime = (value) => {
 
 const statusBadgeClass = (value) => {
   const v = String(value || '').toLowerCase();
-  if (['active', 'paid', 'completed', 'new', 're_enrolled', 'upsell'].includes(v)) return 'bg-green-100 text-green-800';
+  if (['active', 'paid', 'completed', 'new', 're_enrolled', 'upsell', 'rejoin'].includes(v)) return 'bg-green-100 text-green-800';
   if (['wait_for_payment', 'pending_enrollment', 'under_grace_period', 'reserved'].includes(v)) return 'bg-amber-100 text-amber-800';
   if (['inactive', 'dropped', 'due_date'].includes(v)) return 'bg-gray-100 text-gray-800';
   return 'bg-slate-100 text-slate-800';
@@ -207,8 +203,10 @@ const AdminReport = () => {
             <span className="truncate block">{row.class_name || '-'}</span>
           </td>
           <td className="px-4 py-3 whitespace-nowrap">
-            <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.program_enrollment_status)}`}>
-              {row.program_enrollment_status || '-'}
+            <span
+              className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${programEnrollmentStatusBadgeClass(row.program_enrollment_status)}`}
+            >
+              {formatProgramEnrollmentStatus(row.program_enrollment_status)}
             </span>
           </td>
           <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.created_at)}</td>

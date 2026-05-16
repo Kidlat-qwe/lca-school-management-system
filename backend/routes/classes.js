@@ -10,7 +10,9 @@ import { formatYmdLocal, parseYmdToLocalNoon } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
 import {
+  alignInstallmentProfileForRejoinInvoice,
   determineEnrollmentStatus,
+  findInstallmentProfileForRejoin,
   PROGRAM_ENROLLMENT_STATUS,
   ACTIVE_ENROLLMENT_STATUSES,
 } from '../utils/enrollmentStatus.js';
@@ -219,7 +221,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
      FROM classstudentstbl
      WHERE student_id = $1
        AND class_id = $2
-       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
+       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
     [studentId, classId]
   );
 
@@ -638,7 +640,8 @@ router.get(
                  LEFT JOIN (
                    SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
                    FROM classstudentstbl
-                   WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                   WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+                     AND removed_at IS NULL
                    GROUP BY class_id
                  ) enrollment_counts ON c.class_id = enrollment_counts.class_id
                  LEFT JOIN (
@@ -856,7 +859,7 @@ router.post(
       const enrollmentsResult = await client.query(
         `SELECT classstudent_id, student_id, class_id, phase_number, program_enrollment_status
          FROM classstudentstbl
-         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
+         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
         [student_id, source_class_id]
       );
 
@@ -870,7 +873,7 @@ router.post(
 
       const existingInTarget = await client.query(
         `SELECT classstudent_id FROM classstudentstbl
-         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
+         WHERE student_id = $1 AND class_id = $2 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
         [student_id, target_class_id]
       );
       if (existingInTarget.rows.length > 0) {
@@ -886,7 +889,7 @@ router.post(
         const targetEnrollmentCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count
            FROM classstudentstbl
-           WHERE class_id = $1 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')`,
+           WHERE class_id = $1 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
           [target_class_id]
         );
         const currentCount = parseInt(targetEnrollmentCount.rows[0].count, 10);
@@ -920,6 +923,298 @@ router.post(
         success: true,
         message: `Student moved to the other class successfully (${moveCount} enrollment(s), phase preserved).`,
         data: { student_id, source_class_id, target_class_id, enrollments_moved: moveCount },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/:id/students/:studentId/rejoin-invoice
+ * Create a one-phase invoice that lets a previously dropped student rejoin
+ * after payment. Actual enrollment still happens in payments.js after the
+ * invoice is marked Paid.
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/:id/students/:studentId/rejoin-invoice',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    body('phase_number').isInt({ min: 1 }).withMessage('phase_number must be a positive integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const classId = parseInt(req.params.id, 10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const phaseNumber = parseInt(req.body.phase_number, 10);
+
+      await client.query('BEGIN');
+
+      const [classResult, studentResult] = await Promise.all([
+        client.query(
+          `SELECT c.class_id, c.branch_id, c.program_id, c.class_name, c.level_tag, c.max_students,
+                  p.program_name, cu.number_of_phase
+           FROM classestbl c
+           LEFT JOIN programstbl p ON c.program_id = p.program_id
+           LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
+           WHERE c.class_id = $1`,
+          [classId]
+        ),
+        client.query(
+          `SELECT user_id, full_name, email
+           FROM userstbl
+           WHERE user_id = $1 AND user_type = 'Student'`,
+          [studentId]
+        ),
+      ]);
+
+      if (classResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Class not found.' });
+      }
+      if (studentResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Student not found.' });
+      }
+
+      const classData = classResult.rows[0];
+      const student = studentResult.rows[0];
+      const maxPhase = classData.number_of_phase != null ? parseInt(classData.number_of_phase, 10) : null;
+      if (maxPhase && phaseNumber > maxPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Invalid rejoin phase. This curriculum only has ${maxPhase} phase(s).`,
+        });
+      }
+
+      const droppedHistory = await client.query(
+        `SELECT classstudent_id, phase_number, removed_at
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+           AND program_enrollment_status = 'dropped'
+         ORDER BY COALESCE(removed_at, enrolled_at) DESC NULLS LAST, classstudent_id DESC
+         LIMIT 1`,
+        [studentId, classId]
+      );
+      if (droppedHistory.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'This student has no dropped enrollment history in this class.',
+        });
+      }
+      const latestDroppedPhase = parseInt(droppedHistory.rows[0]?.phase_number || 0, 10) || 0;
+
+      const activeSamePhase = await client.query(
+        `SELECT classstudent_id
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+           AND phase_number = $3
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+           AND removed_at IS NULL
+         LIMIT 1`,
+        [studentId, classId, phaseNumber]
+      );
+      if (activeSamePhase.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `Student is already active in Phase ${phaseNumber}.`,
+        });
+      }
+
+      if (classData.max_students != null) {
+        const activeStudentCount = await client.query(
+          `SELECT COUNT(DISTINCT student_id) AS count
+           FROM classstudentstbl
+           WHERE class_id = $1
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+             AND removed_at IS NULL`,
+          [classId]
+        );
+        const alreadyActiveInOtherPhase = await client.query(
+          `SELECT 1
+           FROM classstudentstbl
+           WHERE student_id = $1
+             AND class_id = $2
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+             AND removed_at IS NULL
+           LIMIT 1`,
+          [studentId, classId]
+        );
+        const currentCount = parseInt(activeStudentCount.rows[0]?.count || 0, 10);
+        if (alreadyActiveInOtherPhase.rows.length === 0 && currentCount >= Number(classData.max_students)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Class is full (${currentCount}/${classData.max_students} students).`,
+          });
+        }
+      }
+
+      // Preserve prior installment plan (generated_count, phase scope) — rejoin reactivates on payment.
+      const installmentProfile = await findInstallmentProfileForRejoin(client, studentId, classId);
+
+      const packageResult = await client.query(
+        `SELECT p.package_id, p.package_name, p.package_price
+         FROM packagestbl p
+         WHERE p.status = 'Active'
+           AND (p.branch_id = $1 OR p.branch_id IS NULL)
+           AND p.package_type = 'Phase'
+           AND (
+             p.phase_start IS NULL
+             OR p.phase_start <= $2
+           )
+           AND (
+             p.phase_end IS NULL
+             OR p.phase_end >= $2
+           )
+         ORDER BY
+           CASE WHEN p.branch_id = $1 THEN 0 ELSE 1 END,
+           CASE WHEN p.phase_start IS NOT NULL AND p.phase_end IS NOT NULL THEN 0 ELSE 1 END,
+           p.package_id DESC
+         LIMIT 1`,
+        [classData.branch_id, phaseNumber]
+      );
+
+      let branchPricingResult = { rows: [] };
+      if (classData.branch_id != null) {
+        branchPricingResult = await client.query(
+          `SELECT price AS pricing_price
+           FROM pricingliststbl
+           WHERE branch_id = $1 OR branch_id IS NULL
+           ORDER BY CASE WHEN branch_id = $1 THEN 0 ELSE 1 END, pricinglist_id DESC
+           LIMIT 1`,
+          [classData.branch_id]
+        );
+      }
+
+      const packageRow = packageResult.rows[0] || null;
+      const rawAmount =
+        installmentProfile?.amount != null
+          ? installmentProfile.amount
+          : packageRow?.package_price != null
+            ? packageRow.package_price
+            : (branchPricingResult.rows[0]?.pricing_price ?? 0);
+      const amount = roundCurrency(rawAmount);
+      const invoicePackageId = installmentProfile?.package_id ?? packageRow?.package_id ?? null;
+      const issueDate = formatYmdLocal(new Date());
+      let remarks = `CLASS_ID:${classId};PHASE_START:${phaseNumber};PHASE_END:${phaseNumber};REJOIN_PHASE:${phaseNumber}`;
+      if (installmentProfile?.installmentinvoiceprofiles_id) {
+        remarks += `;INSTALLMENT_PROFILE_ID:${installmentProfile.installmentinvoiceprofiles_id}`;
+      }
+
+      const profileIdForInvoice = installmentProfile?.installmentinvoiceprofiles_id ?? null;
+
+      const invoice = await insertInvoiceWithArNumber(
+        client,
+        profileIdForInvoice
+          ? `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, package_id, installmentinvoiceprofiles_id, invoice_ar_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             RETURNING *`
+          : `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, package_id, invoice_ar_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING *`,
+        profileIdForInvoice
+          ? [
+              'TEMP',
+              classData.branch_id || null,
+              amount,
+              'Unpaid',
+              remarks,
+              issueDate,
+              issueDate,
+              req.user.userId || null,
+              invoicePackageId,
+              profileIdForInvoice,
+            ]
+          : [
+              'TEMP',
+              classData.branch_id || null,
+              amount,
+              'Unpaid',
+              remarks,
+              issueDate,
+              issueDate,
+              req.user.userId || null,
+              invoicePackageId,
+            ]
+      );
+
+      if (profileIdForInvoice) {
+        await alignInstallmentProfileForRejoinInvoice(client, profileIdForInvoice, phaseNumber);
+      }
+
+      const invoiceDescription = `INV-${invoice.invoice_id}`;
+      await client.query(
+        `UPDATE invoicestbl SET invoice_description = $1 WHERE invoice_id = $2`,
+        [invoiceDescription, invoice.invoice_id]
+      );
+      invoice.invoice_description = invoiceDescription;
+
+      await client.query(
+        `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+         VALUES ($1, $2, $3)`,
+        [
+          invoice.invoice_id,
+          `Rejoin enrollment - ${classData.program_name || classData.class_name || 'Class'} Phase ${phaseNumber}`,
+          amount,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO invoicestudentstbl (invoice_id, student_id)
+         VALUES ($1, $2)`,
+        [invoice.invoice_id, studentId]
+      );
+
+      // Preserve the phase gap as dropped history, e.g. dropped Phase 2 → rejoin Phase 4
+      // should leave Phase 3 visible as dropped and not counted as enrolled.
+      for (let phase = latestDroppedPhase + 1; phase < phaseNumber; phase++) {
+        const existingGapRow = await client.query(
+          `SELECT classstudent_id
+           FROM classstudentstbl
+           WHERE student_id = $1 AND class_id = $2 AND phase_number = $3
+           LIMIT 1`,
+          [studentId, classId, phase]
+        );
+        if (existingGapRow.rows.length > 0) continue;
+        await client.query(
+          `INSERT INTO classstudentstbl
+             (student_id, class_id, enrolled_by, phase_number, program_enrollment_status, removed_at, removed_reason, removed_by)
+           VALUES ($1, $2, $3, $4, 'dropped', CURRENT_TIMESTAMP, $5, $6)`,
+          [
+            studentId,
+            classId,
+            'System (Rejoin gap marker)',
+            phase,
+            `Skipped while creating rejoin invoice ${invoiceDescription}`,
+            req.user.userId || null,
+          ]
+        );
+      }
+
+      await syncProgramPaymentStatusForInvoice(client, invoice.invoice_id);
+      await client.query('COMMIT');
+
+      res.status(201).json({
+        success: true,
+        message: `Rejoin invoice ${invoiceDescription} created for ${student.full_name} (Phase ${phaseNumber}). Student will rejoin after payment is completed.`,
+        data: {
+          invoice,
+          phase_number: phaseNumber,
+        },
       });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1478,7 +1773,8 @@ router.get(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
-           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+             AND removed_at IS NULL
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          LEFT JOIN (
@@ -2489,7 +2785,10 @@ router.delete(
 
       // Check for dependencies that prevent deletion
       const enrolledStudents = await client.query(
-        "SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl WHERE class_id = $1 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')",
+        `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
+         WHERE class_id = $1
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+           AND removed_at IS NULL`,
         [id]
       );
       const studentCount = parseInt(enrolledStudents.rows[0].count, 10);
@@ -2783,11 +3082,12 @@ router.get(
 
       // Get enrollment counts per phase for this class
       const enrollmentCountsResult = await query(
-        `SELECT phase_number, COUNT(*) as enrolled_count
+        `SELECT phase_number, COUNT(DISTINCT student_id) as enrolled_count
          FROM classstudentstbl
          WHERE class_id = $1
            AND phase_number IS NOT NULL
-           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+           AND removed_at IS NULL
          GROUP BY phase_number`,
         [id]
       );
@@ -3848,7 +4148,7 @@ router.post(
          FROM classstudentstbl
          WHERE student_id = $1
            AND class_id = $2
-           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
            AND removed_at IS NULL`,
         [student_id, class_id]
       );
@@ -4104,7 +4404,7 @@ router.post(
             `SELECT classstudent_id FROM classstudentstbl
              WHERE student_id = $1
                AND class_id = $2
-               AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+               AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                AND removed_at IS NULL`,
             [student_id, class_id]
           );
@@ -4123,7 +4423,7 @@ router.post(
             const enrolledCount = await client.query(
               `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
                WHERE class_id = $1
-                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                  AND removed_at IS NULL`,
               [class_id]
             );
@@ -4206,8 +4506,8 @@ router.post(
               branch_id,
               reservationFee || 0,
               'Pending',
-              issueDate.toISOString().split('T')[0],
-              dueDate.toISOString().split('T')[0],
+              formatYmdLocal(issueDate),
+              formatYmdLocal(dueDate),
               req.user.userId || null,
               package_id || null, // Link invoice to package
             ]
@@ -4447,7 +4747,7 @@ router.post(
         const enrolledCount = await client.query(
           `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
            WHERE class_id = $1
-             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
              AND removed_at IS NULL`,
           [class_id]
         );
@@ -4883,9 +5183,8 @@ router.post(
         prepaidAckReceiptIdForInvoice = ackId;
       }
 
-      // Create invoice
-      const today = new Date();
-      const issueDateStr = today.toISOString().split('T')[0];
+      // Create invoice — issue_date is the calendar day of enrollment (local business date).
+      const issueDateStr = formatYmdLocal(new Date());
       
       // Determine due_date based on installment settings
       // If installment settings are enabled and valid, use the installment due_date
@@ -5900,7 +6199,10 @@ router.post(
         generatedPhaseInvoice = await generateInvoiceFromInstallment(
           pendingInstallmentGeneration.installmentRecord,
           pendingInstallmentGeneration.profile,
-          pendingInstallmentGeneration.enrollmentAckReuse || null
+          {
+            ...(pendingInstallmentGeneration.enrollmentAckReuse || {}),
+            enrollmentInvoiceIssueYmd: issueDateStr,
+          }
         );
       }
 
@@ -6822,7 +7124,8 @@ router.post(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
-           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell')
+           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+             AND removed_at IS NULL
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
          WHERE c.class_id = $1`,

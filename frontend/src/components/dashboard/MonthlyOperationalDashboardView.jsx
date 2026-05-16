@@ -19,6 +19,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, manilaMonthYYYYMM } from '../../utils/dateUtils';
 import { DashboardStatIcon } from './DashboardStatIcons';
+import CombinedStatsCard from './CombinedStatsCard';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -131,6 +132,7 @@ const MonthlyOperationalDashboardView = ({
           row.ar_sales_amount > 0 ||
           row.merchandise_released_quantity > 0 ||
           row.re_enrollment_count > 0 ||
+          (row.rejoin_count || 0) > 0 ||
           (row.dropped_unenrolled_count || 0) > 0
       ),
     [branchMetrics]
@@ -143,6 +145,7 @@ const MonthlyOperationalDashboardView = ({
     merchandise_released_count: 0,
     merchandise_released_quantity: 0,
     re_enrollment_count: 0,
+    rejoin_count: 0,
     dropped_unenrolled_count: 0,
     pay_verified_count: 0,
     pay_verified_amount: 0,
@@ -276,20 +279,26 @@ const MonthlyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-          <StatsCard
-            title="New Enrollees"
-            value={formatNumber(totals.new_enrollees)}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+          <CombinedStatsCard
+            title="New Enrollees & Re-enrollment"
             iconName="users"
             accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            subtitle="Distinct students · program_enrollment_status = new · enrolled_at in selected month (Manila)"
+            metrics={[
+              { label: 'New enrollees', value: formatNumber(totals.new_enrollees) },
+              { label: 'Re-enrollment', value: formatNumber(totals.re_enrollment_count) },
+            ]}
+            subtitle="Distinct students · new or re_enrolled/upsell · enrolled_at in selected month (Manila)"
           />
-          <StatsCard
-            title="Dropped / Unenrolled"
-            value={formatNumber(totals.dropped_unenrolled_count)}
+          <CombinedStatsCard
+            title="Dropped / Unenrolled & Rejoin"
             iconName="userMinus"
             accent="bg-gradient-to-br from-rose-500 to-red-600"
-            subtitle="program_enrollment_status = dropped · removed_at in selected month (Manila)"
+            metrics={[
+              { label: 'Dropped / unenrolled', value: formatNumber(totals.dropped_unenrolled_count) },
+              { label: 'Rejoin', value: formatNumber(totals.rejoin_count || 0) },
+            ]}
+            subtitle="Dropped: removed_at in month · Rejoin: enrolled_at in month (Manila)"
           />
           <StatsCard
             title="Invoice Sales (Completed)"
@@ -311,13 +320,6 @@ const MonthlyOperationalDashboardView = ({
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
             subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s) in month`}
-          />
-          <StatsCard
-            title="Re-enrollment"
-            value={formatNumber(totals.re_enrollment_count)}
-            iconName="academicCap"
-            accent="bg-gradient-to-br from-teal-400 to-cyan-500"
-            subtitle="Distinct students · re_enrolled or upsell · enrolled_at in selected month (Manila)"
           />
         </div>
 
@@ -405,8 +407,8 @@ const MonthlyOperationalDashboardView = ({
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
-                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New Enrollees</th>
-                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped / Unenrolled</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New · Re-enroll</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped · Rejoin</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Invoice Sales</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Acknowledgement Receipt (float)</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
@@ -427,15 +429,20 @@ const MonthlyOperationalDashboardView = ({
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merch. Qty</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Merch. Txns</th>
-                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Re-enrollment</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {branchBreakdown.map((row) => (
                   <tr key={row.branch_id} className="hover:bg-gray-50">
                     <td className="px-3 py-3 font-medium text-gray-900">{row.branch_name}</td>
-                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.new_enrollees)}</td>
-                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.dropped_unenrolled_count || 0)}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      <span className="block">{formatNumber(row.new_enrollees)}</span>
+                      <span className="block text-xs text-teal-700">{formatNumber(row.re_enrollment_count)}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      <span className="block">{formatNumber(row.dropped_unenrolled_count || 0)}</span>
+                      <span className="block text-xs text-rose-700">{formatNumber(row.rejoin_count || 0)}</span>
+                    </td>
                     <td className="px-3 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
                     <td className="px-3 py-3 text-right font-medium text-violet-700">
                       {formatCurrency(row.ar_sales_amount)}
@@ -455,7 +462,6 @@ const MonthlyOperationalDashboardView = ({
                     </td>
                     <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_quantity)}</td>
                     <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.merchandise_released_count)}</td>
-                    <td className="px-3 py-3 text-right text-gray-700">{formatNumber(row.re_enrollment_count)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -466,7 +472,7 @@ const MonthlyOperationalDashboardView = ({
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <ChartCard
             title="Branch Activity Comparison"
-            subtitle="Monthly counts for new enrollees, drops, merchandise released, and re-enrollment."
+            subtitle="Monthly counts for new enrollees, re-enrollment, drops, rejoin, and merchandise released."
           >
             {activeBranchMetrics.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -477,9 +483,10 @@ const MonthlyOperationalDashboardView = ({
                   <Tooltip />
                   <Legend />
                   <Bar dataKey="new_enrollees" name="New enrollees" fill="#22C55E" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="dropped_unenrolled_count" name="Dropped / Unenrolled" fill="#DC2626" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="merchandise_released_quantity" name="Merchandise released" fill="#F7C844" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="re_enrollment_count" name="Re-enrollment" fill="#14B8A6" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="dropped_unenrolled_count" name="Dropped / unenrolled" fill="#DC2626" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="rejoin_count" name="Rejoin" fill="#F97316" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="merchandise_released_quantity" name="Merchandise released" fill="#F7C844" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

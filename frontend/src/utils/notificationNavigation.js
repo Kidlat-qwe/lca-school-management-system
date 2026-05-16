@@ -67,7 +67,10 @@ function inferNotificationNavigation(notification) {
     return { navigationKey: 'merchandise', navigationQuery: 'notificationTab=requests' };
   }
   if (title.includes('cash deposit summary')) {
-    return { navigationKey: 'daily-summary-sales', navigationQuery: 'notificationTab=cashDeposit' };
+    return {
+      navigationKey: 'daily-summary-sales',
+      navigationQuery: 'notificationTab=cashDeposit',
+    };
   }
   if (title.includes('end of shift')) {
     return { navigationKey: 'daily-summary-sales', navigationQuery: 'notificationTab=endOfShift' };
