@@ -14,6 +14,7 @@
  */
 
 import { query } from '../config/database.js';
+import { loadEnrollmentDashboardMetrics } from './enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
@@ -403,6 +404,12 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
 
   const monthEndInclusive = getMonthEndInclusiveYmd(monthRange);
 
+  const enrollmentDashboard = await loadEnrollmentDashboardMetrics(runQuery, {
+    branchId: branchFilter,
+    enrolledFrom: monthStart,
+    enrolledTo: monthEndExclusive,
+  });
+
   return {
     summary_month: monthRange.key,
     month_start: monthStart,
@@ -410,6 +417,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     month_end_inclusive: monthEndInclusive,
     verification_as_of: `${monthStart}–${monthEndInclusive}`,
     totals,
+    enrollment_dashboard: enrollmentDashboard,
     branch_breakdown: branchBreakdown,
     charts: {
       branch_metrics: branchBreakdown.map((row) => ({

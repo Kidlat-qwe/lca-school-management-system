@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -39,6 +39,56 @@ const StatsCard = ({ title, value, iconName, accent, description }) => (
   </div>
 );
 
+const CombinedStatsCard = ({ title, iconName, accent, description, metrics = [] }) => (
+  <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all hover:shadow-md">
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-gray-600">{title}</p>
+        <div className="mt-3 space-y-2">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="flex items-baseline justify-between gap-3">
+              <span className="text-xs font-medium text-gray-500">{metric.label}</span>
+              <span className="text-2xl font-bold tabular-nums tracking-tight text-gray-900">
+                {typeof metric.value === 'number' ? metric.value.toLocaleString() : metric.value}
+              </span>
+            </div>
+          ))}
+        </div>
+        {description && (
+          <p className="mt-2 text-xs leading-snug text-gray-500">{description}</p>
+        )}
+      </div>
+      <div className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl ${accent}`}>
+        <DashboardStatIcon name={iconName} className="h-6 w-6 text-white drop-shadow-sm" />
+      </div>
+    </div>
+  </div>
+);
+
+const OverallToggle = ({ checked, onChange, disabled = false }) => (
+  <div className="inline-flex items-center gap-2">
+    <span className="text-xs font-medium text-gray-600">Overall</span>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label="Show overall enrollment rate"
+      disabled={disabled}
+      onClick={onChange}
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+        checked ? 'border-gray-900 bg-gray-900' : 'border-gray-300 bg-white'
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`pointer-events-none absolute top-0.5 inline-block h-4 w-4 rounded-full shadow transition-transform duration-200 ${
+          checked ? 'translate-x-5 bg-white' : 'translate-x-0.5 bg-gray-900'
+        }`}
+      />
+    </button>
+  </div>
+);
+
 const ChartCard = ({ title, subtitle, children, className = '' }) => (
   <div className={`rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 ${className}`}>
     <div className="mb-4">
@@ -62,16 +112,45 @@ const EnrollmentDashboard = () => {
   // Default to the current Manila month so the "Enrollments by Month" trend defaults to
   // "this month" on first paint. Users can still pick another month from the picker.
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
+  const [selectedCurriculumId, setSelectedCurriculumId] = useState('');
+  const [enrollmentRateOverall, setEnrollmentRateOverall] = useState(false);
+  const [enrollmentRateByPhase, setEnrollmentRateByPhase] = useState([]);
+  const [enrollmentRateLoading, setEnrollmentRateLoading] = useState(false);
+  const [enrollmentRateError, setEnrollmentRateError] = useState('');
+  const skipCurriculumTableFetchRef = useRef(true);
+
+  const buildEnrollmentParams = (scope) => {
+    const params = new URLSearchParams();
+    if (selectedBranchId) params.set('branch_id', selectedBranchId);
+    if (selectedMonth) params.set('month', selectedMonth);
+    if (selectedCurriculumId) params.set('curriculum_id', selectedCurriculumId);
+    params.set('enrollment_rate_scope', scope);
+    return params;
+  };
+
+  const fetchEnrollmentRateTable = async (scopeOverride) => {
+    const scope = scopeOverride ?? (enrollmentRateOverall ? 'overall' : 'month');
+    try {
+      setEnrollmentRateLoading(true);
+      setEnrollmentRateError('');
+      const res = await apiRequest(`/dashboard/enrollment?${buildEnrollmentParams(scope).toString()}`);
+      setEnrollmentRateByPhase(res.data?.enrollment_rate_by_phase ?? []);
+    } catch (err) {
+      setEnrollmentRateError(err?.message || 'Failed to load enrollment rate table.');
+    } finally {
+      setEnrollmentRateLoading(false);
+    }
+  };
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const params = new URLSearchParams();
-      if (selectedBranchId) params.set('branch_id', selectedBranchId);
-      if (selectedMonth) params.set('month', selectedMonth);
+      const params = buildEnrollmentParams(enrollmentRateOverall ? 'overall' : 'month');
       const res = await apiRequest(`/dashboard/enrollment?${params.toString()}`);
       setData(res.data);
+      setEnrollmentRateByPhase(res.data?.enrollment_rate_by_phase ?? []);
+      setEnrollmentRateError('');
     } catch (err) {
       setError(err?.message || 'Failed to load enrollment dashboard.');
     } finally {
@@ -79,9 +158,24 @@ const EnrollmentDashboard = () => {
     }
   };
 
+  const handleEnrollmentRateOverallToggle = () => {
+    const nextOverall = !enrollmentRateOverall;
+    setEnrollmentRateOverall(nextOverall);
+    fetchEnrollmentRateTable(nextOverall ? 'overall' : 'month');
+  };
+
   useEffect(() => {
     fetchData();
   }, [selectedBranchId, selectedMonth]);
+
+  useEffect(() => {
+    if (skipCurriculumTableFetchRef.current) {
+      skipCurriculumTableFetchRef.current = false;
+      return;
+    }
+    if (loading || !data) return;
+    fetchEnrollmentRateTable();
+  }, [selectedCurriculumId]);
 
   const pieData = useMemo(() => {
     if (!data) return [];
@@ -94,8 +188,13 @@ const EnrollmentDashboard = () => {
   }, [data]);
 
   const monthlyEnrollments = useMemo(() => data?.monthly_enrollments ?? [], [data]);
+  const curricula = useMemo(() => data?.curricula ?? [], [data]);
   const byBranch = useMemo(() => data?.active_inactive_by_branch ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
+  const selectedCurriculum = useMemo(() => {
+    if (!selectedCurriculumId) return null;
+    return curricula.find((item) => String(item.curriculum_id) === String(selectedCurriculumId)) || null;
+  }, [curricula, selectedCurriculumId]);
   const selectedBranchName = useMemo(() => {
     if (!selectedBranchId) return 'All Branches';
     const b = branches.find((x) => String(x.branch_id) === String(selectedBranchId));
@@ -118,14 +217,13 @@ const EnrollmentDashboard = () => {
     );
   }
 
-  const totalStudents = data?.total_students ?? 0;
   const activeStudents = data?.active_students ?? 0;
   const inactiveStudents = data?.inactive_students ?? 0;
-  const reservedOnly = data?.reserved_only_count ?? 0;
-  const reEnrollmentRate = Number(data?.re_enrollment_rate ?? 0);
-  const reEnrollmentRateLabel = `${reEnrollmentRate.toFixed(2)}%`;
+  const newEnrolleesCount = Number(data?.new_enrollees_count ?? 0);
   const reEnrollmentCount = Number(data?.re_enrollment_count ?? 0);
-  const reEnrollmentBaseStudents = Number(data?.re_enrollment_base_students ?? 0);
+  const droppedCount = Number(data?.dropped_count ?? 0);
+  const rejoinCount = Number(data?.rejoin_count ?? 0);
+  const reservedStudents = Number(data?.reserved_students_count ?? data?.reserved_only_count ?? 0);
 
   return (
     <div className="space-y-6">
@@ -133,11 +231,11 @@ const EnrollmentDashboard = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Enrollment Dashboard</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Active and inactive students, reservations, and enrollment trends.
+            Active and inactive students, enrollment status movement, reservations, and trends.
           </p>
           {selectedMonth ? (
             <p className="mt-1 text-xs font-medium text-amber-700">
-              Month filter: applies to the &quot;Enrollments by Month&quot; trend chart only. Top cards use current registered and enrollment status.
+              Month filter: applies to new, re-enrollment, dropped, rejoin, the enrollment trend, and the enrollment rate table (unless Overall is toggled on that table).
             </p>
           ) : null}
         </div>
@@ -171,42 +269,142 @@ const EnrollmentDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatsCard
-          title="Total Students"
-          value={totalStudents}
-          iconName="users"
-          accent="bg-gradient-to-br from-slate-400 to-slate-500"
-          description="All students registered in the system (same scope as the branch filter when a branch is selected)."
-        />
-        <StatsCard
-          title="Active Students"
-          value={activeStudents}
-          iconName="checkCircle"
-          accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-          description="Registered students with at least one current active class enrollment."
-        />
-        <StatsCard
-          title="Inactive Students"
-          value={inactiveStudents}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <CombinedStatsCard
+          title="Active / Inactive Students"
           iconName="userMinus"
-          accent="bg-gradient-to-br from-amber-400 to-amber-500"
-          description="Registered students with no current active enrollment."
+          accent="bg-gradient-to-br from-emerald-400 to-slate-500"
+          metrics={[
+            { label: 'Active', value: activeStudents },
+            { label: 'Inactive', value: inactiveStudents },
+          ]}
+          description="Current student status from studentstatustbl."
+        />
+        <CombinedStatsCard
+          title="New Enrollees / Re-enrollment"
+          iconName="users"
+          accent="bg-gradient-to-br from-teal-400 to-cyan-500"
+          metrics={[
+            { label: 'New enrollees', value: newEnrolleesCount },
+            { label: 'Re-enrollment', value: reEnrollmentCount },
+          ]}
+          description="Selected month from program_enrollment_status."
+        />
+        <CombinedStatsCard
+          title="Dropped / Rejoin"
+          iconName="userMinus"
+          accent="bg-gradient-to-br from-rose-500 to-orange-500"
+          metrics={[
+            { label: 'Dropped', value: droppedCount },
+            { label: 'Rejoin', value: rejoinCount },
+          ]}
+          description="Selected month from program_enrollment_status."
         />
         <StatsCard
-          title="Re-enrollment Rate"
-          value={reEnrollmentRateLabel}
-          iconName="chartBar"
-          accent="bg-gradient-to-br from-blue-400 to-blue-500"
-          description={`${reEnrollmentCount.toLocaleString()} active students with a same-class re-enrollment (2+ enrollments in one class) out of ${reEnrollmentBaseStudents.toLocaleString()} active students.`}
-        />
-        <StatsCard
-          title="Reserved Only"
-          value={reservedOnly}
+          title="Reserved Students"
+          value={reservedStudents}
           iconName="clipboardList"
           accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-          description="Have a reservation but no active enrollment yet."
+          description="Current reserved rows from program_enrollment_status."
         />
+      </div>
+
+      <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
+        <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="text-lg font-semibold text-gray-900">Enrollment Rate by Phase</h3>
+              <OverallToggle
+                checked={enrollmentRateOverall}
+                onChange={handleEnrollmentRateOverallToggle}
+                disabled={enrollmentRateLoading}
+              />
+            </div>
+            <p className="mt-1 text-sm text-gray-500">
+              Enrolled students (new, re_enrolled, upsell, rejoin, or completed) divided by total students with a row for each phase.
+              {enrollmentRateOverall ? (
+                <span className="mt-1 block text-xs text-gray-600">Showing all current enrollment rows (not limited by month).</span>
+              ) : (
+                <span className="mt-1 block text-xs text-gray-600">
+                  Filtered by selected month using enrolled_at (Manila).
+                </span>
+              )}
+              {selectedCurriculum ? (
+                <span className="mt-1 block text-xs text-gray-600">
+                  {selectedCurriculum.curriculum_name}: {selectedCurriculum.number_of_phase || 0} phase(s),{' '}
+                  {selectedCurriculum.number_of_session_per_phase || 0} session(s) per phase.
+                </span>
+              ) : null}
+            </p>
+          </div>
+          <label className="inline-flex w-full flex-col gap-1 sm:w-auto sm:min-w-[240px]">
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Curriculum</span>
+            <select
+              value={selectedCurriculumId}
+              onChange={(e) => setSelectedCurriculumId(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+            >
+              <option value="">Overall</option>
+              {curricula.map((curriculum) => (
+                <option key={curriculum.curriculum_id} value={String(curriculum.curriculum_id)}>
+                  {curriculum.curriculum_name}
+                  {curriculum.number_of_phase || curriculum.number_of_session_per_phase
+                    ? ` (${curriculum.number_of_phase || 0} phases · ${curriculum.number_of_session_per_phase || 0} sessions)`
+                    : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {enrollmentRateError ? (
+          <p className="mb-3 text-sm text-red-600">{enrollmentRateError}</p>
+        ) : null}
+        <div className="relative min-h-[120px]">
+          {enrollmentRateLoading ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/70">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#F7C844] border-t-transparent" />
+            </div>
+          ) : null}
+          <div
+            className="overflow-x-auto rounded-lg"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e0 #f7fafc',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
+            <table style={{ width: '100%', minWidth: '520px' }}>
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+                  <th className="px-4 py-3">Phase</th>
+                  <th className="px-4 py-3 text-right">Enrolled</th>
+                  <th className="px-4 py-3 text-right">Students</th>
+                  <th className="px-4 py-3 text-right">Rate</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 text-sm text-gray-800">
+                {enrollmentRateByPhase.length > 0 ? (
+                  enrollmentRateByPhase.map((row) => (
+                    <tr key={row.phase_number} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">Phase {row.phase_number}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{Number(row.enrolled_count || 0).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{Number(row.student_count ?? row.cohort_count ?? 0).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-gray-900">
+                        {Number(row.enrollment_rate || 0).toFixed(2)}%
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-500">
+                      {enrollmentRateLoading ? 'Loading…' : 'No phase enrollment data for the selected scope.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

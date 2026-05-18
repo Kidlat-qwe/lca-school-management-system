@@ -4,6 +4,7 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
+import { loadEnrollmentDashboardMetrics } from '../lib/enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
@@ -128,8 +129,9 @@ router.get(
 
       const monthSequence = buildMonthSequence(6, monthRange?.anchorDate || new Date());
       const monthKeys = monthSequence.map((m) => m.key);
-      const monthStartDate = monthRange?.start || null;
-      const monthEndDate = monthRange?.end || null;
+      const effectiveMonthRange = monthRange || parseMonthRange(getCurrentManilaMonthKey());
+      const monthStartDate = effectiveMonthRange.start;
+      const monthEndDate = effectiveMonthRange.end;
 
       const enrollmentsQuery = branchFilter
         ? `
@@ -891,6 +893,11 @@ router.get(
         total_amount: salesTrendMap[day.key] || 0,
       }));
 
+      const enrollmentDashboard = await loadEnrollmentDashboardMetrics(query, {
+        branchId: branchFilter,
+        enrolledOnDate: summaryDate,
+      });
+
       res.json({
         success: true,
         data: {
@@ -898,6 +905,7 @@ router.get(
           /** Same calendar day as `summary_date` (YYYY-MM-DD): verification cards use issue_date = this day (aligned with date picker). */
           verification_as_of: summaryDate,
           totals,
+          enrollment_dashboard: enrollmentDashboard,
           branch_breakdown: branchBreakdown,
           charts: {
             branch_metrics: branchBreakdown.map((row) => ({
@@ -982,9 +990,8 @@ router.get(
 
 /**
  * GET /api/sms/dashboard/enrollment
- * Enrollment dashboard: active/inactive students, reserved-only, monthly enrollments, charts data.
- * Active = student with at least one enrollment where program_enrollment_status IN ('new','re_enrolled','upsell','rejoin') and removed_at IS NULL.
- * Inactive = student with no active enrollments (includes reserved-only and never enrolled).
+ * Enrollment dashboard: active/inactive (student_statustbl), program status KPIs, phase enrollment rate, charts.
+ * Phase enrollment rate = per phase_number, enrolled students / students in that phase cohort (program_enrollment_status).
  * Access: Superadmin, Admin, Finance (Admin/Finance see their branch only)
  */
 router.get(
@@ -992,6 +999,11 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    queryValidator('enrollment_rate_scope')
+      .optional()
+      .isIn(['month', 'overall'])
+      .withMessage('enrollment_rate_scope must be month or overall'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance'),
@@ -999,6 +1011,8 @@ router.get(
     try {
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && (req.user.branchId == null);
+      const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
+      const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
       const monthRange = parseMonthRange(req.query.month);
       if (monthRange && monthRange.key > getCurrentManilaMonthKey()) {
         return res.status(400).json({
@@ -1010,132 +1024,167 @@ router.get(
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
       const branchParams = branchFilter ? [branchFilter] : [];
-      const monthStartDate = monthRange?.start || null;
-      const monthEndDate = monthRange?.end || null;
+      const effectiveMonthRange = monthRange || parseMonthRange(getCurrentManilaMonthKey());
+      const monthStartDate = effectiveMonthRange.start;
+      const monthEndDate = effectiveMonthRange.end;
 
-      const studentWhere = branchFilter
-        ? 'WHERE u.user_type = \'Student\' AND u.branch_id = $1'
-        : 'WHERE u.user_type = \'Student\'';
-      const activeEnrollment = "cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin') AND cs.removed_at IS NULL";
+      const statusBranchJoin = branchFilter ? 'AND u.branch_id = $1' : '';
+      const classBranchJoin = branchFilter ? 'AND c.branch_id = $1' : '';
+      const monthParamOffset = branchFilter ? 1 : 0;
+      const monthParams = branchFilter ? [...branchParams, monthStartDate, monthEndDate] : [monthStartDate, monthEndDate];
 
-      // KPI cards: always system snapshot (not month-scoped). Month only affects the enrollments trend chart.
-      const totalStudentsResult = await query(
-        `SELECT COUNT(*) AS count FROM userstbl u ${studentWhere}`,
+      // Current active/inactive snapshot comes from student_statustbl, scoped through userstbl for branch access.
+      const statusSummaryResult = await query(
+        `
+          SELECT
+            COUNT(DISTINCT ss.student_id) AS total_students,
+            COUNT(DISTINCT CASE WHEN ss.status = 'active' THEN ss.student_id END) AS active_students,
+            COUNT(DISTINCT CASE WHEN ss.status = 'inactive' THEN ss.student_id END) AS inactive_students
+          FROM student_statustbl ss
+          INNER JOIN userstbl u ON u.user_id = ss.student_id AND u.user_type = 'Student'
+          WHERE 1 = 1 ${statusBranchJoin}
+        `,
         branchParams
       );
-      const totalStudents = parseInt(totalStudentsResult.rows[0]?.count, 10) || 0;
+      const totalStudents = parseInt(statusSummaryResult.rows[0]?.total_students, 10) || 0;
+      const activeStudents = parseInt(statusSummaryResult.rows[0]?.active_students, 10) || 0;
+      const inactiveStudents = parseInt(statusSummaryResult.rows[0]?.inactive_students, 10) || 0;
 
-      const activeQuery = branchFilter
-        ? `
-          SELECT COUNT(DISTINCT cs.student_id) AS count
-          FROM classstudentstbl cs
-          INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
-          WHERE ${activeEnrollment}
+      const phaseRateParams = [];
+      let phaseRateParamIdx = 1;
+      let phaseRateBranchJoin = '';
+      if (branchFilter) {
+        phaseRateBranchJoin = `AND c.branch_id = $${phaseRateParamIdx}`;
+        phaseRateParams.push(branchFilter);
+        phaseRateParamIdx += 1;
+      }
+      let phaseRateCurriculumJoin = '';
+      if (curriculumFilter) {
+        phaseRateCurriculumJoin = `INNER JOIN programstbl p ON c.program_id = p.program_id AND p.curriculum_id = $${phaseRateParamIdx}`;
+        phaseRateParams.push(curriculumFilter);
+        phaseRateParamIdx += 1;
+      }
+      let phaseRateMonthFilter = '';
+      if (enrollmentRateScope === 'month') {
+        phaseRateMonthFilter = `
+              AND cs.enrolled_at IS NOT NULL
+              AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${phaseRateParamIdx}::date
+              AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${phaseRateParamIdx + 1}::date`;
+        phaseRateParams.push(monthStartDate, monthEndDate);
+        phaseRateParamIdx += 2;
+      }
+
+      // Enrollment rate by phase: enrolled students / total students with a row for that phase.
+      const phaseEnrollmentRateResult = await query(
         `
-        : `
-          SELECT COUNT(DISTINCT cs.student_id) AS count
-          FROM classstudentstbl cs
-          INNER JOIN classestbl c ON cs.class_id = c.class_id
-          WHERE ${activeEnrollment}
-        `;
-      const activeResult = await query(activeQuery, branchParams);
-      const activeStudents = parseInt(activeResult.rows[0]?.count, 10) || 0;
-      const inactiveStudents = Math.max(0, totalStudents - activeStudents);
-
-      // Re-enrollment: more than one classstudent row for the same (student, class) = enrolled again in that class.
-      // Rate = active students who have at least one such same-class re-enrollment / all active students.
-      const reEnrollmentQuery = branchFilter
-        ? `
-          WITH enrollment_rows AS (
-            SELECT cs.student_id, cs.class_id
+          WITH scoped_rows AS (
+            SELECT
+              cs.student_id,
+              COALESCE(cs.phase_number, 0) AS phase_number,
+              cs.program_enrollment_status,
+              cs.removed_at
             FROM classstudentstbl cs
-            INNER JOIN classestbl c ON cs.class_id = c.class_id
-            WHERE c.branch_id = $1
+            INNER JOIN classestbl c ON cs.class_id = c.class_id ${phaseRateBranchJoin}
+            ${phaseRateCurriculumJoin}
+            WHERE COALESCE(cs.phase_number, 0) > 0
+              AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+              ${phaseRateMonthFilter}
           ),
-          reenrollment_pairs AS (
-            SELECT student_id, class_id
-            FROM enrollment_rows
-            GROUP BY student_id, class_id
-            HAVING COUNT(*) > 1
+          phase_student AS (
+            SELECT
+              student_id,
+              phase_number,
+              BOOL_OR(
+                program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+                AND removed_at IS NULL
+              ) AS is_enrolled
+            FROM scoped_rows
+            GROUP BY student_id, phase_number
           ),
-          active_students AS (
-            SELECT DISTINCT cs.student_id
-            FROM classstudentstbl cs
-            INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
-            WHERE ${activeEnrollment}
+          phase_agg AS (
+            SELECT
+              phase_number,
+              COUNT(*)::bigint AS student_count,
+              COUNT(*) FILTER (WHERE is_enrolled)::bigint AS enrolled_count
+            FROM phase_student
+            GROUP BY phase_number
           )
           SELECT
-            (
-              SELECT COUNT(DISTINCT rp.student_id)
-              FROM reenrollment_pairs rp
-              INNER JOIN active_students a ON a.student_id = rp.student_id
-            )::int AS reenrolled_active_count
-        `
-        : `
-          WITH enrollment_rows AS (
-            SELECT cs.student_id, cs.class_id
-            FROM classstudentstbl cs
-            INNER JOIN classestbl c ON cs.class_id = c.class_id
-          ),
-          reenrollment_pairs AS (
-            SELECT student_id, class_id
-            FROM enrollment_rows
-            GROUP BY student_id, class_id
-            HAVING COUNT(*) > 1
-          ),
-          active_students AS (
-            SELECT DISTINCT cs.student_id
-            FROM classstudentstbl cs
-            INNER JOIN classestbl c ON cs.class_id = c.class_id
-            WHERE ${activeEnrollment}
-          )
-          SELECT
-            (
-              SELECT COUNT(DISTINCT rp.student_id)
-              FROM reenrollment_pairs rp
-              INNER JOIN active_students a ON a.student_id = rp.student_id
-            )::int AS reenrolled_active_count
-        `;
-      const reEnrollmentResult = await query(reEnrollmentQuery, branchParams);
-      const reEnrollmentCount = parseInt(reEnrollmentResult.rows[0]?.reenrolled_active_count, 10) || 0;
-      const reEnrollmentBaseStudents = activeStudents;
-      const enrollmentRate = totalStudents > 0
-        ? Number(((activeStudents / totalStudents) * 100).toFixed(2))
-        : 0;
-      const reEnrollmentRate = reEnrollmentBaseStudents > 0
-        ? Number(((reEnrollmentCount / reEnrollmentBaseStudents) * 100).toFixed(2))
-        : 0;
+            phase_number,
+            enrolled_count,
+            student_count,
+            CASE
+              WHEN student_count > 0
+              THEN ROUND((enrolled_count::numeric / student_count::numeric) * 100, 2)
+              ELSE 0
+            END AS enrollment_rate
+          FROM phase_agg
+          ORDER BY phase_number ASC
+        `,
+        phaseRateParams
+      );
+      const enrollmentRateByPhase = phaseEnrollmentRateResult.rows.map((row) => ({
+        phase_number: parseInt(row.phase_number, 10) || 0,
+        enrolled_count: parseInt(row.enrolled_count, 10) || 0,
+        student_count: parseInt(row.student_count, 10) || 0,
+        enrollment_rate: Number(row.enrollment_rate) || 0,
+      }));
 
-      // Reserved-only: at least one reservation, no current active enrollment (not month-scoped)
-      const reservedOnlyQuery = branchFilter
-        ? `
-          SELECT COUNT(DISTINCT r.student_id) AS count
-          FROM reservedstudentstbl r
-          WHERE r.branch_id = $1
-            AND r.status = 'Reserved'
-            AND NOT EXISTS (
-              SELECT 1 FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = r.branch_id
-              WHERE cs.student_id = r.student_id
-                AND ${activeEnrollment}
-            )
+      const programStatusSummaryResult = await query(
         `
-        : `
-          SELECT COUNT(DISTINCT r.student_id) AS count
-          FROM reservedstudentstbl r
-          WHERE r.status = 'Reserved'
-            AND NOT EXISTS (
-              SELECT 1 FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.student_id = r.student_id
-                AND ${activeEnrollment}
-            )
-        `;
-      const reservedOnlyResult = await query(reservedOnlyQuery, branchParams);
-      const reservedOnlyCount = parseInt(reservedOnlyResult.rows[0]?.count, 10) || 0;
+          SELECT
+            COUNT(DISTINCT CASE
+              WHEN cs.program_enrollment_status = 'new'
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+              THEN cs.student_id
+            END) AS new_enrollees_count,
+            COUNT(DISTINCT CASE
+              WHEN cs.program_enrollment_status IN ('re_enrolled', 'upsell')
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+              THEN cs.student_id
+            END) AS re_enrollment_count,
+            COUNT(DISTINCT CASE
+              WHEN cs.program_enrollment_status = 'dropped'
+               AND cs.removed_at IS NOT NULL
+               AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+               AND (
+                 (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)
+                 OR (
+                   cs.enrolled_at IS NULL
+                   AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
+                 )
+               )
+               AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $${monthParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $${monthParamOffset + 2}::date
+              THEN cs.student_id
+            END) AS dropped_count,
+            COUNT(DISTINCT CASE
+              WHEN cs.program_enrollment_status = 'rejoin'
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+              THEN cs.student_id
+            END) AS rejoin_count,
+            COUNT(DISTINCT CASE
+              WHEN cs.program_enrollment_status = 'reserved'
+               AND cs.removed_at IS NULL
+              THEN cs.student_id
+            END) AS reserved_students_count
+          FROM classstudentstbl cs
+          INNER JOIN classestbl c ON cs.class_id = c.class_id ${classBranchJoin}
+        `,
+        monthParams
+      );
+      const programStatusSummary = programStatusSummaryResult.rows[0] || {};
+      const newEnrolleesCount = parseInt(programStatusSummary.new_enrollees_count, 10) || 0;
+      const reEnrollmentCount = parseInt(programStatusSummary.re_enrollment_count, 10) || 0;
+      const droppedCount = parseInt(programStatusSummary.dropped_count, 10) || 0;
+      const rejoinCount = parseInt(programStatusSummary.rejoin_count, 10) || 0;
+      const reservedStudentsCount = parseInt(programStatusSummary.reserved_students_count, 10) || 0;
 
       // Monthly enrollments (last 6 months) for bar chart
-      const monthSequence = buildMonthSequence(6, monthRange?.anchorDate || new Date());
+      const monthSequence = buildMonthSequence(6, effectiveMonthRange.anchorDate || new Date());
       const monthKeys = monthSequence.map((m) => m.key);
       const enrollmentsByMonthQuery = branchFilter
         ? `
@@ -1178,14 +1227,12 @@ router.get(
           SELECT
             b.branch_id,
             COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
-            COUNT(DISTINCT u.user_id) AS total,
-            COUNT(DISTINCT CASE WHEN EXISTS (
-              SELECT 1 FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = b.branch_id
-              WHERE cs.student_id = u.user_id AND ${activeEnrollment}
-            ) THEN u.user_id END) AS active_count
+            COUNT(DISTINCT ss.student_id) AS total,
+            COUNT(DISTINCT CASE WHEN ss.status = 'active' THEN ss.student_id END) AS active_count,
+            COUNT(DISTINCT CASE WHEN ss.status = 'inactive' THEN ss.student_id END) AS inactive_count
           FROM branchestbl b
           LEFT JOIN userstbl u ON u.branch_id = b.branch_id AND u.user_type = 'Student'
+          LEFT JOIN student_statustbl ss ON ss.student_id = u.user_id
           GROUP BY b.branch_id, b.branch_nickname, b.branch_name
           ORDER BY COALESCE(b.branch_nickname, b.branch_name)
         `;
@@ -1195,7 +1242,7 @@ router.get(
           branch_name: row.branch_name || 'Unassigned',
           total: parseInt(row.total, 10) || 0,
           active: parseInt(row.active_count, 10) || 0,
-          inactive: Math.max(0, (parseInt(row.total, 10) || 0) - (parseInt(row.active_count, 10) || 0)),
+          inactive: parseInt(row.inactive_count, 10) || 0,
         }));
       }
 
@@ -1205,21 +1252,43 @@ router.get(
         FROM branchestbl ORDER BY COALESCE(branch_nickname, branch_name)
       `);
 
+      const curriculaResult = await query(`
+        SELECT
+          curriculum_id,
+          curriculum_name,
+          number_of_phase,
+          number_of_session_per_phase,
+          status
+        FROM curriculumstbl
+        ORDER BY curriculum_name ASC
+      `);
+
       res.json({
         success: true,
         data: {
           total_students: totalStudents,
           active_students: activeStudents,
           inactive_students: inactiveStudents,
-          enrollment_rate: enrollmentRate,
+          enrollment_rate_by_phase: enrollmentRateByPhase,
+          enrollment_rate_scope: enrollmentRateScope,
+          curricula: curriculaResult.rows.map((row) => ({
+            curriculum_id: row.curriculum_id,
+            curriculum_name: row.curriculum_name,
+            number_of_phase: parseInt(row.number_of_phase, 10) || 0,
+            number_of_session_per_phase: parseInt(row.number_of_session_per_phase, 10) || 0,
+            status: row.status,
+          })),
+          selected_curriculum_id: curriculumFilter,
+          new_enrollees_count: newEnrolleesCount,
           re_enrollment_count: reEnrollmentCount,
-          re_enrollment_base_students: reEnrollmentBaseStudents,
-          re_enrollment_rate: reEnrollmentRate,
-          reserved_only_count: reservedOnlyCount,
+          dropped_count: droppedCount,
+          rejoin_count: rejoinCount,
+          reserved_students_count: reservedStudentsCount,
+          reserved_only_count: reservedStudentsCount,
           monthly_enrollments,
           active_inactive_by_branch,
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
-          selected_month: monthRange?.key || null,
+          selected_month: effectiveMonthRange.key,
           selected_branch_id: branchFilter,
         },
       });

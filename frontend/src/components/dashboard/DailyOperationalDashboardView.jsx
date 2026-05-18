@@ -137,6 +137,7 @@ const DailyOperationalDashboardView = ({
       ),
     [branchMetrics]
   );
+  const enrollmentDashboard = data?.enrollment_dashboard || {};
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
@@ -274,7 +275,7 @@ const DailyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <CombinedStatsCard
             title="New Enrollees & Re-enrollment"
             iconName="users"
@@ -315,6 +316,13 @@ const DailyOperationalDashboardView = ({
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
             subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s)`}
+          />
+          <StatsCard
+            title="Enrollment Dashboard"
+            value={`${Number(enrollmentDashboard.enrollment_rate || 0).toFixed(2)}%`}
+            iconName="chartBar"
+            accent="bg-gradient-to-br from-blue-400 to-cyan-500"
+            subtitle={`${formatNumber(enrollmentDashboard.enrollment_rate_enrolled_count || 0)} enrolled of ${formatNumber(enrollmentDashboard.enrollment_rate_student_count || 0)} students in selected day (enrolled_at, Manila).`}
           />
         </div>
 

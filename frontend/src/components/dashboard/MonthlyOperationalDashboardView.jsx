@@ -137,6 +137,7 @@ const MonthlyOperationalDashboardView = ({
       ),
     [branchMetrics]
   );
+  const enrollmentDashboard = data?.enrollment_dashboard || {};
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
@@ -279,7 +280,7 @@ const MonthlyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <CombinedStatsCard
             title="New Enrollees & Re-enrollment"
             iconName="users"
@@ -320,6 +321,19 @@ const MonthlyOperationalDashboardView = ({
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
             subtitle={`${formatNumber(totals.merchandise_released_count)} paid merchandise transaction(s) in month`}
+          />
+          <CombinedStatsCard
+            title="Enrollment Dashboard"
+            iconName="chartBar"
+            accent="bg-gradient-to-br from-blue-400 to-cyan-500"
+            metrics={[
+              { label: 'Active', value: formatNumber(enrollmentDashboard.active_students || 0) },
+              { label: 'Inactive', value: formatNumber(enrollmentDashboard.inactive_students || 0) },
+              {
+                label: 'Overall enrollment rate',
+                value: `${Number(enrollmentDashboard.enrollment_rate || 0).toFixed(2)}%`,
+              },
+            ]}
           />
         </div>
 
