@@ -642,7 +642,15 @@ const AdminPaymentLogs = () => {
   }, [openStatusDropdown, openPaymentMethodDropdown, openApprovalMenuId, openActionsDropdown]);
 
   const userType = userInfo?.user_type || userInfo?.userType;
-  const canApprovePayment = () => false;
+  const userBranchId = userInfo?.branch_id ?? userInfo?.branchId;
+  /** Admin may verify reference and approve pending payments for their branch only. */
+  const canApprovePendingPayment = (payment) => {
+    if (userType !== 'Admin') return false;
+    if (userBranchId == null || userBranchId === undefined) return true;
+    return Number(payment.branch_id) === Number(userBranchId);
+  };
+  /** Admin cannot revoke finance approval once granted. */
+  const canRevokeApproval = () => false;
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
@@ -681,7 +689,10 @@ const AdminPaymentLogs = () => {
     try {
       await apiRequest(`/payments/${paymentId}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({ approve: true }),
+        body: JSON.stringify({
+          approve: true,
+          finance_verified_reference_number: enteredRef,
+        }),
       });
       setPayments((prev) =>
         prev.map((p) =>
@@ -2487,40 +2498,29 @@ const AdminPaymentLogs = () => {
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
-                          const canApprove = canApprovePayment(payment);
-                          const showDropdown = openApprovalMenuId === payment.payment_id;
                           return (
-                            <div className="relative min-w-0 max-w-full">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (isApproved) {
-                                    if (!canApprove) return;
-                                    if (showDropdown) {
-                                      setOpenApprovalMenuId(null);
-                                    } else {
-                                      const rect = e.currentTarget.getBoundingClientRect();
-                                      setApprovalMenuPosition({ top: rect.bottom + 4, left: rect.left });
-                                      setOpenApprovalMenuId(payment.payment_id);
-                                    }
-                                  } else {
-                                    openReferenceModal(payment);
-                                  }
-                                }}
-                                className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 shrink-0 hover:ring-2 hover:ring-primary-300 ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
-                                title={isApproved ? 'Only Superadmin, Superfinance, or Finance can approve' : 'Click to update reference number'}
+                            <div className="min-w-0 max-w-full space-y-1">
+                              <span
+                                className={`inline-flex max-w-full px-2 py-1 rounded-md text-xs font-medium ${
+                                  isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                                }`}
                               >
-                                <span className="truncate">{isApproved ? 'Approved' : 'Pending Approval'}</span>
-                                {!isApproved && (
-                                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                  </svg>
-                                )}
-                              </button>
+                                <span className="truncate">
+                                  {isApproved ? 'Approved' : 'Pending Approval'}
+                                </span>
+                              </span>
                               {isApproved && payment.approved_by_name && (
-                                <div className="text-xs text-gray-500 mt-0.5 truncate" title={payment.approved_at ? `Approved at ${payment.approved_at}` : ''}>
-                                  by <span className="truncate inline-block max-w-[100px] align-bottom" title={payment.approved_by_name}>{payment.approved_by_name}</span>
+                                <div
+                                  className="text-xs text-gray-500 truncate"
+                                  title={payment.approved_at ? `Approved at ${payment.approved_at}` : ''}
+                                >
+                                  by{' '}
+                                  <span
+                                    className="truncate inline-block max-w-[100px] align-bottom"
+                                    title={payment.approved_by_name}
+                                  >
+                                    {payment.approved_by_name}
+                                  </span>
                                 </div>
                               )}
                             </div>

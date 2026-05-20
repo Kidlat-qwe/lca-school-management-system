@@ -4,6 +4,42 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `listPaymentLogApprovers.js`
+
+Lists **who approved payments** in Payment Logs (`paymenttbl.approved_by` when `approval_status = 'Approved'`).
+
+**Usage:**
+```bash
+# Summary: distinct approvers grouped by user_type and user
+node scripts/listPaymentLogApprovers.js
+
+# Include sample of each approved payment
+node scripts/listPaymentLogApprovers.js --detail
+
+# Filters
+node scripts/listPaymentLogApprovers.js --branch-id=1
+node scripts/listPaymentLogApprovers.js --from=2026-01-01 --to=2026-05-31
+node scripts/listPaymentLogApprovers.js --user-type=Admin
+node scripts/listPaymentLogApprovers.js --detail --limit=500
+```
+
+**Options:** `--detail`, `--branch-id`, `--from`, `--to` (approved_at, Manila date), `--user-type`, `--limit`, `--help`
+
+Without `--branch-id`, output includes **all branches** from `branchestbl` with approval counts per payment branch (0 if none).
+
+**Revert Admin approvals** (sets `approval_status` back to `Pending`, clears `approved_by`, `approved_at`, `finance_verified_reference_number` — same as revoke in the approve API):
+
+```bash
+# Preview only
+node scripts/listPaymentLogApprovers.js --revert-admin-approvals
+
+# Execute
+node scripts/listPaymentLogApprovers.js --revert-admin-approvals --apply
+
+# Scoped
+node scripts/listPaymentLogApprovers.js --revert-admin-approvals --branch-id=1 --from=2026-01-01 --apply
+```
+
 ### `deleteTodayAcknowledgementReceipts.js`
 
 Deletes acknowledgement receipts for a target date (default: today in Manila timezone).

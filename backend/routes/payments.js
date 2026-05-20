@@ -3965,11 +3965,11 @@ router.get(
 /**
  * PUT /api/sms/payments/:id/approve
  * Approve or unapprove a payment (finance team confirmation)
- * Access: Superadmin, Superfinance can approve all; Finance can approve their branch only
+ * Access: Superadmin, Superfinance can approve all; Finance/Admin can approve their branch only
  */
 router.put(
   '/:id/approve',
-  requireRole('Superadmin', 'Finance', 'Superfinance'),
+  requireRole('Superadmin', 'Finance', 'Superfinance', 'Admin'),
   [
     param('id').isInt().withMessage('Payment ID must be an integer'),
     body('approve').isBoolean().withMessage('approve must be a boolean'),
@@ -4066,10 +4066,10 @@ router.put(
         }
       }
 
-      // Permission check: branch-bound Finance can only approve payments from their own branch
+      // Permission check: branch-bound Finance/Admin can only approve payments from their own branch
       // Superfinance is represented as Finance with no branch_id and should NOT be restricted here
       if (
-        userType === 'Finance' &&
+        (userType === 'Finance' || userType === 'Admin') &&
         userBranchId !== null &&
         userBranchId !== undefined &&
         payment.branch_id !== userBranchId
