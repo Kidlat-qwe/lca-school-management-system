@@ -1220,6 +1220,83 @@ router.get(
         count: enrollmentMap[m.key] || 0,
       }));
 
+      const chartWindowStart = parseMonthRange(monthSequence[0]?.key)?.start || monthStartDate;
+      const monthlyRateParams = [];
+      let monthlyRateParamIdx = 1;
+      let monthlyRateBranchJoin = '';
+      if (branchFilter) {
+        monthlyRateBranchJoin = `AND c.branch_id = $${monthlyRateParamIdx}`;
+        monthlyRateParams.push(branchFilter);
+        monthlyRateParamIdx += 1;
+      }
+      monthlyRateParams.push(chartWindowStart, monthEndDate);
+      const monthlyEnrollmentRateResult = await query(
+        `
+          WITH scoped_rows AS (
+            SELECT
+              TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key,
+              cs.student_id,
+              COALESCE(cs.phase_number, 0) AS phase_number,
+              cs.program_enrollment_status,
+              cs.removed_at
+            FROM classstudentstbl cs
+            INNER JOIN classestbl c ON cs.class_id = c.class_id ${monthlyRateBranchJoin}
+            WHERE cs.enrolled_at IS NOT NULL
+              AND COALESCE(cs.phase_number, 0) BETWEEN 1 AND 10
+              AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+              AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthlyRateParamIdx}::date
+              AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthlyRateParamIdx + 1}::date
+          ),
+          phase_student AS (
+            SELECT
+              month_key,
+              student_id,
+              phase_number,
+              BOOL_OR(
+                program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+                AND removed_at IS NULL
+              ) AS is_enrolled
+            FROM scoped_rows
+            GROUP BY month_key, student_id, phase_number
+          ),
+          month_agg AS (
+            SELECT
+              month_key,
+              COUNT(*)::bigint AS student_count,
+              COUNT(*) FILTER (WHERE is_enrolled)::bigint AS enrolled_count
+            FROM phase_student
+            GROUP BY month_key
+          )
+          SELECT
+            month_key,
+            enrolled_count,
+            student_count,
+            CASE
+              WHEN student_count > 0
+              THEN ROUND((enrolled_count::numeric / student_count::numeric) * 100, 2)
+              ELSE 0
+            END AS enrollment_rate
+          FROM month_agg
+          ORDER BY month_key ASC
+        `,
+        monthlyRateParams
+      );
+      const monthlyRateMap = monthlyEnrollmentRateResult.rows.reduce((acc, row) => {
+        acc[row.month_key] = {
+          enrolled_count: parseInt(row.enrolled_count, 10) || 0,
+          student_count: parseInt(row.student_count, 10) || 0,
+          enrollment_rate: Number(row.enrollment_rate) || 0,
+        };
+        return acc;
+      }, {});
+      const monthly_enrollment_rate = monthSequence.map((m) => ({
+        month: m.label,
+        month_key: m.key,
+        enrolled_count: monthlyRateMap[m.key]?.enrolled_count ?? 0,
+        student_count: monthlyRateMap[m.key]?.student_count ?? 0,
+        enrollment_rate: monthlyRateMap[m.key]?.enrollment_rate ?? 0,
+      }));
+
       // Active vs Inactive by branch (bar chart when no branch filter; same snapshot as KPI cards)
       let active_inactive_by_branch = [];
       if (!branchFilter) {
@@ -1286,6 +1363,7 @@ router.get(
           reserved_students_count: reservedStudentsCount,
           reserved_only_count: reservedStudentsCount,
           monthly_enrollments,
+          monthly_enrollment_rate,
           active_inactive_by_branch,
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
           selected_month: effectiveMonthRange.key,

@@ -194,15 +194,15 @@ const EnrollmentDashboard = () => {
 
   const pieData = useMemo(() => {
     if (!data) return [];
-    const active = data.active_students ?? 0;
-    const inactive = data.inactive_students ?? 0;
+    const newEnrollees = Number(data.new_enrollees_count ?? 0);
+    const reEnrolled = Number(data.re_enrollment_count ?? 0);
     return [
-      { name: 'Active', value: active, fill: COLORS[0] },
-      { name: 'Inactive', value: inactive, fill: COLORS[1] },
+      { name: 'New enrollee', value: newEnrollees, fill: COLORS[0] },
+      { name: 'Re-enrolled', value: reEnrolled, fill: COLORS[3] },
     ].filter((d) => d.value > 0);
   }, [data]);
 
-  const monthlyEnrollments = useMemo(() => data?.monthly_enrollments ?? [], [data]);
+  const monthlyEnrollmentRate = useMemo(() => data?.monthly_enrollment_rate ?? [], [data]);
   const curricula = useMemo(() => data?.curricula ?? [], [data]);
   const byBranch = useMemo(() => data?.active_inactive_by_branch ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
@@ -442,8 +442,8 @@ const EnrollmentDashboard = () => {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <ChartCard
-          title="Active vs Inactive"
-          subtitle="Students currently enrolled in at least one class vs not enrolled."
+          title="New Enrollee vs Re-enrolled"
+          subtitle="Distinct students in the selected month (program_enrollment_status, enrolled_at Manila)."
         >
           {pieData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
@@ -469,22 +469,36 @@ const EnrollmentDashboard = () => {
             </ResponsiveContainer>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
-              No student data to display.
+              No new enrollee or re-enrollment data for the selected month.
             </div>
           )}
         </ChartCard>
 
         <ChartCard
-          title="Enrollments by Month"
-          subtitle="New enrollments in the last 6 months."
-        >
+          title="Enrollment Rate by Month"
+           >
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyEnrollments} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+            <BarChart data={monthlyEnrollmentRate} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
-              <Tooltip />
-              <Bar dataKey="count" name="Enrollments" fill="#F7C844" radius={[4, 4, 0, 0]} />
+              <YAxis
+                tick={{ fontSize: 12 }}
+                domain={[0, 100]}
+                tickFormatter={(value) => `${value}%`}
+              />
+              <Tooltip
+                formatter={(value, name, props) => {
+                  if (name === 'Enrollment rate') {
+                    const row = props?.payload;
+                    return [
+                      `${Number(value).toFixed(2)}% (${Number(row?.enrolled_count || 0).toLocaleString()} / ${Number(row?.student_count || 0).toLocaleString()})`,
+                      name,
+                    ];
+                  }
+                  return [value, name];
+                }}
+              />
+              <Bar dataKey="enrollment_rate" name="Enrollment rate" fill="#F7C844" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
