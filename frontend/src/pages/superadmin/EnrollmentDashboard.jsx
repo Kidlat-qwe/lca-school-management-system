@@ -20,6 +20,21 @@ import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons
 const COLORS = ['#22C55E', '#94A3B8', '#F7C844', '#4F46E5'];
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
 
+/** Sum enrolled / students across phases 1–10, then overall % (e.g. 20/40 → 50%). */
+function summarizeEnrollmentRatePhases1To10(rows) {
+  const phaseRows = (rows || []).filter(
+    (row) => Number(row.phase_number) >= 1 && Number(row.phase_number) <= 10
+  );
+  const enrolledCount = phaseRows.reduce((sum, row) => sum + Number(row.enrolled_count || 0), 0);
+  const studentCount = phaseRows.reduce(
+    (sum, row) => sum + Number(row.student_count ?? row.cohort_count ?? 0),
+    0
+  );
+  const enrollmentRate =
+    studentCount > 0 ? Number(((enrolledCount / studentCount) * 100).toFixed(2)) : 0;
+  return { enrolledCount, studentCount, enrollmentRate, phaseRows };
+}
+
 const StatsCard = ({ title, value, iconName, accent, description }) => (
   <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 transition-all hover:shadow-md">
     <div className="flex items-start justify-between">
@@ -201,6 +216,11 @@ const EnrollmentDashboard = () => {
     return b?.branch_name ?? 'All Branches';
   }, [selectedBranchId, branches]);
 
+  const totalEnrollmentRate = useMemo(
+    () => summarizeEnrollmentRatePhases1To10(enrollmentRateByPhase),
+    [enrollmentRateByPhase]
+  );
+
   if (loading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -269,7 +289,7 @@ const EnrollmentDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <CombinedStatsCard
           title="Active / Inactive Students"
           iconName="userMinus"
@@ -299,6 +319,19 @@ const EnrollmentDashboard = () => {
             { label: 'Rejoin', value: rejoinCount },
           ]}
           description="Selected month from program_enrollment_status."
+        />
+        <StatsCard
+          title="Total Enrollment Rate"
+          value={`${totalEnrollmentRate.enrollmentRate.toFixed(2)}%`}
+          iconName="chartBar"
+          accent="bg-gradient-to-br from-blue-400 to-cyan-500"
+          description={
+            enrollmentRateLoading
+              ? 'Loading…'
+              : `${totalEnrollmentRate.enrolledCount.toLocaleString()} enrolled of ${totalEnrollmentRate.studentCount.toLocaleString()} students (phases 1–10). ${
+                  enrollmentRateOverall ? 'Overall scope.' : 'Selected month (enrolled_at).'
+                }`
+          }
         />
         <StatsCard
           title="Reserved Students"
