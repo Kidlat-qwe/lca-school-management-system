@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import StatusLegend from '../../components/reports/StatusLegend';
@@ -76,8 +77,28 @@ const statusBadgeClass = (value) => {
   return 'bg-slate-100 text-slate-800';
 };
 
+const parseReportLocationSearch = (search) => {
+  const params = new URLSearchParams(search);
+  const tabParam = params.get('tab');
+  const tab =
+    tabParam === TAB_PROGRAM_ENROLLMENT_STATUS
+      ? TAB_PROGRAM_ENROLLMENT_STATUS
+      : tabParam === TAB_PROGRAM_PAYMENT_STATUS
+        ? TAB_PROGRAM_PAYMENT_STATUS
+        : TAB_STUDENT_STATUS;
+  return {
+    tab,
+    phaseNumber: params.get('phase_number') || '',
+    enrolledDateFrom: params.get('enrolled_date_from') || '',
+    enrolledDateTo: params.get('enrolled_date_to') || '',
+    enrolledOnly: params.get('enrolled_only') === '1',
+  };
+};
+
 const AdminReport = () => {
-  const [tab, setTab] = useState(TAB_STUDENT_STATUS);
+  const location = useLocation();
+  const urlBootstrap = parseReportLocationSearch(location.search);
+  const [tab, setTab] = useState(urlBootstrap.tab);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const hasLoadedOnceRef = useRef(false);
@@ -85,9 +106,22 @@ const AdminReport = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterPhaseNumber, setFilterPhaseNumber] = useState(urlBootstrap.phaseNumber);
+  const [filterEnrolledDateFrom, setFilterEnrolledDateFrom] = useState(urlBootstrap.enrolledDateFrom);
+  const [filterEnrolledDateTo, setFilterEnrolledDateTo] = useState(urlBootstrap.enrolledDateTo);
+  const [filterEnrolledOnly, setFilterEnrolledOnly] = useState(urlBootstrap.enrolledOnly);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
 
   const config = TAB_CONFIG[tab];
+
+  useEffect(() => {
+    const parsed = parseReportLocationSearch(location.search);
+    setTab(parsed.tab);
+    if (parsed.phaseNumber) setFilterPhaseNumber(parsed.phaseNumber);
+    if (parsed.enrolledDateFrom) setFilterEnrolledDateFrom(parsed.enrolledDateFrom);
+    if (parsed.enrolledDateTo) setFilterEnrolledDateTo(parsed.enrolledDateTo);
+    setFilterEnrolledOnly(parsed.enrolledOnly);
+  }, [location.search]);
 
   useEffect(() => {
     setFilterStatus('all');
@@ -107,6 +141,12 @@ const AdminReport = () => {
         limit: String(pagination.limit),
       });
       if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
+      if (tab === TAB_PROGRAM_ENROLLMENT_STATUS) {
+        if (filterPhaseNumber) params.set('phase_number', filterPhaseNumber);
+        if (filterEnrolledDateFrom) params.set('enrolled_date_from', filterEnrolledDateFrom);
+        if (filterEnrolledDateTo) params.set('enrolled_date_to', filterEnrolledDateTo);
+        if (filterEnrolledOnly) params.set('enrolled_only', '1');
+      }
       const response = await apiRequest(`${config.endpoint}?${params.toString()}`);
       setRows(response.data || []);
       if (response.pagination) {
@@ -133,13 +173,21 @@ const AdminReport = () => {
   useEffect(() => {
     fetchRows(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, filterStatus, debouncedSearchTerm]);
+  }, [
+    tab,
+    filterStatus,
+    debouncedSearchTerm,
+    filterPhaseNumber,
+    filterEnrolledDateFrom,
+    filterEnrolledDateTo,
+    filterEnrolledOnly,
+  ]);
 
   const table = useMemo(() => {
     if (tab === TAB_STUDENT_STATUS) {
       return {
-        minWidth: '900px',
-        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Updated At', 'Reason'],
+        minWidth: '720px',
+        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Updated At'],
         render: (row) => (
           <>
             <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
@@ -153,17 +201,14 @@ const AdminReport = () => {
               </span>
             </td>
             <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.updated_at)}</td>
-            <td className="px-4 py-3 text-sm text-gray-600 max-w-[260px]" title={row.updated_reason || '-'}>
-              <span className="truncate block">{row.updated_reason || '-'}</span>
-            </td>
           </>
         ),
       };
     }
     if (tab === TAB_PROGRAM_PAYMENT_STATUS) {
       return {
-        minWidth: '1160px',
-        headers: ['Student', 'Email', 'Invoice', 'Class', 'Status', 'Due Date', 'Grace Until', 'Paid At', 'Updated At'],
+        minWidth: '860px',
+        headers: ['Student', 'Email', 'Invoice', 'Class', 'Status', 'Updated At'],
         render: (row) => (
           <>
             <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
@@ -181,17 +226,14 @@ const AdminReport = () => {
                 {row.status || '-'}
               </span>
             </td>
-            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.invoice_due_date || '-'}</td>
-            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.grace_until || '-'}</td>
-            <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.paid_at || '-'}</td>
             <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.updated_at)}</td>
           </>
         ),
       };
     }
     return {
-      minWidth: '1080px',
-      headers: ['Student', 'Email', 'Level Tag', 'Class', 'Enrollment Status', 'Created At', 'Removed At'],
+      minWidth: '1180px',
+      headers: ['Student', 'Email', 'Level Tag', 'Phase', 'Class', 'Enrollment Status', 'Created At', 'Removed At'],
       render: (row) => (
         <>
           <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
@@ -199,6 +241,9 @@ const AdminReport = () => {
             {row.email || '-'}
           </td>
           <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.level_tag || '-'}</td>
+          <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
+            {row.phase_number != null && row.phase_number !== '' ? row.phase_number : '-'}
+          </td>
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[240px]" title={row.class_name || '-'}>
             <span className="truncate block">{row.class_name || '-'}</span>
           </td>
@@ -265,6 +310,48 @@ const AdminReport = () => {
             ))}
           </select>
         </div>
+        {tab === TAB_PROGRAM_ENROLLMENT_STATUS ? (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Phase</label>
+              <input
+                type="number"
+                min={1}
+                value={filterPhaseNumber}
+                onChange={(e) => setFilterPhaseNumber(e.target.value)}
+                placeholder="All phases"
+                className="input-field text-sm min-w-[100px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Enrolled from</label>
+              <input
+                type="date"
+                value={filterEnrolledDateFrom}
+                onChange={(e) => setFilterEnrolledDateFrom(e.target.value)}
+                className="input-field text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Enrolled to</label>
+              <input
+                type="date"
+                value={filterEnrolledDateTo}
+                onChange={(e) => setFilterEnrolledDateTo(e.target.value)}
+                className="input-field text-sm"
+              />
+            </div>
+            <label className="inline-flex items-center gap-2 self-end pb-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={filterEnrolledOnly}
+                onChange={(e) => setFilterEnrolledOnly(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Enrolled only
+            </label>
+          </>
+        ) : null}
       </div>
 
       <StatusLegend tab={tab} />

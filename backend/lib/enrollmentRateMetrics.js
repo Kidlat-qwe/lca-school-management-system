@@ -176,6 +176,184 @@ export const loadEnrollmentStatusSnapshot = async (queryFn, options = {}) => {
  * @param {Function} queryFn
  * @param {{ branchId?: number|null, enrolledOnDate?: string|null, enrolledFrom?: string|null, enrolledTo?: string|null }} options
  */
+/**
+ * Shared scope filters for enrollment-rate queries (matches dashboard phase table).
+ * @returns {{ branchJoin: string, curriculumJoin: string, dateFilter: string, params: unknown[], nextIdx: number }}
+ */
+const buildEnrollmentRateScopeParts = (options = {}) => {
+  const { branchId = null, curriculumId = null, enrolledOnDate = null, enrolledFrom = null, enrolledTo = null } =
+    options;
+  const params = [];
+  let idx = 1;
+  let branchJoin = '';
+  let curriculumJoin = '';
+  let dateFilter = '';
+
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $${idx}`;
+    params.push(branchId);
+    idx += 1;
+  }
+  if (curriculumId) {
+    curriculumJoin = `INNER JOIN programstbl p ON c.program_id = p.program_id AND p.curriculum_id = $${idx}`;
+    params.push(curriculumId);
+    idx += 1;
+  }
+  if (enrolledOnDate) {
+    dateFilter = `
+      AND cs.enrolled_at IS NOT NULL
+      AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${idx}::date`;
+    params.push(enrolledOnDate);
+    idx += 1;
+  } else if (enrolledFrom && enrolledTo) {
+    dateFilter = `
+      AND cs.enrolled_at IS NOT NULL
+      AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${idx}::date
+      AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${idx + 1}::date`;
+    params.push(enrolledFrom, enrolledTo);
+    idx += 2;
+  }
+
+  return { branchJoin, curriculumJoin, dateFilter, params, nextIdx: idx };
+};
+
+const enrollmentRatePhaseStudentsSql = (scope, phaseFilterSql = '') => `
+  WITH scoped_rows AS (
+    SELECT
+      cs.student_id,
+      COALESCE(cs.phase_number, 0) AS phase_number,
+      cs.program_enrollment_status,
+      cs.removed_at,
+      cs.enrolled_at,
+      COALESCE(c.class_name, '') AS class_name,
+      c.branch_id AS class_branch_id
+    FROM classstudentstbl cs
+    INNER JOIN classestbl c ON cs.class_id = c.class_id ${scope.branchJoin}
+    ${scope.curriculumJoin}
+    WHERE COALESCE(cs.phase_number, 0) > 0
+      AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+      ${scope.dateFilter}
+  ),
+  phase_student AS (
+    SELECT
+      student_id,
+      phase_number,
+      BOOL_OR(
+        program_enrollment_status IN ${ENROLLED_STATUSES}
+        AND removed_at IS NULL
+      ) AS is_enrolled,
+      STRING_AGG(DISTINCT program_enrollment_status, ', ' ORDER BY program_enrollment_status) AS statuses_seen,
+      STRING_AGG(DISTINCT NULLIF(class_name, ''), ', ' ORDER BY NULLIF(class_name, '')) AS class_names,
+      MAX(enrolled_at) AS enrolled_at,
+      MAX(removed_at) AS removed_at
+    FROM scoped_rows
+    GROUP BY student_id, phase_number
+  )
+  SELECT
+    ps.student_id,
+    ps.phase_number,
+    ps.is_enrolled,
+    ps.statuses_seen,
+    ps.class_names,
+    TO_CHAR(TIMEZONE('Asia/Manila', ps.enrolled_at), 'YYYY-MM-DD HH24:MI:SS') AS enrolled_at_manila,
+    TO_CHAR(TIMEZONE('Asia/Manila', ps.removed_at), 'YYYY-MM-DD HH24:MI:SS') AS removed_at_manila,
+    u.full_name,
+    u.email,
+    u.level_tag,
+    COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+  FROM phase_student ps
+  INNER JOIN userstbl u ON u.user_id = ps.student_id
+  LEFT JOIN branchestbl b ON b.branch_id = u.branch_id
+  WHERE 1=1
+    ${phaseFilterSql}
+  ORDER BY ps.is_enrolled DESC, u.full_name ASC NULLS LAST, ps.student_id ASC
+`;
+
+/**
+ * Student list behind enrollment-rate-by-phase (for human verification).
+ * @param {Function} queryFn
+ * @param {{ branchId?: number|null, curriculumId?: number|null, enrolledOnDate?: string|null, enrolledFrom?: string|null, enrolledTo?: string|null, phaseNumber: number }} options
+ */
+export const loadEnrollmentRatePhaseStudents = async (queryFn, options = {}) => {
+  const {
+    branchId = null,
+    curriculumId = null,
+    enrolledOnDate = null,
+    enrolledFrom = null,
+    enrolledTo = null,
+    phaseNumber,
+  } = options;
+
+  const scope = buildEnrollmentRateScopeParts({
+    branchId,
+    curriculumId,
+    enrolledOnDate,
+    enrolledFrom,
+    enrolledTo,
+  });
+  const params = [...scope.params];
+  const phaseNum = parseInt(phaseNumber, 10);
+  if (!Number.isFinite(phaseNum) || phaseNum <= 0) {
+    return { students: [], summary: { phase_number: phaseNum, enrolled_count: 0, student_count: 0 } };
+  }
+  params.push(phaseNum);
+  const phaseFilterSql = `AND ps.phase_number = $${scope.nextIdx}`;
+
+  const result = await queryFn(enrollmentRatePhaseStudentsSql(scope, phaseFilterSql), params);
+  const students = (result.rows || []).map((row) => ({
+    student_id: parseInt(row.student_id, 10) || 0,
+    phase_number: parseInt(row.phase_number, 10) || 0,
+    is_enrolled: Boolean(row.is_enrolled),
+    statuses_seen: row.statuses_seen || '',
+    class_names: row.class_names || '',
+    enrolled_at_manila: row.enrolled_at_manila || null,
+    removed_at_manila: row.removed_at_manila || null,
+    full_name: row.full_name || '',
+    email: row.email || '',
+    level_tag: row.level_tag || '',
+    branch_name: row.branch_name || '',
+  }));
+
+  const enrolledCount = students.filter((s) => s.is_enrolled).length;
+  return {
+    students,
+    summary: {
+      phase_number: phaseNum,
+      enrolled_count: enrolledCount,
+      student_count: students.length,
+    },
+  };
+};
+
+/**
+ * All phases — export rows for spreadsheet verification.
+ */
+export const loadEnrollmentRatePhaseStudentsExport = async (queryFn, options = {}) => {
+  const { branchId = null, curriculumId = null, enrolledOnDate = null, enrolledFrom = null, enrolledTo = null } =
+    options;
+  const scope = buildEnrollmentRateScopeParts({
+    branchId,
+    curriculumId,
+    enrolledOnDate,
+    enrolledFrom,
+    enrolledTo,
+  });
+  const result = await queryFn(enrollmentRatePhaseStudentsSql(scope, ''), scope.params);
+  return (result.rows || []).map((row) => ({
+    phase_number: parseInt(row.phase_number, 10) || 0,
+    student_id: parseInt(row.student_id, 10) || 0,
+    full_name: row.full_name || '',
+    email: row.email || '',
+    level_tag: row.level_tag || '',
+    branch_name: row.branch_name || '',
+    class_names: row.class_names || '',
+    statuses_seen: row.statuses_seen || '',
+    counts_toward_enrolled: Boolean(row.is_enrolled) ? 'Y' : 'N',
+    enrolled_at_manila: row.enrolled_at_manila || '',
+    removed_at_manila: row.removed_at_manila || '',
+  }));
+};
+
 export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
   const { branchId = null, enrolledOnDate = null, enrolledFrom = null, enrolledTo = null } = options;
   const [statusSnapshot, rateSummary] = await Promise.all([

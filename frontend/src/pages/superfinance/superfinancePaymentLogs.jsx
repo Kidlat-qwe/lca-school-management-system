@@ -19,6 +19,7 @@ import {
   defaultPaymentLogFilterMonth,
   buildPaymentLogDateParams,
   hasActivePaymentLogDateFilter,
+  parsePaymentLogsLocationSearch,
 } from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
@@ -35,11 +36,8 @@ const SuperfinancePaymentLogs = () => {
   const navigate = useNavigate();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
-  const [financeLogTab, setFinanceLogTab] = useState(() => {
-    const params = new URLSearchParams(location.search);
-    const tab = params.get('notificationTab');
-    return tab === 'return' || tab === 'rejected' ? tab : 'main';
-  });
+  const paymentLogsUrlBootstrap = parsePaymentLogsLocationSearch(location.search);
+  const [financeLogTab, setFinanceLogTab] = useState(() => paymentLogsUrlBootstrap.logTab);
   const [selectedRejectedPayment, setSelectedRejectedPayment] = useState(null);
   const [returnReasonInput, setReturnReasonInput] = useState('');
   const [returnActionLoading, setReturnActionLoading] = useState(false);
@@ -53,13 +51,23 @@ const SuperfinancePaymentLogs = () => {
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterBranch, setFilterBranch] = useState('');
   const [sortConfig, setSortConfig] = useState(null);
-  const [filterFinanceApproval, setFilterFinanceApproval] = useState('');
-  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
-  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  const [filterFinanceApproval, setFilterFinanceApproval] = useState(
+    () => paymentLogsUrlBootstrap.financeApproval
+  );
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState(
+    () => paymentLogsUrlBootstrap.paymentDateFrom
+  );
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState(
+    () => paymentLogsUrlBootstrap.paymentDateTo
+  );
   // Date-filter mode switcher (Month / Payment date / Issue date).
   // Default mode is "month" pre-loaded with the current Manila month so the
   // page boots with a reasonable, narrow range.
-  const [dateFilterMode, setDateFilterMode] = useState(DEFAULT_PAYMENT_LOG_DATE_MODE);
+  const [dateFilterMode, setDateFilterMode] = useState(() =>
+    paymentLogsUrlBootstrap.usePaymentDateMode
+      ? PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
+      : DEFAULT_PAYMENT_LOG_DATE_MODE
+  );
   const [filterIssueMonth, setFilterIssueMonth] = useState(() => defaultPaymentLogFilterMonth());
   const [filterCreatedDateFrom, setFilterCreatedDateFrom] = useState('');
   const [filterCreatedDateTo, setFilterCreatedDateTo] = useState('');
@@ -105,10 +113,17 @@ const SuperfinancePaymentLogs = () => {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const notificationTab = params.get('notificationTab');
-    if (notificationTab === 'main' || notificationTab === 'return' || notificationTab === 'rejected') {
-      setFinanceLogTab(notificationTab);
+    const parsed = parsePaymentLogsLocationSearch(location.search);
+    setFinanceLogTab(parsed.logTab);
+    if (parsed.financeApproval) {
+      setFilterFinanceApproval(parsed.financeApproval);
+    } else if (parsed.clearFinanceApproval) {
+      setFilterFinanceApproval('');
+    }
+    if (parsed.usePaymentDateMode) {
+      setDateFilterMode(PAYMENT_LOG_DATE_MODES.PAYMENT_DATE);
+      setFilterIssueDateFrom(parsed.paymentDateFrom);
+      setFilterIssueDateTo(parsed.paymentDateTo);
     }
   }, [location.search]);
 

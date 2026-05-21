@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Bar,
   BarChart,
@@ -16,6 +17,8 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import EnrollmentRatePhaseVerifyModal from '../../components/dashboard/EnrollmentRatePhaseVerifyModal';
+import { issueDateRangeFromManilaMonth } from '../../utils/dateUtils';
 
 const COLORS = ['#22C55E', '#94A3B8', '#F7C844', '#4F46E5'];
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
@@ -115,10 +118,12 @@ const ChartCard = ({ title, subtitle, children, className = '' }) => (
 );
 
 const EnrollmentDashboard = () => {
+  const navigate = useNavigate();
   const { userInfo } = useAuth();
   const { selectedBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.userType || userInfo?.user_type;
   const branchId = userInfo?.branchId ?? userInfo?.branch_id;
+  const reportBasePath = userType === 'Admin' ? '/admin' : '/superadmin';
   const showBranchFilter = userType === 'Superadmin' || (userType === 'Finance' && (branchId === null || branchId === undefined));
 
   const [data, setData] = useState(null);
@@ -132,6 +137,7 @@ const EnrollmentDashboard = () => {
   const [enrollmentRateByPhase, setEnrollmentRateByPhase] = useState([]);
   const [enrollmentRateLoading, setEnrollmentRateLoading] = useState(false);
   const [enrollmentRateError, setEnrollmentRateError] = useState('');
+  const [verifyPhase, setVerifyPhase] = useState(null);
   const skipCurriculumTableFetchRef = useRef(true);
 
   const buildEnrollmentParams = (scope) => {
@@ -141,6 +147,25 @@ const EnrollmentDashboard = () => {
     if (selectedCurriculumId) params.set('curriculum_id', selectedCurriculumId);
     params.set('enrollment_rate_scope', scope);
     return params;
+  };
+
+  const openVerifyPhase = (row) => {
+    if (!row?.phase_number) return;
+    setVerifyPhase(row);
+  };
+
+  const openEnrollmentReport = ({ phaseNumber, enrolledOnly }) => {
+    const params = new URLSearchParams();
+    params.set('tab', 'program_enrollment_status');
+    if (selectedBranchId) params.set('branch_id', String(selectedBranchId));
+    if (phaseNumber) params.set('phase_number', String(phaseNumber));
+    if (!enrollmentRateOverall && selectedMonth) {
+      const range = issueDateRangeFromManilaMonth(selectedMonth);
+      if (range.from) params.set('enrolled_date_from', range.from);
+      if (range.to) params.set('enrolled_date_to', range.to);
+    }
+    if (enrolledOnly) params.set('enrolled_only', '1');
+    navigate(`${reportBasePath}/report?${params.toString()}`);
   };
 
   const fetchEnrollmentRateTable = async (scopeOverride) => {
@@ -215,6 +240,13 @@ const EnrollmentDashboard = () => {
     const b = branches.find((x) => String(x.branch_id) === String(selectedBranchId));
     return b?.branch_name ?? 'All Branches';
   }, [selectedBranchId, branches]);
+
+  const enrollmentVerifyScopeLabel = useMemo(() => {
+    const parts = [selectedBranchName];
+    if (selectedCurriculum) parts.push(selectedCurriculum.curriculum_name);
+    parts.push(enrollmentRateOverall ? 'Overall scope' : `Month: ${selectedMonth}`);
+    return parts.filter(Boolean).join(' · ');
+  }, [selectedBranchName, selectedCurriculum, enrollmentRateOverall, selectedMonth]);
 
   const totalEnrollmentRate = useMemo(
     () => summarizeEnrollmentRatePhases1To10(enrollmentRateByPhase),
@@ -389,6 +421,9 @@ const EnrollmentDashboard = () => {
             </select>
           </label>
         </div>
+        <p className="mb-3 text-xs text-gray-500">
+          Click a phase row to view the student list behind Enrolled and Students counts.
+        </p>
         {enrollmentRateError ? (
           <p className="mb-3 text-sm text-red-600">{enrollmentRateError}</p>
         ) : null}
@@ -418,7 +453,20 @@ const EnrollmentDashboard = () => {
               <tbody className="divide-y divide-gray-100 text-sm text-gray-800">
                 {enrollmentRateByPhase.length > 0 ? (
                   enrollmentRateByPhase.map((row) => (
-                    <tr key={row.phase_number} className="hover:bg-gray-50">
+                    <tr
+                      key={row.phase_number}
+                      className="cursor-pointer hover:bg-amber-50/80"
+                      onClick={() => openVerifyPhase(row)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          openVerifyPhase(row);
+                        }
+                      }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`View students for phase ${row.phase_number}`}
+                    >
                       <td className="px-4 py-3 font-medium text-gray-900">Phase {row.phase_number}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{Number(row.enrolled_count || 0).toLocaleString()}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{Number(row.student_count ?? row.cohort_count ?? 0).toLocaleString()}</td>
@@ -526,6 +574,16 @@ const EnrollmentDashboard = () => {
           </ResponsiveContainer>
         </ChartCard>
       )}
+
+      <EnrollmentRatePhaseVerifyModal
+        open={Boolean(verifyPhase)}
+        phaseNumber={verifyPhase?.phase_number}
+        phaseRow={verifyPhase}
+        queryParams={buildEnrollmentParams(enrollmentRateOverall ? 'overall' : 'month').toString()}
+        scopeLabel={enrollmentVerifyScopeLabel}
+        onClose={() => setVerifyPhase(null)}
+        onOpenReport={openEnrollmentReport}
+      />
     </div>
   );
 };

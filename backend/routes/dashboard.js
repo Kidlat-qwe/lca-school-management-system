@@ -4,7 +4,11 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
-import { loadEnrollmentDashboardMetrics } from '../lib/enrollmentRateMetrics.js';
+import {
+  loadEnrollmentDashboardMetrics,
+  loadEnrollmentRatePhaseStudents,
+  loadEnrollmentRatePhaseStudentsExport,
+} from '../lib/enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
@@ -1368,6 +1372,126 @@ router.get(
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
           selected_month: effectiveMonthRange.key,
           selected_branch_id: branchFilter,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const resolveEnrollmentRateScopeDates = (enrollmentRateScope, monthRange) => {
+  if (enrollmentRateScope === 'month' && monthRange) {
+    return { enrolledFrom: monthRange.start, enrolledTo: monthRange.end };
+  }
+  return { enrolledFrom: null, enrolledTo: null };
+};
+
+/**
+ * GET /api/sms/dashboard/enrollment-rate-phase-students
+ * Drill-down student list for one phase (verify enrollment rate table).
+ */
+router.get(
+  '/enrollment-rate-phase-students',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    queryValidator('enrollment_rate_scope')
+      .optional()
+      .isIn(['month', 'overall'])
+      .withMessage('enrollment_rate_scope must be month or overall'),
+    queryValidator('phase_number').isInt({ min: 1 }).withMessage('phase_number is required'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    try {
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const isFinanceNoBranch = req.user.userType === 'Finance' && req.user.branchId == null;
+      const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
+      const monthRange = parseMonthRange(req.query.month);
+      const branchFilter = isSuperadmin || isFinanceNoBranch
+        ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
+        : (req.user.branchId || null);
+      const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
+      const phaseNumber = parseInt(req.query.phase_number, 10);
+      const { enrolledFrom, enrolledTo } = resolveEnrollmentRateScopeDates(
+        enrollmentRateScope,
+        monthRange || parseMonthRange(getCurrentManilaMonthKey())
+      );
+
+      const payload = await loadEnrollmentRatePhaseStudents(query, {
+        branchId: branchFilter,
+        curriculumId: curriculumFilter,
+        enrolledFrom,
+        enrolledTo,
+        phaseNumber,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          ...payload,
+          enrollment_rate_scope: enrollmentRateScope,
+          selected_branch_id: branchFilter,
+          selected_curriculum_id: curriculumFilter,
+          selected_month: monthRange?.key ?? null,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/enrollment-rate-phase-students/export
+ * All phases — student rows for Excel verification export.
+ */
+router.get(
+  '/enrollment-rate-phase-students/export',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    queryValidator('enrollment_rate_scope')
+      .optional()
+      .isIn(['month', 'overall'])
+      .withMessage('enrollment_rate_scope must be month or overall'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    try {
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const isFinanceNoBranch = req.user.userType === 'Finance' && req.user.branchId == null;
+      const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
+      const monthRange = parseMonthRange(req.query.month);
+      const branchFilter = isSuperadmin || isFinanceNoBranch
+        ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
+        : (req.user.branchId || null);
+      const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
+      const { enrolledFrom, enrolledTo } = resolveEnrollmentRateScopeDates(
+        enrollmentRateScope,
+        monthRange || parseMonthRange(getCurrentManilaMonthKey())
+      );
+
+      const rows = await loadEnrollmentRatePhaseStudentsExport(query, {
+        branchId: branchFilter,
+        curriculumId: curriculumFilter,
+        enrolledFrom,
+        enrolledTo,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          rows,
+          enrollment_rate_scope: enrollmentRateScope,
+          selected_branch_id: branchFilter,
+          selected_curriculum_id: curriculumFilter,
+          selected_month: monthRange?.key ?? null,
         },
       });
     } catch (error) {

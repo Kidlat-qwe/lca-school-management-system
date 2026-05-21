@@ -1692,6 +1692,7 @@ router.get(
       .isISO8601()
       .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('pending_only').optional().isString().withMessage('pending_only must be a string'),
+    queryValidator('approval_status').optional().isString().withMessage('approval_status must be a string'),
     queryValidator('payment_method').optional().isString().withMessage('payment_method must be a string'),
     queryValidator('search').optional().isString().withMessage('search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
@@ -1707,11 +1708,14 @@ router.get(
         issue_date_from: issueDateFrom,
         issue_date_to: issueDateTo,
         pending_only: pendingOnlyRaw,
+        approval_status: approvalStatusRaw,
         payment_method: paymentMethodRaw,
         search,
         page = 1,
         limit = 20,
       } = req.query;
+      // Normalise to 'Approved' | 'Pending' | '' — only 'Approved' and '' matter for this endpoint.
+      const approvalStatusFilter = approvalStatusRaw ? String(approvalStatusRaw).trim() : '';
       const pmFilter =
         paymentMethodRaw != null && String(paymentMethodRaw).trim() !== ''
           ? String(paymentMethodRaw).trim()
@@ -1860,7 +1864,11 @@ router.get(
         }
       }
 
-      if (pendingOnly) {
+      if (approvalStatusFilter === 'Approved') {
+        // Verified-only: Completed + explicitly Approved, excluding Returned/Rejected.
+        paySql += ` AND p.status = 'Completed'
+                    AND p.approval_status = 'Approved'`;
+      } else if (pendingOnly) {
         paySql += ` AND p.status = 'Completed'
                     AND (p.approval_status IS NULL OR p.approval_status NOT IN ('Approved', 'Returned', 'Rejected'))`;
       } else {
@@ -2016,7 +2024,8 @@ router.get(
 
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
-      if (!pmFilter || pmFilter === 'Acknowledgement Receipt') {
+      // AR rows have a synthetic approval_status of 'Pending'; skip them when caller wants Approved-only.
+      if (approvalStatusFilter !== 'Approved' && (!pmFilter || pmFilter === 'Acknowledgement Receipt')) {
         const arRes = await query(arSql, arParams);
         arRows = (arRes.rows || []).map((row) => ({
           payment_id: `AR-${row.ack_receipt_id}`,

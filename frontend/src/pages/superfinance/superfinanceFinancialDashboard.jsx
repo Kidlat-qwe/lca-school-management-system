@@ -12,9 +12,7 @@ const SuperfinanceFinancialDashboard = () => {
   const { selectedBranchId, branches, selectedBranchName } = useGlobalBranchFilter();
   const [metrics, setMetrics] = useState({
     totalRevenue: 0,
-    pendingInvoices: 0,
     completedPayments: 0,
-    unpaidInvoices: 0,
     totalBranches: 0,
     revenueByBranch: [],
     verifiedPaymentsCount: 0,
@@ -120,8 +118,6 @@ const SuperfinanceFinancialDashboard = () => {
       const invoices = invoicesResponse.data || [];
       const pm = payMetricsRes.data || {};
 
-      const pendingInvoices = invoices.filter((i) => i.status === 'Unpaid' || i.status === 'Partial').length;
-      const unpaidInvoices = invoices.filter((i) => i.status === 'Unpaid').length;
       const packageAr = (acknowledgementReceipts || []).filter((ar) => ar.ar_type === 'Package');
       const arIncludedSales = packageAr.filter((ar) => !['Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
       const arVerified = packageAr.filter((ar) => ['Verified', 'Applied'].includes(ar.status));
@@ -144,9 +140,7 @@ const SuperfinanceFinancialDashboard = () => {
 
       setMetrics({
         totalRevenue: pm.totalRevenue ?? 0,
-        pendingInvoices,
         completedPayments: pm.completedPayments ?? 0,
-        unpaidInvoices,
         totalBranches: selectedBranchId ? 1 : branchesData.length,
         revenueByBranch,
         verifiedPaymentsCount: pm.verifiedPaymentsCount ?? 0,
@@ -261,6 +255,8 @@ const SuperfinanceFinancialDashboard = () => {
     const params = new URLSearchParams();
     params.set('notificationTab', 'main');
     params.set('financeApproval', type === 'verified' ? 'approved' : 'pending');
+    if (issueDateFrom.trim()) params.set('payment_date_from', issueDateFrom.trim());
+    if (issueDateTo.trim()) params.set('payment_date_to', issueDateTo.trim());
     navigate(`/superfinance/payment-logs?${params.toString()}`);
   };
 
@@ -326,7 +322,7 @@ const SuperfinanceFinancialDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -378,34 +374,6 @@ const SuperfinanceFinancialDashboard = () => {
             </div>
             <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
               <DashboardStatIcon name="checkCircle" className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Pending Invoices</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">
-                {metrics.pendingInvoices}
-              </p>
-            </div>
-            <div className="h-12 w-12 rounded-full bg-yellow-100 flex items-center justify-center">
-              <DashboardStatIcon name="clock" className="h-6 w-6 text-yellow-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Unpaid Invoices</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">
-                {metrics.unpaidInvoices}
-              </p>
-            </div>
-            <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
-              <DashboardStatIcon name="exclamationTriangle" className="h-6 w-6 text-red-600" />
             </div>
           </div>
         </div>

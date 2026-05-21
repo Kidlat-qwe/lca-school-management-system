@@ -102,3 +102,39 @@ export const hasActivePaymentLogDateFilter = ({
   if (mode === PAYMENT_LOG_DATE_MODES.CREATED_DATE) return Boolean(createdFrom || createdTo);
   return false;
 };
+
+/**
+ * Parse Payment Logs deep-link query params (Financial Dashboard → Payment Logs).
+ *
+ * @param {string} search - location.search (e.g. "?financeApproval=approved&...")
+ * @returns {{
+ *   logTab: 'main'|'return'|'rejected',
+ *   financeApproval: ''|'approved'|'pending',
+ *   clearFinanceApproval: boolean,
+ *   paymentDateFrom: string,
+ *   paymentDateTo: string,
+ *   usePaymentDateMode: boolean,
+ * }}
+ */
+export const parsePaymentLogsLocationSearch = (search = '') => {
+  const params = new URLSearchParams(search);
+  const notificationTab = params.get('notificationTab');
+  const financeApproval = params.get('financeApproval');
+  const payFrom = (params.get('payment_date_from') || params.get('issue_date_from') || '')
+    .trim()
+    .slice(0, 10);
+  const payTo = (params.get('payment_date_to') || params.get('issue_date_to') || '').trim().slice(0, 10);
+  const hasUrlPayFrom = /^\d{4}-\d{2}-\d{2}$/.test(payFrom);
+  const hasUrlPayTo = /^\d{4}-\d{2}-\d{2}$/.test(payTo);
+
+  return {
+    logTab:
+      notificationTab === 'return' || notificationTab === 'rejected' ? notificationTab : 'main',
+    financeApproval:
+      financeApproval === 'approved' || financeApproval === 'pending' ? financeApproval : '',
+    clearFinanceApproval: financeApproval === 'all' || financeApproval === '',
+    paymentDateFrom: hasUrlPayFrom ? payFrom : '',
+    paymentDateTo: hasUrlPayTo ? payTo : '',
+    usePaymentDateMode: hasUrlPayFrom || hasUrlPayTo,
+  };
+};

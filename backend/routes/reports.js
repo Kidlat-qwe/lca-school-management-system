@@ -374,11 +374,33 @@ router.get(
       .optional()
       .isIn(['all', 'reserved', 'pending_enrollment', 'new', 're_enrolled', 'upsell', 'rejoin', 'dropped', 'completed'])
       .withMessage('invalid status filter'),
+    queryValidator('phase_number').optional().isInt({ min: 1 }).withMessage('phase_number must be a positive integer'),
+    queryValidator('enrolled_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('enrolled_date_from must be YYYY-MM-DD'),
+    queryValidator('enrolled_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('enrolled_date_to must be YYYY-MM-DD'),
+    queryValidator('enrolled_only')
+      .optional()
+      .isIn(['0', '1', 'true', 'false'])
+      .withMessage('enrolled_only must be 0 or 1'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const { status = 'all', branch_id, search, page = 1, limit = 10 } = req.query;
+      const phaseNumber = req.query.phase_number ? parseInt(req.query.phase_number, 10) : null;
+      const enrolledDateFrom = req.query.enrolled_date_from
+        ? String(req.query.enrolled_date_from).trim().slice(0, 10)
+        : '';
+      const enrolledDateTo = req.query.enrolled_date_to
+        ? String(req.query.enrolled_date_to).trim().slice(0, 10)
+        : '';
+      const enrolledOnly =
+        req.query.enrolled_only === '1' || String(req.query.enrolled_only || '').toLowerCase() === 'true';
       const pageNum = parseInt(page, 10) || 1;
       const limitNum = parseInt(limit, 10) || 10;
       const offset = (pageNum - 1) * limitNum;
@@ -410,11 +432,34 @@ router.get(
         params.push(`%${searchTerm}%`);
       }
 
+      if (phaseNumber != null && Number.isFinite(phaseNumber) && phaseNumber > 0) {
+        paramCount++;
+        whereSql += ` AND COALESCE(base.phase_number, 0) = $${paramCount}`;
+        params.push(phaseNumber);
+      }
+
+      if (enrolledDateFrom) {
+        paramCount++;
+        whereSql += ` AND base.enrolled_at IS NOT NULL AND TIMEZONE('Asia/Manila', base.enrolled_at)::date >= $${paramCount}::date`;
+        params.push(enrolledDateFrom);
+      }
+      if (enrolledDateTo) {
+        paramCount++;
+        whereSql += ` AND base.enrolled_at IS NOT NULL AND TIMEZONE('Asia/Manila', base.enrolled_at)::date <= $${paramCount}::date`;
+        params.push(enrolledDateTo);
+      }
+
+      if (enrolledOnly) {
+        whereSql += ` AND base.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+          AND base.removed_at IS NULL`;
+      }
+
       const baseSql = `
         SELECT
           base.classstudent_id,
           base.student_id,
           base.class_id,
+          base.phase_number,
           base.program_enrollment_status,
           base.enrolled_at AS created_at,
           base.removed_at,
