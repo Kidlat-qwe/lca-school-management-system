@@ -4,6 +4,26 @@
  */
 
 const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed')";
+const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
+
+const buildMonthEnrolledAtFilter = (paramFromIdx, paramToIdx) => `
+  AND cs.enrolled_at IS NOT NULL
+  AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${paramFromIdx}::date
+  AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${paramToIdx}::date`;
+
+/** Matches student_statustbl drop-blocking rule (migration 115). */
+const DROP_BLOCKED_STUDENT_SQL = `
+  SELECT DISTINCT cs.student_id
+  FROM classstudentstbl cs
+  WHERE cs.program_enrollment_status = 'dropped'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM classstudentstbl active_after_drop
+      WHERE active_after_drop.student_id = cs.student_id
+        AND active_after_drop.program_enrollment_status IN ${ACTIVE_PROGRAM_STATUSES}
+        AND active_after_drop.removed_at IS NULL
+        AND active_after_drop.enrolled_at > COALESCE(cs.removed_at, cs.enrolled_at)
+    )`;
 
 /**
  * @param {import('pg').QueryResult['rows']} rows
@@ -173,9 +193,141 @@ export const loadEnrollmentStatusSnapshot = async (queryFn, options = {}) => {
 };
 
 /**
+ * Active/inactive for Enrollment Dashboard month picker: distinct students with enrolled_at in range.
+ * Active = has a month enrollment row in ACTIVE_PROGRAM_STATUSES with removed_at IS NULL, and not drop-blocked.
  * @param {Function} queryFn
- * @param {{ branchId?: number|null, enrolledOnDate?: string|null, enrolledFrom?: string|null, enrolledTo?: string|null }} options
+ * @param {{ branchId?: number|null, enrolledFrom: string, enrolledTo: string }} options
  */
+export const loadEnrollmentStatusSnapshotForMonth = async (queryFn, options = {}) => {
+  const { branchId = null, enrolledFrom, enrolledTo } = options;
+  const params = [];
+  let paramIdx = 1;
+  let branchJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $${paramIdx}`;
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  const fromIdx = paramIdx;
+  const toIdx = paramIdx + 1;
+  params.push(enrolledFrom, enrolledTo);
+
+  const result = await queryFn(
+    `
+      WITH month_enrollments AS (
+        SELECT
+          cs.student_id,
+          cs.program_enrollment_status,
+          cs.removed_at
+        FROM classstudentstbl cs
+        INNER JOIN classestbl c ON cs.class_id = c.class_id
+        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+        WHERE 1 = 1
+          ${branchJoin}
+          ${buildMonthEnrolledAtFilter(fromIdx, toIdx)}
+      ),
+      student_month_status AS (
+        SELECT
+          me.student_id,
+          BOOL_OR(
+            me.program_enrollment_status IN ${ACTIVE_PROGRAM_STATUSES}
+            AND me.removed_at IS NULL
+          ) AS has_active_enrollment_in_month
+        FROM month_enrollments me
+        GROUP BY me.student_id
+      ),
+      drop_blocked AS (
+        ${DROP_BLOCKED_STUDENT_SQL}
+      )
+      SELECT
+        COUNT(DISTINCT sms.student_id)::bigint AS total_students,
+        COUNT(DISTINCT CASE
+          WHEN sms.has_active_enrollment_in_month AND db.student_id IS NULL
+          THEN sms.student_id
+        END)::bigint AS active_students,
+        COUNT(DISTINCT CASE
+          WHEN NOT sms.has_active_enrollment_in_month OR db.student_id IS NOT NULL
+          THEN sms.student_id
+        END)::bigint AS inactive_students
+      FROM student_month_status sms
+      LEFT JOIN drop_blocked db ON db.student_id = sms.student_id
+    `,
+    params
+  );
+
+  const row = result.rows[0] || {};
+  return {
+    active_students: parseInt(row.active_students, 10) || 0,
+    inactive_students: parseInt(row.inactive_students, 10) || 0,
+    total_students: parseInt(row.total_students, 10) || 0,
+  };
+};
+
+/**
+ * Active/inactive by branch for selected month (enrolled_at, Manila).
+ * @param {Function} queryFn
+ * @param {{ enrolledFrom: string, enrolledTo: string }} options
+ */
+export const loadActiveInactiveByBranchForMonth = async (queryFn, options = {}) => {
+  const { enrolledFrom, enrolledTo } = options;
+  const result = await queryFn(
+    `
+      WITH month_enrollments AS (
+        SELECT
+          cs.student_id,
+          c.branch_id,
+          cs.program_enrollment_status,
+          cs.removed_at
+        FROM classstudentstbl cs
+        INNER JOIN classestbl c ON cs.class_id = c.class_id
+        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+        WHERE cs.enrolled_at IS NOT NULL
+          ${buildMonthEnrolledAtFilter(1, 2)}
+      ),
+      student_branch_month AS (
+        SELECT
+          me.student_id,
+          me.branch_id,
+          BOOL_OR(
+            me.program_enrollment_status IN ${ACTIVE_PROGRAM_STATUSES}
+            AND me.removed_at IS NULL
+          ) AS has_active_enrollment_in_month
+        FROM month_enrollments me
+        GROUP BY me.student_id, me.branch_id
+      ),
+      drop_blocked AS (
+        ${DROP_BLOCKED_STUDENT_SQL}
+      )
+      SELECT
+        b.branch_id,
+        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+        COUNT(DISTINCT sbm.student_id)::bigint AS total,
+        COUNT(DISTINCT CASE
+          WHEN sbm.has_active_enrollment_in_month AND db.student_id IS NULL
+          THEN sbm.student_id
+        END)::bigint AS active_count,
+        COUNT(DISTINCT CASE
+          WHEN NOT sbm.has_active_enrollment_in_month OR db.student_id IS NOT NULL
+          THEN sbm.student_id
+        END)::bigint AS inactive_count
+      FROM branchestbl b
+      LEFT JOIN student_branch_month sbm ON sbm.branch_id = b.branch_id
+      LEFT JOIN drop_blocked db ON db.student_id = sbm.student_id
+      GROUP BY b.branch_id, b.branch_nickname, b.branch_name
+      ORDER BY COALESCE(b.branch_nickname, b.branch_name)
+    `,
+    [enrolledFrom, enrolledTo]
+  );
+
+  return (result.rows || []).map((row) => ({
+    branch_id: row.branch_id,
+    branch_name: row.branch_name || 'Unassigned',
+    total: parseInt(row.total, 10) || 0,
+    active: parseInt(row.active_count, 10) || 0,
+    inactive: parseInt(row.inactive_count, 10) || 0,
+  }));
+};
+
 /**
  * Shared scope filters for enrollment-rate queries (matches dashboard phase table).
  * @returns {{ branchJoin: string, curriculumJoin: string, dateFilter: string, params: unknown[], nextIdx: number }}

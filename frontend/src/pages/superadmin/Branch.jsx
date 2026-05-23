@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { apiRequest } from '../../config/api';
+import { apiRequest, invalidateApiCache } from '../../config/api';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Branch = () => {
@@ -101,7 +101,7 @@ const Branch = () => {
   const fetchBranches = async () => {
     try {
       setLoading(true);
-      const response = await apiRequest('/branches');
+      const response = await apiRequest('/branches', { cache: 'reference' });
       setBranches(response.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch branches');
@@ -128,6 +128,7 @@ const Branch = () => {
       await apiRequest(`/branches/${branchId}`, {
         method: 'DELETE',
       });
+      invalidateApiCache();
       fetchBranches(); // Refresh the list
     } catch (err) {
       appAlert(err.message || 'Failed to delete branch');
@@ -272,6 +273,7 @@ const Branch = () => {
       }
       
       closeModal();
+      invalidateApiCache();
       fetchBranches(); // Refresh the list
     } catch (err) {
       setError(err.message || `Failed to ${editingBranch ? 'update' : 'create'} branch`);

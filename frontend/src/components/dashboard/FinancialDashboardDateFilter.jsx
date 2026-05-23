@@ -79,10 +79,8 @@ const FinancialDashboardDateFilter = ({
                 Date range
               </h2>
               <p className="text-xs text-gray-500 mt-1">
-                <span className="font-medium text-gray-700">Total revenue</span> and payment totals use{' '}
-                <span className="font-medium text-gray-700">payment date</span> (Manila, when payment was recorded).{' '}
-                Invoice counts on this page still use <span className="font-medium text-gray-700">invoice issue date</span>.{' '}
-                Excel export with dates uses the same payment-date basis so totals match revenue.
+                Revenue and payment totals use the date the payment was recorded (Philippine time). Invoice lists on this
+                page may still use invoice issue date. Exports use the same payment date so totals match the cards above.
               </p>
             </div>
             <button

@@ -1269,6 +1269,36 @@ const Invoice = () => {
     }
   };
 
+  const handleDeleteInvoice = async (invoice) => {
+    setOpenMenuId(null);
+    setMenuPosition({ top: 0, right: 0 });
+
+    if (
+      !(await appConfirm({
+        title: 'Delete invoice',
+        message: `Are you sure you want to delete INV-${invoice.invoice_id}? This permanently removes the invoice, its items, student links, and any payments recorded on it.`,
+        destructive: true,
+        confirmLabel: 'Delete',
+      }))
+    ) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/invoices/${invoice.invoice_id}`, {
+        method: 'DELETE',
+      });
+
+      if (selectedInvoiceForDetails?.invoice_id === invoice.invoice_id) {
+        closeDetailsModal();
+      }
+
+      await fetchInvoices();
+    } catch (err) {
+      appAlert(err.message || 'Failed to delete invoice');
+    }
+  };
+
   // Helper functions
   const getBranchName = (branchId) => {
     if (!branchId) return null;
@@ -1776,18 +1806,18 @@ const Invoice = () => {
       <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1280px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1520px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '170px' }} />
                 <col style={{ width: '150px' }} />
                 <col style={{ width: '170px' }} />
                 <col style={{ width: '130px' }} />
                 <col style={{ width: '100px' }} />
-                <col style={{ width: '110px' }} />
+                <col style={{ width: '150px' }} />
                 <col style={{ width: '120px' }} />
-                <col style={{ width: '120px' }} />
-                <col style={{ width: '130px' }} />
-                <col style={{ width: '120px' }} />
+                <col style={{ width: '112px' }} />
+                <col style={{ width: '112px' }} />
+                <col style={{ width: '112px' }} />
                 <col style={{ width: '90px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
@@ -1804,15 +1834,15 @@ const Invoice = () => {
                   </th>
                   <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }} />
                   <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '100px', minWidth: '100px' }} />
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '110px', minWidth: '110px' }}>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '150px', minWidth: '150px' }}>
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Total Amount
                   </th>
-                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }} />
-                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }} />
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
+                  <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '112px', minWidth: '112px' }} />
+                  <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '112px', minWidth: '112px' }} />
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '112px', minWidth: '112px' }}>
                     Due Date
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
@@ -1940,47 +1970,47 @@ const Invoice = () => {
                         {invoice.status || 'Draft'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-4 py-4 align-top overflow-hidden" style={{ width: '150px', minWidth: '150px', maxWidth: '150px' }}>
                       {invoice.status === 'Balance Invoiced' ? (
-                        <div className="text-xs text-gray-900 space-y-0.5">
-                          <div>
-                            <span className="text-gray-500">Balance invoice:</span>{' '}
-                            <span className="font-medium">
+                        <div className="text-xs text-gray-900 space-y-1 min-w-0">
+                          <div className="leading-snug break-words">
+                            <span className="text-gray-500 block">Balance invoice:</span>
+                            <span className="font-medium tabular-nums">
                               ₱{Number(invoice.balance_invoice_amount ?? invoice.amount ?? 0).toFixed(2)}
                             </span>
                           </div>
-                          <div>
-                            <span className="text-gray-500">Paid amount:</span>{' '}
-                            <span className="font-medium">
+                          <div className="leading-snug break-words">
+                            <span className="text-gray-500 block">Paid amount:</span>
+                            <span className="font-medium tabular-nums">
                               ₱{Number(invoice.paid_amount ?? 0).toFixed(2)}
                             </span>
                           </div>
                         </div>
                       ) : (
-                        <div className="text-sm text-gray-900">
+                        <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                           {invoice.amount !== null && invoice.amount !== undefined
                             ? `₱${getInvoiceDisplayAmount(invoice).toFixed(2)}`
                             : '-'}
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
+                    <td className="px-4 py-4 overflow-hidden" style={{ width: '120px', minWidth: '120px', maxWidth: '120px' }}>
+                      <div className="text-sm font-medium text-gray-900 whitespace-nowrap tabular-nums">
                         ₱{Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                      <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {invoice.issue_date ? formatDateManila(invoice.issue_date) : '-'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                      <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {invoice.last_payment_date ? formatDateManila(invoice.last_payment_date) : '—'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                      <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {invoice.due_date
                           ? formatDateManila(invoice.due_date)
                           : '-'}
@@ -2157,6 +2187,20 @@ const Invoice = () => {
                       <span>Send Email</span>
                       <svg className={`w-4 h-4 ${isInvoiceOverdue(selectedInvoice) ? 'text-orange-600' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                    <div className="my-1 border-t border-gray-100" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteInvoice(selectedInvoice);
+                      }}
+                      className="flex items-center justify-between w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      <span>Delete</span>
+                      <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
                   </>

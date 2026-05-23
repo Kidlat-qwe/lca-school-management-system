@@ -18,6 +18,7 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
@@ -180,7 +181,7 @@ const FinancialDashboard = () => {
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Financial Dashboard</h1>
-            <p className="text-sm text-gray-500">Real-time overview of your physical school operations</p>
+            <p className="text-sm text-gray-500">{FINANCIAL_DASHBOARD.pageIntroSuperadmin}</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
             <label className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
@@ -249,7 +250,7 @@ const FinancialDashboard = () => {
           <StatsCard
             title="Total payments"
             value={totalPaymentsCount}
-            trend={`${formatPeso(totalPaymentsAmount)} in selected month (completed, payable + tips)`}
+            trend={FINANCIAL_DASHBOARD.totalPaymentsTrend(formatPeso(totalPaymentsAmount))}
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
             iconName="currency"
           />
@@ -265,15 +266,7 @@ const FinancialDashboard = () => {
         <div className="space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Payment verification (Finance & Superfinance)</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Completed payments only (amounts are <span className="font-medium text-gray-700">payable + tips</span>). When a{' '}
-              <span className="font-medium text-gray-700">month</span> is selected above, amounts use{' '}
-              <span className="font-medium text-gray-700">payment issue date</span> on the payment record in that calendar month
-              (month start through the day before the next month), matching Payment Logs month mode.{' '}
-              <span className="font-medium text-gray-700">Verified</span> means approval status is Approved;{' '}
-              <span className="font-medium text-gray-700">Unverified</span> means Completed but not Approved, excluding Finance Returned or
-              Rejected.
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{FINANCIAL_DASHBOARD.paymentVerificationIntro}</p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
@@ -300,10 +293,7 @@ const FinancialDashboard = () => {
         <div className="space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package Acknowledgement Receipt)</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              <span className="font-medium text-gray-700">Verified Acknowledgement Receipt</span> includes statuses Verified and Applied.{' '}
-              <span className="font-medium text-gray-700">Unverified Acknowledgement Receipt</span> includes Submitted/Pending acknowledgement receipt records awaiting verification.
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{FINANCIAL_DASHBOARD.arVerificationIntro}</p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
@@ -340,7 +330,7 @@ const FinancialDashboard = () => {
                   <div>
                     <h2 className="text-lg font-bold text-red-900">Crossing Procedures Alert</h2>
                     <p className="text-sm text-red-700">
-                      {crossingProcedures.total_violations} student(s) enrolled in classes from different branches
+                      {FINANCIAL_DASHBOARD.crossingAlert(crossingProcedures.total_violations)}
                     </p>
                   </div>
                 </div>
@@ -407,7 +397,7 @@ const FinancialDashboard = () => {
 
         {/* Charts Section */}
         <div className="grid gap-6 lg:grid-cols-2">
-          <ChartCard title="Monthly Enrollment Trend" subtitle="Past 6 months">
+          <ChartCard title="Monthly Enrollment Trend" subtitle={FINANCIAL_DASHBOARD.chartEnrollment}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={metrics?.monthly_enrollments || []}
@@ -457,7 +447,7 @@ const FinancialDashboard = () => {
 
           <ChartCard
             title="Monthly Invoice Revenue"
-            subtitle="Invoice amounts plus tips from completed payments (per invoice), by issue month"
+            subtitle={FINANCIAL_DASHBOARD.chartRevenue}
           >
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
@@ -508,7 +498,7 @@ const FinancialDashboard = () => {
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <ChartCard title="Students by Branch" subtitle="Current distribution">
+          <ChartCard title="Students by Branch" subtitle={FINANCIAL_DASHBOARD.chartStudentsByBranch}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={studentsByBranch} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -545,7 +535,7 @@ const FinancialDashboard = () => {
 
           <ChartCard
             title="Invoice Status"
-            subtitle="Count by status; slice totals include invoice balance plus tips from completed payments"
+            subtitle={FINANCIAL_DASHBOARD.chartInvoiceStatus}
           >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -575,7 +565,7 @@ const FinancialDashboard = () => {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Reservation Status" subtitle="Current reservations">
+          <ChartCard title="Reservation Status" subtitle={FINANCIAL_DASHBOARD.chartReservations}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie

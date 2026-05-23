@@ -9,6 +9,14 @@ import {
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { apiRequest } from '../config/api';
+import { clearAllApiCache, setApiCacheUserScope } from '../utils/apiCache/apiCache';
+import { warmupReferenceCache } from '../utils/apiCache/warmupReferenceCache';
+
+const applyUserSessionCache = (user) => {
+  const userId = user?.user_id ?? user?.userId ?? user?.uid ?? 'anonymous';
+  setApiCacheUserScope(userId);
+  warmupReferenceCache(user);
+};
 
 const AuthContext = createContext({});
 
@@ -122,6 +130,7 @@ export const AuthProvider = ({ children }) => {
         emailVerified: firebaseUser.emailVerified,
       };
       setUserInfo(userInfoData);
+      applyUserSessionCache(userInfoData);
       return { success: true, user: userInfoData };
     } catch (error) {
       console.error('❌ Signup error:', error);
@@ -158,6 +167,7 @@ export const AuthProvider = ({ children }) => {
         });
         if (response && response.user) {
           setUserInfo(response.user);
+          applyUserSessionCache(response.user);
           return { success: true, user: response.user };
         }
       } catch (verifyError) {
@@ -221,6 +231,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await signOut(auth);
       localStorage.removeItem('firebase_token');
+      clearAllApiCache();
       setCurrentUser(null);
       setUserInfo(null);
     } catch (error) {
@@ -257,6 +268,7 @@ export const AuthProvider = ({ children }) => {
         };
         console.log('Refreshing user info:', normalizedUser);
         setUserInfo(normalizedUser);
+        applyUserSessionCache(normalizedUser);
         return normalizedUser;
       }
     } catch (error) {
@@ -297,12 +309,14 @@ export const AuthProvider = ({ children }) => {
               const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
               if (response && response.user && isMounted) {
                 setUserInfo(response.user);
+                applyUserSessionCache(response.user);
               }
             } catch (error) {
               const is401 = error.response?.status === 401 || error.message?.includes('Invalid or expired token');
               if (is401 && isMounted) {
                 // Backend rejected the token (expired or server config). Sign out so user gets a clean login and can try again.
                 localStorage.removeItem('firebase_token');
+                clearAllApiCache();
                 signOut(auth).catch(() => {});
                 setUserInfo(null);
               }
@@ -323,6 +337,7 @@ export const AuthProvider = ({ children }) => {
         if (isMounted) {
           // If we're creating a user, don't clear userInfo - it will be restored by signup function
           if (!isCreatingUser) {
+            clearAllApiCache();
             setUserInfo(null);
           }
         }

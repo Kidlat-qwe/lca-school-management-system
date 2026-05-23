@@ -1,11 +1,12 @@
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import { PLACEHOLDER_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const StudentDashboard = () => {
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-2 text-sm text-gray-600">Welcome to the Student Dashboard</p>
+        <p className="mt-2 text-sm text-gray-600">{PLACEHOLDER_DASHBOARD.student}</p>
       </div>
 
       <div className="rounded-2xl border border-gray-100 bg-white p-8 shadow-sm sm:p-12">
@@ -14,9 +15,7 @@ const StudentDashboard = () => {
             <DashboardStatIcon name="bookOpen" className="h-10 w-10 text-white drop-shadow-sm" />
           </div>
           <h2 className="mt-6 text-xl font-semibold tracking-tight text-gray-900">Student Dashboard</h2>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            This is a placeholder dashboard for Student users. Content will be added here in the future.
-          </p>
+          <p className="mt-2 text-sm leading-relaxed text-gray-600">{PLACEHOLDER_DASHBOARD.student}</p>
         </div>
       </div>
     </div>

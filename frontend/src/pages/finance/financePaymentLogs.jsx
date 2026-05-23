@@ -17,7 +17,6 @@ import {
   DEFAULT_PAYMENT_LOG_DATE_MODE,
   defaultPaymentLogFilterMonth,
   buildPaymentLogDateParams,
-  hasActivePaymentLogDateFilter,
   parsePaymentLogsLocationSearch,
 } from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
@@ -627,35 +626,6 @@ const FinancePaymentLogs = () => {
   }, [filteredPayments, filterTotalLineAmount]);
 
   const summaryPaymentLogCount = Number(pagination.total) || 0;
-  const hasPaymentLogFilters = Boolean(
-    searchTerm ||
-      filterPaymentMethod ||
-      filterFinanceApproval ||
-      hasActivePaymentLogDateFilter({
-        mode: dateFilterMode,
-        month: filterIssueMonth,
-        paymentFrom: filterIssueDateFrom,
-        paymentTo: filterIssueDateTo,
-        createdFrom: filterCreatedDateFrom,
-        createdTo: filterCreatedDateTo,
-      })
-  );
-
-  // Reset returns the page to its boot state: month-mode pre-loaded with the
-  // current Manila month. We deliberately do NOT clear back to a fully empty
-  // date filter so the page never accidentally fetches the entire history.
-  const resetPaymentLogFilters = () => {
-    setSearchTerm('');
-    setFilterPaymentMethod('');
-    setFilterFinanceApproval('');
-    setDateFilterMode(DEFAULT_PAYMENT_LOG_DATE_MODE);
-    setFilterIssueMonth(defaultPaymentLogFilterMonth());
-    setFilterIssueDateFrom('');
-    setFilterIssueDateTo('');
-    setFilterCreatedDateFrom('');
-    setFilterCreatedDateTo('');
-    fetchPayments(1);
-  };
 
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
@@ -1068,7 +1038,7 @@ const FinancePaymentLogs = () => {
             ) : null}
           </div>
         </div>
-        <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-4 border-t border-gray-100 pt-4">
           <p className="text-xs text-gray-500">
             {dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
               ? 'Month filter uses payment date. Clear the month to show all dates.'
@@ -1076,14 +1046,6 @@ const FinancePaymentLogs = () => {
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
               : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}
           </p>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <button type="button" onClick={resetPaymentLogFilters} disabled={!hasPaymentLogFilters} className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
-              Reset
-            </button>
-            <button type="button" onClick={() => fetchPayments(1)} className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-              Search
-            </button>
-          </div>
         </div>
       </div>
 

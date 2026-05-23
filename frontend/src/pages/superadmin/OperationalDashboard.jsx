@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { OPERATIONAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const OperationalDashboard = () => {
   const { selectedBranchId: filterBranch } = useGlobalBranchFilter();
@@ -103,14 +104,13 @@ const OperationalDashboard = () => {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Operational Dashboard</h1>
-        <p className="text-sm text-gray-600 mt-1">
-          Cohort retention analysis: track student retention by enrollment month
-        </p>
+        <p className="text-sm text-gray-600 mt-1">{OPERATIONAL_DASHBOARD.pageIntro}</p>
       </div>
 
       {/* Filters - Branch first; Teacher, Room, Program appear when branch is selected */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h3 className="text-sm font-semibold text-gray-900 mb-4">Filters</h3>
+        <p className="text-xs text-gray-500 mb-4">{OPERATIONAL_DASHBOARD.filtersTitle}</p>
         <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${filterBranch ? 'lg:grid-cols-3' : ''}`}>
           {filterBranch && (
             <>
@@ -249,8 +249,8 @@ const OperationalDashboard = () => {
             <h3 className="text-lg font-semibold text-gray-900">Cohort Retention Analysis</h3>
             <span
               className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-gray-100 text-xs font-semibold text-gray-500 cursor-help"
-              title="Cohort retention tracks students by first enrollment month and shows what percent of that same group enrolled again in each following month."
-              aria-label="Cohort retention definition"
+              title={OPERATIONAL_DASHBOARD.cohortTooltip}
+              aria-label="What cohort retention means"
             >
               ?
             </span>

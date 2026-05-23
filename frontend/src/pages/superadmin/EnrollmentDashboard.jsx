@@ -18,6 +18,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 import EnrollmentRatePhaseVerifyModal from '../../components/dashboard/EnrollmentRatePhaseVerifyModal';
+import { ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { issueDateRangeFromManilaMonth } from '../../utils/dateUtils';
 
 const COLORS = ['#22C55E', '#94A3B8', '#F7C844', '#4F46E5'];
@@ -282,13 +283,9 @@ const EnrollmentDashboard = () => {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Enrollment Dashboard</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Active and inactive students, enrollment status movement, reservations, and trends.
-          </p>
+          <p className="mt-1 text-sm text-gray-500">{ENROLLMENT_DASHBOARD.pageIntro}</p>
           {selectedMonth ? (
-            <p className="mt-1 text-xs font-medium text-amber-700">
-              Month filter: applies to new, re-enrollment, dropped, rejoin, the enrollment trend, and the enrollment rate table (unless Overall is toggled on that table).
-            </p>
+            <p className="mt-1 text-xs font-medium text-amber-700">{ENROLLMENT_DASHBOARD.monthFilterNote}</p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -330,7 +327,7 @@ const EnrollmentDashboard = () => {
             { label: 'Active', value: activeStudents },
             { label: 'Inactive', value: inactiveStudents },
           ]}
-          description="Current student status from studentstatustbl."
+          description={ENROLLMENT_DASHBOARD.activeInactive}
         />
         <CombinedStatsCard
           title="New Enrollees / Re-enrollment"
@@ -340,7 +337,7 @@ const EnrollmentDashboard = () => {
             { label: 'New enrollees', value: newEnrolleesCount },
             { label: 'Re-enrollment', value: reEnrollmentCount },
           ]}
-          description="Selected month from program_enrollment_status."
+          description={ENROLLMENT_DASHBOARD.newReenroll}
         />
         <CombinedStatsCard
           title="Dropped / Rejoin"
@@ -350,7 +347,7 @@ const EnrollmentDashboard = () => {
             { label: 'Dropped', value: droppedCount },
             { label: 'Rejoin', value: rejoinCount },
           ]}
-          description="Selected month from program_enrollment_status."
+          description={ENROLLMENT_DASHBOARD.droppedRejoin}
         />
         <StatsCard
           title="Total Enrollment Rate"
@@ -359,10 +356,12 @@ const EnrollmentDashboard = () => {
           accent="bg-gradient-to-br from-blue-400 to-cyan-500"
           description={
             enrollmentRateLoading
-              ? 'Loading…'
-              : `${totalEnrollmentRate.enrolledCount.toLocaleString()} enrolled of ${totalEnrollmentRate.studentCount.toLocaleString()} students (phases 1–10). ${
-                  enrollmentRateOverall ? 'Overall scope.' : 'Selected month (enrolled_at).'
-                }`
+              ? ENROLLMENT_DASHBOARD.enrollmentRateLoading
+              : ENROLLMENT_DASHBOARD.enrollmentRate(
+                  totalEnrollmentRate.enrolledCount,
+                  totalEnrollmentRate.studentCount,
+                  enrollmentRateOverall ? 'all time' : 'the selected month'
+                )
           }
         />
         <StatsCard
@@ -370,7 +369,7 @@ const EnrollmentDashboard = () => {
           value={reservedStudents}
           iconName="clipboardList"
           accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-          description="Current reserved rows from program_enrollment_status."
+          description={ENROLLMENT_DASHBOARD.reserved}
         />
       </div>
 
@@ -386,13 +385,11 @@ const EnrollmentDashboard = () => {
               />
             </div>
             <p className="mt-1 text-sm text-gray-500">
-              Enrolled students (new, re_enrolled, upsell, rejoin, or completed) divided by total students with a row for each phase.
+              {ENROLLMENT_DASHBOARD.phaseTableIntro}
               {enrollmentRateOverall ? (
-                <span className="mt-1 block text-xs text-gray-600">Showing all current enrollment rows (not limited by month).</span>
+                <span className="mt-1 block text-xs text-gray-600">{ENROLLMENT_DASHBOARD.phaseTableOverall}</span>
               ) : (
-                <span className="mt-1 block text-xs text-gray-600">
-                  Filtered by selected month using enrolled_at (Manila).
-                </span>
+                <span className="mt-1 block text-xs text-gray-600">{ENROLLMENT_DASHBOARD.phaseTableMonth}</span>
               )}
               {selectedCurriculum ? (
                 <span className="mt-1 block text-xs text-gray-600">
@@ -421,9 +418,7 @@ const EnrollmentDashboard = () => {
             </select>
           </label>
         </div>
-        <p className="mb-3 text-xs text-gray-500">
-          Click a phase row to view the student list behind Enrolled and Students counts.
-        </p>
+        <p className="mb-3 text-xs text-gray-500">{ENROLLMENT_DASHBOARD.phaseTableClick}</p>
         {enrollmentRateError ? (
           <p className="mb-3 text-sm text-red-600">{enrollmentRateError}</p>
         ) : null}
@@ -491,7 +486,7 @@ const EnrollmentDashboard = () => {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <ChartCard
           title="New Enrollee vs Re-enrolled"
-          subtitle="Distinct students in the selected month (program_enrollment_status, enrolled_at Manila)."
+          subtitle={ENROLLMENT_DASHBOARD.chartNewVsReenroll}
         >
           {pieData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
@@ -522,9 +517,7 @@ const EnrollmentDashboard = () => {
           )}
         </ChartCard>
 
-        <ChartCard
-          title="Enrollment Rate by Month"
-           >
+        <ChartCard title="Enrollment Rate by Month" subtitle={ENROLLMENT_DASHBOARD.chartRateByMonth}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={monthlyEnrollmentRate} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -555,7 +548,7 @@ const EnrollmentDashboard = () => {
       {byBranch.length > 0 && (
         <ChartCard
           title="Active vs Inactive by Branch"
-          subtitle="Student counts per branch (all branches view)."
+          subtitle={ENROLLMENT_DASHBOARD.chartActiveByBranch}
         >
           <ResponsiveContainer width="100%" height="100%">
             <BarChart

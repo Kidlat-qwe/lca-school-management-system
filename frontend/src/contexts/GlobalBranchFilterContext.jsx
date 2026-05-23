@@ -90,7 +90,7 @@ export const GlobalBranchFilterProvider = ({ children }) => {
     const loadBranches = async () => {
       try {
         setLoadingBranches(true);
-        const response = await apiRequest('/branches');
+        const response = await apiRequest('/branches', { cache: 'reference' });
         setBranches(response.data || []);
       } catch (error) {
         console.error('Error fetching global branch filters:', error);

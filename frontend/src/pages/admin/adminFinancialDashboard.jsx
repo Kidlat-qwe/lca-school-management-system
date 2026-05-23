@@ -19,6 +19,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 import { buildPaymentLogDateParams, PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
+import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
@@ -181,7 +182,7 @@ const AdminFinancialDashboard = () => {
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Financial Dashboard</h1>
-            <p className="text-sm text-gray-500">Branch overview: {branchName}</p>
+            <p className="text-sm text-gray-500">{FINANCIAL_DASHBOARD.pageIntroAdmin(branchName)}</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
             <label className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
@@ -229,7 +230,7 @@ const AdminFinancialDashboard = () => {
           <StatsCard
             title="Total Payments"
             value={totalPaymentsCount.toLocaleString()}
-            subtitle="Completed payments in selected month"
+            subtitle="Number of completed payments in the month you selected"
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
             iconName="currency"
             onClick={() => navigate('/admin/payment-logs')}
@@ -252,9 +253,7 @@ const AdminFinancialDashboard = () => {
         <div className="space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification (Package Acknowledgement Receipt)</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Verified Acknowledgement Receipt includes Verified/Applied statuses. Unverified Acknowledgement Receipt includes Submitted/Pending statuses awaiting Finance/Superfinance action.
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{FINANCIAL_DASHBOARD.arVerificationIntro}</p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
@@ -277,7 +276,7 @@ const AdminFinancialDashboard = () => {
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <ChartCard title="Monthly Enrollment Trend" subtitle="Past 6 months (branch)">
+          <ChartCard title="Monthly Enrollment Trend" subtitle={FINANCIAL_DASHBOARD.chartEnrollment}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={monthlyEnrollments} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
                 <defs>
@@ -304,7 +303,7 @@ const AdminFinancialDashboard = () => {
 
           <ChartCard
             title="Monthly Invoice Revenue"
-            subtitle="Invoice amounts plus tips from completed payments (branch), by issue month"
+            subtitle={FINANCIAL_DASHBOARD.chartRevenue}
           >
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={invoiceTrend} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
@@ -335,7 +334,7 @@ const AdminFinancialDashboard = () => {
         <div className="grid gap-6 lg:grid-cols-2">
           <ChartCard
             title="Invoice Status"
-            subtitle="Count by status (branch); amounts include invoice balance plus tips from completed payments"
+            subtitle={FINANCIAL_DASHBOARD.chartInvoiceStatus}
           >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -357,7 +356,7 @@ const AdminFinancialDashboard = () => {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Reservation Status" subtitle="Current reservations (branch)">
+          <ChartCard title="Reservation Status" subtitle={FINANCIAL_DASHBOARD.chartReservations}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={reservationStatus} dataKey="count" nameKey="status" outerRadius={100} innerRadius={50} paddingAngle={2}>

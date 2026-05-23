@@ -8,6 +8,8 @@ import {
   loadEnrollmentDashboardMetrics,
   loadEnrollmentRatePhaseStudents,
   loadEnrollmentRatePhaseStudentsExport,
+  loadEnrollmentStatusSnapshotForMonth,
+  loadActiveInactiveByBranchForMonth,
 } from '../lib/enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
@@ -1032,27 +1034,19 @@ router.get(
       const monthStartDate = effectiveMonthRange.start;
       const monthEndDate = effectiveMonthRange.end;
 
-      const statusBranchJoin = branchFilter ? 'AND u.branch_id = $1' : '';
       const classBranchJoin = branchFilter ? 'AND c.branch_id = $1' : '';
       const monthParamOffset = branchFilter ? 1 : 0;
       const monthParams = branchFilter ? [...branchParams, monthStartDate, monthEndDate] : [monthStartDate, monthEndDate];
 
-      // Current active/inactive snapshot comes from student_statustbl, scoped through userstbl for branch access.
-      const statusSummaryResult = await query(
-        `
-          SELECT
-            COUNT(DISTINCT ss.student_id) AS total_students,
-            COUNT(DISTINCT CASE WHEN ss.status = 'active' THEN ss.student_id END) AS active_students,
-            COUNT(DISTINCT CASE WHEN ss.status = 'inactive' THEN ss.student_id END) AS inactive_students
-          FROM student_statustbl ss
-          INNER JOIN userstbl u ON u.user_id = ss.student_id AND u.user_type = 'Student'
-          WHERE 1 = 1 ${statusBranchJoin}
-        `,
-        branchParams
-      );
-      const totalStudents = parseInt(statusSummaryResult.rows[0]?.total_students, 10) || 0;
-      const activeStudents = parseInt(statusSummaryResult.rows[0]?.active_students, 10) || 0;
-      const inactiveStudents = parseInt(statusSummaryResult.rows[0]?.inactive_students, 10) || 0;
+      // Active/inactive for selected month (enrolled_at, Manila) — same month scope as new/re-enrollment KPIs.
+      const monthStatusSnapshot = await loadEnrollmentStatusSnapshotForMonth(query, {
+        branchId: branchFilter,
+        enrolledFrom: monthStartDate,
+        enrolledTo: monthEndDate,
+      });
+      const totalStudents = monthStatusSnapshot.total_students;
+      const activeStudents = monthStatusSnapshot.active_students;
+      const inactiveStudents = monthStatusSnapshot.inactive_students;
 
       const phaseRateParams = [];
       let phaseRateParamIdx = 1;
@@ -1301,30 +1295,13 @@ router.get(
         enrollment_rate: monthlyRateMap[m.key]?.enrollment_rate ?? 0,
       }));
 
-      // Active vs Inactive by branch (bar chart when no branch filter; same snapshot as KPI cards)
+      // Active vs Inactive by branch (bar chart when no branch filter; same month scope as KPI cards)
       let active_inactive_by_branch = [];
       if (!branchFilter) {
-        const byBranchQuery = `
-          SELECT
-            b.branch_id,
-            COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
-            COUNT(DISTINCT ss.student_id) AS total,
-            COUNT(DISTINCT CASE WHEN ss.status = 'active' THEN ss.student_id END) AS active_count,
-            COUNT(DISTINCT CASE WHEN ss.status = 'inactive' THEN ss.student_id END) AS inactive_count
-          FROM branchestbl b
-          LEFT JOIN userstbl u ON u.branch_id = b.branch_id AND u.user_type = 'Student'
-          LEFT JOIN student_statustbl ss ON ss.student_id = u.user_id
-          GROUP BY b.branch_id, b.branch_nickname, b.branch_name
-          ORDER BY COALESCE(b.branch_nickname, b.branch_name)
-        `;
-        const byBranchResult = await query(byBranchQuery);
-        active_inactive_by_branch = byBranchResult.rows.map((row) => ({
-          branch_id: row.branch_id,
-          branch_name: row.branch_name || 'Unassigned',
-          total: parseInt(row.total, 10) || 0,
-          active: parseInt(row.active_count, 10) || 0,
-          inactive: parseInt(row.inactive_count, 10) || 0,
-        }));
+        active_inactive_by_branch = await loadActiveInactiveByBranchForMonth(query, {
+          enrolledFrom: monthStartDate,
+          enrolledTo: monthEndDate,
+        });
       }
 
       // Branches list for filter

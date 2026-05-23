@@ -2219,7 +2219,7 @@ router.put(
 /**
  * DELETE /api/sms/invoices/:id
  * Delete invoice and its related records
- * Access: Superadmin, Admin
+ * Access: Superadmin only
  */
 router.delete(
   '/:id',
@@ -2227,7 +2227,7 @@ router.delete(
     param('id').isInt().withMessage('Invoice ID must be an integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Finance'),
+  requireRole('Superadmin'),
   async (req, res, next) => {
     const client = await getClient();
     try {

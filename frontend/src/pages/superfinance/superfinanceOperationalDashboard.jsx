@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiRequest } from '../../config/api';
+import { OPERATIONAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
 const SuperfinanceOperationalDashboard = () => {
@@ -103,9 +104,7 @@ const SuperfinanceOperationalDashboard = () => {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Operational Dashboard</h1>
-        <p className="text-sm text-gray-600 mt-1">
-          Cohort retention analysis: track student retention by enrollment month
-        </p>
+        <p className="text-sm text-gray-600 mt-1">{OPERATIONAL_DASHBOARD.pageIntro}</p>
       </div>
 
       {/* Filters - Branch first; Teacher, Room, Program appear when branch is selected */}
@@ -249,8 +248,8 @@ const SuperfinanceOperationalDashboard = () => {
             <h3 className="text-lg font-semibold text-gray-900">Cohort Retention Analysis</h3>
             <span
               className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-gray-100 text-xs font-semibold text-gray-500 cursor-help"
-              title="Cohort retention tracks students by first enrollment month and shows what percent of that same group enrolled again in each following month."
-              aria-label="Cohort retention definition"
+              title={OPERATIONAL_DASHBOARD.cohortTooltip}
+              aria-label="What cohort retention means"
             >
               ?
             </span>

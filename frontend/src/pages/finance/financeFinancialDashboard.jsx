@@ -5,6 +5,7 @@ import FinancialDashboardDateFilter from '../../components/dashboard/FinancialDa
 import { appAlert } from '../../utils/appAlert';
 import { firstDayOfMonthManilaYMD, formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import { FINANCE_ROLE_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const FinanceFinancialDashboard = () => {
   const navigate = useNavigate();
@@ -206,7 +207,7 @@ const FinanceFinancialDashboard = () => {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Financial Dashboard</h1>
-          <p className="mt-2 text-sm text-gray-600">Welcome to the Finance Dashboard</p>
+          <p className="mt-2 text-sm text-gray-600">{FINANCE_ROLE_DASHBOARD.pageIntroBranch}</p>
           {issueDateFrom || issueDateTo ? (
             <p className="mt-2 text-xs text-primary-700 font-medium">
               {activeSummary}
@@ -247,9 +248,7 @@ const FinanceFinancialDashboard = () => {
               <p className="mt-2 text-2xl font-bold text-gray-900">
                 {formatCurrency(metrics.totalRevenue)}
               </p>
-              <p className="mt-1 text-xs text-gray-500">
-                Completed payments (payable + tips), payment date in range (Manila)
-              </p>
+              <p className="mt-1 text-xs text-gray-500">{FINANCE_ROLE_DASHBOARD.totalRevenue}</p>
             </div>
           </div>
         </div>
@@ -275,7 +274,7 @@ const FinanceFinancialDashboard = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Acknowledgement Receipt Sales</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{formatCurrency(metrics.arSalesAmount)}</p>
-              <p className="mt-1 text-xs text-gray-500">{metrics.arSalesCount} receipt(s) in selected range</p>
+              <p className="mt-1 text-xs text-gray-500">{FINANCE_ROLE_DASHBOARD.arSales(metrics.arSalesCount)}</p>
             </div>
             <div className="h-12 w-12 rounded-full bg-violet-100 flex items-center justify-center">
               <DashboardStatIcon name="clipboardList" className="h-6 w-6 text-violet-600" />
@@ -295,7 +294,7 @@ const FinanceFinancialDashboard = () => {
               <p className="text-sm font-medium text-gray-600">Verified Payments</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.verifiedPaymentsCount}</p>
               <p className="mt-1 text-xs text-gray-500">
-                {formatCurrency(metrics.verifiedPaymentsAmount)} total (payable + tips)
+                {FINANCE_ROLE_DASHBOARD.verifiedPayments(formatCurrency(metrics.verifiedPaymentsAmount))}
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-teal-100 flex items-center justify-center">
@@ -313,7 +312,7 @@ const FinanceFinancialDashboard = () => {
               <p className="text-sm font-medium text-gray-600">Unverified Payments</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.unverifiedPaymentsCount}</p>
               <p className="mt-1 text-xs text-gray-500">
-                {formatCurrency(metrics.unverifiedPaymentsAmount)} total (payable + tips)
+                {FINANCE_ROLE_DASHBOARD.unverifiedPayments(formatCurrency(metrics.unverifiedPaymentsAmount))}
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
@@ -336,7 +335,7 @@ const FinanceFinancialDashboard = () => {
                 {metrics.arVerifiedCount}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                {formatCurrency(metrics.arVerifiedAmount)} total (payment + tips)
+                {FINANCE_ROLE_DASHBOARD.verifiedAr(formatCurrency(metrics.arVerifiedAmount))}
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
@@ -356,7 +355,7 @@ const FinanceFinancialDashboard = () => {
                 {metrics.arUnverifiedCount}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                {formatCurrency(metrics.arUnverifiedAmount)} total (payment + tips)
+                {FINANCE_ROLE_DASHBOARD.unverifiedAr(formatCurrency(metrics.arUnverifiedAmount))}
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
@@ -370,7 +369,7 @@ const FinanceFinancialDashboard = () => {
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900">Recent Invoices</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Latest in current filter (by issue date)</p>
+            <p className="text-xs text-gray-500 mt-0.5">{FINANCE_ROLE_DASHBOARD.recentInvoices}</p>
           </div>
           <div className="p-6">
             {recentInvoices.length === 0 ? (
@@ -413,7 +412,7 @@ const FinanceFinancialDashboard = () => {
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900">Recent Payments</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Latest completed in current filter (by issue date)</p>
+            <p className="text-xs text-gray-500 mt-0.5">{FINANCE_ROLE_DASHBOARD.recentPayments}</p>
           </div>
           <div className="p-6">
             {recentPayments.length === 0 ? (
