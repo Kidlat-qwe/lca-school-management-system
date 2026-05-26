@@ -30,6 +30,7 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
 
 /** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
 const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
@@ -2262,7 +2263,11 @@ const PaymentLogs = () => {
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/superadmin/invoice', { state: { focusInvoiceId: selectedRejectedPayment.invoice_id } })}
+                onClick={() => {
+                  const navState = buildInvoiceNavigateStateFromRejectedPayment(selectedRejectedPayment);
+                  setSelectedRejectedPayment(null);
+                  navigate('/superadmin/invoice', { state: navState });
+                }}
                 className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
               >
                 Go to invoice

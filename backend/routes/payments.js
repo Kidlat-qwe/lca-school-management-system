@@ -158,8 +158,9 @@ const syncInstallmentProfileForRejoinInvoice = async ({ client, invoice, student
 };
 
 /**
- * Rejected tab lists all payment rows with approval_status Rejected (audit history).
- * Invoice status may already be Paid/Unpaid after the branch recorded a new payment.
+ * Rejected tab: latest rejection per invoice while invoicestbl.status is still Rejected.
+ * Once the branch records a new completed payment and the invoice is Paid/Partially Paid again,
+ * the row leaves this tab (payment row remains in DB for audit).
  */
 
 /**
@@ -177,6 +178,13 @@ const PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL = `
       ORDER BY COALESCE(p3.rejected_at, p3.created_at) DESC NULLS LAST, p3.payment_id DESC
       LIMIT 1
     )
+  )`;
+
+/** Hide rejected rows when invoice is no longer Rejected (paid again). */
+const PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL = `
+  AND (
+    p.invoice_id IS NULL
+    OR COALESCE(i.status, '') = 'Rejected'
   )`;
 // All routes require authentication
 router.use(verifyFirebaseToken);
@@ -1409,6 +1417,7 @@ router.get(
 
       if (isRejectedPaymentLogsTab) {
         sql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
+        sql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
       }
 
       sql += ` ORDER BY p.payment_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
@@ -1620,6 +1629,7 @@ router.get(
 
       if (isRejectedPaymentLogsTab) {
         countSql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
+        countSql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
       }
 
       // acknowledgement_receiptstbl can produce multiple join rows per payment; COUNT/SUM must

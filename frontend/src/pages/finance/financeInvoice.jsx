@@ -27,7 +27,12 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
-import { useOpenInvoiceFromPaymentLogsNavigation } from '../../utils/invoiceFocusNavigation';
+import {
+  getInvoiceRowRejectedPaymentOverlay,
+  isInvoiceFocusedFromPaymentLogs,
+  useOpenInvoiceFromPaymentLogsNavigation,
+  useScrollToFocusedInvoiceRow,
+} from '../../utils/invoiceFocusNavigation';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -599,13 +604,13 @@ const FinanceInvoice = () => {
     setShowDetailsModal(true);
   };
 
-  useOpenInvoiceFromPaymentLogsNavigation({
+  const { paymentLogsFocus } = useOpenInvoiceFromPaymentLogsNavigation({
     location,
     navigate,
     apiRequest,
-    openInvoiceDetails: openViewEditInvoice,
     mergeInvoiceIntoList,
     clearListDateFilters: clearInvoiceListDateFilters,
+    setFilterStatus,
   });
 
   const openDetailsModal = async (invoice) => {
@@ -1380,6 +1385,14 @@ const FinanceInvoice = () => {
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
+
+  useScrollToFocusedInvoiceRow(
+    paymentLogsFocus,
+    sortedInvoices,
+    currentPage,
+    setCurrentPage,
+    ITEMS_PER_PAGE
+  );
   const summaryInvoiceCount = filteredInvoices.length;
   const summaryInvoiceTotal = filteredInvoices.reduce(
     (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
@@ -1851,8 +1864,15 @@ const FinanceInvoice = () => {
                     </td>
                   </tr>
                 ) : (
-                  paginatedInvoices.map((invoice) => (
-                  <tr key={invoice.invoice_id}>
+                  paginatedInvoices.map((invoice) => {
+                  const rejectedOverlay = getInvoiceRowRejectedPaymentOverlay(invoice, paymentLogsFocus);
+                  const isFocusedFromPaymentLogs = isInvoiceFocusedFromPaymentLogs(invoice, paymentLogsFocus);
+                  return (
+                  <tr
+                    key={invoice.invoice_id}
+                    id={`invoice-row-${invoice.invoice_id}`}
+                    className={isFocusedFromPaymentLogs ? 'bg-red-50 ring-2 ring-inset ring-red-300' : undefined}
+                  >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
                         <span>INV-{invoice.invoice_id}</span>
@@ -1958,6 +1978,11 @@ const FinanceInvoice = () => {
                       >
                         {invoice.status || 'Draft'}
                       </span>
+                      {rejectedOverlay?.rejectReason && (
+                        <p className="mt-1 max-w-[200px] text-xs text-red-700 line-clamp-2" title={rejectedOverlay.rejectReason}>
+                          {rejectedOverlay.rejectReason}
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                         {invoice.status === 'Balance Invoiced' ? (
@@ -1975,6 +2000,10 @@ const FinanceInvoice = () => {
                               </span>
                             </div>
                           </div>
+                        ) : rejectedOverlay ? (
+                          <div className="text-sm font-medium text-gray-900">
+                            ₱{rejectedOverlay.amount.toFixed(2)}
+                          </div>
                         ) : (
                           <div className="text-sm text-gray-900">
                             {invoice.amount !== null && invoice.amount !== undefined
@@ -1985,7 +2014,9 @@ const FinanceInvoice = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
-                        ₱{Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}
+                        {rejectedOverlay
+                          ? `₱${rejectedOverlay.totalAmount.toFixed(2)}`
+                          : `₱${Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}`}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -1997,7 +2028,9 @@ const FinanceInvoice = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        {invoice.last_payment_date
+                        {rejectedOverlay?.paymentDate
+                          ? formatDateManila(rejectedOverlay.paymentDate)
+                          : invoice.last_payment_date
                           ? formatDateManila(invoice.last_payment_date)
                           : '—'}
                       </div>
@@ -2022,7 +2055,8 @@ const FinanceInvoice = () => {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
                 )}
               </tbody>
             </table>

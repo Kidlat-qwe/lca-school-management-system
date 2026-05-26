@@ -30,6 +30,7 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
 
 const SuperfinancePaymentLogs = () => {
   const location = useLocation();
@@ -1798,7 +1799,11 @@ const SuperfinancePaymentLogs = () => {
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/superfinance/invoice', { state: { focusInvoiceId: selectedRejectedPayment.invoice_id } })}
+                onClick={() => {
+                  const navState = buildInvoiceNavigateStateFromRejectedPayment(selectedRejectedPayment);
+                  setSelectedRejectedPayment(null);
+                  navigate('/superfinance/invoice', { state: navState });
+                }}
                 className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
               >
                 Go to invoice

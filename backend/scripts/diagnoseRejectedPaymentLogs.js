@@ -38,6 +38,8 @@ console.table(
   }))
 );
 
-console.log(`\nRejected tab lists all ${r.rows.length} row(s) with approval_status=Rejected (invoice status may differ).`);
+console.log(`\nRejected tab shows rows where approval_status=Rejected AND invoice status is still Rejected.`);
+const visible = r.rows.filter((row) => row.invoice_status === 'Rejected' || row.invoice_id == null);
+console.log(`Visible on Rejected tab: ${visible.length} of ${r.rows.length} row(s).`);
 
 await pool.end();
