@@ -334,22 +334,22 @@ const DailyOperationalDashboardView = ({
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatsCard
-              title="Payments (approved)"
+              title="Payments (verified)"
               value={formatNumber(totals.pay_verified_count || 0)}
               iconName="currency"
               accent="bg-gradient-to-br from-cyan-500 to-teal-600"
-              subtitle={DAILY_OPERATIONAL.payApproved(formatCurrency(totals.pay_verified_amount || 0), verificationAsOfDisplay)}
+              subtitle={DAILY_OPERATIONAL.payVerified(formatCurrency(totals.pay_verified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goPaymentLogsByVerify('verified')}
-              ariaLabel={`Open payment logs for approved completed payments on ${verificationAsOfDisplay} (Manila)`}
+              ariaLabel={`Open payment logs for verified completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
             <StatsCard
-              title="Payments (not approved yet)"
+              title="Payments (not verified yet)"
               value={formatNumber(totals.pay_unverified_count || 0)}
               iconName="chartBar"
               accent="bg-gradient-to-br from-slate-500 to-slate-600"
-              subtitle={DAILY_OPERATIONAL.payPending(formatCurrency(totals.pay_unverified_amount || 0), verificationAsOfDisplay)}
+              subtitle={DAILY_OPERATIONAL.payNotVerifiedYet(formatCurrency(totals.pay_unverified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goPaymentLogsByVerify('unverified')}
-              ariaLabel={`Open payment logs for not-yet-approved completed payments on ${verificationAsOfDisplay} (Manila)`}
+              ariaLabel={`Open payment logs for not-yet-verified completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
             <StatsCard
               title="Acknowledgement Receipt (verified or applied)"
@@ -405,11 +405,11 @@ const DailyOperationalDashboardView = ({
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Acknowledgement Receipt (float)</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
                     <span className="block">Pay.</span>
-                    <span className="block">approved</span>
+                    <span className="block">verified</span>
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
                     <span className="block">Pay.</span>
-                    <span className="block">pending</span>
+                    <span className="block">not verified</span>
                   </th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
                     <span className="block">Package Acknowledgement Receipt</span>

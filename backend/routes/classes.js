@@ -6095,7 +6095,7 @@ router.post(
               promoApplyScopeForProfile, // Store promo scope
               promoMonthsToApplyForProfile, // Store months to apply
               0, // Start with 0 months applied
-              profilePhaseStart, // For Phase package: first phase (e.g. 3). Else: null (= 1)
+              class_id != null ? (profilePhaseStart ?? 1) : profilePhaseStart,
             ]
           );
           installmentProfile = profileResult.rows[0];

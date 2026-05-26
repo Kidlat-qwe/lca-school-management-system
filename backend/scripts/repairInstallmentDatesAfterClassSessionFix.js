@@ -233,8 +233,7 @@ async function refreshPhaseProfilesAndQueue(client, dryRun) {
     `SELECT ip.*
      FROM installmentinvoiceprofilestbl ip
      WHERE ip.is_active = true
-       AND ip.class_id IS NOT NULL
-       AND ip.phase_start IS NOT NULL`
+       AND ip.class_id IS NOT NULL`
   );
 
   let profiles = 0;

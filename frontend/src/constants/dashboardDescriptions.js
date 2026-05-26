@@ -22,10 +22,10 @@ export const DAILY_OPERATIONAL = {
     `${txnCount} paid merchandise sale(s). Quantity is total items released.`,
   enrollmentRate: (enrolled, total) =>
     `${enrolled} of ${total} phase enrollments on this date are still active. Rate is by program phase, not the same as “new enrollees” above.`,
-  payApproved: (amount, date) =>
-    `${amount} — completed payments finance has approved · ${date}`,
-  payPending: (amount, date) =>
-    `${amount} — completed but waiting for finance approval · ${date}`,
+  payVerified: (amount, date) =>
+    `${amount} — completed payments finance has verified · ${date}`,
+  payNotVerifiedYet: (amount, date) =>
+    `${amount} — completed but not verified yet · ${date}`,
   arVerified: (amount, date) =>
     `${amount} — package acknowledgement receipts verified or applied · ${date}`,
   arUnverified: (amount, date) =>
@@ -33,7 +33,7 @@ export const DAILY_OPERATIONAL = {
   verificationSection: 'Finance checks for the selected date',
   branchTable: 'Each column uses the same calendar day you selected above.',
   salesGuide:
-    'Invoice Sales uses payment issue date. Acknowledgement Receipt Sales matches the AR page total for that day. Verification cards count package ARs by issue date and approval status.',
+    'Invoice Sales uses payment issue date. Acknowledgement Receipt Sales matches the AR page total for that day. Verification cards count package ARs by issue date and verification status.',
   chartBranchActivity: 'Compare branches: enrollments, drops, rejoins, and merchandise for this date.',
   chartInvoiceByBranch: 'Invoice and acknowledgement receipt totals by branch for this date.',
   chartSalesTrend: 'Completed invoice payments over the last 7 days.',
@@ -54,14 +54,14 @@ export const MONTHLY_OPERATIONAL = {
   merchandise: (txnCount) => `${txnCount} paid merchandise sale(s) in this month.`,
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase enrollment rate (see Enrollment Dashboard for details).',
-  payApproved: (amount) => `${amount} — approved completed payments in this month`,
-  payPending: (amount) => `${amount} — completed, pending finance approval, in this month`,
+  payVerified: (amount) => `${amount} — verified completed payments in this month`,
+  payNotVerifiedYet: (amount) => `${amount} — completed, not verified yet, in this month`,
   arVerified: (amount) => `${amount} — verified or applied package ARs in this month`,
   arUnverified: (amount) => `${amount} — package ARs awaiting verification in this month`,
   verificationSection: 'Finance checks for the selected month',
   branchTable: 'All columns use the selected calendar month.',
   salesGuide:
-    'Invoice Sales uses payment issue date in the month. AR Sales matches the AR page for that month. Verification cards use package AR issue dates in the same range.',
+    'Invoice Sales uses payment issue date in the month. AR Sales matches the AR page for that month. Verification cards use package AR and payment verification status in the same range.',
   chartBranchActivity: 'Monthly totals by branch: enrollments, drops, rejoins, and merchandise.',
   chartInvoiceByBranch: 'Invoice and acknowledgement receipt totals by branch for this month.',
   chartSalesTrend: 'Completed invoice payments for the last six months (ends with your selected month).',

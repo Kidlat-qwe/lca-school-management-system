@@ -38,11 +38,21 @@ const setDayOfMonth = (dateValue, day) => {
   return new Date(date.getFullYear(), date.getMonth(), day, 12, 0, 0, 0);
 };
 
+/**
+ * Class-linked installment plans bill from classsessionstbl phase dates.
+ * Legacy rows stored phase_start as NULL (meaning phase 1); class_id alone is sufficient.
+ */
 export const isPhaseInstallmentProfile = (profile = {}) =>
-  profile.phase_start !== null &&
-  profile.phase_start !== undefined &&
-  profile.class_id !== null &&
-  profile.class_id !== undefined;
+  profile.class_id !== null && profile.class_id !== undefined;
+
+/** Effective first phase for billing (NULL/omitted phase_start => 1). */
+export const resolveProfilePhaseStart = (profile = {}) => {
+  if (profile.phase_start !== null && profile.phase_start !== undefined) {
+    const n = parseInt(profile.phase_start, 10);
+    return Number.isInteger(n) && n >= 1 ? n : 1;
+  }
+  return 1;
+};
 
 export const getCurrentInstallmentPhaseNumber = (profile = {}, generatedCountOverride = null) => {
   const startPhase = profile.phase_start !== null && profile.phase_start !== undefined
@@ -58,7 +68,7 @@ export const getCurrentInstallmentPhaseNumber = (profile = {}, generatedCountOve
 export const getLastInstallmentPhaseNumber = (profile = {}) => {
   if (!isPhaseInstallmentProfile(profile)) return null;
 
-  const startPhase = parseInt(profile.phase_start, 10);
+  const startPhase = resolveProfilePhaseStart(profile);
   const totalPhases = parseInt(profile.total_phases || 0, 10);
   if (!Number.isInteger(startPhase) || !Number.isInteger(totalPhases) || totalPhases <= 0) {
     return null;
@@ -105,8 +115,12 @@ export const buildPhaseInstallmentSchedule = async ({
     return null;
   }
 
-  const currentPhaseNumber = getCurrentInstallmentPhaseNumber(profile, generatedCountOverride);
-  const lastPhaseNumber = getLastInstallmentPhaseNumber(profile);
+  const profileWithPhaseStart = {
+    ...profile,
+    phase_start: resolveProfilePhaseStart(profile),
+  };
+  const currentPhaseNumber = getCurrentInstallmentPhaseNumber(profileWithPhaseStart, generatedCountOverride);
+  const lastPhaseNumber = getLastInstallmentPhaseNumber(profileWithPhaseStart);
   if (lastPhaseNumber !== null && currentPhaseNumber > lastPhaseNumber) {
     return {
       current_phase_number: null,

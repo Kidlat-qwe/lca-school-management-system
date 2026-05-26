@@ -351,9 +351,9 @@ export const generateInvoiceFromInstallment = async (
     );
     await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
     
-    // Calculate next generation date and next invoice month from fixed cadence.
-    const nextGenDate = cycle.nextGenerationDate;
-    const nextInvoiceMonth = cycle.nextInvoiceMonth;
+    // Default: fixed monthly cadence (25th generation / 5th due). Phase packages override below.
+    let nextGenDate = cycle.nextGenerationDate;
+    let nextInvoiceMonth = cycle.nextInvoiceMonth;
     
     // Check phase limit before generating
     const profileCheck = await client.query(
@@ -415,6 +415,18 @@ export const generateInvoiceFromInstallment = async (
     const isLastInvoice = nextPhaseSchedule
       ? nextPhaseSchedule.is_last_phase
       : (maxInvoices !== null && newCount >= maxInvoices);
+
+    // Phase installments: next bill is tied to the next phase's class session month, not monthly +1.
+    if (nextPhaseSchedule && !nextPhaseSchedule.is_last_phase) {
+      if (nextPhaseSchedule.current_generation_date) {
+        const ng = parseYmdToLocalNoon(nextPhaseSchedule.current_generation_date);
+        if (ng) nextGenDate = ng;
+      }
+      if (nextPhaseSchedule.current_invoice_month) {
+        const nim = parseYmdToLocalNoon(nextPhaseSchedule.current_invoice_month);
+        if (nim) nextInvoiceMonth = nim;
+      }
+    }
     
     if (isLastInvoice) {
       // Last invoice - mark profile as inactive and update installment invoice status
@@ -536,6 +548,30 @@ export const processDueInstallmentInvoices = async () => {
     
     for (const installmentInvoice of dueInvoices) {
       try {
+        const phaseProfile = isPhaseInstallmentProfile({
+          class_id: installmentInvoice.class_id,
+          phase_start: installmentInvoice.phase_start,
+        });
+        if (phaseProfile) {
+          const phaseSched = await buildPhaseInstallmentSchedule({
+            db: { query },
+            profile: {
+              class_id: installmentInvoice.class_id,
+              phase_start: installmentInvoice.phase_start,
+              total_phases: installmentInvoice.total_phases,
+              generated_count: installmentInvoice.generated_count || 0,
+            },
+            generatedCountOverride: installmentInvoice.generated_count || 0,
+          });
+          const genYmd = phaseSched?.current_generation_date;
+          if (genYmd && String(genYmd).slice(0, 10) > todayStr) {
+            console.log(
+              `[Generator] Skip profile ${installmentInvoice.installmentinvoiceprofiles_id}: phase ${phaseSched.current_phase_number} generation ${genYmd} is after today`
+            );
+            continue;
+          }
+        }
+
         const invoiceData = await generateInvoiceFromInstallment(installmentInvoice, {
           student_id: installmentInvoice.student_id,
           branch_id: installmentInvoice.branch_id,

@@ -9,7 +9,11 @@ import {
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
-import { buildPhaseInstallmentSchedule, getPhaseDueDateYmd } from '../utils/phaseInstallmentUtils.js';
+import {
+  buildPhaseInstallmentSchedule,
+  getPhaseDueDateYmd,
+  isPhaseInstallmentProfile,
+} from '../utils/phaseInstallmentUtils.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
@@ -416,36 +420,33 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
 }) => {
   const paymentDateYmd = paymentIssueDate || formatYmdLocal(new Date());
 
-  // -----------------------------------------------------------------
-  // IMPORTANT — DESIGN DECISION (mid-year enrollments)
-  //
-  // Previously this helper called buildPhaseInstallmentSchedule, which
-  // derived the first generation date from the EARLIEST class session
-  // of the current phase. For mid-year enrollments (e.g. enrolling in
-  // Phase 6 of a 10-phase plan) that anchor falls many months in the
-  // future, so the very first invoice was issued with a future date
-  // and disappeared from the current invoice page filter.
-  //
-  // The product requirement is: when downpayment is paid TODAY, the
-  // first phase invoice must be visible on TODAY's invoice page.
-  // We therefore anchor the schedule to the payment date. The cron
-  // (processDueInstallmentInvoices) will then generate the subsequent
-  // phases monthly from today.
-  //
-  // Non-phase-aware profiles (no phase_start) keep the original due
-  // date behaviour (linked to class session 1 if class is set).
-  // -----------------------------------------------------------------
-  const nonPhaseFirstDueYmd =
-    profile.class_id && (profile.phase_start === null || profile.phase_start === undefined)
-      ? await getPhaseDueDateYmd(client, profile.class_id, 1)
-      : null;
+  let scheduledDateYmd = profile.bill_invoice_due_date || paymentDateYmd;
+  let firstGenerationYmd = paymentDateYmd;
+  let currentInvoiceMonthYmd = paymentDateYmd;
+  let phaseSchedule = null;
 
-  const firstGenerationYmd = paymentDateYmd;
-  const currentInvoiceMonthYmd = paymentDateYmd;
-  const scheduledDateYmd =
-    nonPhaseFirstDueYmd
-    || profile.bill_invoice_due_date
-    || paymentDateYmd;
+  if (isPhaseInstallmentProfile(profile)) {
+    phaseSchedule = await buildPhaseInstallmentSchedule({
+      db: client,
+      profile,
+      generatedCountOverride: 0,
+      issueDateOverride: paymentDateYmd,
+    });
+    if (phaseSchedule?.current_due_date) {
+      scheduledDateYmd = phaseSchedule.current_due_date;
+    }
+    if (phaseSchedule?.current_generation_date) {
+      firstGenerationYmd = phaseSchedule.current_generation_date;
+    }
+    if (phaseSchedule?.current_invoice_month) {
+      currentInvoiceMonthYmd = phaseSchedule.current_invoice_month;
+    }
+  } else if (profile.class_id) {
+    const nonPhaseFirstDueYmd = await getPhaseDueDateYmd(client, profile.class_id, 1);
+    if (nonPhaseFirstDueYmd) {
+      scheduledDateYmd = nonPhaseFirstDueYmd;
+    }
+  }
 
   const firstInvoiceRecordResult = await client.query(
     `INSERT INTO installmentinvoicestbl 
@@ -469,7 +470,7 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
 
   return {
     firstInvoiceRecord: firstInvoiceRecordResult.rows[0],
-    phaseSchedule: null,
+    phaseSchedule,
   };
 };
 

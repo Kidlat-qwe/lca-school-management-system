@@ -13,6 +13,11 @@
 
 import '../config/loadEnv.js';
 import pool from '../config/database.js';
+import {
+  buildPhaseInstallmentSchedule,
+  isPhaseInstallmentProfile,
+  resolveProfilePhaseStart,
+} from '../utils/phaseInstallmentUtils.js';
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -156,13 +161,43 @@ async function runForUserId(sid, asJson) {
   const inv = await pool.query(
     `SELECT i.invoice_id, i.branch_id, i.installmentinvoiceprofiles_id, i.status, i.amount,
             i.invoice_description, TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
-            i.invoice_ar_number
+            TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_date,
+            i.invoice_ar_number, i.remarks
      FROM invoicestbl i
      WHERE i.installmentinvoiceprofiles_id = ANY($1::int[])
      ORDER BY i.invoice_id DESC`,
     [pids]
   );
   out.linkedInvoices = inv.rows || [];
+
+  for (const p of out.profiles) {
+    if (!p.class_id) continue;
+    const phases = await pool.query(
+      `SELECT phase_number, MIN(scheduled_date)::text AS phase_start
+       FROM classsessionstbl WHERE class_id = $1
+       GROUP BY phase_number ORDER BY phase_number LIMIT 12`,
+      [p.class_id]
+    );
+    p.class_phase_starts = phases.rows;
+    p.uses_phase_session_billing = isPhaseInstallmentProfile(p);
+    p.effective_phase_start = resolveProfilePhaseStart(p);
+    if (isPhaseInstallmentProfile(p)) {
+      try {
+        p.phase_schedule_at_generated_count = await buildPhaseInstallmentSchedule({
+          db: pool,
+          profile: p,
+          generatedCountOverride: p.generated_count || 0,
+        });
+      } catch (e) {
+        p.phase_schedule_error = e.message;
+      }
+    }
+    if (p.class_id && (p.phase_start == null) && isPhaseInstallmentProfile(p)) {
+      out.notes.push(
+        `Profile ${p.installmentinvoiceprofiles_id}: phase_start is NULL but class_id is set — billing should use class sessions (run repairClassLinkedInstallmentBilling.js if monthly due dates appear).`
+      );
+    }
+  }
 
   // Diagnosis
   const hasDownpaymentId = out.profiles.some((p) => p.downpayment_invoice_id != null);
@@ -242,8 +277,25 @@ async function runForUserId(sid, asJson) {
         status: i.status,
         amount: i.amount,
         issue_date: i.issue_date,
+        due_date: i.due_date,
       }))
     );
+  }
+
+  const withClass = out.profiles.filter((p) => p.class_id);
+  if (withClass.length) {
+    console.log('\n=== Class phase session starts (classsessionstbl) ===');
+    withClass.forEach((p) => {
+      console.log(`Profile ${p.installmentinvoiceprofiles_id} class_id=${p.class_id} effective_phase_start=${p.effective_phase_start}`);
+      if (p.class_phase_starts?.length) {
+        console.table(p.class_phase_starts);
+      } else {
+        console.log('  (no sessions)');
+      }
+      if (p.phase_schedule_at_generated_count) {
+        console.log('  Schedule at generated_count:', p.phase_schedule_at_generated_count);
+      }
+    });
   }
 
   console.log('\n=== Notes ===');
