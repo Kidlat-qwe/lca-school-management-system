@@ -17,6 +17,7 @@ import {
   DEFAULT_PAYMENT_LOG_DATE_MODE,
   defaultPaymentLogFilterMonth,
   buildPaymentLogDateParams,
+  buildPaymentLogListDateParams,
 } from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
@@ -1008,7 +1009,8 @@ const AdminPaymentLogs = () => {
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (adminBranchId) params.set('branch_id', String(adminBranchId));
       if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: branchLogTab,
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,
@@ -1021,7 +1023,6 @@ const AdminPaymentLogs = () => {
       if (branchLogTab === 'return') {
         params.set('my_return_queue', 'true');
       } else if (branchLogTab === 'rejected') {
-        params.set('status', 'Rejected');
         params.set('approval_status', 'Rejected');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
@@ -1070,7 +1071,8 @@ const AdminPaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       params.set('branch_id', String(adminBranchId));
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: 'return',
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,

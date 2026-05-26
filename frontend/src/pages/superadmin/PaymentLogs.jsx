@@ -18,6 +18,7 @@ import {
   DEFAULT_PAYMENT_LOG_DATE_MODE,
   defaultPaymentLogFilterMonth,
   buildPaymentLogDateParams,
+  buildPaymentLogListDateParams,
 } from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
@@ -199,7 +200,8 @@ const PaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       if (filterBranch) params.set('branch_id', filterBranch);
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: 'return',
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,
@@ -297,7 +299,8 @@ const PaymentLogs = () => {
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
       if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: branchLogTab,
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,
@@ -309,7 +312,6 @@ const PaymentLogs = () => {
       if (branchLogTab === 'return') {
         params.set('approval_status', 'Returned');
       } else if (branchLogTab === 'rejected') {
-        params.set('status', 'Rejected');
         params.set('approval_status', 'Rejected');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');
@@ -1259,7 +1261,9 @@ const PaymentLogs = () => {
         </div>
         <div className="mt-4 border-t border-gray-100 pt-4">
           <p className="text-xs text-gray-500">
-            {dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
+            {branchLogTab === 'rejected' || branchLogTab === 'return'
+              ? 'Returned and Rejected tabs list all matching audit rows (no month filter). Use search or branch to narrow results.'
+              : dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
               ? 'Month filter uses payment issue date (paymenttbl.issue_date), same field as the Superadmin Financial Dashboard month scope. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'

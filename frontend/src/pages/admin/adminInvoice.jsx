@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -27,6 +27,7 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import { useOpenInvoiceFromPaymentLogsNavigation } from '../../utils/invoiceFocusNavigation';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -46,6 +47,7 @@ const getInvoiceSummaryAmountIncludingTips = (invoice) =>
 
 const AdminInvoice = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { userInfo } = useAuth();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
@@ -76,6 +78,24 @@ const AdminInvoice = () => {
       setIssueTo: setFilterIssueDateTo,
     });
   };
+
+  const clearInvoiceListDateFilters = useCallback(() => {
+    setDateFilterMode(invoiceDateFilterUtil.DEFAULT_MODE);
+    setFilterIssueMonth('');
+    setFilterPaymentDateFrom('');
+    setFilterPaymentDateTo('');
+    setFilterIssueDateFrom('');
+    setFilterIssueDateTo('');
+  }, []);
+
+  const mergeInvoiceIntoList = useCallback((invoice) => {
+    setInvoices((prev) => {
+      if (prev.some((row) => Number(row.invoice_id) === Number(invoice.invoice_id))) {
+        return prev;
+      }
+      return [invoice, ...prev];
+    });
+  }, []);
 
   const [sortConfig, setSortConfig] = useState(null);
 
@@ -629,6 +649,15 @@ const AdminInvoice = () => {
     setNewStudentId('');
     setShowDetailsModal(true);
   };
+
+  useOpenInvoiceFromPaymentLogsNavigation({
+    location,
+    navigate,
+    apiRequest,
+    openInvoiceDetails: openViewEditInvoice,
+    mergeInvoiceIntoList,
+    clearListDateFilters: clearInvoiceListDateFilters,
+  });
 
   const handleDownloadPDF = async (invoice) => {
     setOpenMenuId(null);

@@ -36,6 +36,10 @@ import {
   getChainRootInvoiceId,
   removeUnusedBalanceInvoice,
 } from '../utils/balanceInvoice.js';
+import {
+  deriveInvoiceStatusForInvoice,
+  invoiceHasRejectedPayment,
+} from '../utils/invoicePaymentStatus.js';
 
 const router = express.Router();
 
@@ -154,16 +158,9 @@ const syncInstallmentProfileForRejoinInvoice = async ({ client, invoice, student
 };
 
 /**
- * Rejected tab lists payment rows with status/approval Rejected. Once the branch records a new
- * payment, invoicestbl.status leaves `Rejected` (e.g. Paid / Partially Paid). Those resolved rows
- * should disappear from the tab while staying in the DB for audit.
+ * Rejected tab lists all payment rows with approval_status Rejected (audit history).
+ * Invoice status may already be Paid/Unpaid after the branch recorded a new payment.
  */
-const PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL = `
-  AND (
-    p.invoice_id IS NULL
-    OR i.invoice_id IS NULL
-    OR TRIM(COALESCE(i.status::text, '')) = 'Rejected'
-  )`;
 
 /**
  * Resubmit after rejection creates another payment row; both stay Rejected in history.
@@ -177,7 +174,6 @@ const PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL = `
       FROM paymenttbl p3
       WHERE p3.invoice_id = p.invoice_id
         AND COALESCE(p3.approval_status, '') = 'Rejected'
-        AND COALESCE(p3.status, '') = 'Rejected'
       ORDER BY COALESCE(p3.rejected_at, p3.created_at) DESC NULLS LAST, p3.payment_id DESC
       LIMIT 1
     )
@@ -1123,9 +1119,7 @@ router.get(
         ? String(paymentMethodRaw).trim()
         : '';
       const searchTerm = search ? String(search).trim() : '';
-      const isRejectedPaymentLogsTab =
-        String(status || '').trim() === 'Rejected' &&
-        String(approvalStatus || '').trim() === 'Rejected';
+      const isRejectedPaymentLogsTab = String(approvalStatus || '').trim() === 'Rejected';
       const returnedByMe =
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
       let myReturnQueue =
@@ -1414,7 +1408,6 @@ router.get(
       }
 
       if (isRejectedPaymentLogsTab) {
-        sql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
         sql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
       }
 
@@ -1626,7 +1619,6 @@ router.get(
       }
 
       if (isRejectedPaymentLogsTab) {
-        countSql += PAYMENT_LOG_REJECTED_TAB_INVOICE_STILL_REJECTED_SQL;
         countSql += PAYMENT_LOG_REJECTED_TAB_LATEST_PER_INVOICE_SQL;
       }
 
@@ -2657,7 +2649,10 @@ router.post(
         } else if (totalSettled > 0) {
           newInvoiceStatus = 'Partially Paid';
         } else {
-          if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
+          const hasRejectedPayment = await invoiceHasRejectedPayment(client, invoice_id);
+          if (hasRejectedPayment) {
+            newInvoiceStatus = 'Rejected';
+          } else if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
             newInvoiceStatus = 'Unpaid';
 
             if (
@@ -3261,7 +3256,11 @@ router.put(
           } else if (totalPaid > 0) {
             newInvoiceStatus = 'Partially Paid';
           } else {
-            newInvoiceStatus = 'Unpaid';
+            newInvoiceStatus = await deriveInvoiceStatusForInvoice(client, payment.invoice_id, {
+              totalSettled: totalPaid,
+              originalInvoiceAmount,
+              previousStatus: invoice.status,
+            });
           }
 
           if (newInvoiceStatus !== invoice.status) {
@@ -3731,12 +3730,11 @@ router.delete(
           payment.invoice_id,
         ]);
 
-        let newInvoiceStatus = 'Unpaid';
-        if (totalPaid >= originalInvoiceAmount) {
-          newInvoiceStatus = 'Paid';
-        } else if (totalPaid > 0) {
-          newInvoiceStatus = 'Partially Paid';
-        }
+        const newInvoiceStatus = await deriveInvoiceStatusForInvoice(client, payment.invoice_id, {
+          totalSettled: totalPaid,
+          originalInvoiceAmount,
+          previousStatus: invoice.status,
+        });
 
         await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
           newInvoiceStatus,

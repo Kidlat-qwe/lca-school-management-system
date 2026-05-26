@@ -19,6 +19,7 @@ import {
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
 import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
+import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -2058,7 +2059,10 @@ router.post(
       } else if (totalPaid > 0) {
         newInvoiceStatus = 'Partially Paid';
       } else {
-        if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
+        const hasRejectedPayment = await invoiceHasRejectedPayment(client, invoice_id);
+        if (hasRejectedPayment) {
+          newInvoiceStatus = 'Rejected';
+        } else if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
           newInvoiceStatus = 'Unpaid';
         }
       }

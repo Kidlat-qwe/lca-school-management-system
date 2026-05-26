@@ -17,6 +17,7 @@ import {
   DEFAULT_PAYMENT_LOG_DATE_MODE,
   defaultPaymentLogFilterMonth,
   buildPaymentLogDateParams,
+  buildPaymentLogListDateParams,
   parsePaymentLogsLocationSearch,
 } from '../../utils/paymentLogDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
@@ -158,7 +159,8 @@ const FinancePaymentLogs = () => {
     try {
       const params = new URLSearchParams({ limit: '1', page: '1' });
       if (filterBranch) params.set('branch_id', filterBranch);
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: 'return',
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,
@@ -233,7 +235,8 @@ const FinancePaymentLogs = () => {
       const params = new URLSearchParams({ limit: String(limit), page: String(page) });
       if (filterBranch) params.set('branch_id', filterBranch);
       if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
-      const dateParams = buildPaymentLogDateParams({
+      const dateParams = buildPaymentLogListDateParams({
+        logTab: financeLogTab,
         mode: dateFilterMode,
         month: filterIssueMonth,
         paymentFrom: filterIssueDateFrom,
@@ -246,7 +249,6 @@ const FinancePaymentLogs = () => {
       if (financeLogTab === 'return') {
         params.set('approval_status', 'Returned');
       } else if (financeLogTab === 'rejected') {
-        params.set('status', 'Rejected');
         params.set('approval_status', 'Rejected');
       } else if (filterFinanceApproval === 'approved') {
         params.set('status', 'Completed');

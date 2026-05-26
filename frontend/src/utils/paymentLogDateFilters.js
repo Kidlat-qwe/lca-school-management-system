@@ -84,6 +84,23 @@ export const buildPaymentLogDateParams = ({
   return out;
 };
 
+/** Returned / Rejected tabs list audit rows; payment-issue month filter hides older items. */
+export const PAYMENT_LOG_AUDIT_TABS = Object.freeze(['return', 'rejected']);
+
+export const isPaymentLogAuditTab = (logTab) => PAYMENT_LOG_AUDIT_TABS.includes(logTab);
+
+/**
+ * Date params for Payment Logs list/count API.
+ * Main tab: filters on payment issue date (existing behavior).
+ * Return / Rejected tabs: no issue-date filter — show all matching audit rows (branch/search still apply).
+ */
+export const buildPaymentLogListDateParams = ({ logTab = 'main', ...dateArgs } = {}) => {
+  if (isPaymentLogAuditTab(logTab)) {
+    return {};
+  }
+  return buildPaymentLogDateParams(dateArgs);
+};
+
 /**
  * Convenience: returns true when the active mode currently has any non-empty
  * date input. Used to decide whether to highlight a "Date filter active"
