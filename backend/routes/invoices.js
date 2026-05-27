@@ -12,6 +12,7 @@ import {
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
+import { drawArCutGuideLines } from '../lib/ackReceiptPdfLayout.js';
 
 const router = express.Router();
 
@@ -790,7 +791,11 @@ router.get(
       );
       const amountDue = grandTotal - totalPayments;
 
-      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: isAr ? 'landscape' : 'portrait' });
+      const doc = new PDFDocument({
+        margin: 40,
+        size: 'A4',
+        layout: 'portrait',
+      });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename=${isAr ? 'acknowledgement-receipt' : isSoa ? 'soa' : 'invoice'}-${id}.pdf`);
 
@@ -888,24 +893,25 @@ router.get(
         const amountPaid = Math.max(0, totalPayments || 0);
 
         // Header
-        doc.font('Helvetica-Bold').fontSize(19).fillColor('#111827')
-          .text('ACKNOWLEDGEMENT RECEIPT', left, y, { width: contentWidth, align: 'right' });
-        y += 6;
+        const titleY = y - 4;
+        doc.font('Helvetica-Bold').fontSize(20).fillColor('#111827')
+          .text('ACKNOWLEDGEMENT RECEIPT', left, titleY, { width: contentWidth, align: 'center' });
+        y = titleY + 40;
 
         if (hasLogo) {
-          doc.image(logoPath, left, y + 4, { width: 42, height: 42 });
+          doc.image(logoPath, left, y + 2, { width: 42, height: 42 });
         }
         doc.font('Helvetica-Bold').fontSize(13).fillColor('#111827')
-          .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 6, { width: 360 });
+          .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 4, { width: 360 });
         doc.font('Helvetica').fontSize(9).fillColor('#374151')
-          .text(branchInfo?.branch_address || '-', hasLogo ? left + 52 : left, y + 24, { width: 360 });
+          .text(branchInfo?.branch_address || '-', hasLogo ? left + 52 : left, y + 22, { width: 360 });
         doc.font('Helvetica').fontSize(9).fillColor('#374151')
-          .text(`Contact: ${branchInfo?.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 36, { width: 360 });
+          .text(`Contact: ${branchInfo?.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 34, { width: 360 });
         doc.font('Helvetica').fontSize(9).fillColor('#374151')
-          .text(`Email: ${branchInfo?.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 48, { width: 360 });
+          .text(`Email: ${branchInfo?.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
 
         doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
-          .text(`No. ${arNumber}`, right - 180, y + 34, { width: 180, align: 'right' });
+          .text(`No. ${arNumber}`, right - 180, y + 28, { width: 180, align: 'right' });
         y += 74;
 
         // Receipt meta
@@ -922,7 +928,7 @@ router.get(
         const tWidth = contentWidth;
         const rowH = 24;
         const headerH = 24;
-        const detailRows = 5;
+        const detailRows = 4;
         const footerRows = 1;
         const totalRows = detailRows + footerRows;
         // Layout (post-MONTH-removal): DESCRIPTION 50% | RATE 25% | AMOUNT 25%
@@ -980,6 +986,8 @@ router.get(
         doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
         doc.text('Received by:', right - 200, y);
         doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
+
+        drawArCutGuideLines(doc, y + 22, 40);
 
         doc.end();
         return;

@@ -19,6 +19,11 @@ import {
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
 import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
+import {
+  ACK_RECEIPT_PAGE_MARGIN,
+  ACK_RECEIPT_PDF_OPTIONS,
+  drawArCutGuideLines,
+} from '../lib/ackReceiptPdfLayout.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 
 const router = express.Router();
@@ -212,47 +217,50 @@ function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
     })}`;
 
   const pageWidth = doc.page.width;
-  const left = 40;
-  const right = pageWidth - 40;
+  const left = ACK_RECEIPT_PAGE_MARGIN;
+  const right = pageWidth - ACK_RECEIPT_PAGE_MARGIN;
   const contentWidth = right - left;
-  let y = 42;
-
+  const titleY = ACK_RECEIPT_PAGE_MARGIN - 4;
   doc
     .font('Helvetica-Bold')
-    .fontSize(19)
+    .fontSize(20)
     .fillColor('#111827')
-    .text('ACKNOWLEDGEMENT RECEIPT', left, y, { width: contentWidth, align: 'right' });
-  y += 6;
+    .text('ACKNOWLEDGEMENT RECEIPT', left, titleY, {
+      width: contentWidth,
+      align: 'center',
+    });
+
+  let y = titleY + 40;
 
   if (hasLogo) {
-    doc.image(logoPath, left, y + 4, { width: 42, height: 42 });
+    doc.image(logoPath, left, y + 2, { width: 42, height: 42 });
   }
   doc
     .font('Helvetica-Bold')
     .fontSize(13)
     .fillColor('#111827')
-    .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 6, { width: 360 });
+    .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 4, { width: 360 });
   doc
     .font('Helvetica')
     .fontSize(9)
     .fillColor('#374151')
-    .text(ar.branch_address || '-', hasLogo ? left + 52 : left, y + 24, { width: 360 });
+    .text(ar.branch_address || '-', hasLogo ? left + 52 : left, y + 22, { width: 360 });
   doc
     .font('Helvetica')
     .fontSize(9)
     .fillColor('#374151')
-    .text(`Contact: ${ar.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 36, { width: 360 });
+    .text(`Contact: ${ar.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 34, { width: 360 });
   doc
     .font('Helvetica')
     .fontSize(9)
     .fillColor('#374151')
-    .text(`Email: ${ar.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 48, { width: 360 });
+    .text(`Email: ${ar.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
 
   doc
     .font('Helvetica-Bold')
     .fontSize(11)
     .fillColor('#111827')
-    .text(`No. ${arNumber}`, right - 180, y + 34, { width: 180, align: 'right' });
+    .text(`No. ${arNumber}`, right - 180, y + 28, { width: 180, align: 'right' });
   y += 74;
 
   const metaStartY = y;
@@ -269,7 +277,7 @@ function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
   const tWidth = contentWidth;
   const rowH = 24;
   const headerH = 24;
-  const detailRows = 5;
+  const detailRows = 4;
   const footerRows = 1;
   const totalRows = detailRows + footerRows;
   const descW = tWidth * 0.5;
@@ -335,12 +343,14 @@ function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
       align: 'center',
     });
 
-  y += headerH + rowH * totalRows + 24;
+  y += headerH + rowH * totalRows + 20;
   doc.font('Helvetica').fontSize(9).fillColor('#111827');
   doc.text('Prepared by:', left, y);
   doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
   doc.text('Received by:', right - 200, y);
   doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
+
+  drawArCutGuideLines(doc, y + 30, left);
 }
 
 const createArSubmissionNotification = async ({
@@ -1723,7 +1733,7 @@ router.get(
         }
       }
 
-      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
+      const doc = new PDFDocument({ ...ACK_RECEIPT_PDF_OPTIONS });
       res.setHeader('Content-Type', 'application/pdf');
       const pairedIdForName =
         pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0
@@ -1742,7 +1752,7 @@ router.get(
 
       for (let i = 0; i < pageRows.length; i += 1) {
         if (i > 0) {
-          doc.addPage({ margin: 40, size: 'A4', layout: 'landscape' });
+          doc.addPage({ ...ACK_RECEIPT_PDF_OPTIONS });
         }
         drawAcknowledgementReceiptPage(doc, pageRows[i], logoPath, hasLogo);
       }

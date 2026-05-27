@@ -86,12 +86,19 @@ const enrollStudentForFullPaymentPhases = async ({
     );
     if (activePhase.rows.length > 0) continue;
 
-    const fullPayStatus = await getFullPaymentPhaseEnrollmentStatus({
-      client,
+    const defaultStatus =
+      phase === phaseEnd && phaseEnd > phaseStart
+        ? PROGRAM_ENROLLMENT_STATUS.COMPLETED
+        : Number(phase) === Number(phaseStart)
+          ? PROGRAM_ENROLLMENT_STATUS.NEW
+          : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
+
+    const fullPayStatus = await determineRejoinAwarePhaseStatus({
+      db: client,
       studentId,
       classId,
       phaseNumber: phase,
-      phaseStart,
+      defaultStatus,
     });
 
     const droppedPhase = await client.query(

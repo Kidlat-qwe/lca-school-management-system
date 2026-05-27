@@ -10,6 +10,8 @@ import {
   loadEnrollmentRatePhaseStudentsExport,
   loadEnrollmentStatusSnapshotForMonth,
   loadActiveInactiveByBranchForMonth,
+  loadStudentPhaseEnrollmentMatrix,
+  loadStudentMonthEnrollmentMatrix,
 } from '../lib/enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
@@ -1005,11 +1007,17 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('year').optional().matches(/^\d{4}$/).withMessage('year must be YYYY'),
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    queryValidator('class_id').optional().isInt().withMessage('Class ID must be an integer'),
     queryValidator('enrollment_rate_scope')
       .optional()
       .isIn(['month', 'overall'])
       .withMessage('enrollment_rate_scope must be month or overall'),
+    queryValidator('phase_matrix_scope')
+      .optional()
+      .isIn(['month', 'overall'])
+      .withMessage('phase_matrix_scope must be month or overall'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance'),
@@ -1018,7 +1026,9 @@ router.get(
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && (req.user.branchId == null);
       const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
+      const classFilter = req.query.class_id ? parseInt(req.query.class_id, 10) : null;
       const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
+      const phaseMatrixScope = req.query.phase_matrix_scope === 'overall' ? 'overall' : 'month';
       const monthRange = parseMonthRange(req.query.month);
       if (monthRange && monthRange.key > getCurrentManilaMonthKey()) {
         return res.status(400).json({
@@ -1026,6 +1036,8 @@ router.get(
           message: 'month cannot be in the future',
         });
       }
+      const currentCalendarYear = parseInt(getTodayManila().slice(0, 4), 10);
+      const matrixYear = req.query.year ? parseInt(req.query.year, 10) : null;
       const branchFilter = isSuperadmin || isFinanceNoBranch
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
@@ -1295,6 +1307,42 @@ router.get(
         enrollment_rate: monthlyRateMap[m.key]?.enrollment_rate ?? 0,
       }));
 
+      const curriculaResult = await query(`
+        SELECT
+          curriculum_id,
+          curriculum_name,
+          number_of_phase,
+          number_of_session_per_phase,
+          status
+        FROM curriculumstbl
+        ORDER BY curriculum_name ASC
+      `);
+
+      const curriculumRows = curriculaResult.rows || [];
+      const selectedCurriculumRow = curriculumFilter
+        ? curriculumRows.find((row) => parseInt(row.curriculum_id, 10) === curriculumFilter)
+        : null;
+      const matrixMaxPhase = Math.min(
+        Math.max(parseInt(selectedCurriculumRow?.number_of_phase, 10) || 10, 1),
+        10
+      );
+
+      const student_phase_enrollment_matrix = await loadStudentPhaseEnrollmentMatrix(query, {
+        branchId: branchFilter,
+        curriculumId: curriculumFilter,
+        classId: classFilter,
+        maxPhase: matrixMaxPhase,
+        enrolledFrom: phaseMatrixScope === 'month' ? monthStartDate : null,
+        enrolledTo: phaseMatrixScope === 'month' ? monthEndDate : null,
+      });
+
+      // Month matrix — Jan–Dec for selected year, or 12-month rolling window when year omitted.
+      const student_month_enrollment_matrix = await loadStudentMonthEnrollmentMatrix(query, {
+        branchId: branchFilter,
+        classId: classFilter,
+        year: matrixYear || currentCalendarYear,
+      });
+
       // Active vs Inactive by branch (bar chart when no branch filter; same month scope as KPI cards)
       let active_inactive_by_branch = [];
       if (!branchFilter) {
@@ -1310,16 +1358,40 @@ router.get(
         FROM branchestbl ORDER BY COALESCE(branch_nickname, branch_name)
       `);
 
-      const curriculaResult = await query(`
-        SELECT
-          curriculum_id,
-          curriculum_name,
-          number_of_phase,
-          number_of_session_per_phase,
-          status
-        FROM curriculumstbl
-        ORDER BY curriculum_name ASC
-      `);
+      // Classes for dropdown filter (scoped to branch when provided)
+      const classFilterParams = [];
+      let classFilterJoin = '';
+      if (branchFilter) {
+        classFilterJoin = 'WHERE c.branch_id = $1';
+        classFilterParams.push(branchFilter);
+      }
+      const classesResult = await query(
+        `
+          SELECT c.class_id, c.class_name
+          FROM classestbl c
+          ${classFilterJoin}
+          ORDER BY c.class_name ASC NULLS LAST, c.class_id DESC
+        `,
+        classFilterParams
+      );
+
+      const classYearRangeResult = await query(
+        `
+          SELECT
+            COALESCE(
+              MAX(EXTRACT(YEAR FROM TIMEZONE('Asia/Manila', c.end_date)::date))::int,
+              $${branchFilter ? 2 : 1}::int
+            ) AS max_class_end_year
+          FROM classestbl c
+          WHERE c.end_date IS NOT NULL
+          ${branchFilter ? 'AND c.branch_id = $1' : ''}
+        `,
+        branchFilter ? [branchFilter, currentCalendarYear] : [currentCalendarYear]
+      );
+      const maxClassEndYear =
+        parseInt(classYearRangeResult.rows[0]?.max_class_end_year, 10) || currentCalendarYear;
+      const monthlyMatrixMinYear = 2023;
+      const monthlyMatrixMaxYear = Math.max(maxClassEndYear, currentCalendarYear);
 
       res.json({
         success: true,
@@ -1345,10 +1417,20 @@ router.get(
           reserved_only_count: reservedStudentsCount,
           monthly_enrollments,
           monthly_enrollment_rate,
+          student_phase_enrollment_matrix,
+          phase_matrix_scope: phaseMatrixScope,
+          student_month_enrollment_matrix,
           active_inactive_by_branch,
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
+          classes: classesResult.rows.map((row) => ({ class_id: row.class_id, class_name: row.class_name })),
           selected_month: effectiveMonthRange.key,
+          selected_year: student_month_enrollment_matrix.selected_year,
+          year_range: {
+            min_year: monthlyMatrixMinYear,
+            max_year: monthlyMatrixMaxYear,
+          },
           selected_branch_id: branchFilter,
+          selected_class_id: classFilter,
         },
       });
     } catch (error) {

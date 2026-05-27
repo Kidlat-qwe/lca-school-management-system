@@ -5,6 +5,7 @@
 
 const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed')";
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
+const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
 const buildMonthEnrolledAtFilter = (paramFromIdx, paramToIdx) => `
   AND cs.enrolled_at IS NOT NULL
@@ -36,9 +37,11 @@ export const summarizeEnrollmentRateByPhase = (rows) => {
     enrollment_rate: Number(row.enrollment_rate) || 0,
   }));
   const enrolledCount = byPhase.reduce((sum, row) => sum + row.enrolled_count, 0);
-  const studentCount = byPhase.reduce((sum, row) => sum + row.student_count, 0);
-  const enrollmentRate = studentCount > 0
-    ? Number(((enrolledCount / studentCount) * 100).toFixed(2))
+  // Business rule: use a fixed cohort denominator, not SUM(student_count).
+  // loadEnrollmentRateByPhase returns the same cohort_size in `student_count` for each phase row.
+  const cohortSize = byPhase.length > 0 ? byPhase[0].student_count : 0;
+  const enrollmentRate = cohortSize > 0
+    ? Number(((enrolledCount / cohortSize) * 100).toFixed(2))
     : 0;
   const phaseNumbers = byPhase.map((row) => row.phase_number).filter((n) => n > 0);
   const phaseFrom = phaseNumbers.length > 0 ? Math.min(...phaseNumbers) : null;
@@ -50,7 +53,7 @@ export const summarizeEnrollmentRateByPhase = (rows) => {
   return {
     by_phase: byPhase,
     enrolled_count: enrolledCount,
-    student_count: studentCount,
+    student_count: cohortSize,
     enrollment_rate: enrollmentRate,
     phases_summary_label: phasesSummaryLabel,
     phase_from: phaseFrom,
@@ -111,6 +114,9 @@ export const loadEnrollmentRateByPhase = async (queryFn, options = {}) => {
           AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
           ${dateFilter}
       ),
+      cohort AS (
+        SELECT COUNT(DISTINCT student_id)::bigint AS cohort_size FROM scoped_rows
+      ),
       phase_student AS (
         SELECT
           student_id,
@@ -125,7 +131,6 @@ export const loadEnrollmentRateByPhase = async (queryFn, options = {}) => {
       phase_agg AS (
         SELECT
           phase_number,
-          COUNT(*)::bigint AS student_count,
           COUNT(*) FILTER (WHERE is_enrolled)::bigint AS enrolled_count
         FROM phase_student
         GROUP BY phase_number
@@ -133,13 +138,14 @@ export const loadEnrollmentRateByPhase = async (queryFn, options = {}) => {
       SELECT
         phase_number,
         enrolled_count,
-        student_count,
         CASE
-          WHEN student_count > 0
-          THEN ROUND((enrolled_count::numeric / student_count::numeric) * 100, 2)
+          WHEN cohort.cohort_size > 0
+          THEN ROUND((enrolled_count::numeric / cohort.cohort_size::numeric) * 100, 2)
           ELSE 0
-        END AS enrollment_rate
+        END AS enrollment_rate,
+        cohort.cohort_size::bigint AS student_count
       FROM phase_agg
+      CROSS JOIN cohort
       ORDER BY phase_number ASC
     `,
     params
@@ -520,5 +526,609 @@ export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
     enrollment_rate_student_count: rateSummary.student_count,
     enrollment_rate_phases_summary_label: rateSummary.phases_summary_label,
     enrollment_rate_by_phase: rateSummary.by_phase,
+  };
+};
+
+/**
+ * Student × phase enrollment matrix driven purely by program_enrollment_status.
+ *
+ * Logic:
+ *   - Cohort = all students who have any classstudentstbl row for phases 1–N
+ *     (branch / curriculum scoped).
+ *   - Cell = 1 when the student has a row for that phase where
+ *       program_enrollment_status IN ('new','re_enrolled','upsell','rejoin','completed')
+ *       AND removed_at IS NULL
+ *     This covers: actively enrolled + completed-the-phase students
+ *     (completed rows always have removed_at IS NULL per DB trigger).
+ *   - Cell = 0 when the student has no qualifying row (never reached that phase,
+ *     or was dropped from it).
+ *   When enrolledFrom / enrolledTo are set (month scope), only rows with enrolled_at
+ *   in that Manila calendar month are included.
+ *
+ * @param {Function} queryFn
+ * @param {{ branchId?: number|null, curriculumId?: number|null, classId?: number|null, maxPhase?: number, enrolledFrom?: string|null, enrolledTo?: string|null }} options
+ */
+export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) => {
+  const {
+    branchId = null,
+    curriculumId = null,
+    classId = null,
+    maxPhase = 10,
+    enrolledFrom = null,
+    enrolledTo = null,
+  } = options;
+  const phaseCount = Math.min(Math.max(parseInt(maxPhase, 10) || 10, 1), 10);
+
+  const params = [phaseCount];
+  let paramIdx = 2;
+  let branchJoin = '';
+  let curriculumJoin = '';
+  let classJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $${paramIdx}`;
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  if (curriculumId) {
+    curriculumJoin = `INNER JOIN programstbl p ON c.program_id = p.program_id AND p.curriculum_id = $${paramIdx}`;
+    params.push(curriculumId);
+    paramIdx += 1;
+  }
+  if (classId) {
+    classJoin = `AND cs.class_id = $${paramIdx}`;
+    params.push(classId);
+    paramIdx += 1;
+  }
+  let monthFilter = '';
+  if (enrolledFrom && enrolledTo) {
+    monthFilter = `
+          AND cs.enrolled_at IS NOT NULL
+          AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${paramIdx}::date
+          AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${paramIdx + 1}::date`;
+    params.push(enrolledFrom, enrolledTo);
+    paramIdx += 2;
+  }
+
+  const result = await queryFn(
+    `
+      WITH phase_series AS (
+        SELECT generate_series(1, $1::int) AS phase_number
+      ),
+      scoped_rows AS (
+        -- Phase records in scope; optional enrolled_at month window
+        SELECT
+          cs.classstudent_id,
+          cs.student_id,
+          cs.class_id,
+          COALESCE(cs.phase_number, 0) AS phase_number,
+          cs.program_enrollment_status,
+          cs.removed_at,
+          cs.enrolled_at,
+          NOT EXISTS (
+            SELECT 1
+            FROM installmentinvoiceprofilestbl ip
+            WHERE ip.student_id = cs.student_id
+              AND ip.class_id = cs.class_id
+          ) AS is_full_payment
+        FROM classstudentstbl cs
+        INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
+        ${curriculumJoin}
+        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+        WHERE COALESCE(cs.phase_number, 0) BETWEEN 1 AND $1::int
+          AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          ${classJoin}
+          ${monthFilter}
+      ),
+      cohort AS (
+        SELECT DISTINCT student_id FROM scoped_rows
+      ),
+      student_phase_latest AS (
+        -- Pick the latest row per student-phase (handles re-enroll/drop/rejoin history).
+        SELECT
+          sr.student_id,
+          sr.phase_number,
+          sr.program_enrollment_status,
+          sr.removed_at,
+          sr.is_full_payment,
+          ROW_NUMBER() OVER (
+            PARTITION BY sr.student_id, sr.phase_number
+            ORDER BY COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST, sr.classstudent_id DESC
+          ) AS rn
+        FROM scoped_rows sr
+      ),
+      matrix AS (
+        -- Cross-join: every student × every phase slot
+        SELECT
+          c.student_id,
+          ps.phase_number,
+          spl.program_enrollment_status,
+          spl.removed_at,
+          spl.is_full_payment
+        FROM cohort c
+        CROSS JOIN phase_series ps
+        LEFT JOIN student_phase_latest spl
+          ON spl.student_id = c.student_id
+         AND spl.phase_number = ps.phase_number
+         AND spl.rn = 1
+      )
+      SELECT
+        m.student_id,
+        u.full_name,
+        m.phase_number,
+        m.program_enrollment_status,
+        m.removed_at,
+        m.is_full_payment
+      FROM matrix m
+      INNER JOIN userstbl u ON u.user_id = m.student_id
+      ORDER BY u.full_name ASC NULLS LAST, m.student_id ASC, m.phase_number ASC
+    `,
+    params
+  );
+
+  const phases = Array.from({ length: phaseCount }, (_, i) => {
+    const phaseNumber = i + 1;
+    return { key: phaseNumber, label: `Phase ${phaseNumber}` };
+  });
+
+  const studentMap = new Map();
+  const normalizeStatusLabel = (status) => {
+    if (!status) return '';
+    const raw = String(status);
+    switch (raw) {
+      case 're_enrolled':
+        return 're-enrolled';
+      case 'pending_enrollment':
+        return 'pending enrollment';
+      default:
+        return raw.replaceAll('_', ' ').toLowerCase();
+    }
+  };
+
+  for (const row of result.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const phaseNumber = parseInt(row.phase_number, 10);
+    if (!studentMap.has(studentId)) {
+      studentMap.set(studentId, {
+        student_id: studentId,
+        full_name: row.full_name || `Student ${studentId}`,
+        phases: {},
+      });
+    }
+    const status = row.program_enrollment_status || null;
+    const removedAt = row.removed_at || null;
+    const isEnrolled =
+      status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
+    const mark = isEnrolled ? '1' : '-';
+    const label = isEnrolled
+      ? normalizeStatusLabel(status)
+      : (status === 'dropped' || removedAt != null ? 'dropped/unenrolled' : normalizeStatusLabel(status));
+    studentMap.get(studentId).phases[phaseNumber] = {
+      mark,
+      label,
+      status,
+      is_full_payment: Boolean(row.is_full_payment),
+    };
+  }
+
+  const students = Array.from(studentMap.values());
+  // Display-only normalization:
+  // - Show "new" only on the student's first enrolled phase cell.
+  // - If later enrolled phase cells still have status 'new' in DB, display as 're-enrolled'.
+  // - Full-payment: last enrolled phase in scope shows 'completed' (matches installment fully-paid rule).
+  for (const student of students) {
+    const firstEnrolledPhase = phases.reduce((min, p) => {
+      const cell = student.phases?.[p.key];
+      if (cell?.mark === '1') return Math.min(min, p.key);
+      return min;
+    }, Number.POSITIVE_INFINITY);
+
+    if (!Number.isFinite(firstEnrolledPhase)) continue;
+
+    let maxFullPayEnrolledPhase = 0;
+    for (const p of phases) {
+      const cell = student.phases?.[p.key];
+      if (!cell || cell.mark !== '1') continue;
+      if (cell.is_full_payment) {
+        maxFullPayEnrolledPhase = Math.max(maxFullPayEnrolledPhase, p.key);
+      }
+      if (cell.status === 'new' && p.key !== firstEnrolledPhase) {
+        cell.label = normalizeStatusLabel('re_enrolled');
+      } else if (cell.status === 're_enrolled') {
+        cell.label = normalizeStatusLabel('re_enrolled');
+      }
+    }
+
+    if (maxFullPayEnrolledPhase > firstEnrolledPhase) {
+      const lastCell = student.phases[maxFullPayEnrolledPhase];
+      if (lastCell?.mark === '1') {
+        lastCell.label = 'completed';
+      }
+    }
+  }
+  const cohortSize = students.length;
+  let totalEnrolledCells = 0;
+
+  const phase_stats = phases.map(({ key, label }) => {
+    let enrolledCount = 0;
+    for (const student of students) {
+      if (student.phases[key]?.mark === '1') enrolledCount += 1;
+    }
+    totalEnrolledCells += enrolledCount;
+    const enrollmentRate =
+      cohortSize > 0 ? Number(((enrolledCount / cohortSize) * 100).toFixed(2)) : 0;
+    return {
+      phase_number: key,
+      phase: label,
+      enrolled_count: enrolledCount,
+      student_count: cohortSize,
+      enrollment_rate: enrollmentRate,
+    };
+  });
+
+  // Combined rate: sum(numerators) / cohort size — same 204 population, do not sum denominators.
+  const totalEnrollmentRate =
+    cohortSize > 0 ? Number(((totalEnrolledCells / cohortSize) * 100).toFixed(2)) : 0;
+
+  return {
+    phases,
+    students,
+    phase_stats,
+    cohort_size: cohortSize,
+    total_enrolled_cells: totalEnrolledCells,
+    total_cells: cohortSize * phases.length,
+    total_enrollment_rate: totalEnrollmentRate,
+    scope: enrolledFrom && enrolledTo ? 'month' : 'overall',
+  };
+};
+
+/**
+ * Shared label helper used by both matrix builders.
+ * @param {string|null} status
+ */
+const normalizeEnrollmentLabel = (status) => {
+  if (!status) return '';
+  switch (status) {
+    case 're_enrolled': return 're-enrolled';
+    case 'pending_enrollment': return 'pending enrollment';
+    default: return status.replaceAll('_', ' ').toLowerCase();
+  }
+};
+
+/**
+ * Student × month enrollment matrix — phase-offset billing model.
+ *
+ * WHY phase-offset instead of enrolled_at month:
+ *   Invoices are generated on the 25th of month M, due 5th of M+1.
+ *   A student may pay February's invoice on January 28 (before due date).
+ *   In that case the Phase 2 row has enrolled_at = January 28, which would
+ *   wrongly place them in January's column if we used enrolled_at month.
+ *   Similarly, advance payments (paying Phase 3, 4, 5 in one go in January)
+ *   must appear in March, April, May — not all in January.
+ *
+ * SOLUTION — two billing models:
+ *
+ *   Installment (has installmentinvoiceprofilestbl for student+class):
+ *     1. ANCHOR = earliest phase + enrolled_at month of that phase.
+ *     2. billing_month = anchor_month + (phase_number − anchor_phase) months
+ *     Handles early/late payments vs invoice due dates.
+ *
+ *   Full-payment (no installment profile for student+class):
+ *     billing_month = class.start_date month + (phase_number − 1) months
+ *     Aligns phases to when the class actually runs, not when tuition was paid.
+ *     Falls back to installment anchor logic when start_date is missing.
+ *
+ *   Cohort = students with at least one billing_month inside the display window.
+ *
+ * @param {Function} queryFn
+ * @param {{ branchId?: number|null, classId?: number|null, year?: number|string|null, fromMonth?: string, toMonth?: string }} options
+ *   year — calendar year (Jan–Dec). Takes precedence over fromMonth/toMonth.
+ *   fromMonth / toMonth — YYYY-MM strings (inclusive). Used only when year is omitted.
+ */
+export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) => {
+  const { branchId = null, classId = null, year = null, fromMonth = null, toMonth = null } = options;
+
+  const nowManila = new Date(
+    new Date().toLocaleString('en-CA', { timeZone: 'Asia/Manila' })
+  );
+  const currentYear = nowManila.getFullYear();
+
+  let fromYM;
+  let toYM;
+  let selectedYear = null;
+  let monthLabelMode = 'short_year'; // 'short' = Jan, Feb … | 'short_year' = Jul 2025
+
+  if (year != null && year !== '') {
+    const y = parseInt(String(year), 10);
+    if (!Number.isFinite(y) || y < 2000 || y > 2100) {
+      throw new Error('year must be a valid calendar year');
+    }
+    selectedYear = y;
+    fromYM = `${y}-01`;
+    toYM = `${y}-12`;
+    monthLabelMode = 'short';
+  } else {
+    toYM = toMonth || `${currentYear}-${String(nowManila.getMonth() + 1).padStart(2, '0')}`;
+    fromYM = fromMonth || (() => {
+      const d = new Date(`${toYM}-01`);
+      d.setMonth(d.getMonth() - 11);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    })();
+  }
+
+  const fromMonthStart = `${fromYM}-01`;
+  const toMonthStart = `${toYM}-01`;
+
+  const params = [fromMonthStart, toMonthStart];
+  let paramIdx = 3;
+  let branchJoin = '';
+  let classJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $${paramIdx}`;
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  if (classId) {
+    classJoin = `AND cs.class_id = $${paramIdx}`;
+    params.push(classId);
+    paramIdx += 1;
+  }
+
+  const result = await queryFn(
+    `
+      WITH month_series AS (
+        SELECT gs::date AS month_start
+        FROM generate_series($1::date, $2::date, '1 month'::interval) gs
+      ),
+
+      -- All phase rows for the scoped student set (no date filter here —
+      -- we need every phase to compute billing months correctly)
+      scoped_rows AS (
+        SELECT
+          cs.classstudent_id,
+          cs.student_id,
+          cs.class_id,
+          COALESCE(cs.phase_number, 1)                                           AS phase_number,
+          cs.program_enrollment_status,
+          cs.removed_at,
+          cs.enrolled_at,
+          c.start_date                                                           AS class_start_date,
+          NOT EXISTS (
+            SELECT 1
+            FROM installmentinvoiceprofilestbl ip
+            WHERE ip.student_id = cs.student_id
+              AND ip.class_id   = cs.class_id
+          )                                                                      AS is_full_payment
+        FROM classstudentstbl cs
+        INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
+        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          AND (
+            cs.enrolled_at IS NOT NULL
+            OR c.start_date IS NOT NULL
+          )
+          ${classJoin}
+      ),
+
+      -- Installment anchor: earliest phase + enrolled_at month (payment-driven).
+      anchor AS (
+        SELECT DISTINCT ON (student_id, class_id)
+          student_id,
+          class_id,
+          phase_number                                                           AS base_phase,
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date        AS base_month
+        FROM scoped_rows
+        WHERE enrolled_at IS NOT NULL
+        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC
+      ),
+
+      phase_billing AS (
+        SELECT
+          sr.student_id,
+          sr.phase_number,
+          sr.program_enrollment_status,
+          sr.removed_at,
+          sr.classstudent_id,
+          sr.is_full_payment,
+          CASE
+            WHEN sr.is_full_payment AND sr.class_start_date IS NOT NULL THEN
+              (
+                DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date
+                + ((sr.phase_number - 1)::int * INTERVAL '1 month')
+              )::date
+            WHEN a.base_month IS NOT NULL THEN
+              (a.base_month + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month'))::date
+            ELSE NULL
+          END AS billing_month
+        FROM scoped_rows sr
+        LEFT JOIN anchor a
+          ON a.student_id = sr.student_id
+         AND a.class_id   = sr.class_id
+      ),
+
+      -- Cohort = students with at least one billing_month inside the display window.
+      -- This excludes students who enrolled and finished entirely before the window.
+      cohort AS (
+        SELECT DISTINCT student_id
+        FROM phase_billing
+        WHERE billing_month IS NOT NULL
+          AND billing_month >= $1::date
+          AND billing_month <= $2::date
+      ),
+
+      -- Per student per billing_month: pick the best status row.
+      -- Priority: enrolled+active > any > dropped.
+      student_month_status AS (
+        SELECT DISTINCT ON (student_id, billing_month)
+          student_id,
+          billing_month,
+          program_enrollment_status,
+          removed_at,
+          is_full_payment
+        FROM phase_billing
+        WHERE billing_month IS NOT NULL
+          AND billing_month >= $1::date
+          AND billing_month <= $2::date
+        ORDER BY
+          student_id,
+          billing_month,
+          -- Prefer enrolled-and-active rows first
+          CASE
+            WHEN program_enrollment_status IN ${ENROLLED_STATUSES} AND removed_at IS NULL THEN 0
+            ELSE 1
+          END ASC,
+          removed_at DESC NULLS LAST,
+          classstudent_id DESC
+      ),
+
+      matrix AS (
+        SELECT
+          co.student_id,
+          ms.month_start,
+          sms.program_enrollment_status,
+          sms.removed_at,
+          sms.is_full_payment
+        FROM cohort co
+        CROSS JOIN month_series ms
+        LEFT JOIN student_month_status sms
+          ON sms.student_id   = co.student_id
+         AND sms.billing_month = ms.month_start
+      )
+
+      SELECT
+        m.student_id,
+        u.full_name,
+        TO_CHAR(m.month_start, 'YYYY-MM')  AS month_key,
+        TO_CHAR(m.month_start, 'Mon YYYY') AS month_label,
+        m.program_enrollment_status,
+        m.removed_at,
+        m.is_full_payment
+      FROM matrix m
+      INNER JOIN userstbl u ON u.user_id = m.student_id
+      ORDER BY u.full_name ASC NULLS LAST, m.student_id ASC, m.month_start ASC
+    `,
+    params
+  );
+
+  // Build ordered months list from the query params (not from result rows, so empty months show)
+  const months = [];
+  {
+    let cur = new Date(fromMonthStart);
+    const end = new Date(toMonthStart);
+    while (cur <= end) {
+      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+      const label =
+        monthLabelMode === 'short'
+          ? cur.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+          : cur.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+      months.push({ key, label });
+      cur.setUTCMonth(cur.getUTCMonth() + 1);
+    }
+  }
+
+  const studentMap = new Map();
+
+  for (const row of result.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const monthKey = row.month_key;
+
+    if (!studentMap.has(studentId)) {
+      studentMap.set(studentId, {
+        student_id: studentId,
+        full_name: row.full_name || `Student ${studentId}`,
+        months: {},
+      });
+    }
+
+    const status = row.program_enrollment_status || null;
+    const removedAt = row.removed_at || null;
+    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
+    const mark = isEnrolled ? '1' : '-';
+    const label = isEnrolled
+      ? normalizeEnrollmentLabel(status)
+      : status === 'dropped' || removedAt != null
+        ? 'dropped/unenrolled'
+        : normalizeEnrollmentLabel(status);
+
+    studentMap.get(studentId).months[monthKey] = {
+      mark,
+      label,
+      status,
+      is_full_payment: Boolean(row.is_full_payment),
+    };
+  }
+
+  const students = Array.from(studentMap.values());
+
+  // Display-only:
+  // - "new" only on first enrolled month; later DB "new" → "re-enrolled"
+  // - Full-payment: last enrolled month → "completed" (same rule as phase matrix)
+  for (const student of students) {
+    const firstEnrolledKey = months.reduce((first, m) => {
+      const cell = student.months?.[m.key];
+      if (cell?.mark === '1') return first ?? m.key;
+      return first;
+    }, null);
+
+    if (!firstEnrolledKey) continue;
+
+    let maxFullPayMonthKey = null;
+    for (const m of months) {
+      const cell = student.months?.[m.key];
+      if (!cell || cell.mark !== '1') continue;
+      if (cell.is_full_payment) {
+        if (!maxFullPayMonthKey || m.key > maxFullPayMonthKey) {
+          maxFullPayMonthKey = m.key;
+        }
+      }
+      if (cell.status === 'new' && m.key !== firstEnrolledKey) {
+        cell.label = 're-enrolled';
+      } else if (cell.status === 're_enrolled') {
+        cell.label = 're-enrolled';
+      }
+    }
+
+    if (maxFullPayMonthKey && maxFullPayMonthKey > firstEnrolledKey) {
+      const lastCell = student.months[maxFullPayMonthKey];
+      if (lastCell?.mark === '1') {
+        lastCell.label = 'completed';
+      }
+    }
+  }
+
+  const cohortSize = students.length;
+  let totalEnrolledCells = 0;
+
+  const month_stats = months.map(({ key, label }) => {
+    let enrolledCount = 0;
+    for (const student of students) {
+      if (student.months[key]?.mark === '1') enrolledCount += 1;
+    }
+    totalEnrolledCells += enrolledCount;
+    const enrollmentRate =
+      cohortSize > 0 ? Number(((enrolledCount / cohortSize) * 100).toFixed(2)) : 0;
+    return {
+      month_key: key,
+      month: label,
+      enrolled_count: enrolledCount,
+      student_count: cohortSize,
+      enrollment_rate: enrollmentRate,
+    };
+  });
+
+  // Combined rate: sum(month numerators) / cohort size — same population each month, do not sum denominators.
+  const totalEnrollmentRate =
+    cohortSize > 0 ? Number(((totalEnrolledCells / cohortSize) * 100).toFixed(2)) : 0;
+
+  return {
+    months,
+    students,
+    month_stats,
+    cohort_size: cohortSize,
+    total_enrolled_cells: totalEnrolledCells,
+    total_cells: cohortSize * months.length,
+    total_enrollment_rate: totalEnrollmentRate,
+    from_month: fromYM,
+    to_month: toYM,
+    selected_year: selectedYear,
   };
 };

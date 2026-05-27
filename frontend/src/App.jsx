@@ -10,7 +10,8 @@ import FinancialDashboard from './pages/superadmin/FinancialDashboard';
 import DailyOperationalDashboard from './pages/superadmin/DailyOperationalDashboard';
 import MonthlyOperationalDashboard from './pages/superadmin/MonthlyOperationalDashboard';
 import OperationalDashboard from './pages/superadmin/OperationalDashboard';
-import EnrollmentDashboard from './pages/superadmin/EnrollmentDashboard';
+import PhaseEnrollmentDashboard from './pages/superadmin/PhaseEnrollmentDashboard';
+import MonthlyEnrollmentDashboard from './pages/superadmin/MonthlyEnrollmentDashboard';
 import Branch from './pages/superadmin/Branch';
 import Personnel from './pages/superadmin/Personnel';
 import Student from './pages/superadmin/Student';
@@ -110,7 +111,9 @@ function App() {
             <Route path="monthly-operational-dashboard" element={<MonthlyOperationalDashboard />} />
             <Route path="financial-dashboard" element={<FinancialDashboard />} />
             <Route path="operational-dashboard" element={<OperationalDashboard />} />
-            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
+            <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
+            <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
+            <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
             <Route path="branch" element={<Branch />} />
             <Route path="personnel" element={<Personnel />} />
             <Route path="student" element={<Student />} />
@@ -150,7 +153,9 @@ function App() {
             <Route path="monthly-operational-dashboard" element={<AdminMonthlyOperationalDashboard />} />
             <Route path="financial-dashboard" element={<AdminFinancialDashboard />} />
             <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
-            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
+            <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
+            <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
+            <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
             <Route path="calendar" element={<AdminCalendar />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="personnel" element={<AdminPersonnel />} />
@@ -222,7 +227,9 @@ function App() {
           >
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<FinanceFinancialDashboard />} />
-            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
+            <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
+            <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
+            <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
             <Route path="invoice" element={<FinanceInvoice />} />
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
@@ -242,7 +249,9 @@ function App() {
           >
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<SuperfinanceFinancialDashboard />} />
-            <Route path="enrollment-dashboard" element={<EnrollmentDashboard />} />
+            <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
+            <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
+            <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
             <Route path="invoice" element={<SuperfinanceInvoice />} />
             <Route path="installment-invoice" element={<SuperfinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />

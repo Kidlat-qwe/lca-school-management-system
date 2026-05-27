@@ -77,7 +77,16 @@ const Sidebar = ({ isOpen, onClose }) => {
         },
         {
           name: 'Enrollment Dashboard',
-          path: `${basePath}/enrollment-dashboard`,
+          children: [
+            {
+              name: 'Phase Enrollment Dashboard',
+              path: `${basePath}/phase-enrollment-dashboard`,
+            },
+            {
+              name: 'Monthly Enrollment Dashboard',
+              path: `${basePath}/monthly-enrollment-dashboard`,
+            },
+          ],
         },
       ],
     },
@@ -444,7 +453,8 @@ const Sidebar = ({ isOpen, onClose }) => {
           if (child.name === 'Daily Operational Dashboard') path = `${basePath}/daily-operational-dashboard`;
           if (child.name === 'Monthly Operational Dashboard') path = `${basePath}/monthly-operational-dashboard`;
           if (child.name === 'Operational summary') path = `${basePath}/operational-dashboard`;
-          if (child.name === 'Enrollment Dashboard') path = `${basePath}/enrollment-dashboard`;
+          if (child.name === 'Phase Enrollment Dashboard') path = `${basePath}/phase-enrollment-dashboard`;
+          if (child.name === 'Monthly Enrollment Dashboard') path = `${basePath}/monthly-enrollment-dashboard`;
           return { ...child, path };
         };
         children = item.children
@@ -578,56 +588,109 @@ const Sidebar = ({ isOpen, onClose }) => {
     childList.map((child) => {
       if (child.children?.length > 0) {
         const nestedKey = `${parentItemName}:${child.name}`;
-        const subActive = isGroupActive(child.children);
+        const subActive =
+          isGroupActive(child.children) || (child.path ? isActive(child.path) : false);
         const isNestedOpen = expandedNestedMenu === nestedKey;
+        const rowActiveClass = subActive
+          ? 'bg-[#F7C844] text-gray-900 font-medium'
+          : 'text-gray-600 hover:bg-primary-50';
         return (
           <div key={nestedKey} className="space-y-1">
-            <button
-              type="button"
-              onClick={() =>
-                setExpandedNestedMenu((prev) => (prev === nestedKey ? null : nestedKey))
-              }
-              className={`
-                flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors
-                ${
-                  subActive
-                    ? 'bg-[#F7C844] text-gray-900 font-medium'
-                    : 'text-gray-600 hover:bg-primary-50'
-                }
-              `}
-            >
-              <span className="flex min-w-0 items-center space-x-2">
-                <svg
-                  className="h-4 w-4 flex-shrink-0"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
+            {child.path ? (
+              <div
+                className={`flex w-full items-stretch overflow-hidden rounded-lg text-sm transition-colors ${rowActiveClass}`}
+              >
+                <NavLink
+                  to={child.path}
+                  onClick={onClose}
+                  className="flex min-w-0 flex-1 items-center space-x-2 px-3 py-2"
                 >
-                  <path
-                    fillRule="evenodd"
-                    d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <span className="truncate">{child.name}</span>
-              </span>
-              {isNestedOpen ? (
-                <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path
-                    fillRule="evenodd"
-                    d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              ) : (
-                <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path
-                    fillRule="evenodd"
-                    d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              )}
-            </button>
+                  <svg
+                    className="h-4 w-4 flex-shrink-0"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                    aria-hidden
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  <span className="truncate">{child.name}</span>
+                </NavLink>
+                <button
+                  type="button"
+                  aria-expanded={isNestedOpen}
+                  aria-label={`${isNestedOpen ? 'Collapse' : 'Expand'} ${child.name} submenu`}
+                  onClick={() =>
+                    setExpandedNestedMenu((prev) => (prev === nestedKey ? null : nestedKey))
+                  }
+                  className="flex flex-shrink-0 items-center px-2 hover:bg-black/5"
+                >
+                  {isNestedOpen ? (
+                    <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                      <path
+                        fillRule="evenodd"
+                        d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  ) : (
+                    <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                      <path
+                        fillRule="evenodd"
+                        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedNestedMenu((prev) => (prev === nestedKey ? null : nestedKey))
+                }
+                className={`
+                  flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors
+                  ${rowActiveClass}
+                `}
+              >
+                <span className="flex min-w-0 items-center space-x-2">
+                  <svg
+                    className="h-4 w-4 flex-shrink-0"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  <span className="truncate">{child.name}</span>
+                </span>
+                {isNestedOpen ? (
+                  <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path
+                      fillRule="evenodd"
+                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path
+                      fillRule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                )}
+              </button>
+            )}
             <div className={isNestedOpen ? 'ml-2 space-y-1 border-l border-gray-200 pl-2' : 'hidden'}>
               {child.children.map((grand) => (
                 <NavLink

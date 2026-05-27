@@ -1,5 +1,5 @@
 /**
- * On-screen preview styled like the printed Acknowledgement Receipt (A4 landscape AR PDF).
+ * On-screen preview styled like the printed Acknowledgement Receipt (A4 portrait AR PDF).
  * Uses PHP formatting and bordered table to match finance documents.
  */
 
