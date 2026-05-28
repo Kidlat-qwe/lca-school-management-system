@@ -10,6 +10,7 @@ import {
   loadEnrollmentRatePhaseStudentsExport,
   loadEnrollmentStatusSnapshotForMonth,
   loadActiveInactiveByBranchForMonth,
+  loadReservedStudentsCount,
   loadStudentPhaseEnrollmentMatrix,
   loadStudentMonthEnrollmentMatrix,
 } from '../lib/enrollmentRateMetrics.js';
@@ -1175,12 +1176,7 @@ router.get(
                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
               THEN cs.student_id
-            END) AS rejoin_count,
-            COUNT(DISTINCT CASE
-              WHEN cs.program_enrollment_status = 'reserved'
-               AND cs.removed_at IS NULL
-              THEN cs.student_id
-            END) AS reserved_students_count
+            END) AS rejoin_count
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id ${classBranchJoin}
         `,
@@ -1191,7 +1187,11 @@ router.get(
       const reEnrollmentCount = parseInt(programStatusSummary.re_enrollment_count, 10) || 0;
       const droppedCount = parseInt(programStatusSummary.dropped_count, 10) || 0;
       const rejoinCount = parseInt(programStatusSummary.rejoin_count, 10) || 0;
-      const reservedStudentsCount = parseInt(programStatusSummary.reserved_students_count, 10) || 0;
+      const reservedStudentsCount = await loadReservedStudentsCount(query, {
+        branchId: branchFilter,
+        classId: classFilter,
+        curriculumId: curriculumFilter,
+      });
 
       // Monthly enrollments (last 6 months) for bar chart
       const monthSequence = buildMonthSequence(6, effectiveMonthRange.anchorDate || new Date());

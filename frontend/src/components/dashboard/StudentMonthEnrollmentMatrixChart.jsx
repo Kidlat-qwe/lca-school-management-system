@@ -54,12 +54,14 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
     );
   }
 
-  const chartData = monthStats.map((row) => ({
-    month: row.month,
-    enrollment_rate: row.enrollment_rate,
-    enrolled_count: row.enrolled_count,
-    student_count: row.student_count,
-  }));
+  const chartData = monthStats
+    .filter((row) => row.has_prior_month && row.prior_month_enrolled_count > 0)
+    .map((row) => ({
+      month: row.month,
+      re_enrollment_rate: row.re_enrollment_rate,
+      re_enrolled_count: row.re_enrolled_count,
+      prior_month_enrolled_count: row.prior_month_enrolled_count,
+    }));
 
   const tooltipText = MONTHLY_ENROLLMENT_DASHBOARD.matrixTitleTooltip(displayYear || '');
 
@@ -92,7 +94,7 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                   className="sticky left-0 top-0 z-[70] border-b border-gray-200 bg-amber-50 px-4 py-2.5 shadow-[2px_0_4px_rgba(0,0,0,0.08)]"
                   style={{ minWidth: '160px', height: RATE_HEADER_HEIGHT_PX }}
                 >
-                  Month rate
+                  Re-enrollment rate
                 </th>
                 {monthStats.map((row) => (
                   <th
@@ -100,12 +102,20 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                     className="sticky top-0 z-[60] border-b border-gray-200 bg-amber-50 px-3 py-2.5 text-center whitespace-nowrap"
                     style={{ height: RATE_HEADER_HEIGHT_PX }}
                   >
-                    <div className="text-[11px] font-semibold tabular-nums text-gray-900">
-                      {row.enrolled_count}/{row.student_count}
-                    </div>
-                    <div className="text-[11px] tabular-nums text-amber-800">
-                      {row.enrollment_rate.toFixed(0)}%
-                    </div>
+                    {row.has_prior_month && row.prior_month_enrolled_count > 0 ? (
+                      <>
+                        <div className="text-[11px] font-semibold tabular-nums text-gray-900">
+                          {row.re_enrolled_count}/{row.prior_month_enrolled_count}
+                        </div>
+                        <div className="text-[11px] tabular-nums text-amber-800">
+                          {Number(row.re_enrollment_rate ?? 0).toFixed(0)}%
+                        </div>
+                      </>
+                    ) : row.has_prior_month ? (
+                      <div className="text-[11px] tabular-nums text-gray-500">—</div>
+                    ) : (
+                      <div className="text-[11px] tabular-nums text-gray-500">—</div>
+                    )}
                   </th>
                 ))}
               </tr>
@@ -174,17 +184,17 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
             <YAxis tick={{ fontSize: 12 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
             <Tooltip
               formatter={(value, name, props) => {
-                if (name === 'Enrollment rate') {
+                if (name === 'Re-enrollment rate') {
                   const row = props?.payload;
                   return [
-                    `${Number(value).toFixed(2)}% (${Number(row?.enrolled_count || 0).toLocaleString()} / ${Number(row?.student_count || 0).toLocaleString()})`,
+                    `${Number(value).toFixed(2)}% (${Number(row?.re_enrolled_count || 0).toLocaleString()} / ${Number(row?.prior_month_enrolled_count || 0).toLocaleString()})`,
                     name,
                   ];
                 }
                 return [value, name];
               }}
             />
-            <Bar dataKey="enrollment_rate" name="Enrollment rate" fill="#4F46E5" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="re_enrollment_rate" name="Re-enrollment rate" fill="#4F46E5" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

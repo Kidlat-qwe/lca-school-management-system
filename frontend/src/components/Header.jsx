@@ -17,6 +17,8 @@ const Header = ({ onMenuClick }) => {
     selectedBranchId,
     setSelectedBranchId,
     shouldShowBranchFilter,
+    showMobileBranchFilterInHeader,
+    isBranchScopedUser: isBranchScopedFromContext,
   } = useGlobalBranchFilter();
   const navigate = useNavigate();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -31,9 +33,7 @@ const Header = ({ onMenuClick }) => {
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const userBranchId = userInfo?.branch_id || userInfo?.branchId;
   const isBranchAdmin = userType === 'Admin' && userBranchId !== null && userBranchId !== undefined;
-  const isBranchScopedUser =
-    userType === 'Admin' ||
-    (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined);
+  const isBranchScopedUser = isBranchScopedFromContext;
 
   // Fetch branch name if user has a branch_id
   useEffect(() => {
@@ -55,12 +55,6 @@ const Header = ({ onMenuClick }) => {
     if (userInfo) {
       fetchBranchName();
     }
-  }, [userInfo]);
-
-  // Debug: Log when userInfo changes
-  useEffect(() => {
-    console.log('Header userInfo updated:', userInfo);
-    console.log('Profile picture URL:', userInfo?.profile_picture_url);
   }, [userInfo]);
 
   // Close menu when clicking outside
@@ -128,6 +122,45 @@ const Header = ({ onMenuClick }) => {
     setIsPasswordResetModalOpen(true);
   };
 
+  const renderBranchFilterSelect = (selectId, wrapperClassName = '') => (
+    <div className={`relative ${wrapperClassName}`.trim()}>
+      <label htmlFor={selectId} className="sr-only">
+        Global Branch Filter
+      </label>
+      <select
+        id={selectId}
+        value={isBranchScopedUser ? (branchNickname || branchName || 'Your Branch') : selectedBranchId}
+        onChange={(e) => setSelectedBranchId(e.target.value)}
+        className="w-full appearance-none rounded-lg border border-[#c78d14] bg-[#f8d373] px-3 py-2 pr-9 text-sm font-medium text-gray-900 text-left shadow-sm transition-colors focus:border-[#a86f00] focus:outline-none focus:ring-2 focus:ring-[#f4b428] lg:px-4 lg:pr-10"
+        disabled={loadingBranches || isBranchScopedUser}
+      >
+        {isBranchScopedUser ? (
+          <option value={branchNickname || branchName || 'Your Branch'}>
+            {branchNickname || branchName || 'Your Branch'}
+          </option>
+        ) : (
+          <>
+            <option value="">All branches</option>
+            {branches.map((branch) => (
+              <option key={branch.branch_id} value={branch.branch_id}>
+                {branch.branch_nickname || branch.branch_name}
+              </option>
+            ))}
+          </>
+        )}
+      </select>
+      <svg
+        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-700"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        aria-hidden
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </div>
+  );
+
   const handlePasswordResetSubmit = async (e) => {
     e.preventDefault();
     setResetEmailError('');
@@ -174,9 +207,10 @@ const Header = ({ onMenuClick }) => {
     <>
       <div className="fixed top-0 left-0 right-0 z-50 bg-[#F7C844]">
         <div className="h-[env(safe-area-inset-top,0px)]" aria-hidden="true" />
-        <header className="bg-[#F7C844] border-b border-primary-600 min-h-16 flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-2 shadow-sm">
+        <header className="bg-[#F7C844] border-b border-primary-600 shadow-sm">
+        <div className="min-h-16 flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-2">
         {/* Logo and Company Name / Branch Name */}
-        <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+        <div className="flex items-center space-x-2 sm:space-x-3 min-w-0 flex-1">
           <img
             src="/LCA Icon.png"
             alt="Little Champions Academy Logo"
@@ -203,44 +237,10 @@ const Header = ({ onMenuClick }) => {
               </h1>
             )}
           </div>
-          {(shouldShowBranchFilter || isBranchScopedUser) && (
+          {shouldShowBranchFilter && (
             <div className="hidden lg:flex items-center pl-3 flex-shrink-0">
               <div className="w-[240px] max-w-[280px]">
-                <label htmlFor="global_branch_filter" className="sr-only">
-                  Global Branch Filter
-                </label>
-                <div className="relative">
-                  <select
-                    id="global_branch_filter"
-                    value={isBranchScopedUser ? (branchNickname || branchName || 'Your Branch') : selectedBranchId}
-                    onChange={(e) => setSelectedBranchId(e.target.value)}
-                    className="w-full appearance-none rounded-lg border border-[#c78d14] bg-[#f8d373] px-4 py-2 pr-10 text-sm font-medium text-gray-900 text-left shadow-sm transition-colors focus:border-[#a86f00] focus:outline-none focus:ring-2 focus:ring-[#f4b428]"
-                    disabled={loadingBranches || isBranchScopedUser}
-                  >
-                    {isBranchScopedUser ? (
-                      <option value={branchNickname || branchName || 'Your Branch'}>
-                        {branchNickname || branchName || 'Your Branch'}
-                      </option>
-                    ) : (
-                      <>
-                        <option value="">Global Branch Filter</option>
-                        {branches.map((branch) => (
-                          <option key={branch.branch_id} value={branch.branch_id}>
-                            {branch.branch_nickname || branch.branch_name}
-                          </option>
-                        ))}
-                      </>
-                    )}
-                  </select>
-                  <svg
-                    className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-700"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
+                {renderBranchFilterSelect('global_branch_filter')}
               </div>
             </div>
           )}
@@ -311,8 +311,24 @@ const Header = ({ onMenuClick }) => {
 
           {/* Dropdown Menu */}
           {isProfileMenuOpen && (
-            <div className="absolute right-0 mt-2 w-48 sm:w-56 bg-white rounded-md shadow-lg z-50 border border-gray-200">
+            <div
+              className={`absolute right-0 mt-2 bg-white rounded-md shadow-lg z-50 border border-gray-200 ${
+                showMobileBranchFilterInHeader ? 'w-[min(100vw-1rem,17.5rem)] sm:w-64' : 'w-48 sm:w-56'
+              }`}
+            >
               <div className="py-1">
+                {showMobileBranchFilterInHeader && (
+                  <div
+                    className="lg:hidden px-3 py-2.5 border-b border-gray-100"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                      {isBranchScopedUser ? 'Your branch' : 'Filter by branch'}
+                    </p>
+                    {renderBranchFilterSelect('global_branch_filter_mobile')}
+                  </div>
+                )}
                 <button
                   onClick={handleChangeProfilePhoto}
                   className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center space-x-2"
@@ -344,6 +360,7 @@ const Header = ({ onMenuClick }) => {
             </div>
           )}
           </div>
+        </div>
         </div>
         </header>
       </div>

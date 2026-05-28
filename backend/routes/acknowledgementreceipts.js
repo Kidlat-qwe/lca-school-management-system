@@ -1887,7 +1887,7 @@ router.post(
         });
       }
 
-      if (invoice.balance_invoice_id || invoice.status === 'Balance Invoiced') {
+      if (invoice.balance_invoice_id) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,

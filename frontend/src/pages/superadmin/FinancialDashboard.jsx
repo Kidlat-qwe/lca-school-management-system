@@ -18,6 +18,7 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import CombinedStatsCard from '../../components/dashboard/CombinedStatsCard';
 import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
@@ -235,24 +236,35 @@ const FinancialDashboard = () => {
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Total Branches"
-            value={totals.total_branches}
-            accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
+          <CombinedStatsCard
+            title="Branches & Students"
             iconName="building"
+            accent="bg-gradient-to-br from-yellow-400 to-emerald-500"
+            size="financial"
+            metricsLayout="stacked"
+            metrics={[
+              { label: 'Total Branches:', value: (totals.total_branches || 0).toLocaleString() },
+              { label: 'Total Students:', value: (totals.total_students || 0).toLocaleString() },
+            ]}
+            tooltip={FINANCIAL_DASHBOARD.branchesStudents}
           />
           <StatsCard
-            title="Total Students"
-            value={totals.total_students}
-            accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
-            iconName="users"
-          />
-          <StatsCard
-            title="Total payments"
+            title="Total Payments"
             value={totalPaymentsCount}
-            trend={FINANCIAL_DASHBOARD.totalPaymentsTrend(formatPeso(totalPaymentsAmount))}
+            trend={FINANCIAL_DASHBOARD.totalPaymentsCount}
+            trendClassName="text-gray-500"
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
             iconName="currency"
+            onClick={() => navigate('/superadmin/payment-logs')}
+          />
+          <StatsCard
+            title="Total Amount"
+            value={formatPeso(totalPaymentsAmount)}
+            trend={FINANCIAL_DASHBOARD.totalPaymentsAmount}
+            trendClassName="text-gray-500"
+            accent="bg-gradient-to-br from-violet-500 to-purple-600"
+            iconName="creditCard"
+            onClick={() => navigate('/superadmin/payment-logs')}
           />
           <StatsCard
             title="Active Classes"

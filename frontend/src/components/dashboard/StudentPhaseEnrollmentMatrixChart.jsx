@@ -55,19 +55,25 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
                   className="sticky left-0 top-0 z-50 h-11 bg-amber-50 px-4 py-2.5"
                   style={{ minWidth: '160px' }}
                 >
-                  Phase rate
+                  Re-enrollment rate
                 </th>
                 {phaseStats.map((row) => (
                   <th
                     key={`stat-top-${row.phase_number}`}
                     className="sticky top-0 z-40 h-11 bg-amber-50 px-3 py-2.5 text-center whitespace-nowrap"
                   >
-                    <div className="text-[11px] font-semibold tabular-nums text-gray-900">
-                      {row.enrolled_count}/{row.student_count}
-                    </div>
-                    <div className="text-[11px] tabular-nums text-amber-800">
-                      {row.enrollment_rate.toFixed(0)}%
-                    </div>
+                    {row.has_prior_phase && row.prior_phase_enrolled_count > 0 ? (
+                      <>
+                        <div className="text-[11px] font-semibold tabular-nums text-gray-900">
+                          {row.re_enrolled_count}/{row.prior_phase_enrolled_count}
+                        </div>
+                        <div className="text-[11px] tabular-nums text-amber-800">
+                          {Number(row.re_enrollment_rate ?? 0).toFixed(0)}%
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[11px] tabular-nums text-gray-500">—</div>
+                    )}
                   </th>
                 ))}
               </tr>

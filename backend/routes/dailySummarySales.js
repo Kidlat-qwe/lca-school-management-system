@@ -170,16 +170,15 @@ router.get(
           params.push(paymentDateTo);
         }
       } else if (useIssueDateRange) {
-        // Payment Logs "Issue Date" uses created_date_* on payments to filter
-        // p.issue_date; for EOD rows, that business day is d.summary_date.
+        // EOD submit date: when the branch submitted the end-of-shift summary.
         if (createdDateFrom) {
           pc++;
-          sql += ` AND d.summary_date >= $${pc}::date`;
+          sql += ` AND d.submitted_at::date >= $${pc}::date`;
           params.push(createdDateFrom);
         }
         if (createdDateTo) {
           pc++;
-          sql += ` AND d.summary_date <= $${pc}::date`;
+          sql += ` AND d.submitted_at::date <= $${pc}::date`;
           params.push(createdDateTo);
         }
       } else if (useSummaryRange) {
@@ -267,12 +266,12 @@ router.get(
       } else if (useIssueDateRange) {
         if (createdDateFrom) {
           cc++;
-          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countSql += ` AND d.submitted_at::date >= $${cc}::date`;
           countParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           cc++;
-          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countSql += ` AND d.submitted_at::date <= $${cc}::date`;
           countParams.push(createdDateTo);
         }
       } else if (useSummaryRange) {
@@ -332,12 +331,12 @@ router.get(
       } else if (useIssueDateRange) {
         if (createdDateFrom) {
           sc++;
-          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedSql += ` AND d.submitted_at::date >= $${sc}::date`;
           submittedParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           sc++;
-          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedSql += ` AND d.submitted_at::date <= $${sc}::date`;
           submittedParams.push(createdDateTo);
         }
       } else if (useSummaryRange) {
@@ -388,12 +387,12 @@ router.get(
       } else if (useIssueDateRange) {
         if (createdDateFrom) {
           fc++;
-          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredSql += ` AND d.submitted_at::date >= $${fc}::date`;
           filteredParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           fc++;
-          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredSql += ` AND d.submitted_at::date <= $${fc}::date`;
           filteredParams.push(createdDateTo);
         }
       } else if (useSummaryRange) {

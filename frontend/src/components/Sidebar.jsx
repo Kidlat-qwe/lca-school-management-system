@@ -51,7 +51,7 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Finance'], // Dropdown for Superadmin, Admin, Finance/Superfinance
       children: [
         {
-          name: 'Operational Dashboard',
+          name: 'Operational',
           roles: ['Superadmin', 'Admin'],
           children: [
             {
@@ -76,7 +76,7 @@ const Sidebar = ({ isOpen, onClose }) => {
           roles: ['Superadmin', 'Admin'],
         },
         {
-          name: 'Enrollment Dashboard',
+          name: 'Enrollment',
           children: [
             {
               name: 'Phase Enrollment Dashboard',

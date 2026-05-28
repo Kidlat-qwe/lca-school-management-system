@@ -18,6 +18,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import CombinedStatsCard from '../../components/dashboard/CombinedStatsCard';
 import { buildPaymentLogDateParams, PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
 import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 
@@ -221,18 +222,32 @@ const AdminFinancialDashboard = () => {
         )}
 
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Students (Branch)"
-            value={(totals.total_students || 0).toLocaleString()}
-            accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
+          <CombinedStatsCard
+            title="Branch & Students"
             iconName="users"
+            accent="bg-gradient-to-br from-emerald-400 to-emerald-500"
+            size="financial"
+            metricsLayout="stacked"
+            metrics={[
+              { label: 'Branch:', value: branchName },
+              { label: 'Students:', value: (totals.total_students || 0).toLocaleString() },
+            ]}
+            tooltip={FINANCIAL_DASHBOARD.branchesStudentsAdmin(branchName)}
           />
           <StatsCard
             title="Total Payments"
             value={totalPaymentsCount.toLocaleString()}
-            subtitle="Number of completed payments in the month you selected"
+            subtitle={FINANCIAL_DASHBOARD.totalPaymentsCount}
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
             iconName="currency"
+            onClick={() => navigate('/admin/payment-logs')}
+          />
+          <StatsCard
+            title="Total Amount"
+            value={totalPaymentsDisplay}
+            subtitle={FINANCIAL_DASHBOARD.totalPaymentsAmount}
+            accent="bg-gradient-to-br from-violet-500 to-purple-600"
+            iconName="creditCard"
             onClick={() => navigate('/admin/payment-logs')}
           />
           <StatsCard
@@ -240,13 +255,6 @@ const AdminFinancialDashboard = () => {
             value={(totals.active_classes || 0).toLocaleString()}
             accent="bg-gradient-to-br from-orange-400 to-orange-500"
             iconName="bookOpen"
-          />
-          <StatsCard
-            title="Total Payments"
-            value={totalPaymentsDisplay}
-            accent="bg-gradient-to-br from-yellow-400 to-yellow-500"
-            iconName="creditCard"
-            onClick={() => navigate('/admin/payment-logs')}
           />
         </div>
 

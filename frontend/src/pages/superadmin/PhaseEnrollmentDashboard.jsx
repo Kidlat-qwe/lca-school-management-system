@@ -9,8 +9,8 @@ import {
 } from '../../components/dashboard/EnrollmentDashboardKpiCards';
 import EnrollmentRatePhaseVerifyModal from '../../components/dashboard/EnrollmentRatePhaseVerifyModal';
 import StudentPhaseEnrollmentMatrixChart from '../../components/dashboard/StudentPhaseEnrollmentMatrixChart';
-import { ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
-import { enrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
+import { ENROLLMENT_DASHBOARD, PHASE_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { reEnrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
 import { issueDateRangeFromManilaMonth } from '../../utils/dateUtils';
 
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
@@ -169,8 +169,8 @@ const PhaseEnrollmentDashboard = () => {
     return parts.filter(Boolean).join(' · ');
   }, [selectedBranchName, enrollmentRateOverall, selectedMonth]);
 
-  const totalEnrollmentRate = useMemo(
-    () => enrollmentRateFromMatrixStats(studentPhaseMatrix?.phase_stats),
+  const totalReEnrollmentRate = useMemo(
+    () => reEnrollmentRateFromMatrixStats(studentPhaseMatrix?.phase_stats ?? []),
     [studentPhaseMatrix]
   );
 
@@ -270,17 +270,17 @@ const PhaseEnrollmentDashboard = () => {
           tooltip={ENROLLMENT_DASHBOARD.droppedRejoin}
         />
         <EnrollmentStatsCard
-          title="Total Enrollment Rate"
-          value={`${totalEnrollmentRate.enrollmentRate.toFixed(2)}%`}
+          title="Total Re-enrollment Rate"
+          value={`${totalReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
           iconName="chartBar"
           accent="bg-gradient-to-br from-blue-400 to-cyan-500"
           tooltip={
             enrollmentRateLoading
               ? ENROLLMENT_DASHBOARD.enrollmentRateLoading
-              : ENROLLMENT_DASHBOARD.enrollmentRate(
-                  totalEnrollmentRate.enrolledCount,
-                  totalEnrollmentRate.cohortSize,
-                  phaseMatrixOverall ? 'all time' : 'the selected month'
+              : PHASE_ENROLLMENT_DASHBOARD.reEnrollmentRate(
+                  totalReEnrollmentRate.reEnrolledCount,
+                  totalReEnrollmentRate.priorEnrolledCount,
+                  phaseMatrixOverall ? 'all phases' : 'the selected month'
                 )
           }
         />
@@ -304,7 +304,9 @@ const PhaseEnrollmentDashboard = () => {
                 disabled={loading}
               />
             </div>
-            <p className="mt-1 text-sm text-gray-500">{ENROLLMENT_DASHBOARD.chartRateByMonth}</p>
+            <p className="mt-1 text-sm text-gray-500">
+              {PHASE_ENROLLMENT_DASHBOARD.matrixLegend} {PHASE_ENROLLMENT_DASHBOARD.matrixRateTooltip}
+            </p>
             <p className="mt-1 text-xs font-medium text-amber-800">{phaseMatrixScopeLabel}</p>
           </div>
           <div className="flex flex-shrink-0">

@@ -18,6 +18,10 @@ export const DAILY_OPERATIONAL = {
     'Total from completed invoice payments on this date (amount due + tips). Returned and rejected payments are excluded.',
   arSales: (receiptCount) =>
     `${receiptCount} acknowledgement receipt(s) on this date — matches the main Acknowledgement Receipt list for the same day.`,
+  combinedSales:
+    'Invoice sales use payment issue date. AR sales match the Acknowledgement Receipt list for the same day.',
+  totalPayments:
+    'Invoice sales plus acknowledgement receipt sales for this date (same scope as the two lines above).',
   merchandise: (txnCount) =>
     `${txnCount} paid merchandise sale(s). Quantity is total items released.`,
   enrollmentRate: (enrolled, total) =>
@@ -51,6 +55,10 @@ export const MONTHLY_OPERATIONAL = {
     'Completed invoice payments in this month (amount due + tips). Returned and rejected are excluded.',
   arSales: (receiptCount) =>
     `${receiptCount} acknowledgement receipt(s) in this month — matches the main AR list for the same month.`,
+  combinedSales:
+    'Invoice sales use payment issue date in the month. AR sales match the AR list for the same month.',
+  totalPayments:
+    'Invoice sales plus acknowledgement receipt sales for this month (same scope as the two lines above).',
   merchandise: (txnCount) => `${txnCount} paid merchandise sale(s) in this month.`,
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase enrollment rate (see Enrollment Dashboard for details).',
@@ -83,7 +91,7 @@ export const ENROLLMENT_DASHBOARD = {
     `Sum of phase enrollments (${enrolledSum.toLocaleString()}) ÷ ${cohortSize.toLocaleString()} students in ${scope} × 100. Each phase uses the same cohort as denominator.`,
   enrollmentRateLoading: 'Loading enrollment rate…',
   reserved:
-    'Count from classstudentstbl where program_enrollment_status is reserved and removed_at is null. Current snapshot across classes — not filtered by the month or year picker.',
+    'Active reservations from reservedstudentstbl (status Reserved or Fee Paid). Excludes Expired, Cancelled, Upgraded, and past-due unpaid. Respects branch and class filters; not filtered by the month or year picker.',
   phaseTableIntro:
     'For each program phase: how many enrollments are active vs total for the month. Click a row to see names.',
   phaseTableOverall: 'All enrollment records (any date).',
@@ -101,6 +109,14 @@ export const FINANCIAL_DASHBOARD = {
   pageIntroSuperadmin:
     'School-wide money and enrollment overview. Pick a month to align payment totals with Payment Logs.',
   pageIntroAdmin: (branchName) => `Money and enrollment overview for ${branchName}.`,
+  branchesStudents:
+    'Branches in scope for your filter (all schools or one branch from the header). Students = users with student role in that scope.',
+  branchesStudentsAdmin: (branchName) =>
+    `Your assigned branch (${branchName}) and student count for that branch.`,
+  totalPaymentsCount:
+    'Number of completed payment lines in the selected month (payment issue date). Returned and rejected are excluded.',
+  totalPaymentsAmount:
+    'Sum of payable amount plus tips for completed payments in the selected month. Matches Payment Logs total for the same month.',
   totalPaymentsTrend: (amount) => `${amount} from completed payments in the selected month (amount due + tips)`,
   paymentVerificationIntro:
     'Completed payments only. With a month selected, amounts use each payment’s issue date in that month. Verified = finance approved. Unverified = completed but not approved yet (not returned or rejected).',
@@ -138,19 +154,31 @@ export const OPERATIONAL_DASHBOARD = {
     'Students are grouped by the month they first enrolled. The table shows what percentage of that same group enrolled again in each later month.',
 };
 
+export const PHASE_ENROLLMENT_DASHBOARD = {
+  reEnrollmentRate: (retainedSum, priorPhaseSum, scope) =>
+    `Total re-enrollment rate (${scope}): ${retainedSum.toLocaleString()} students retained ÷ ${priorPhaseSum.toLocaleString()} enrolled in the prior phase × 100. Phase 1 is N/A. First-time ("new") enrollments are never counted.`,
+  matrixLegend:
+    '1 = enrolled for that phase. Labels: new (first phase only), re-enrolled, or completed. Dash = not enrolled.',
+  matrixRateTooltip:
+    'Re-enrollment rate row: of students enrolled in the previous phase, how many stayed enrolled in this phase. Phase 1 has no prior phase (—). First-time and gap-return enrollments are excluded from each phase fraction.',
+};
+
 export const MONTHLY_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
-    `Track each student's enrollment across Jan – Dec ${year} based on program_enrollment_status.`,
-  enrollmentRate: (enrolledSum, cohortSize, year) =>
-    `Sum of monthly enrollments (${enrolledSum.toLocaleString()}) ÷ ${cohortSize.toLocaleString()} students in ${year} × 100. Each month uses the same cohort as denominator.`,
+    `Track each student's enrollment across Jan – Dec ${year} and monthly re-enrollment retention.`,
+  reEnrollmentRate: (retainedSum, priorMonthSum, year) =>
+    `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} students retained ÷ ${priorMonthSum.toLocaleString()} enrolled in the prior month × 100. Sums Feb–Dec plus Jan vs Dec ${Number(year) - 1}. First-time ("new") enrollments are never counted.`,
   matrixTitleTooltip: (year) =>
     `Columns are Jan through Dec ${year}. Each cell is the billing month the phase covers — not the payment date.\n\n` +
+    'Re-enrollment rate row: of students enrolled in the previous month, how many stayed enrolled this month. ' +
+    `January compares to December ${Number(year) - 1} when viewing a calendar year. ` +
+    'First-time enrollments ("new") and students returning after a gap are not counted in that month\'s fraction.\n\n' +
     'Installment: invoice generated on the 25th of each month; due on the 5th of the following month. ' +
     'Billing months follow payment timing (early or advance payments map to the correct future month).\n\n' +
     'Full-payment: Phase 1 aligns to the class start date; each following phase maps to the next calendar month. ' +
     'The last enrolled month shows as completed. Middle months show as re-enrolled.',
   matrixLegend:
-    '1 = enrolled for that billing month. Labels: new, re-enrolled, or completed. Dash = not enrolled.',
+    '1 = enrolled for that billing month. Labels: new (first enroll only), re-enrolled, or completed. Dash = not enrolled.',
 };
 
 export const PLACEHOLDER_DASHBOARD = {

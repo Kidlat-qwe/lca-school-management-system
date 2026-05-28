@@ -530,12 +530,12 @@ router.get(
       if (useCreatedRange) {
         if (createdDateFrom) {
           pc++;
-          sql += ` AND c.created_at::date >= $${pc}::date`;
+          sql += ` AND c.submitted_at::date >= $${pc}::date`;
           params.push(createdDateFrom);
         }
         if (createdDateTo) {
           pc++;
-          sql += ` AND c.created_at::date <= $${pc}::date`;
+          sql += ` AND c.submitted_at::date <= $${pc}::date`;
           params.push(createdDateTo);
         }
       } else if (useRange) {
@@ -591,12 +591,12 @@ router.get(
       if (useCreatedRange) {
         if (createdDateFrom) {
           cc++;
-          countSql += ` AND c.created_at::date >= $${cc}::date`;
+          countSql += ` AND c.submitted_at::date >= $${cc}::date`;
           countParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           cc++;
-          countSql += ` AND c.created_at::date <= $${cc}::date`;
+          countSql += ` AND c.submitted_at::date <= $${cc}::date`;
           countParams.push(createdDateTo);
         }
       } else if (useRange) {
@@ -649,12 +649,12 @@ router.get(
       if (useCreatedRange) {
         if (createdDateFrom) {
           sc++;
-          submittedSql += ` AND c.created_at::date >= $${sc}::date`;
+          submittedSql += ` AND c.submitted_at::date >= $${sc}::date`;
           submittedParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           sc++;
-          submittedSql += ` AND c.created_at::date <= $${sc}::date`;
+          submittedSql += ` AND c.submitted_at::date <= $${sc}::date`;
           submittedParams.push(createdDateTo);
         }
       } else if (useRange) {
@@ -694,12 +694,12 @@ router.get(
       if (useCreatedRange) {
         if (createdDateFrom) {
           fc++;
-          filteredSql += ` AND c.created_at::date >= $${fc}::date`;
+          filteredSql += ` AND c.submitted_at::date >= $${fc}::date`;
           filteredParams.push(createdDateFrom);
         }
         if (createdDateTo) {
           fc++;
-          filteredSql += ` AND c.created_at::date <= $${fc}::date`;
+          filteredSql += ` AND c.submitted_at::date <= $${fc}::date`;
           filteredParams.push(createdDateTo);
         }
       } else if (useRange) {

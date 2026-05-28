@@ -8,14 +8,13 @@ import {
   formatDateTimeManila,
   manilaMonthYYYYMM,
 } from '../../utils/dateUtils';
-import {
-  PAYMENT_LOG_DATE_MODES,
-  PAYMENT_LOG_DATE_MODE_LABELS,
-} from '../../utils/paymentLogDateFilters';
+import { PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
 import {
   buildDailySummaryListDateQueryParams,
   defaultDailySummaryFilterMonth,
   DEFAULT_DAILY_SUMMARY_DATE_FILTER_MODE,
+  getDailySummaryDateFilterTitle,
+  getDailySummaryDateModeLabels,
   hasActiveDailySummaryListDateFilter,
 } from '../../utils/dailySummaryListDateFilters';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
@@ -108,6 +107,7 @@ const AdminDailySummary = () => {
   const [detailsView, setDetailsView] = useState({ open: false, record: null });
 
   const isCash = summaryKind === TAB_CASH;
+  const dateModeLabels = getDailySummaryDateModeLabels(isCash);
   const summaryRecordIdField = isCash ? 'cash_deposit_summary_id' : 'daily_summary_id';
 
   /** Same as superadmin Daily Summary list: prefer live EOD totals from GET (payments + AR for date). */
@@ -463,19 +463,7 @@ const AdminDailySummary = () => {
           </div>
           <div
             className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2 sm:gap-y-1 sm:py-1.5 sm:ps-3 sm:pe-2"
-            title={
-              dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
-                ? isCash
-                  ? 'Deposit periods overlapping the selected Manila month. Clear month for all.'
-                  : 'Summary days in the Manila month (same calendar day as paymenttbl.issue_date for that close). Clear month for all.'
-                : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
-                  ? isCash
-                    ? 'Deposits whose period overlaps your date range (inclusive).'
-                    : 'Summary day range (inclusive), aligned with Payment Logs payment date.'
-                  : isCash
-                    ? 'When the deposit summary was submitted (created_at, inclusive).'
-                    : 'Issue date range (inclusive): filters summary_date like Payment Logs Issue Date.'
-            }
+            title={getDailySummaryDateFilterTitle(isCash, dateFilterMode)}
           >
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date filter</span>
@@ -485,9 +473,9 @@ const AdminDailySummary = () => {
                 className="inline-flex flex-wrap gap-0.5 rounded border border-gray-200 bg-gray-50 p-px"
               >
                 {[
-                  { mode: PAYMENT_LOG_DATE_MODES.MONTH, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.MONTH] },
-                  { mode: PAYMENT_LOG_DATE_MODES.PAYMENT_DATE, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.PAYMENT_DATE] },
-                  { mode: PAYMENT_LOG_DATE_MODES.CREATED_DATE, label: PAYMENT_LOG_DATE_MODE_LABELS[PAYMENT_LOG_DATE_MODES.CREATED_DATE] },
+                  { mode: PAYMENT_LOG_DATE_MODES.MONTH, label: dateModeLabels[PAYMENT_LOG_DATE_MODES.MONTH] },
+                  { mode: PAYMENT_LOG_DATE_MODES.PAYMENT_DATE, label: dateModeLabels[PAYMENT_LOG_DATE_MODES.PAYMENT_DATE] },
+                  { mode: PAYMENT_LOG_DATE_MODES.CREATED_DATE, label: dateModeLabels[PAYMENT_LOG_DATE_MODES.CREATED_DATE] },
                 ].map(({ mode, label }) => {
                   const isActive = dateFilterMode === mode;
                   return (
@@ -525,7 +513,7 @@ const AdminDailySummary = () => {
                   <input
                     id="admin-ds-primary-from"
                     type="date"
-                    aria-label="From"
+                    aria-label={isCash ? 'Deposit date from' : 'End of shift date from'}
                     value={filterIssueDateFrom}
                     max={filterIssueDateTo || undefined}
                     onChange={(e) => setFilterIssueDateFrom(e.target.value)}
@@ -537,7 +525,7 @@ const AdminDailySummary = () => {
                   <input
                     id="admin-ds-primary-to"
                     type="date"
-                    aria-label="To"
+                    aria-label={isCash ? 'Deposit date to' : 'End of shift date to'}
                     value={filterIssueDateTo}
                     min={filterIssueDateFrom || undefined}
                     onChange={(e) => setFilterIssueDateTo(e.target.value)}
@@ -550,7 +538,7 @@ const AdminDailySummary = () => {
                   <input
                     id="admin-ds-created-from"
                     type="date"
-                    aria-label="Issue date from"
+                    aria-label={isCash ? 'Submit date from' : 'EOD submit date from'}
                     value={filterCreatedDateFrom}
                     max={filterCreatedDateTo || undefined}
                     onChange={(e) => setFilterCreatedDateFrom(e.target.value)}
@@ -562,7 +550,7 @@ const AdminDailySummary = () => {
                   <input
                     id="admin-ds-created-to"
                     type="date"
-                    aria-label="Issue date to"
+                    aria-label={isCash ? 'Submit date to' : 'EOD submit date to'}
                     value={filterCreatedDateTo}
                     min={filterCreatedDateFrom || undefined}
                     onChange={(e) => setFilterCreatedDateTo(e.target.value)}

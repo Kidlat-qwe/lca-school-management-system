@@ -9,7 +9,7 @@ import {
   EnrollmentStatsCard,
 } from '../../components/dashboard/EnrollmentDashboardKpiCards';
 import { ENROLLMENT_DASHBOARD, MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
-import { enrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
+import { reEnrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
 
 const CURRENT_YEAR = parseInt(
   new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 4),
@@ -95,8 +95,8 @@ const MonthlyEnrollmentDashboard = () => {
   const branches = useMemo(() => data?.branches ?? [], [data]);
   const displayYear = data?.selected_year ?? selectedYear;
 
-  const totalEnrollmentRate = useMemo(
-    () => enrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats),
+  const totalReEnrollmentRate = useMemo(
+    () => reEnrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats ?? []),
     [studentMonthMatrix]
   );
 
@@ -208,13 +208,13 @@ const MonthlyEnrollmentDashboard = () => {
           tooltip={ENROLLMENT_DASHBOARD.droppedRejoin}
         />
         <EnrollmentStatsCard
-          title="Total Enrollment Rate"
-          value={`${totalEnrollmentRate.enrollmentRate.toFixed(2)}%`}
+          title="Total Re-enrollment Rate"
+          value={`${totalReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
           iconName="chartBar"
           accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.enrollmentRate(
-            totalEnrollmentRate.enrolledCount,
-            totalEnrollmentRate.cohortSize,
+          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reEnrollmentRate(
+            totalReEnrollmentRate.reEnrolledCount,
+            totalReEnrollmentRate.priorMonthEnrolledCount,
             displayYear
           )}
         />

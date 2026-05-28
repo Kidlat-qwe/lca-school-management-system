@@ -21,11 +21,13 @@ import {
   todayManilaYMD,
 } from '../../utils/dateUtils';
 import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
+import { buildInvoiceListRequestParams } from '../../utils/invoiceListApiParams';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
+import InvoiceStatusMultiFilter from '../../components/invoices/InvoiceStatusMultiFilter';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import {
   getInvoiceRowRejectedPaymentOverlay,
@@ -63,7 +65,7 @@ const AdminInvoice = () => {
   const [nameSearchTerm, setNameSearchTerm] = useState('');
   const [studentNameSearch, setStudentNameSearch] = useState('');
   // Removed filterBranch - admin only sees their branch
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterStatuses, setFilterStatuses] = useState([]);
   // Date filter: Month | Payment date | Issue Date.
   // Default mode = MONTH, default month = current Manila month.
   const [dateFilterMode, setDateFilterMode] = useState(invoiceDateFilterUtil.DEFAULT_MODE);
@@ -107,8 +109,6 @@ const AdminInvoice = () => {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   // Removed openBranchDropdown - admin only sees their branch
-  const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
-  const [statusDropdownRect, setStatusDropdownRect] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
   // Removed branches state - admin only sees their branch
@@ -160,6 +160,14 @@ const AdminInvoice = () => {
   const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
   const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [listPagination, setListPagination] = useState({
+    page: 1,
+    limit: ITEMS_PER_PAGE,
+    total: 0,
+    totalPages: 1,
+  });
+  const [serverStatusCounts, setServerStatusCounts] = useState({});
+  const [listFilterSummary, setListFilterSummary] = useState(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDateFrom, setExportDateFrom] = useState('');
   const [exportDateTo, setExportDateTo] = useState('');
@@ -196,10 +204,10 @@ const AdminInvoice = () => {
     }
   }, [adminBranchId]);
 
-  // Server-side list: refetch when branch or date filters change (text/status stay client-side).
+  // Server-side list (Payment Logs pattern): refetch page 1 when branch, date, or status filters change.
   useEffect(() => {
     if (!adminBranchId) return;
-    fetchInvoices();
+    fetchInvoices(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     adminBranchId,
@@ -209,6 +217,7 @@ const AdminInvoice = () => {
     filterPaymentDateTo,
     filterIssueDateFrom,
     filterIssueDateTo,
+    filterStatuses,
   ]);
 
   // Auto-set branch_id from adminBranchId when available
@@ -290,19 +299,15 @@ const AdminInvoice = () => {
         setOpenMenuId(null);
       }
       // Removed openBranchDropdown - admin only sees their branch
-      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown') && !event.target.closest('.status-filter-dropdown-portal')) {
-        setOpenStatusDropdown(false);
-        setStatusDropdownRect(null);
-      }
     };
 
-    if (openMenuId || openStatusDropdown) {
+    if (openMenuId) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }
-  }, [openMenuId, openStatusDropdown]);
+  }, [openMenuId]);
 
   const handleMenuClick = (invoiceId, event) => {
     const button = event.currentTarget;
@@ -356,32 +361,66 @@ const AdminInvoice = () => {
     }
   };
 
-  const fetchInvoices = async () => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams();
-      if (adminBranchId) params.set('branch_id', String(adminBranchId));
-      params.set('limit', '100');
-      const dateParams = invoiceDateFilterUtil.buildParams({
-        mode: dateFilterMode,
-        month: filterIssueMonth,
-        paymentFrom: filterPaymentDateFrom,
-        paymentTo: filterPaymentDateTo,
-        issueFrom: filterIssueDateFrom,
-        issueTo: filterIssueDateTo,
-      });
-      Object.entries(dateParams).forEach(([k, v]) => {
-        if (v) params.set(k, v);
-      });
-      const response = await apiRequest(`/invoices?${params.toString()}`);
-      setInvoices(response.data || []);
-    } catch (err) {
-      setError(err.message || 'Failed to fetch invoices');
-      console.error('Error fetching invoices:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchInvoices = useCallback(
+    async (page = 1) => {
+      try {
+        setLoading(true);
+        const params = buildInvoiceListRequestParams({
+          page,
+          limit: ITEMS_PER_PAGE,
+          branchId: adminBranchId,
+          statuses: filterStatuses,
+          dateFilterMode,
+          month: filterIssueMonth,
+          paymentFrom: filterPaymentDateFrom,
+          paymentTo: filterPaymentDateTo,
+          issueFrom: filterIssueDateFrom,
+          issueTo: filterIssueDateTo,
+        });
+        const response = await apiRequest(`/invoices?${params.toString()}`);
+        setInvoices(response.data || []);
+        setServerStatusCounts(response.statusCounts || {});
+        setListFilterSummary(response.filterSummary || null);
+        if (response.pagination) {
+          setListPagination({
+            page: response.pagination.page,
+            limit: response.pagination.limit,
+            total: response.pagination.total,
+            totalPages: response.pagination.totalPages || 1,
+          });
+          setCurrentPage(response.pagination.page);
+        } else {
+          setListPagination({
+            page: 1,
+            limit: ITEMS_PER_PAGE,
+            total: (response.data || []).length,
+            totalPages: 1,
+          });
+          setCurrentPage(1);
+        }
+        setError('');
+      } catch (err) {
+        setError(err.message || 'Failed to fetch invoices');
+        console.error('Error fetching invoices:', err);
+        setInvoices([]);
+        setServerStatusCounts({});
+        setListFilterSummary(null);
+        setListPagination({ page: 1, limit: ITEMS_PER_PAGE, total: 0, totalPages: 1 });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      adminBranchId,
+      filterStatuses,
+      dateFilterMode,
+      filterIssueMonth,
+      filterPaymentDateFrom,
+      filterPaymentDateTo,
+      filterIssueDateFrom,
+      filterIssueDateTo,
+    ]
+  );
 
   // Removed fetchBranches - admin only sees their branch
 
@@ -595,7 +634,7 @@ const AdminInvoice = () => {
       }
       
       closeModal();
-      fetchInvoices();
+      fetchInvoices(currentPage);
     } catch (err) {
       setError(err.message || `Failed to ${editingInvoice ? 'update' : 'create'} invoice`);
       console.error('Error saving invoice:', err);
@@ -661,7 +700,7 @@ const AdminInvoice = () => {
     apiRequest,
     mergeInvoiceIntoList,
     clearListDateFilters: clearInvoiceListDateFilters,
-    setFilterStatus,
+    setFilterStatuses,
   });
 
   const handleDownloadPDF = async (invoice) => {
@@ -1123,7 +1162,7 @@ const AdminInvoice = () => {
       });
 
       handleClosePaymentModal();
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
 
       try {
         const invRes = await apiRequest(`/invoices/${paidInvoiceId}`);
@@ -1179,7 +1218,7 @@ const AdminInvoice = () => {
       });
 
       // Refresh invoices list
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
 
       setEditingStatus(false);
     } catch (err) {
@@ -1231,7 +1270,7 @@ const AdminInvoice = () => {
       });
       
       // Refresh invoice data
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       const invoiceData = updatedInvoice.data;
       
@@ -1265,7 +1304,7 @@ const AdminInvoice = () => {
       });
       
       // Refresh invoice data
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       const invoiceData = updatedInvoice.data;
       
@@ -1296,7 +1335,7 @@ const AdminInvoice = () => {
       setNewStudentId('');
       
       // Refresh invoice data
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       setSelectedInvoiceForDetails(updatedInvoice.data);
     } catch (err) {
@@ -1322,7 +1361,7 @@ const AdminInvoice = () => {
       });
       
       // Refresh invoice data
-      await fetchInvoices();
+      await fetchInvoices(currentPage);
       const updatedInvoice = await apiRequest(`/invoices/${selectedInvoiceForDetails.invoice_id}`);
       setSelectedInvoiceForDetails(updatedInvoice.data);
     } catch (err) {
@@ -1338,13 +1377,13 @@ const AdminInvoice = () => {
     return student ? student.full_name : null;
   };
 
-  const getUniqueStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
+  const getUniqueStatuses = Object.keys(serverStatusCounts).sort();
+  const invoicesInScopeTotal = Object.values(serverStatusCounts).reduce(
+    (sum, n) => sum + (Number(n) || 0),
+    0
+  );
 
-  // Two-pass filtering: first apply every filter EXCEPT the status filter
-  // so we can derive accurate per-status counts (used by the dropdown
-  // options and the active-Unpaid filter chip) for the user's current
-  // scope. Date narrowing is applied server-side via the date-filter mode
-  // switcher, so it doesn't appear here.
+  // Client-side search on the current server page (branch, date, status are server-side).
   const matchesNonStatusFilters = (invoice) => {
     const invoiceIdStr = `INV-${invoice.invoice_id}`;
     const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
@@ -1358,28 +1397,16 @@ const AdminInvoice = () => {
       (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
     return matchesSearch && matchesStudentName;
   };
-  const invoicesInScope = invoices.filter(matchesNonStatusFilters);
-  const invoiceStatusCounts = invoicesInScope.reduce((acc, inv) => {
-    const s = String(inv?.status || '').trim();
-    if (!s) return acc;
-    acc[s] = (acc[s] || 0) + 1;
-    return acc;
-  }, {});
+  const displayInvoices = invoices.filter(matchesNonStatusFilters);
+  const invoiceStatusCounts = serverStatusCounts;
   const unpaidInvoiceCount = invoiceStatusCounts['Unpaid'] || 0;
-  const filteredInvoices = invoicesInScope.filter((invoice) =>
-    filterStatus ? invoice.status === filterStatus : true
-  );
-  const sortedInvoices = sortRows(filteredInvoices, sortConfig, {
+  const sortedInvoices = sortRows(displayInvoices, sortConfig, {
     branch: { accessor: (invoice) => selectedBranchName || invoice.branch_name || '', type: 'string' },
     status: { accessor: 'status', type: 'string' },
     issue_date: { accessor: 'issue_date', type: 'date' },
     payment_date: { accessor: 'payment_date', type: 'date' },
   });
-  const totalPages = Math.max(Math.ceil(sortedInvoices.length / ITEMS_PER_PAGE), 1);
-  const paginatedInvoices = sortedInvoices.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const paginatedInvoices = sortedInvoices;
 
   useScrollToFocusedInvoiceRow(
     paymentLogsFocus,
@@ -1388,11 +1415,17 @@ const AdminInvoice = () => {
     setCurrentPage,
     ITEMS_PER_PAGE
   );
-  const summaryInvoiceCount = filteredInvoices.length;
-  const summaryInvoiceTotal = filteredInvoices.reduce(
+  const summaryInvoiceCount = listPagination.total;
+  const summaryInvoiceTotal = displayInvoices.reduce(
     (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
     0
   );
+  const isPaymentDateScope =
+    dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE ||
+    dateFilterMode === DATE_FILTER_MODES.MONTH;
+  const summaryAmountDisplay =
+    listFilterSummary != null ? listFilterSummary.totalAmount : summaryInvoiceTotal;
+  const summaryPaymentLineCount = listFilterSummary?.paymentLineCount ?? null;
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
     setCurrentPage(1);
@@ -1400,21 +1433,7 @@ const AdminInvoice = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [
-    nameSearchTerm,
-    studentNameSearch,
-    filterStatus,
-    dateFilterMode,
-    filterIssueMonth,
-    filterPaymentDateFrom,
-    filterPaymentDateTo,
-    filterIssueDateFrom,
-    filterIssueDateTo,
-  ]);
-
-  useEffect(() => {
-    setCurrentPage((prevPage) => Math.min(prevPage, totalPages));
-  }, [totalPages]);
+  }, [nameSearchTerm, studentNameSearch]);
 
   const calculateItemTotal = (item) => {
     const amount = parseFloat(item.amount) || 0;
@@ -1475,12 +1494,29 @@ const AdminInvoice = () => {
         emptyMessage =
           'No payments or unpaid invoices found for the selected date range.';
       } else {
-        exportRows = filteredInvoices
-          .filter((invoice) => {
-            if (!shouldIncludeInvoiceByStatuses(invoice, exportSelectedStatuses)) return false;
-            return true;
-          })
-          .map((invoice) => ({
+        const collected = [];
+        let page = 1;
+        let totalPages = 1;
+        do {
+          const params = buildInvoiceListRequestParams({
+            page,
+            limit: 100,
+            branchId: adminBranchId,
+            statuses: exportSelectedStatuses,
+            dateFilterMode,
+            month: filterIssueMonth,
+            paymentFrom: filterPaymentDateFrom,
+            paymentTo: filterPaymentDateTo,
+            issueFrom: filterIssueDateFrom,
+            issueTo: filterIssueDateTo,
+          });
+          const response = await apiRequest(`/invoices?${params.toString()}`);
+          collected.push(...(response.data || []));
+          totalPages = response.pagination?.totalPages || 1;
+          page += 1;
+        } while (page <= totalPages);
+
+        exportRows = collected.map((invoice) => ({
             'Invoice ID': `INV-${invoice.invoice_id}`,
             'Acknowledgement Receipt#': invoice.invoice_ar_number || '-',
             'Student Name(s)': (invoice.students || []).map((s) => s?.full_name).filter(Boolean).join(', ') || '-',
@@ -1512,14 +1548,6 @@ const AdminInvoice = () => {
       setExportLoading(false);
     }
   };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -1579,24 +1607,14 @@ const AdminInvoice = () => {
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
-          <div>
-            <label htmlFor="admin-invoice-status-filter" className="mb-1 block text-xs font-medium text-gray-700">
-              Status
-            </label>
-            <select
-              id="admin-invoice-status-filter"
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-            >
-              <option value="">All statuses ({invoicesInScope.length})</option>
-              {getUniqueStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status} ({invoiceStatusCounts[status] || 0})
-                </option>
-              ))}
-            </select>
-          </div>
+          <InvoiceStatusMultiFilter
+            id="admin-invoice-status-filter"
+            statuses={getUniqueStatuses}
+            statusCounts={invoiceStatusCounts}
+            selectedStatuses={filterStatuses}
+            onChange={setFilterStatuses}
+            totalInScope={invoicesInScopeTotal}
+          />
           <div className="space-y-2">
             <span className="block text-xs font-medium text-gray-700">Date filter</span>
             <div
@@ -1690,15 +1708,15 @@ const AdminInvoice = () => {
         <div className="mt-4 flex flex-col gap-2 border-t border-gray-100 pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
           <p className="text-xs text-gray-500">
             {dateFilterMode === DATE_FILTER_MODES.MONTH
-              ? 'Filtering by invoice payment date (month). Clear to show all dates.'
+              ? 'Month uses payment date (same as Payment Logs). Totals match Payment Logs for that month.'
               : dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE
-                ? 'Filtering by invoice payment date (range). Inclusive on both ends.'
-                : 'Filtering by invoice issue date (range). Inclusive on both ends.'}
+                ? 'Payment date range (inclusive). Totals match Payment Logs for the same range.'
+                : 'Issue date range (inclusive). Invoice list is loaded page by page from the server.'}
           </p>
-          {filterStatus === 'Unpaid' && (
+          {filterStatuses.includes('Unpaid') && (
             <button
               type="button"
-              onClick={() => setFilterStatus('')}
+              onClick={() => setFilterStatuses((prev) => prev.filter((s) => s !== 'Unpaid'))}
               aria-pressed={true}
               title="Clear unpaid filter"
               className="relative inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 transition-colors hover:bg-red-200"
@@ -1716,18 +1734,41 @@ const AdminInvoice = () => {
       </div>
 
       {/* Summary line — sits between the filter container and the table */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
-        <span>
-          <span className="font-semibold text-gray-900">Total Invoice:</span>{' '}
-          <span className="font-medium text-gray-900">{summaryInvoiceCount.toLocaleString('en-US')}</span>
-        </span>
-        <span className="text-gray-300">·</span>
-        <span>
-          <span className="font-semibold text-gray-900">Total amount (incl. tips):</span>{' '}
-          <span className="font-semibold text-emerald-700">
-            ₱{summaryInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      <div className="flex flex-col gap-1 text-sm text-gray-700">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>
+            <span className="font-semibold text-gray-900">Total Invoice:</span>{' '}
+            <span className="font-medium text-gray-900">{summaryInvoiceCount.toLocaleString('en-US')}</span>
           </span>
-        </span>
+          {isPaymentDateScope && summaryPaymentLineCount != null ? (
+            <>
+              <span className="text-gray-300">·</span>
+              <span>
+                <span className="font-semibold text-gray-900">Total payment lines:</span>{' '}
+                <span className="font-medium text-gray-900">
+                  {summaryPaymentLineCount.toLocaleString('en-US')}
+                </span>
+              </span>
+            </>
+          ) : null}
+          <span className="text-gray-300">·</span>
+          <span>
+            <span className="font-semibold text-gray-900">Total amount (incl. tips):</span>{' '}
+            <span className="font-semibold text-emerald-700">
+              ₱{summaryAmountDisplay.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </span>
+        </div>
+        {isPaymentDateScope ? (
+          <p className="text-[11px] text-gray-500 leading-snug">
+            Payment date filter: total amount and payment lines follow your status selection.
+            All statuses includes rejected-approval payments in this period when that month has them.
+          </p>
+        ) : (
+          <p className="text-[11px] text-gray-500 leading-snug">
+            Amount shown sums invoice rows on the current page. Use Payment date or Month to reconcile with Payment Logs.
+          </p>
+        )}
       </div>
 
       {/* Error Message */}
@@ -1786,11 +1827,20 @@ const AdminInvoice = () => {
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {filteredInvoices.length === 0 ? (
+                {loading ? (
+                  <tr>
+                    <td colSpan={11} className="px-6 py-10 text-center">
+                      <div className="inline-flex items-center gap-2 text-sm text-gray-600">
+                        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600" />
+                        Loading invoices...
+                      </div>
+                    </td>
+                  </tr>
+                ) : sortedInvoices.length === 0 ? (
                   <tr>
                     <td colSpan={11} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
-                        {nameSearchTerm || studentNameSearch || filterStatus
+                        {nameSearchTerm || studentNameSearch || filterStatuses.length > 0
                           ? 'No matching invoices. Try adjusting your search or filters.'
                           : 'No invoices yet. Add your first invoice to get started.'}
                       </p>
@@ -1905,16 +1955,16 @@ const AdminInvoice = () => {
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                        {invoice.status === 'Balance Invoiced' ? (
+                        {invoice.balance_invoice_id ? (
                           <div className="text-xs text-gray-900 space-y-0.5">
                             <div>
-                              <span className="text-gray-500">Balance invoice:</span>{' '}
+                              <span className="text-gray-500">Remaining (INV-{invoice.continued_to_invoice_id || invoice.balance_invoice_id}):</span>{' '}
                               <span className="font-medium">
                                 ₱{Number(invoice.balance_invoice_amount ?? invoice.amount ?? 0).toFixed(2)}
                               </span>
                             </div>
                             <div>
-                              <span className="text-gray-500">Paid amount:</span>{' '}
+                              <span className="text-gray-500">Paid on this invoice:</span>{' '}
                               <span className="font-medium">
                                 ₱{Number(invoice.paid_amount ?? 0).toFixed(2)}
                               </span>
@@ -1982,12 +2032,12 @@ const AdminInvoice = () => {
             </table>
           </div>
           <FixedTablePagination
-            page={currentPage}
-            totalPages={totalPages}
-            totalItems={filteredInvoices.length}
-            itemsPerPage={ITEMS_PER_PAGE}
+            page={listPagination.page}
+            totalPages={listPagination.totalPages}
+            totalItems={listPagination.total}
+            itemsPerPage={listPagination.limit}
             itemLabel="invoices"
-            onPageChange={setCurrentPage}
+            onPageChange={(page) => fetchInvoices(page)}
           />
         </div>
 
@@ -2016,7 +2066,7 @@ const AdminInvoice = () => {
           >
             <div className="py-1">
               {(() => {
-                const selectedInvoice = filteredInvoices.find(i => i.invoice_id === openMenuId);
+                const selectedInvoice = invoices.find(i => i.invoice_id === openMenuId);
                 if (!selectedInvoice) return null;
                 return (
                   <>
@@ -2142,53 +2192,6 @@ const AdminInvoice = () => {
             </div>
           </div>
         </>,
-        document.body
-      )}
-
-      {/* Status filter dropdown - portaled to avoid table overflow clipping */}
-      {openStatusDropdown && statusDropdownRect && createPortal(
-        <div
-          className="fixed status-filter-dropdown-portal w-48 bg-white rounded-md shadow-lg z-[100] border border-gray-200 max-h-60 overflow-y-auto py-1"
-          style={{
-            top: `${statusDropdownRect.bottom + 4}px`,
-            left: `${statusDropdownRect.left}px`,
-            minWidth: `${Math.max(statusDropdownRect.width, 192)}px`,
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setFilterStatus('');
-              setOpenStatusDropdown(false);
-              setStatusDropdownRect(null);
-            }}
-            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-              !filterStatus ? 'bg-gray-100 font-medium' : 'text-gray-700'
-            }`}
-          >
-            All Statuses
-          </button>
-          {getUniqueStatuses.map((status) => (
-            <button
-              key={status}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFilterStatus(status);
-                setOpenStatusDropdown(false);
-                setStatusDropdownRect(null);
-              }}
-              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-100 ${
-                filterStatus === status ? 'bg-gray-100 font-medium' : 'text-gray-700'
-              }`}
-            >
-              {status}
-            </button>
-          ))}
-        </div>,
         document.body
       )}
 

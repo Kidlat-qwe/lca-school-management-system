@@ -7,11 +7,10 @@ import HighPriorityAnnouncementModal from './HighPriorityAnnouncementModal';
 import BranchCashHoldingAlertModal from './BranchCashHoldingAlertModal';
 import { GlobalBranchFilterProvider } from '../contexts/GlobalBranchFilterContext';
 
-const Layout = () => {
+const LayoutBody = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <GlobalBranchFilterProvider>
       <div className="min-h-screen bg-gray-50 overflow-x-hidden">
         <NavigationActivityLogger />
         <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
@@ -35,9 +34,14 @@ const Layout = () => {
         {/* Branch Admin: urgent login-time alert when undeposited cash exceeds threshold */}
         <BranchCashHoldingAlertModal />
       </div>
-    </GlobalBranchFilterProvider>
   );
 };
+
+const Layout = () => (
+  <GlobalBranchFilterProvider>
+    <LayoutBody />
+  </GlobalBranchFilterProvider>
+);
 
 export default Layout;
 

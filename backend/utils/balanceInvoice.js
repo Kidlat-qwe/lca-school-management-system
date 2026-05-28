@@ -413,7 +413,7 @@ export async function createBalanceInvoiceFromPartial({
   }
 
   await client.query(
-    `UPDATE invoicestbl SET balance_invoice_id = $1, status = 'Balance Invoiced', amount = 0 WHERE invoice_id = $2`,
+    `UPDATE invoicestbl SET balance_invoice_id = $1, status = 'Partially Paid', amount = 0 WHERE invoice_id = $2`,
     [newInv.invoice_id, parent.invoice_id]
   );
 

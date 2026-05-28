@@ -75,11 +75,16 @@ export const GlobalBranchFilterProvider = ({ children }) => {
   const branchId = userInfo?.branch_id ?? userInfo?.branchId ?? null;
   const isSuperfinance = userType === 'Finance' && (branchId === null || branchId === undefined);
   const isEligibleRole = userType === 'Superadmin' || isSuperfinance;
+  const isBranchScopedUser =
+    userType === 'Admin' ||
+    (userType === 'Finance' && branchId !== null && branchId !== undefined);
 
   const currentPath = location.pathname || '';
   const isSupportedPrefix = SUPPORTED_ROUTE_PREFIXES.some((prefix) => currentPath.startsWith(prefix));
   const currentSegment = currentPath.split('/')[2] || '';
   const shouldShowBranchFilter = isEligibleRole && isSupportedPrefix && SUPPORTED_ROUTE_SEGMENTS.has(currentSegment);
+  /** Mobile only: branch control lives in the profile menu (not a second header row). */
+  const showMobileBranchFilterInHeader = shouldShowBranchFilter || isBranchScopedUser;
 
   useEffect(() => {
     if (!isEligibleRole) {
@@ -121,9 +126,21 @@ export const GlobalBranchFilterProvider = ({ children }) => {
       selectedBranchName: selectedBranchDisplayName,
       selectedBranchNameParts: formatBranchNameParts(selectedBranchDisplayName),
       shouldShowBranchFilter,
+      showMobileBranchFilterInHeader,
+      isBranchScopedUser,
       isEligibleRole,
     }),
-    [branches, loadingBranches, selectedBranchId, selectedBranch, selectedBranchDisplayName, shouldShowBranchFilter, isEligibleRole]
+    [
+      branches,
+      loadingBranches,
+      selectedBranchId,
+      selectedBranch,
+      selectedBranchDisplayName,
+      shouldShowBranchFilter,
+      showMobileBranchFilterInHeader,
+      isBranchScopedUser,
+      isEligibleRole,
+    ]
   );
 
   return (

@@ -22,6 +22,263 @@ const parseYmdQuery = (raw) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
 };
 
+/** Matches list UI status (overdue unpaid shown as Unpaid; legacy Balance Invoiced → Partially Paid). */
+const INVOICE_COMPUTED_STATUS_SQL = `CASE
+  WHEN i.status = 'Balance Invoiced' THEN 'Partially Paid'
+  WHEN i.status IN ('Unpaid', 'Pending', 'Draft') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
+  THEN 'Unpaid'
+  ELSE i.status
+END`;
+
+const INVOICE_LIST_FROM_SQL = `FROM invoicestbl i
+                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.invoice_id = i.invoice_id`;
+
+/**
+ * Shared WHERE clause for invoice list, count, and status breakdown queries.
+ * @returns {{ whereSql: string, params: unknown[], paramCount: number }}
+ */
+function buildInvoiceListWhereClause({
+  user,
+  branch_id,
+  statusesList = [],
+  paymentDateFrom,
+  paymentDateTo,
+  issueDateFrom,
+  issueDateTo,
+}) {
+  const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
+  const useIssueRange = Boolean(issueDateFrom || issueDateTo);
+
+  let whereSql = ' WHERE 1=1';
+  const params = [];
+  let paramCount = 0;
+
+  if (user.userType !== 'Superadmin' && user.branchId) {
+    paramCount += 1;
+    whereSql += ` AND i.branch_id = $${paramCount}`;
+    params.push(user.branchId);
+  } else if (branch_id) {
+    paramCount += 1;
+    whereSql += ` AND i.branch_id = $${paramCount}`;
+    params.push(branch_id);
+  }
+
+  if (statusesList.length > 0) {
+    const wantsRejectedStatus = statusesList.includes('Rejected');
+    const baseStatuses = statusesList.filter((status) => status !== 'Rejected');
+    const statusClauses = [];
+
+    if (baseStatuses.length > 0) {
+      paramCount += 1;
+      statusClauses.push(`(${INVOICE_COMPUTED_STATUS_SQL}) = ANY($${paramCount}::text[])`);
+      params.push(baseStatuses);
+    }
+
+    if (wantsRejectedStatus) {
+      const rejectedStatusClauses = [
+        `rp.invoice_id = i.invoice_id`,
+        `rp.status = 'Completed'`,
+        `COALESCE(rp.approval_status, 'Pending') = 'Rejected'`,
+      ];
+      if (usePaymentRange) {
+        if (paymentDateFrom) {
+          paramCount += 1;
+          rejectedStatusClauses.push(`rp.issue_date >= $${paramCount}::date`);
+          params.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          paramCount += 1;
+          rejectedStatusClauses.push(`rp.issue_date <= $${paramCount}::date`);
+          params.push(paymentDateTo);
+        }
+      }
+      statusClauses.push(`EXISTS (SELECT 1 FROM paymenttbl rp WHERE ${rejectedStatusClauses.join(' AND ')})`);
+    }
+
+    if (statusClauses.length > 0) {
+      whereSql += ` AND (${statusClauses.join(' OR ')})`;
+    }
+  }
+
+  if (usePaymentRange) {
+    const paymentDateClauses = [
+      `p.invoice_id = i.invoice_id`,
+      `p.status = 'Completed'`,
+      `COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
+    ];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      paymentDateClauses.push(`p.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      paymentDateClauses.push(`p.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
+    const unpaidDateFallbackClauses = [`(${INVOICE_COMPUTED_STATUS_SQL}) = 'Unpaid'`];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      unpaidDateFallbackClauses.push(`i.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      unpaidDateFallbackClauses.push(`i.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
+    const rejectedPaymentDateClauses = [
+      `pr.invoice_id = i.invoice_id`,
+      `pr.status = 'Completed'`,
+      `COALESCE(pr.approval_status, 'Pending') = 'Rejected'`,
+    ];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      rejectedPaymentDateClauses.push(`pr.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      rejectedPaymentDateClauses.push(`pr.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
+    whereSql += ` AND (
+      EXISTS (
+        SELECT 1
+        FROM paymenttbl p
+        WHERE ${paymentDateClauses.join(' AND ')}
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM paymenttbl pr
+        WHERE ${rejectedPaymentDateClauses.join(' AND ')}
+      )
+      OR (${unpaidDateFallbackClauses.join(' AND ')})
+    )`;
+  }
+
+  if (useIssueRange) {
+    if (issueDateFrom) {
+      paramCount += 1;
+      whereSql += ` AND i.issue_date >= $${paramCount}::date`;
+      params.push(issueDateFrom);
+    }
+    if (issueDateTo) {
+      paramCount += 1;
+      whereSql += ` AND i.issue_date <= $${paramCount}::date`;
+      params.push(issueDateTo);
+    }
+  }
+
+  return { whereSql, params, paramCount };
+}
+
+/**
+ * Header totals for paginated invoice list (matches active status + date filters).
+ * Payment-date scope: sum completed payment lines in range for invoices in scope.
+ * All statuses: includes rejected-approval payment lines. Issue-date scope: per-invoice billed + tips.
+ */
+async function computeInvoiceFilterSummary({
+  listWhereFiltered,
+  paymentDateFrom,
+  paymentDateTo,
+  statusesList = [],
+}) {
+  const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
+  const allStatuses = statusesList.length === 0;
+  const onlyRejected = statusesList.length === 1 && statusesList[0] === 'Rejected';
+  const wantsRejected = allStatuses || statusesList.includes('Rejected');
+  const baseStatuses = statusesList.filter((status) => status !== 'Rejected');
+
+  if (usePaymentRange) {
+    const params = [...listWhereFiltered.params];
+    let paramCount = listWhereFiltered.paramCount;
+
+    let invoiceStatusSql = '';
+    if (!allStatuses && !onlyRejected && baseStatuses.length > 0) {
+      paramCount += 1;
+      invoiceStatusSql = ` AND (${INVOICE_COMPUTED_STATUS_SQL}) = ANY($${paramCount}::text[])`;
+      params.push(baseStatuses);
+    }
+
+    let approvalSql = '';
+    if (onlyRejected) {
+      approvalSql = ` AND COALESCE(p.approval_status, 'Pending') = 'Rejected'`;
+    } else if (!wantsRejected) {
+      approvalSql = ` AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`;
+    }
+
+    const payDateParts = [];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      payDateParts.push(`p.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      payDateParts.push(`p.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
+    const payDateSql = payDateParts.length > 0 ? payDateParts.join(' AND ') : 'TRUE';
+
+    const paymentInner = `
+      SELECT p.payment_id,
+             MAX(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) AS line_amt
+      FROM paymenttbl p
+      WHERE p.status = 'Completed'
+        ${approvalSql}
+        AND ${payDateSql}
+        AND EXISTS (
+          SELECT 1
+          ${INVOICE_LIST_FROM_SQL}
+          ${listWhereFiltered.whereSql}
+          ${invoiceStatusSql}
+          AND i.invoice_id = p.invoice_id
+        )
+      GROUP BY p.payment_id`;
+
+    const sumResult = await query(
+      `SELECT COUNT(*)::int AS line_count,
+              COALESCE(SUM(line_amt), 0)::numeric AS line_total
+       FROM (${paymentInner}) s`,
+      params
+    );
+
+    return {
+      totalAmount: parseFloat(sumResult.rows[0]?.line_total ?? 0) || 0,
+      paymentLineCount: Number(sumResult.rows[0]?.line_count ?? 0) || 0,
+    };
+  }
+
+  const issueSumResult = await query(
+    `SELECT COALESCE(SUM(
+      COALESCE(i.amount, 0)
+      + COALESCE((
+        SELECT SUM(COALESCE(px.payable_amount, 0))
+        FROM paymenttbl px
+        WHERE px.invoice_id = i.invoice_id
+          AND px.status = 'Completed'
+          AND COALESCE(px.approval_status, 'Pending') <> 'Rejected'
+      ), 0)
+      + COALESCE((
+        SELECT SUM(COALESCE(px.tip_amount, 0))
+        FROM paymenttbl px
+        WHERE px.invoice_id = i.invoice_id
+          AND px.status = 'Completed'
+          AND COALESCE(px.approval_status, 'Pending') <> 'Rejected'
+      ), 0)
+    ), 0)::numeric AS invoice_total
+    ${INVOICE_LIST_FROM_SQL}
+    ${listWhereFiltered.whereSql}`,
+    listWhereFiltered.params
+  );
+
+  return {
+    totalAmount: parseFloat(issueSumResult.rows[0]?.invoice_total ?? 0) || 0,
+    paymentLineCount: null,
+  };
+}
+
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
@@ -36,6 +293,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
+    queryValidator('statuses').optional().isString().withMessage('statuses must be a comma-separated string'),
     queryValidator('payment_date_from').optional().isISO8601().withMessage('payment_date_from must be YYYY-MM-DD'),
     queryValidator('payment_date_to').optional().isISO8601().withMessage('payment_date_to must be YYYY-MM-DD'),
     queryValidator('issue_date_from').optional().isISO8601().withMessage('issue_date_from must be YYYY-MM-DD'),
@@ -129,13 +387,117 @@ router.get(
         // Continue with invoice fetching even if expiration check fails
       }
 
-      const { branch_id, status } = req.query;
+      const { branch_id, status, statuses: statusesRaw, page: pageRaw, limit: limitRaw } = req.query;
       const paymentDateFrom = parseYmdQuery(req.query.payment_date_from);
       const paymentDateTo = parseYmdQuery(req.query.payment_date_to);
-      const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
       const issueDateFrom = parseYmdQuery(req.query.issue_date_from);
       const issueDateTo = parseYmdQuery(req.query.issue_date_to);
-      const useIssueRange = Boolean(issueDateFrom || issueDateTo);
+
+      if (paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+      if (issueDateFrom && issueDateTo && issueDateFrom > issueDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'issue_date_from must be on or before issue_date_to',
+        });
+      }
+
+      const statusesList = statusesRaw
+        ? String(statusesRaw)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : status
+          ? [String(status).trim()].filter(Boolean)
+          : [];
+
+      const usePagination = pageRaw !== undefined && pageRaw !== null && String(pageRaw).trim() !== '';
+      const pageNum = usePagination ? Math.max(parseInt(pageRaw, 10) || 1, 1) : 1;
+      const limitNum = usePagination
+        ? Math.min(Math.max(parseInt(limitRaw, 10) || 10, 1), 100)
+        : Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 100);
+      const offset = (pageNum - 1) * limitNum;
+
+      const listWhereBase = buildInvoiceListWhereClause({
+        user: req.user,
+        branch_id,
+        statusesList: [],
+        paymentDateFrom,
+        paymentDateTo,
+        issueDateFrom,
+        issueDateTo,
+      });
+
+      const listWhereFiltered = buildInvoiceListWhereClause({
+        user: req.user,
+        branch_id,
+        statusesList,
+        paymentDateFrom,
+        paymentDateTo,
+        issueDateFrom,
+        issueDateTo,
+      });
+
+      let totalCount = 0;
+      const statusCounts = {};
+
+      if (usePagination) {
+        const countResult = await query(
+          `SELECT COUNT(*)::int AS total ${INVOICE_LIST_FROM_SQL} ${listWhereFiltered.whereSql}`,
+          listWhereFiltered.params
+        );
+        totalCount = countResult.rows[0]?.total ?? 0;
+
+        const statusCountsResult = await query(
+          `SELECT (${INVOICE_COMPUTED_STATUS_SQL}) AS status_key, COUNT(*)::int AS cnt
+           ${INVOICE_LIST_FROM_SQL}
+           ${listWhereBase.whereSql}
+           GROUP BY 1`,
+          listWhereBase.params
+        );
+        for (const row of statusCountsResult.rows) {
+          const key = String(row.status_key || '').trim();
+          if (key) statusCounts[key] = Number(row.cnt) || 0;
+        }
+
+        const rejectedStatusCountResult = await query(
+          `SELECT COUNT(DISTINCT i.invoice_id)::int AS cnt
+           ${INVOICE_LIST_FROM_SQL}
+           ${listWhereBase.whereSql}
+           AND EXISTS (
+             SELECT 1
+             FROM paymenttbl p
+             WHERE p.invoice_id = i.invoice_id
+               AND p.status = 'Completed'
+               AND COALESCE(p.approval_status, 'Pending') = 'Rejected'
+               ${paymentDateFrom ? `AND p.issue_date >= $${listWhereBase.paramCount + 1}::date` : ''}
+               ${paymentDateTo ? `AND p.issue_date <= $${listWhereBase.paramCount + (paymentDateFrom ? 2 : 1)}::date` : ''}
+           )`,
+          [
+            ...listWhereBase.params,
+            ...(paymentDateFrom ? [paymentDateFrom] : []),
+            ...(paymentDateTo ? [paymentDateTo] : []),
+          ]
+        );
+        const rejectedCount = Number(rejectedStatusCountResult.rows[0]?.cnt || 0);
+        if (rejectedCount > 0) {
+          statusCounts.Rejected = rejectedCount;
+        }
+      }
+
+      let filterSummary = null;
+      if (usePagination) {
+        filterSummary = await computeInvoiceFilterSummary({
+          listWhereFiltered,
+          paymentDateFrom,
+          paymentDateTo,
+          statusesList,
+        });
+      }
 
       let sql = `SELECT i.invoice_id, i.invoice_description, i.branch_id, i.amount, i.status, i.remarks, 
                        TO_CHAR(i.issue_date, 'YYYY-MM-DD') as issue_date, 
@@ -153,84 +515,27 @@ router.get(
                         i.ack_receipt_id,
                         i.invoice_ar_number,
                         ar.prospect_student_name as ar_prospect_student_name,
-                        CASE
-                          WHEN i.status IN ('Unpaid', 'Pending', 'Draft') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
-                          THEN 'Unpaid'
-                          ELSE i.status
-                        END as computed_status
-                 FROM invoicestbl i
-                 LEFT JOIN acknowledgement_receiptstbl ar ON ar.invoice_id = i.invoice_id
-                 WHERE 1=1`;
-      const params = [];
-      let paramCount = 0;
+                        ${INVOICE_COMPUTED_STATUS_SQL} as computed_status
+                 ${INVOICE_LIST_FROM_SQL}
+                 ${listWhereFiltered.whereSql}`;
 
-      // Filter by branch (non-superadmin users are limited to their branch)
-      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
-        paramCount++;
-        sql += ` AND i.branch_id = $${paramCount}`;
-        params.push(req.user.branchId);
-      } else if (branch_id) {
-        paramCount++;
-        sql += ` AND i.branch_id = $${paramCount}`;
-        params.push(branch_id);
-      }
+      const params = [...listWhereFiltered.params];
+      let paramCount = listWhereFiltered.paramCount;
 
-      if (status) {
-        paramCount++;
-        sql += ` AND i.status = $${paramCount}`;
-        params.push(status);
-      }
-
-      if (usePaymentRange) {
-        if (paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
-          return res.status(400).json({
-            success: false,
-            message: 'payment_date_from must be on or before payment_date_to',
-          });
-        }
-        const paymentDateClauses = [
-          `p.invoice_id = i.invoice_id`,
-          `p.status = 'Completed'`,
-          `COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
-        ];
-        if (paymentDateFrom) {
-          paramCount++;
-          paymentDateClauses.push(`p.issue_date >= $${paramCount}::date`);
-          params.push(paymentDateFrom);
-        }
-        if (paymentDateTo) {
-          paramCount++;
-          paymentDateClauses.push(`p.issue_date <= $${paramCount}::date`);
-          params.push(paymentDateTo);
-        }
-        sql += ` AND EXISTS (
-          SELECT 1
-          FROM paymenttbl p
-          WHERE ${paymentDateClauses.join(' AND ')}
-        )`;
-      }
-
-      if (useIssueRange) {
-        if (issueDateFrom && issueDateTo && issueDateFrom > issueDateTo) {
-          return res.status(400).json({
-            success: false,
-            message: 'issue_date_from must be on or before issue_date_to',
-          });
-        }
-        if (issueDateFrom) {
-          paramCount++;
-          sql += ` AND i.issue_date >= $${paramCount}::date`;
-          params.push(issueDateFrom);
-        }
-        if (issueDateTo) {
-          paramCount++;
-          sql += ` AND i.issue_date <= $${paramCount}::date`;
-          params.push(issueDateTo);
-        }
-      }
-
-      // Return all matching invoices, ordered from newest to oldest
       sql += ' ORDER BY invoice_id DESC';
+
+      if (usePagination) {
+        paramCount += 1;
+        sql += ` LIMIT $${paramCount}`;
+        params.push(limitNum);
+        paramCount += 1;
+        sql += ` OFFSET $${paramCount}`;
+        params.push(offset);
+      } else if (limitNum) {
+        paramCount += 1;
+        sql += ` LIMIT $${paramCount}`;
+        params.push(limitNum);
+      }
 
       const result = await query(sql, params);
 
@@ -330,7 +635,6 @@ router.get(
 
             const canRecordPayment =
               !invoice.balance_invoice_id &&
-              invoice.status !== 'Balance Invoiced' &&
               invoice.status !== 'Paid' &&
               invoice.status !== 'Cancelled';
             const displayDescription = await resolveInvoiceDisplayDescription(pool, invoice);
@@ -343,44 +647,40 @@ router.get(
               }
             }
             let effectiveStatus = invoice.computed_status || invoice.status;
-            if (
-              invoice.balance_invoice_id &&
-              totalSettled > 0 &&
-              effectiveStatus !== 'Paid' &&
-              effectiveStatus !== 'Cancelled'
-            ) {
+            if (effectiveStatus === 'Balance Invoiced') {
               effectiveStatus = 'Partially Paid';
-            } else if (
+            }
+            const isSupersededParent = Boolean(invoice.balance_invoice_id);
+            const isOpenBalanceLeaf =
               chainSummary &&
               Number(chainSummary.leaf_invoice_id) === Number(invoice.invoice_id) &&
               invoice.parent_invoice_id &&
               !invoice.balance_invoice_id &&
+              Number(chainSummary.remaining_on_leaf) > 0;
+            if (
+              (isSupersededParent || isOpenBalanceLeaf) &&
               effectiveStatus !== 'Paid' &&
-              effectiveStatus !== 'Cancelled' &&
-              Number(chainSummary.total_paid_in_chain) > 0 &&
-              Number(chainSummary.remaining_on_leaf) > 0
+              effectiveStatus !== 'Cancelled'
             ) {
-              effectiveStatus = 'Balance Invoiced';
+              effectiveStatus = 'Partially Paid';
             }
+            const chainPaidForDisplay = isSupersededParent
+              ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
+              : totalPaid;
+            const chainRemainingForDisplay = isSupersededParent
+              ? Number(chainSummary?.remaining_on_leaf ?? effectiveAmount)
+              : null;
 
             return {
               ...invoice,
               amount: effectiveAmount,
               status: effectiveStatus,
               display_description: displayDescription,
-              paid_amount:
-                effectiveStatus === 'Balance Invoiced'
-                  ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
-                  : totalPaid,
+              paid_amount: chainPaidForDisplay,
               total_tip_amount: totalTip,
-              total_received_amount:
-                (effectiveStatus === 'Balance Invoiced'
-                  ? Number(chainSummary?.total_paid_in_chain ?? totalPaid)
-                  : totalPaid) + totalTip,
-              balance_invoice_amount:
-                effectiveStatus === 'Balance Invoiced'
-                  ? Number(chainSummary?.remaining_on_leaf ?? effectiveAmount)
-                  : null,
+              total_received_amount: chainPaidForDisplay + totalTip,
+              balance_invoice_amount: chainRemainingForDisplay,
+              continued_to_invoice_id: isSupersededParent ? invoice.balance_invoice_id : null,
               items,
               students: studentsWithDisplayName,
               can_record_payment: canRecordPayment,
@@ -407,10 +707,25 @@ router.get(
         })
       );
 
-      res.json({
+      const responseBody = {
         success: true,
         data: invoicesWithDetails,
-      });
+      };
+
+      if (usePagination) {
+        responseBody.pagination = {
+          page: pageNum,
+          limit: limitNum,
+          total: totalCount,
+          totalPages: Math.max(Math.ceil(totalCount / limitNum), 1),
+        };
+        responseBody.statusCounts = statusCounts;
+        if (filterSummary) {
+          responseBody.filterSummary = filterSummary;
+        }
+      }
+
+      res.json(responseBody);
     } catch (error) {
       next(error);
     }
@@ -537,24 +852,22 @@ router.get(
         console.error('getChainFinancialSummary:', e);
       }
       let effectiveStatus = invoiceRow.status;
-      if (
-        invoiceRow.balance_invoice_id &&
-        totalSettled > 0 &&
-        effectiveStatus !== 'Paid' &&
-        effectiveStatus !== 'Cancelled'
-      ) {
+      if (effectiveStatus === 'Balance Invoiced') {
         effectiveStatus = 'Partially Paid';
-      } else if (
+      }
+      const isSupersededParent = Boolean(invoiceRow.balance_invoice_id);
+      const isOpenBalanceLeaf =
         chainSummary &&
         Number(chainSummary.leaf_invoice_id) === Number(invoiceRow.invoice_id) &&
         invoiceRow.parent_invoice_id &&
         !invoiceRow.balance_invoice_id &&
+        Number(chainSummary.remaining_on_leaf) > 0;
+      if (
+        (isSupersededParent || isOpenBalanceLeaf) &&
         effectiveStatus !== 'Paid' &&
-        effectiveStatus !== 'Cancelled' &&
-        Number(chainSummary.total_paid_in_chain) > 0 &&
-        Number(chainSummary.remaining_on_leaf) > 0
+        effectiveStatus !== 'Cancelled'
       ) {
-        effectiveStatus = 'Balance Invoiced';
+        effectiveStatus = 'Partially Paid';
       }
 
       const displayDescription = await resolveInvoiceDisplayDescription(pool, invoiceRow);
@@ -575,7 +888,6 @@ router.get(
 
       const canRecordPayment =
         !invoiceRow.balance_invoice_id &&
-        invoiceRow.status !== 'Balance Invoiced' &&
         invoiceRow.status !== 'Paid' &&
         invoiceRow.status !== 'Cancelled';
 

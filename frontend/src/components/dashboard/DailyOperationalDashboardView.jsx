@@ -20,6 +20,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from './DashboardStatIcons';
 import CombinedStatsCard from './CombinedStatsCard';
+import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
@@ -33,18 +34,24 @@ const formatCurrency = (amount) =>
 const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
 const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
-const StatsCard = ({ title, value, iconName, accent, subtitle, onClick, ariaLabel }) => {
+const StatsCard = ({ title, value, iconName, accent, tooltip, subtitle, onClick, ariaLabel }) => {
+  const helpText = tooltip ?? subtitle;
   const Wrapper = onClick ? 'button' : 'div';
   return (
     <Wrapper
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       aria-label={ariaLabel || (onClick ? title : undefined)}
-      className={`group relative h-full w-full overflow-hidden rounded-2xl bg-white p-5 text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${onClick ? 'cursor-pointer' : ''}`}
+      className={`group relative h-full w-full overflow-visible rounded-2xl bg-white p-5 text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${onClick ? 'cursor-pointer' : ''}`}
     >
       <div className="flex h-full flex-col">
         <div className="flex items-start justify-between gap-3">
-          <p className="text-sm font-semibold text-gray-700 leading-tight">{title}</p>
+          <p className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm font-semibold leading-tight text-gray-700">
+            <span>{title}</span>
+            {helpText ? (
+              <MatrixInfoTooltip label={`About ${title}`}>{helpText}</MatrixInfoTooltip>
+            ) : null}
+          </p>
           <div
             className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${accent} shadow-sm transition-transform duration-300 group-hover:scale-110`}
           >
@@ -52,7 +59,6 @@ const StatsCard = ({ title, value, iconName, accent, subtitle, onClick, ariaLabe
           </div>
         </div>
         <p className="mt-3 text-[1.65rem] leading-none font-bold tracking-tight text-gray-900 break-words">{value}</p>
-        {subtitle ? <p className="mt-2 text-[11px] leading-4 font-medium text-gray-500">{subtitle}</p> : null}
       </div>
       <div
         className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`}
@@ -139,6 +145,11 @@ const DailyOperationalDashboardView = ({
     [branchMetrics]
   );
   const enrollmentDashboard = data?.enrollment_dashboard || {};
+  const totalPaymentsAmount = useMemo(() => {
+    const invoice = Number(data?.totals?.daily_sales_amount) || 0;
+    const ar = Number(data?.totals?.ar_sales_amount) || 0;
+    return invoice + ar;
+  }, [data?.totals?.daily_sales_amount, data?.totals?.ar_sales_amount]);
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
@@ -283,7 +294,7 @@ const DailyOperationalDashboardView = ({
               { label: 'New enrollees', value: formatNumber(totals.new_enrollees) },
               { label: 'Re-enrollment', value: formatNumber(totals.re_enrollment_count) },
             ]}
-            subtitle={DAILY_OPERATIONAL.newEnrolleesReenroll}
+            tooltip={DAILY_OPERATIONAL.newEnrolleesReenroll}
           />
           <CombinedStatsCard
             title="Dropped / Unenrolled & Rejoin"
@@ -293,35 +304,39 @@ const DailyOperationalDashboardView = ({
               { label: 'Dropped / unenrolled', value: formatNumber(totals.dropped_unenrolled_count) },
               { label: 'Rejoin', value: formatNumber(totals.rejoin_count || 0) },
             ]}
-            subtitle={DAILY_OPERATIONAL.droppedRejoin}
+            tooltip={DAILY_OPERATIONAL.droppedRejoin}
           />
-          <StatsCard
-            title="Invoice Sales (Completed)"
-            value={formatCurrency(totals.daily_sales_amount)}
+          <CombinedStatsCard
+            title="Invoice & Acknowledgement Receipt Sales"
             iconName="currency"
-            accent="bg-gradient-to-br from-indigo-500 to-indigo-600"
-            subtitle={DAILY_OPERATIONAL.invoiceSales}
+            accent="bg-gradient-to-br from-indigo-500 to-violet-600"
+            metricsLayout="stacked"
+            metrics={[
+              { label: 'Invoice Sales:', value: formatCurrency(totals.daily_sales_amount) },
+              { label: 'Acknowledgement Receipt:', value: formatCurrency(totals.ar_sales_amount) },
+            ]}
+            tooltip={`${DAILY_OPERATIONAL.combinedSales}\n\n${DAILY_OPERATIONAL.arSales(formatNumber(totals.ar_sales_count))}`}
           />
           <StatsCard
-            title="Acknowledgement Receipt Sales"
-            value={formatCurrency(totals.ar_sales_amount)}
-            iconName="clipboardList"
-            accent="bg-gradient-to-br from-violet-500 to-purple-600"
-            subtitle={DAILY_OPERATIONAL.arSales(formatNumber(totals.ar_sales_count))}
+            title="Total Payments"
+            value={formatCurrency(totalPaymentsAmount)}
+            iconName="creditCard"
+            accent="bg-gradient-to-br from-violet-600 to-purple-700"
+            tooltip={DAILY_OPERATIONAL.totalPayments}
           />
           <StatsCard
             title="Merchandise Released"
             value={formatNumber(totals.merchandise_released_quantity)}
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
-            subtitle={DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}
+            tooltip={DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}
           />
           <StatsCard
             title="Enrollment Dashboard"
             value={`${Number(enrollmentDashboard.enrollment_rate || 0).toFixed(2)}%`}
             iconName="chartBar"
             accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            subtitle={DAILY_OPERATIONAL.enrollmentRate(
+            tooltip={DAILY_OPERATIONAL.enrollmentRate(
               formatNumber(enrollmentDashboard.enrollment_rate_enrolled_count || 0),
               formatNumber(enrollmentDashboard.enrollment_rate_student_count || 0)
             )}
@@ -338,7 +353,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_verified_count || 0)}
               iconName="currency"
               accent="bg-gradient-to-br from-cyan-500 to-teal-600"
-              subtitle={DAILY_OPERATIONAL.payVerified(formatCurrency(totals.pay_verified_amount || 0), verificationAsOfDisplay)}
+              tooltip={DAILY_OPERATIONAL.payVerified(formatCurrency(totals.pay_verified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goPaymentLogsByVerify('verified')}
               ariaLabel={`Open payment logs for verified completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
@@ -347,7 +362,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.pay_unverified_count || 0)}
               iconName="chartBar"
               accent="bg-gradient-to-br from-slate-500 to-slate-600"
-              subtitle={DAILY_OPERATIONAL.payNotVerifiedYet(formatCurrency(totals.pay_unverified_amount || 0), verificationAsOfDisplay)}
+              tooltip={DAILY_OPERATIONAL.payNotVerifiedYet(formatCurrency(totals.pay_unverified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goPaymentLogsByVerify('unverified')}
               ariaLabel={`Open payment logs for not-yet-verified completed payments on ${verificationAsOfDisplay} (Manila)`}
             />
@@ -356,7 +371,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_verified_count || 0)}
               iconName="clipboardList"
               accent="bg-gradient-to-br from-fuchsia-500 to-purple-600"
-              subtitle={DAILY_OPERATIONAL.arVerified(formatCurrency(totals.ar_verified_amount || 0), verificationAsOfDisplay)}
+              tooltip={DAILY_OPERATIONAL.arVerified(formatCurrency(totals.ar_verified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goArByVerify('verified')}
               ariaLabel="Open acknowledgement receipt list filtered to verified and applied"
             />
@@ -365,7 +380,7 @@ const DailyOperationalDashboardView = ({
               value={formatNumber(totals.ar_unverified_count || 0)}
               iconName="academicCap"
               accent="bg-gradient-to-br from-amber-500 to-orange-600"
-              subtitle={DAILY_OPERATIONAL.arUnverified(formatCurrency(totals.ar_unverified_amount || 0), verificationAsOfDisplay)}
+              tooltip={DAILY_OPERATIONAL.arUnverified(formatCurrency(totals.ar_unverified_amount || 0), verificationAsOfDisplay)}
               onClick={() => goArByVerify('unverified')}
               ariaLabel="Open acknowledgement receipt list filtered to unverified statuses"
             />

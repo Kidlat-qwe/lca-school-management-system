@@ -1099,6 +1099,7 @@ router.get(
       .isISO8601()
       .withMessage('created_date_to must be YYYY-MM-DD'),
     queryValidator('status').optional().isString().withMessage('Status must be a string'),
+    queryValidator('invoice_statuses').optional().isString().withMessage('invoice_statuses must be a comma-separated string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     queryValidator('approval_status').optional().isString().withMessage('approval_status must be a string'),
@@ -1120,6 +1121,7 @@ router.get(
         issue_date_from: issueDateFrom,
         issue_date_to: issueDateTo,
         status,
+        invoice_statuses: invoiceStatusesRaw,
         approval_status: approvalStatus,
         exclude_approval_status: excludeApprovalStatus,
         returned_by_me: returnedByMeRaw,
@@ -1134,6 +1136,12 @@ router.get(
         ? String(paymentMethodRaw).trim()
         : '';
       const searchTerm = search ? String(search).trim() : '';
+      const invoiceStatuses = invoiceStatusesRaw
+        ? String(invoiceStatusesRaw)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
       const isRejectedPaymentLogsTab = String(approvalStatus || '').trim() === 'Rejected';
       const returnedByMe =
         returnedByMeRaw === '1' || String(returnedByMeRaw).toLowerCase() === 'true';
@@ -1337,6 +1345,15 @@ router.get(
         paramCount++;
         sql += ` AND p.status = $${paramCount}`;
         params.push(status);
+      }
+      if (invoiceStatuses.length === 1) {
+        paramCount++;
+        sql += ` AND i.status = $${paramCount}`;
+        params.push(invoiceStatuses[0]);
+      } else if (invoiceStatuses.length > 1) {
+        paramCount++;
+        sql += ` AND i.status = ANY($${paramCount}::text[])`;
+        params.push(invoiceStatuses);
       }
 
       if (approvalStatus) {
@@ -1549,6 +1566,15 @@ router.get(
         countParamCount++;
         countSql += ` AND p.status = $${countParamCount}`;
         countParams.push(status);
+      }
+      if (invoiceStatuses.length === 1) {
+        countParamCount++;
+        countSql += ` AND i.status = $${countParamCount}`;
+        countParams.push(invoiceStatuses[0]);
+      } else if (invoiceStatuses.length > 1) {
+        countParamCount++;
+        countSql += ` AND i.status = ANY($${countParamCount}::text[])`;
+        countParams.push(invoiceStatuses);
       }
 
       if (approvalStatus) {
@@ -2512,15 +2538,6 @@ router.post(
         });
       }
 
-      if (invoice.status === 'Balance Invoiced') {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message:
-            'This invoice was superseded after a partial payment. Use the new balance invoice to record payments.',
-        });
-      }
-
       // Verify student exists
       const studentCheck = await client.query('SELECT * FROM userstbl WHERE user_id = $1', [student_id]);
       if (studentCheck.rows.length === 0) {
@@ -2654,7 +2671,7 @@ router.post(
           issueDateYmd: formatYmdLocal(new Date(issue_date)),
         });
         createdBalanceInvoiceId = balance_invoice_id;
-        newInvoiceStatus = 'Balance Invoiced';
+        newInvoiceStatus = 'Partially Paid';
       } else {
         await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
           remainingBalance,

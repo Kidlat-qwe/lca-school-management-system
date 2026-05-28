@@ -60,16 +60,16 @@ export function useOpenInvoiceFromPaymentLogsNavigation({
   apiRequest,
   mergeInvoiceIntoList,
   clearListDateFilters,
-  setFilterStatus,
+  setFilterStatuses,
 }) {
   const mergeInvoiceIntoListRef = useRef(mergeInvoiceIntoList);
   const clearListDateFiltersRef = useRef(clearListDateFilters);
-  const setFilterStatusRef = useRef(setFilterStatus);
+  const setFilterStatusesRef = useRef(setFilterStatuses);
   const [paymentLogsFocus, setPaymentLogsFocus] = useState(null);
 
   mergeInvoiceIntoListRef.current = mergeInvoiceIntoList;
   clearListDateFiltersRef.current = clearListDateFilters;
-  setFilterStatusRef.current = setFilterStatus;
+  setFilterStatusesRef.current = setFilterStatuses;
 
   useEffect(() => {
     const focusInvoiceId = location?.state?.focusInvoiceId;
@@ -84,7 +84,7 @@ export function useOpenInvoiceFromPaymentLogsNavigation({
     let cancelled = false;
 
     clearListDateFiltersRef.current?.();
-    setFilterStatusRef.current?.('Rejected');
+    setFilterStatusesRef.current?.(['Rejected']);
     setPaymentLogsFocus({
       invoiceId,
       rejectedPayment: location?.state?.focusRejectedPayment || null,
