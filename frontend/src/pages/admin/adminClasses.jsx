@@ -5312,6 +5312,13 @@ setFormData({
         teacher_ids: validTeacherIds,
         days_of_week: formattedDays,
       };
+
+      if (formData.start_date) {
+        requestBody.class_start_date = formData.start_date;
+      }
+      if (formData.end_date) {
+        requestBody.class_end_date = formData.end_date;
+      }
       
       // Only include exclude_class_id if it's provided and valid
       if (excludeClassId) {
@@ -5344,6 +5351,20 @@ setFormData({
       setCheckingConflicts(false);
     }
   };
+
+  // Re-check teacher availability when class date range changes
+  useEffect(() => {
+    if (!formData.teacher_ids?.length || !formData.start_date) return;
+    const hasEnabledDay = Object.values(formData.days_of_week || {}).some(
+      (d) => d?.enabled && d?.start_time && d?.end_time
+    );
+    if (!hasEnabledDay) return;
+    checkTeacherConflicts(
+      formData.teacher_ids,
+      formData.days_of_week,
+      editingClass?.class_id || null
+    );
+  }, [formData.start_date, formData.end_date]);
 
   // Handle days of week time change
   const handleDaysOfWeekTimeChange = (day, field, value) => {

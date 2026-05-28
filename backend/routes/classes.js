@@ -21,6 +21,7 @@ import {
   insertInvoiceWithArNumberReuseOrAllocate,
 } from '../utils/invoiceArNumber.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
+import { checkScheduleConflict, checkTeacherScheduleConflict } from '../utils/scheduleConflict.js';
 
 const router = express.Router();
 
@@ -350,229 +351,6 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
       phase_start: phaseStart,
     },
   };
-};
-
-/**
- * Check if a schedule conflicts with existing active class schedules in a room
- * @param {number} roomId - Room ID
- * @param {string} dayOfWeek - Day of week (e.g., 'Monday')
- * @param {string} startTime - Start time (HH:MM format)
- * @param {string} endTime - End time (HH:MM format)
- * @param {number} excludeClassId - Class ID to exclude from conflict check (for updates)
- * @returns {Promise<{hasConflict: boolean, conflictingClass: object|null, message: string|null}>}
- */
-const checkScheduleConflict = async (roomId, dayOfWeek, startTime, endTime, excludeClassId = null) => {
-  if (!roomId || !dayOfWeek || !startTime || !endTime) {
-    return { hasConflict: false, conflictingClass: null, message: null };
-  }
-
-  try {
-    // Find all active classes using this room on this day
-    let conflictQuery = `
-      SELECT 
-        rs.class_id,
-        rs.day_of_week,
-        rs.start_time,
-        rs.end_time,
-        c.class_id,
-        c.class_name,
-        c.level_tag,
-        p.program_name,
-        c.status
-      FROM roomschedtbl rs
-      INNER JOIN classestbl c ON rs.class_id = c.class_id
-      LEFT JOIN programstbl p ON c.program_id = p.program_id
-      WHERE rs.room_id = $1
-        AND rs.day_of_week = $2
-        AND c.status = 'Active'
-        AND rs.start_time IS NOT NULL
-        AND rs.end_time IS NOT NULL
-    `;
-
-    const params = [roomId, dayOfWeek];
-    
-    if (excludeClassId) {
-      conflictQuery += ' AND rs.class_id != $3';
-      params.push(excludeClassId);
-    }
-
-    const conflictResult = await query(conflictQuery, params);
-
-    // Check for time overlap
-    // Two time ranges overlap if: start1 < end2 AND start2 < end1
-    for (const existingSchedule of conflictResult.rows) {
-      const existingStart = existingSchedule.start_time;
-      const existingEnd = existingSchedule.end_time;
-      const newStart = startTime;
-      const newEnd = endTime;
-
-      // Convert times to comparable format (assuming HH:MM or HH:MM:SS format)
-      const timeToMinutes = (timeStr) => {
-        if (!timeStr) return 0;
-        const parts = timeStr.split(':');
-        return parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
-      };
-
-      const existingStartMin = timeToMinutes(existingStart);
-      const existingEndMin = timeToMinutes(existingEnd);
-      const newStartMin = timeToMinutes(newStart);
-      const newEndMin = timeToMinutes(newEnd);
-
-      // Check for overlap: newStart < existingEnd AND existingStart < newEnd
-      if (newStartMin < existingEndMin && existingStartMin < newEndMin) {
-        const className = existingSchedule.class_name 
-          ? `${existingSchedule.program_name || ''} - ${existingSchedule.class_name}`.trim()
-          : existingSchedule.level_tag 
-            ? `${existingSchedule.program_name || ''} - ${existingSchedule.level_tag}`.trim()
-            : existingSchedule.program_name || `Class ${existingSchedule.class_id}`;
-
-        return {
-          hasConflict: true,
-          conflictingClass: {
-            class_id: existingSchedule.class_id,
-            class_name: existingSchedule.class_name,
-            level_tag: existingSchedule.level_tag,
-            program_name: existingSchedule.program_name,
-          },
-          message: `Schedule conflicts with active class "${className}" (${existingStart} - ${existingEnd})`,
-        };
-      }
-    }
-
-    return { hasConflict: false, conflictingClass: null, message: null };
-  } catch (error) {
-    console.error('Error checking schedule conflict:', error);
-    // On error, don't block - let it through but log the error
-    return { hasConflict: false, conflictingClass: null, message: null };
-  }
-};
-
-/**
- * Check if a teacher has schedule conflicts with existing class sessions
- * @param {number} teacherId - Teacher user ID
- * @param {Array} daysOfWeek - Array of day schedules: [{day: 'Monday', start_time: '09:00', end_time: '10:00'}, ...]
- * @param {number} excludeClassId - Class ID to exclude from conflict check (for updates)
- * @returns {Promise<{hasConflict: boolean, conflicts: Array<{day: string, conflictingSession: object, message: string}>}>}
- */
-const checkTeacherScheduleConflict = async (teacherId, daysOfWeek, excludeClassId = null) => {
-  if (!teacherId || !daysOfWeek || !Array.isArray(daysOfWeek) || daysOfWeek.length === 0) {
-    return { hasConflict: false, conflicts: [] };
-  }
-
-  try {
-    // Get day names that are enabled
-    const enabledDays = daysOfWeek.filter(d => d.enabled && d.start_time && d.end_time);
-    if (enabledDays.length === 0) {
-      return { hasConflict: false, conflicts: [] };
-    }
-
-    // Map day names to PostgreSQL day names (Monday -> Monday, etc.)
-    // We need to check sessions where the scheduled_date falls on the same day of week
-    // PostgreSQL EXTRACT(DOW FROM date) returns 0-6 (Sunday=0, Monday=1, ..., Saturday=6)
-    const dayNameToDOW = {
-      'Sunday': 0,
-      'Monday': 1,
-      'Tuesday': 2,
-      'Wednesday': 3,
-      'Thursday': 4,
-      'Friday': 5,
-      'Saturday': 6
-    };
-
-    const conflicts = [];
-
-    // Check each enabled day
-    for (const daySchedule of enabledDays) {
-      const dayName = daySchedule.day;
-      const dayOfWeek = dayNameToDOW[dayName];
-      
-      if (dayOfWeek === undefined) continue;
-
-      // Query for sessions where:
-      // 1. original_teacher_id matches the teacher
-      // 2. The scheduled_date falls on the same day of week
-      // 3. The scheduled times overlap
-      // 4. Status is 'Scheduled' or 'Completed' (active sessions)
-      let conflictQuery = `
-        SELECT 
-          cs.classsession_id,
-          cs.class_id,
-          cs.scheduled_date,
-          cs.scheduled_start_time,
-          cs.scheduled_end_time,
-          cs.original_teacher_id,
-          cs.status,
-          c.class_name,
-          c.level_tag,
-          p.program_name
-        FROM classsessionstbl cs
-        INNER JOIN classestbl c ON cs.class_id = c.class_id
-        LEFT JOIN programstbl p ON c.program_id = p.program_id
-        WHERE cs.original_teacher_id = $1
-          AND EXTRACT(DOW FROM cs.scheduled_date) = $2
-          AND cs.status IN ('Scheduled', 'Completed')
-          AND cs.scheduled_start_time IS NOT NULL
-          AND cs.scheduled_end_time IS NOT NULL
-      `;
-
-      const params = [teacherId, dayOfWeek];
-      
-      if (excludeClassId) {
-        conflictQuery += ' AND cs.class_id != $3';
-        params.push(excludeClassId);
-      }
-
-      const conflictResult = await query(conflictQuery, params);
-
-      // Check for time overlap with each existing session
-      const timeToMinutes = (timeStr) => {
-        if (!timeStr) return 0;
-        const parts = timeStr.split(':');
-        return parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
-      };
-
-      const newStartMin = timeToMinutes(daySchedule.start_time);
-      const newEndMin = timeToMinutes(daySchedule.end_time);
-
-      for (const existingSession of conflictResult.rows) {
-        const existingStartMin = timeToMinutes(existingSession.scheduled_start_time);
-        const existingEndMin = timeToMinutes(existingSession.scheduled_end_time);
-
-        // Check for overlap: newStart < existingEnd AND existingStart < newEnd
-        if (newStartMin < existingEndMin && existingStartMin < newEndMin) {
-          const className = existingSession.class_name 
-            ? `${existingSession.program_name || ''} - ${existingSession.class_name}`.trim()
-            : existingSession.level_tag 
-              ? `${existingSession.program_name || ''} - ${existingSession.level_tag}`.trim()
-              : existingSession.program_name || `Class ${existingSession.class_id}`;
-
-          conflicts.push({
-            day: dayName,
-            conflictingSession: {
-              classsession_id: existingSession.classsession_id,
-              class_id: existingSession.class_id,
-              class_name: existingSession.class_name,
-              level_tag: existingSession.level_tag,
-              program_name: existingSession.program_name,
-              scheduled_date: existingSession.scheduled_date,
-              scheduled_start_time: existingSession.scheduled_start_time,
-              scheduled_end_time: existingSession.scheduled_end_time,
-            },
-            message: `Teacher has a conflicting session on ${dayName} (${existingSession.scheduled_start_time} - ${existingSession.scheduled_end_time}) for class "${className}"`,
-          });
-        }
-      }
-    }
-
-    return {
-      hasConflict: conflicts.length > 0,
-      conflicts: conflicts,
-    };
-  } catch (error) {
-    console.error('Error checking teacher schedule conflict:', error);
-    // On error, don't block - let it through but log the error
-    return { hasConflict: false, conflicts: [] };
-  }
 };
 
 // All routes require authentication
@@ -2109,7 +1887,8 @@ router.post(
                 daySchedule.day,
                 daySchedule.start_time,
                 daySchedule.end_time,
-                null // No exclude class for new class
+                null,
+                { classStartDate: start_date, classEndDate: end_date }
               );
 
               if (conflict.hasConflict) {
@@ -2361,6 +2140,9 @@ router.put(
 
       const existingClass = existingClassResult.rows[0];
       const finalRoomId = room_id !== undefined ? room_id : existingClass.room_id;
+      const effectiveStartDate =
+        start_date !== undefined ? start_date : existingClass.start_date;
+      const effectiveEndDate = end_date !== undefined ? end_date : existingClass.end_date;
 
       // Check for conflicts if updating schedules
       if (days_of_week && Array.isArray(days_of_week) && days_of_week.length > 0 && finalRoomId) {
@@ -2371,7 +2153,8 @@ router.put(
               daySchedule.day,
               daySchedule.start_time,
               daySchedule.end_time,
-              id // Exclude current class from conflict check
+              id,
+              { classStartDate: effectiveStartDate, classEndDate: effectiveEndDate }
             );
 
             if (conflict.hasConflict) {
@@ -2450,7 +2233,8 @@ router.put(
               daySchedule.day,
               daySchedule.start_time,
               daySchedule.end_time,
-              id // Exclude current class from conflict check
+              id,
+              { classStartDate: effectiveStartDate, classEndDate: effectiveEndDate }
             );
 
             if (conflict.hasConflict) {
@@ -6574,56 +6358,6 @@ router.post(
       // Ensure scheduleRoomId is null (not undefined) for database insertion
       scheduleRoomId = scheduleRoomId || null;
 
-      // Validate schedule conflicts BEFORE creating merged class
-      // Exclude all classes being merged (source + targets) since their schedules will be removed
-      if (scheduleRoomId && schedules.length > 0) {
-        const allClassIdsToExclude = [sourceClassId, ...targetClassIds];
-        const scheduleConflicts = [];
-        
-        for (const schedule of schedules) {
-          if (schedule.day_of_week && schedule.start_time && schedule.end_time) {
-            const conflict = await checkScheduleConflict(
-              scheduleRoomId,
-              schedule.day_of_week,
-              schedule.start_time,
-              schedule.end_time,
-              null // We'll manually exclude classes in the query
-            );
-            
-            // Check if the conflict is with one of the classes being merged
-            // If so, it's not a real conflict since those classes will be deleted
-            if (conflict.hasConflict && conflict.conflictingClass) {
-              const conflictingClassId = conflict.conflictingClass.class_id;
-              const isClassBeingMerged = allClassIdsToExclude.includes(conflictingClassId);
-              
-              if (!isClassBeingMerged) {
-                // This is a real conflict with another class that's not being merged
-                scheduleConflicts.push({
-                  day: schedule.day_of_week,
-                  start_time: schedule.start_time,
-                  end_time: schedule.end_time,
-                  conflicting_class: conflict.conflictingClass,
-                  message: conflict.message,
-                });
-              }
-            }
-          }
-        }
-        
-        if (scheduleConflicts.length > 0) {
-          await client.query('ROLLBACK');
-          const conflictMessages = scheduleConflicts.map(c => 
-            `${c.day} ${c.start_time}-${c.end_time}: ${c.message}`
-          ).join('\n');
-          
-          return res.status(400).json({
-            success: false,
-            message: `Schedule conflicts detected. The selected schedule overlaps with existing classes:\n${conflictMessages}`,
-            conflicts: scheduleConflicts,
-          });
-        }
-      }
-
       // Calculate merged class properties from all classes
       const mergedMaxStudents = Math.max(
         ...allClasses.map(c => c.max_students || 0)
@@ -6644,6 +6378,53 @@ router.post(
             new Date(date) > new Date(latest) ? date : latest
           )
         : null;
+
+      // Validate schedule conflicts BEFORE creating merged class (uses merged date range)
+      if (scheduleRoomId && schedules.length > 0) {
+        const allClassIdsToExclude = [sourceClassId, ...targetClassIds];
+        const scheduleConflicts = [];
+
+        for (const schedule of schedules) {
+          if (schedule.day_of_week && schedule.start_time && schedule.end_time) {
+            const conflict = await checkScheduleConflict(
+              scheduleRoomId,
+              schedule.day_of_week,
+              schedule.start_time,
+              schedule.end_time,
+              null,
+              { classStartDate: mergedStartDate, classEndDate: mergedEndDate }
+            );
+
+            if (conflict.hasConflict && conflict.conflictingClass) {
+              const conflictingClassId = conflict.conflictingClass.class_id;
+              const isClassBeingMerged = allClassIdsToExclude.includes(conflictingClassId);
+
+              if (!isClassBeingMerged) {
+                scheduleConflicts.push({
+                  day: schedule.day_of_week,
+                  start_time: schedule.start_time,
+                  end_time: schedule.end_time,
+                  conflicting_class: conflict.conflictingClass,
+                  message: conflict.message,
+                });
+              }
+            }
+          }
+        }
+
+        if (scheduleConflicts.length > 0) {
+          await client.query('ROLLBACK');
+          const conflictMessages = scheduleConflicts.map(c =>
+            `${c.day} ${c.start_time}-${c.end_time}: ${c.message}`
+          ).join('\n');
+
+          return res.status(400).json({
+            success: false,
+            message: `Schedule conflicts detected. The selected schedule overlaps with existing classes:\n${conflictMessages}`,
+            conflicts: scheduleConflicts,
+          });
+        }
+      }
 
       // Use provided class_name and teacher_id from request, or fallback to defaults
       const allTeacherIds = allClasses.map(c => c.teacher_id).filter(Boolean);
@@ -7288,18 +7069,20 @@ router.post(
 
         // Check for conflicts with existing active classes
         if (schedule.room_id && schedule.day_of_week && schedule.start_time && schedule.end_time) {
-          // Pre-validate: Check if this schedule would conflict with any existing class
-          // We don't exclude any class yet since we haven't created the restored classes
+          const originalClass = mergeData.original_classes?.find(c => c.class_id === schedule.class_id);
           const conflict = await checkScheduleConflict(
             schedule.room_id,
             schedule.day_of_week,
             schedule.start_time,
             schedule.end_time,
-            null // No exclude - we're checking against ALL existing classes
+            null,
+            {
+              classStartDate: originalClass?.start_date,
+              classEndDate: originalClass?.end_date,
+            }
           );
 
           if (conflict.hasConflict) {
-            const originalClass = mergeData.original_classes?.find(c => c.class_id === schedule.class_id);
             scheduleConflicts.push({
               type: 'room_conflict',
               room_id: schedule.room_id,
@@ -7579,12 +7362,17 @@ router.post(
 
         // Defensive conflict check (should not find conflicts if pre-validation worked)
         if (schedule.room_id && schedule.day_of_week && schedule.start_time && schedule.end_time) {
+          const restoredClass = mergeData.original_classes?.find((c) => c.class_id === schedule.class_id);
           const conflict = await checkScheduleConflict(
             schedule.room_id,
             schedule.day_of_week,
             schedule.start_time,
             schedule.end_time,
-            newClassId // Exclude the restored class itself
+            newClassId,
+            {
+              classStartDate: restoredClass?.start_date,
+              classEndDate: restoredClass?.end_date,
+            }
           );
 
           if (conflict.hasConflict) {
@@ -8001,7 +7789,7 @@ router.get(
 /**
  * POST /api/v1/classes/check-teacher-conflicts
  * Check if teachers have schedule conflicts with existing class sessions
- * Body: { teacher_ids: [1, 2, ...], days_of_week: [{day: 'Monday', start_time: '09:00', end_time: '10:00', enabled: true}, ...], exclude_class_id?: number }
+ * Body: { teacher_ids, days_of_week, exclude_class_id?, class_start_date?, class_end_date? }
  * Access: Superadmin, Admin
  */
 router.post(
@@ -8047,12 +7835,20 @@ router.post(
         return Number.isInteger(Number(value));
       })
       .withMessage('exclude_class_id must be an integer or null'),
+    body('class_start_date')
+      .optional({ nullable: true })
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage('class_start_date must be YYYY-MM-DD'),
+    body('class_end_date')
+      .optional({ nullable: true })
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage('class_end_date must be YYYY-MM-DD'),
     handleValidationErrors,
     requireRole('Superadmin', 'Admin'),
   ],
   async (req, res, next) => {
     try {
-      const { teacher_ids, days_of_week, exclude_class_id } = req.body;
+      const { teacher_ids, days_of_week, exclude_class_id, class_start_date, class_end_date } = req.body;
 
       if (!teacher_ids || !Array.isArray(teacher_ids) || teacher_ids.length === 0) {
         return res.status(400).json({
@@ -8083,7 +7879,8 @@ router.post(
         const conflictResult = await checkTeacherScheduleConflict(
           teacherId,
           formattedDaysOfWeek,
-          exclude_class_id || null
+          exclude_class_id || null,
+          { classStartDate: class_start_date, classEndDate: class_end_date }
         );
 
         if (conflictResult.hasConflict && conflictResult.conflicts.length > 0) {
