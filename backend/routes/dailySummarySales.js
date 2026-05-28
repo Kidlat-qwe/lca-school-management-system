@@ -518,6 +518,33 @@ router.get(
 
 const TODAY_MANILA = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
+/**
+ * Pending End-of-Shift dates for a branch:
+ * every calendar day after the latest submitted summary, up to today (Manila).
+ */
+const getPendingEodDates = async (branchId, todayYmd) => {
+  if (!branchId || !todayYmd) return [];
+  const result = await query(
+    `
+      WITH latest_summary AS (
+        SELECT MAX(summary_date)::date AS latest_date
+        FROM daily_summary_salestbl
+        WHERE branch_id = $1
+      )
+      SELECT TO_CHAR(gs::date, 'YYYY-MM-DD') AS summary_date
+      FROM latest_summary ls
+      CROSS JOIN LATERAL generate_series(
+        COALESCE((ls.latest_date + INTERVAL '1 day')::date, $2::date),
+        $2::date,
+        '1 day'::interval
+      ) gs
+      ORDER BY gs ASC
+    `,
+    [branchId, todayYmd]
+  );
+  return (result.rows || []).map((row) => String(row.summary_date).slice(0, 10)).filter(Boolean);
+};
+
 /** Normalize Postgres DATE / string / Date to YYYY-MM-DD (calendar date for branch summary). */
 const summaryDateToYmd = (value) => {
   if (value == null || value === '') return '';
@@ -1113,9 +1140,9 @@ const createDailySummarySubmissionNotification = async ({
 
 /**
  * POST /api/sms/daily-summary-sales
- * Submit daily summary for TODAY only. Admin only.
+ * Submit daily summary for a pending calendar day. Admin only.
  * Amount is auto-calculated from paymenttbl (no manual input).
- * Body: { summary_date } optional - must be today (Manila). Defaults to today Manila.
+ * Body: { summary_date } optional. Defaults to today Manila.
  */
 router.post(
   '/',
@@ -1136,10 +1163,21 @@ router.post(
 
       const today = TODAY_MANILA();
       const requestedDate = (req.body?.summary_date || today).slice(0, 10);
-      if (requestedDate !== today) {
+      if (requestedDate > today) {
         return res.status(400).json({
           success: false,
-          message: `You can only submit for today (${today}). Received: ${requestedDate}`,
+          message: `You cannot submit End of Shift for a future date. Today is ${today}.`,
+        });
+      }
+
+      const pendingDates = await getPendingEodDates(userBranchId, today);
+      if (!pendingDates.includes(requestedDate)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'The selected date is not pending for End of Shift submission. Please choose one of the pending dates.',
+          pending_dates: pendingDates,
+          required_date: pendingDates[0] || null,
         });
       }
 
@@ -1406,7 +1444,7 @@ router.put(
 
 /**
  * GET /api/sms/daily-summary-sales/check-today
- * Check if Admin has already submitted for today (their branch).
+ * Check pending End-of-Shift dates for Admin branch (up to today, Manila).
  */
 router.get(
   '/check-today',
@@ -1415,7 +1453,10 @@ router.get(
     try {
       const userBranchId = req.user.branchId;
       if (!userBranchId) {
-        return res.json({ success: true, data: { submitted: false, record: null } });
+        return res.json({
+          success: true,
+          data: { submitted: false, record: null, pending_dates: [], required_date: null },
+        });
       }
       const today = TODAY_MANILA();
       const result = await query(
@@ -1425,11 +1466,15 @@ router.get(
         [userBranchId, today]
       );
       const record = result.rows[0] || null;
+      const pendingDates = await getPendingEodDates(userBranchId, today);
+      const requiredDate = pendingDates[0] || null;
       res.json({
         success: true,
         data: {
-          submitted: !!record,
+          submitted: pendingDates.length === 0,
           record,
+          pending_dates: pendingDates,
+          required_date: requiredDate,
         },
       });
     } catch (error) {

@@ -150,6 +150,13 @@ const AdminPaymentLogs = () => {
   const [endOfShiftPreview, setEndOfShiftPreview] = useState(null);
   const [endOfShiftSuccess, setEndOfShiftSuccess] = useState('');
   const [endOfShiftAlreadySubmitted, setEndOfShiftAlreadySubmitted] = useState(false);
+  const [endOfShiftPendingDates, setEndOfShiftPendingDates] = useState([]);
+  const [endOfShiftRequiredDate, setEndOfShiftRequiredDate] = useState(null);
+  const [endOfShiftSelectedDate, setEndOfShiftSelectedDate] = useState('');
+  const [endOfShiftCalendarMonth, setEndOfShiftCalendarMonth] = useState('');
+  const [endOfShiftPickerOpen, setEndOfShiftPickerOpen] = useState(false);
+  const [endOfShiftStatusLoaded, setEndOfShiftStatusLoaded] = useState(false);
+  const [endOfShiftPreviewLoading, setEndOfShiftPreviewLoading] = useState(false);
   const [openActionsDropdown, setOpenActionsDropdown] = useState(false);
   const [depositModalOpen, setDepositModalOpen] = useState(false);
   const [depositStartDate, setDepositStartDate] = useState('');
@@ -171,12 +178,36 @@ const AdminPaymentLogs = () => {
   const [thresholdAlert, setThresholdAlert] = useState(null);
   const latestFetchIdRef = useRef(0);
   const quickActionHandledRef = useRef(false);
+  const endOfShiftPickerRef = useRef(null);
 
   // Today in Manila (YYYY-MM-DD) for end-of-shift
   const todayManila = () => {
     const now = new Date();
     const manila = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
     return manila.toISOString().split('T')[0];
+  };
+
+  const shiftMonth = (monthYmd, delta) => {
+    const [y, m] = String(monthYmd || '').split('-').map((v) => parseInt(v, 10));
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return todayManila().slice(0, 7);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    d.setUTCMonth(d.getUTCMonth() + delta);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const buildCalendarCells = (monthYmd) => {
+    const [y, m] = String(monthYmd || '').split('-').map((v) => parseInt(v, 10));
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return [];
+    const firstDay = new Date(Date.UTC(y, m - 1, 1));
+    const startOffset = firstDay.getUTCDay(); // Sunday-first calendar
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const cells = [];
+    for (let i = 0; i < startOffset; i += 1) cells.push(null);
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      cells.push(`${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+    return cells;
   };
 
   const openDepositCashModal = () => {
@@ -489,18 +520,53 @@ const AdminPaymentLogs = () => {
     }
   }, [adminBranchId]);
 
-  const fetchEndOfShiftStatus = async () => {
+  const fetchEndOfShiftPreview = async (summaryDate) => {
+    const date = (summaryDate || '').slice(0, 10);
+    if (!date) {
+      setEndOfShiftPreview(null);
+      return;
+    }
+    setEndOfShiftPreviewLoading(true);
     try {
-      const [checkRes, previewRes] = await Promise.all([
-        apiRequest('/daily-summary-sales/check-today'),
-        apiRequest(`/daily-summary-sales/preview?date=${todayManila()}`),
-      ]);
+      const previewRes = await apiRequest(`/daily-summary-sales/preview?date=${encodeURIComponent(date)}`);
       setEndOfShiftPreview(previewRes?.data || null);
-      setEndOfShiftAlreadySubmitted(!!checkRes?.data?.submitted);
+    } catch (err) {
+      console.error('End of shift preview error:', err);
+      setEndOfShiftPreview(null);
+    } finally {
+      setEndOfShiftPreviewLoading(false);
+    }
+  };
+
+  const fetchEndOfShiftStatus = async () => {
+    setEndOfShiftStatusLoaded(false);
+    try {
+      const checkRes = await apiRequest('/daily-summary-sales/check-today');
+      const pending = Array.isArray(checkRes?.data?.pending_dates) ? checkRes.data.pending_dates : [];
+      const required = checkRes?.data?.required_date || pending[0] || null;
+      const allCaughtUp = pending.length === 0;
+
+      setEndOfShiftPendingDates(pending);
+      setEndOfShiftRequiredDate(required);
+      setEndOfShiftAlreadySubmitted(allCaughtUp);
+
+      const initialDate = required || todayManila();
+      setEndOfShiftSelectedDate(initialDate);
+      setEndOfShiftCalendarMonth(initialDate.slice(0, 7));
+      if (!allCaughtUp && initialDate) {
+        await fetchEndOfShiftPreview(initialDate);
+      } else {
+        setEndOfShiftPreview(null);
+      }
     } catch (err) {
       console.error('End of shift status error:', err);
       setEndOfShiftPreview(null);
+      setEndOfShiftPendingDates([]);
+      setEndOfShiftRequiredDate(null);
+      setEndOfShiftSelectedDate('');
       setEndOfShiftAlreadySubmitted(false);
+    } finally {
+      setEndOfShiftStatusLoaded(true);
     }
   };
 
@@ -511,7 +577,18 @@ const AdminPaymentLogs = () => {
   }, [adminBranchId]);
 
   useEffect(() => {
-    if (!adminBranchId || quickActionHandledRef.current) return;
+    if (!endOfShiftPickerOpen) return;
+    const onDocMouseDown = (event) => {
+      if (endOfShiftPickerRef.current && !endOfShiftPickerRef.current.contains(event.target)) {
+        setEndOfShiftPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [endOfShiftPickerOpen]);
+
+  useEffect(() => {
+    if (!adminBranchId || !endOfShiftStatusLoaded || quickActionHandledRef.current) return;
 
     const params = new URLSearchParams(location.search);
     const quickAction = (params.get('quickAction') || '').trim();
@@ -527,19 +604,37 @@ const AdminPaymentLogs = () => {
       handleEndOfShiftClick();
       quickActionHandledRef.current = true;
     }
-  }, [adminBranchId, location.search, endOfShiftAlreadySubmitted]);
+  }, [adminBranchId, endOfShiftStatusLoaded, location.search, endOfShiftAlreadySubmitted]);
 
   const handleEndOfShiftClick = () => {
-    if (endOfShiftAlreadySubmitted) {
-      appAlert('End of day has already been submitted for today. Only one submission per branch per day is allowed.');
+    if (endOfShiftAlreadySubmitted || endOfShiftPendingDates.length === 0) {
+      appAlert('End of Shift is up to date. There are no missed submission dates.');
       return;
     }
+    const dateToUse = endOfShiftRequiredDate || endOfShiftSelectedDate || endOfShiftPendingDates[0];
+    if (dateToUse) {
+      setEndOfShiftSelectedDate(dateToUse);
+      setEndOfShiftCalendarMonth(dateToUse.slice(0, 7));
+      fetchEndOfShiftPreview(dateToUse);
+    }
     setEndOfShiftSuccess('');
+    setEndOfShiftPickerOpen(false);
     setEndOfShiftModalOpen(true);
   };
 
-  const buildEodSummaryAlertMessage = (previewData) => {
-    const summaryDate = todayManila();
+  const handleEndOfShiftDateChange = (nextDate) => {
+    const normalized = (nextDate || '').slice(0, 10);
+    if (!normalized) return;
+    if (!endOfShiftPendingDates.includes(normalized)) {
+      appAlert('You can only choose a date that is still pending End of Shift submission.');
+      return;
+    }
+    setEndOfShiftSelectedDate(normalized);
+    fetchEndOfShiftPreview(normalized);
+  };
+
+  const buildEodSummaryAlertMessage = (previewData, summaryDate) => {
+    const resolvedDate = (summaryDate || endOfShiftSelectedDate || todayManila()).slice(0, 10);
     const totalAmount = Number(previewData?.total_amount || 0).toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -552,7 +647,7 @@ const AdminPaymentLogs = () => {
       '',
       'Summary Notes',
       `Branch: ${selectedBranchName || 'Your Branch'}`,
-      `Date: ${formatDateManila(summaryDate)}`,
+      `Date: ${formatDateManila(resolvedDate)}`,
       `Completed Payments: ${paymentCount}`,
       `Acknowledgement Receipt Sales: ${arCount}`,
       `Total Sales: ₱${totalAmount}`,
@@ -562,17 +657,23 @@ const AdminPaymentLogs = () => {
   };
 
   const handleEndOfShiftSubmit = async () => {
+    const submitDate = (endOfShiftSelectedDate || endOfShiftRequiredDate || '').slice(0, 10);
+    if (!submitDate) {
+      appAlert('Select the End of Shift date to submit.');
+      return;
+    }
     setEndOfShiftLoading(true);
     setEndOfShiftSuccess('');
     try {
       await apiRequest('/daily-summary-sales', {
         method: 'POST',
-        body: JSON.stringify({ summary_date: todayManila() }),
+        body: JSON.stringify({ summary_date: submitDate }),
       });
-      setEndOfShiftSuccess('Daily summary submitted successfully and is awaiting verification.');
-      setEndOfShiftAlreadySubmitted(true);
+      setEndOfShiftSuccess(
+        `End of Shift for ${formatDateManila(submitDate) || submitDate} submitted successfully and is awaiting verification.`
+      );
       setEndOfShiftModalOpen(false);
-      appAlert(buildEodSummaryAlertMessage(endOfShiftPreview));
+      appAlert(buildEodSummaryAlertMessage(endOfShiftPreview, submitDate));
       await fetchEndOfShiftStatus();
     } catch (err) {
       setEndOfShiftSuccess('');
@@ -1231,6 +1332,20 @@ const AdminPaymentLogs = () => {
   );
   const endOfShiftPaymentRows = Array.isArray(endOfShiftPreview?.payments) ? endOfShiftPreview.payments : [];
   const endOfShiftArRows = Array.isArray(endOfShiftPreview?.ar_receipts) ? endOfShiftPreview.ar_receipts : [];
+  const endOfShiftPendingDateSet = useMemo(() => new Set(endOfShiftPendingDates), [endOfShiftPendingDates]);
+  const endOfShiftCalendarCells = useMemo(
+    () => buildCalendarCells(endOfShiftCalendarMonth),
+    [endOfShiftCalendarMonth]
+  );
+  const endOfShiftMonthLabel = useMemo(() => {
+    const [y, m] = String(endOfShiftCalendarMonth || '').split('-').map((v) => parseInt(v, 10));
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return '';
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  }, [endOfShiftCalendarMonth]);
   const endOfShiftTotalFromRows =
     endOfShiftPaymentRows.reduce((sum, p) => sum + getPaymentLogTableTotalAmountColumn(p), 0) +
     endOfShiftArRows.reduce(
@@ -1447,8 +1562,10 @@ const AdminPaymentLogs = () => {
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={
                   endOfShiftAlreadySubmitted
-                    ? 'EOD already submitted for today'
-                    : "Submit all today's sales for closure"
+                    ? 'All required End of Shift dates are submitted'
+                    : endOfShiftPendingDates.length > 1
+                      ? `${endOfShiftPendingDates.length} dates pending — submit oldest first`
+                      : 'Submit End of Shift for the pending date'
                 }
               >
                 {endOfShiftLoading ? (
@@ -2033,34 +2150,173 @@ const AdminPaymentLogs = () => {
         </div>
       )}
 
+      {endOfShiftPendingDates.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">End of Shift required</p>
+          <p className="mt-1">
+            {endOfShiftPendingDates.length === 1
+              ? 'Submit the missed End of Shift for '
+              : `${endOfShiftPendingDates.length} End of Shift dates are pending. Submit the oldest date first: `}
+            <span className="font-medium">
+              {formatDateManila(endOfShiftRequiredDate) || endOfShiftRequiredDate}
+            </span>
+            {endOfShiftPendingDates.length > 1 && (
+              <span className="mt-1 block text-xs text-amber-800">
+                Pending:{' '}
+                {endOfShiftPendingDates.map((d) => formatDateManila(d) || d).join(', ')}
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* End of Shift Confirmation Modal */}
       {endOfShiftModalOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-3 sm:p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-[min(1440px,calc(100vw-2rem))] max-h-[92vh] flex flex-col p-5 sm:p-7 min-w-0" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 shrink-0">End of Shift</h3>
             <p className="mt-2 text-sm text-gray-600 shrink-0">
-              Submit all today&apos;s sales for proper closure? This will submit your branch EOD for Finance/Superfinance verification, email Superadmin and Finance (org-wide summary: submitted branches and branches not yet submitted), and send a confirmation to branch Admin email(s) on file.
+              Submit sales for the selected calendar day. This sends your branch EOD for Finance/Superfinance verification and notifies Superadmin and Finance.
             </p>
-            <p className="mt-1 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
-              One submission per day: totals include completed payments and standalone acknowledgement receipts with{' '}
-              <strong>issue date today</strong> for your branch. You cannot submit again until tomorrow.
+            <div className="mt-4 shrink-0">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                Summary date <span className="text-red-500">*</span>
+              </label>
+              <div className="relative w-full max-w-xs" ref={endOfShiftPickerRef}>
+                <button
+                  type="button"
+                  onClick={() => !endOfShiftLoading && setEndOfShiftPickerOpen((prev) => !prev)}
+                  disabled={endOfShiftLoading}
+                  className="flex w-full items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:bg-gray-100"
+                >
+                  <span>{formatDateManila(endOfShiftSelectedDate) || endOfShiftSelectedDate || 'Select date'}</span>
+                  <svg className="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10m-11 9h12a2 2 0 002-2V7a2 2 0 00-2-2H6a2 2 0 00-2 2v11a2 2 0 002 2z" />
+                  </svg>
+                </button>
+
+                {endOfShiftPickerOpen ? (
+                  <div className="absolute z-20 mt-1 w-[18rem] rounded-lg border border-gray-300 bg-white p-3 shadow-lg">
+                    <div className="mb-2 flex items-center justify-between">
+                      <button
+                        type="button"
+                        disabled={endOfShiftLoading}
+                        onClick={() => setEndOfShiftCalendarMonth((prev) => shiftMonth(prev, -1))}
+                        className="rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Prev
+                      </button>
+                      <p className="text-sm font-semibold text-gray-800">{endOfShiftMonthLabel}</p>
+                      <button
+                        type="button"
+                        disabled={endOfShiftLoading}
+                        onClick={() => setEndOfShiftCalendarMonth((prev) => shiftMonth(prev, 1))}
+                        className="rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-gray-500">
+                      {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d) => (
+                        <span key={d} className="py-1">
+                          {d}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-1 grid grid-cols-7 gap-1">
+                      {endOfShiftCalendarCells.map((cellYmd, idx) => {
+                        if (!cellYmd) {
+                          return <span key={`empty-${idx}`} className="h-8 rounded-md bg-transparent" aria-hidden />;
+                        }
+                        const dayNum = parseInt(cellYmd.slice(8, 10), 10);
+                        const isPending = endOfShiftPendingDateSet.has(cellYmd);
+                        const isSelected = cellYmd === endOfShiftSelectedDate;
+                        return (
+                          <button
+                            key={cellYmd}
+                            type="button"
+                            onClick={() => {
+                              handleEndOfShiftDateChange(cellYmd);
+                              setEndOfShiftPickerOpen(false);
+                            }}
+                            disabled={!isPending || endOfShiftLoading}
+                            title={
+                              isPending
+                                ? `Pending: ${formatDateManila(cellYmd) || cellYmd}`
+                                : 'Not pending (already submitted)'
+                            }
+                            className={`h-8 rounded-md border text-xs font-medium transition-colors ${
+                              isSelected
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : isPending
+                                  ? 'border-gray-300 bg-white text-gray-700 hover:bg-blue-50'
+                                  : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                            }`}
+                          >
+                            {dayNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setEndOfShiftPickerOpen(false)}
+                        className="text-xs font-medium text-gray-600 hover:underline"
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const today = todayManila();
+                          if (endOfShiftPendingDateSet.has(today)) {
+                            handleEndOfShiftDateChange(today);
+                            setEndOfShiftPickerOpen(false);
+                          } else {
+                            appAlert('Today is not pending for End of Shift submission.');
+                          }
+                        }}
+                        className="text-xs font-medium text-blue-600 hover:underline"
+                      >
+                        Today
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                Only pending dates are clickable. Submitted dates are disabled.
+              </p>
+            </div>
+            <p className="mt-2 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
+              Totals include completed payments and standalone acknowledgement receipts with{' '}
+              <strong>issue date on the selected day</strong> for your branch. One submission per branch per calendar day.
             </p>
             <p className="mt-1 text-sm font-medium text-gray-700 shrink-0">
-              Date & time: {formatDateTimeManila(new Date())} (Manila)
+              Submitted at: {formatDateTimeManila(new Date())} (Manila)
             </p>
-            {endOfShiftPreview && (
+            {endOfShiftPreviewLoading && (
+              <p className="mt-3 text-sm text-blue-600 shrink-0">Loading preview for selected date…</p>
+            )}
+            {endOfShiftPreview && !endOfShiftPreviewLoading && (
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
-                  Today&apos;s total: ₱{(endOfShiftTotalFromRows || endOfShiftPreview.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
+                  Total for {formatDateManila(endOfShiftSelectedDate) || endOfShiftSelectedDate}: ₱
+                  {(endOfShiftTotalFromRows || endOfShiftPreview.total_amount || 0).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
                   {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone acknowledgement receipt(s))
                 </p>
                 <p className="mt-1 text-xs text-gray-500 shrink-0">
-                  Collected per row is payable plus tip (matches today&apos;s total). Invoice total is the invoice document amount from line items (or manual invoice amount).
+                  Collected per row is payable plus tip (matches the selected day total). Invoice total is the invoice document amount from line items (or manual invoice amount).
                 </p>
                 {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-                      Payment records (issue date today)
+                      Payment records (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
                     </p>
                     <div className="rounded-lg border border-gray-200 min-w-0 overflow-hidden">
                       <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
@@ -2145,7 +2401,7 @@ const AdminPaymentLogs = () => {
                 {Array.isArray(endOfShiftPreview.ar_receipts) && endOfShiftPreview.ar_receipts.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-                      Standalone Acknowledgement Receipt sales (issue date today)
+                      Standalone Acknowledgement Receipt sales (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
                     </p>
                     <div
                       className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto"
@@ -2255,7 +2511,7 @@ const AdminPaymentLogs = () => {
                 {Number(endOfShiftPreview.completed_payment_count ?? 0) === 0 &&
                   Number(endOfShiftPreview.ar_sales_count ?? 0) === 0 && (
                   <p className="mt-3 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    No completed payments or standalone acknowledgement receipt for today. You can still submit to close the day with zero sales.
+                    No completed payments or standalone acknowledgement receipt for this date. You can still submit to close the day with zero sales.
                   </p>
                 )}
               </>
@@ -2272,7 +2528,7 @@ const AdminPaymentLogs = () => {
               <button
                 type="button"
                 onClick={handleEndOfShiftSubmit}
-                disabled={endOfShiftLoading || endOfShiftAlreadySubmitted}
+                disabled={endOfShiftLoading || endOfShiftPreviewLoading || !endOfShiftSelectedDate}
                 className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50"
               >
                 {endOfShiftLoading ? 'Submitting...' : 'Submit'}

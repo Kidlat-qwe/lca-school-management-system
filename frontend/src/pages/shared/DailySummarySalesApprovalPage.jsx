@@ -822,13 +822,16 @@ const DailySummarySalesApprovalPage = () => {
         className="overflow-x-auto rounded-lg"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
       >
-        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '1100px' : '900px' }}>
+        <table className="min-w-full divide-y divide-gray-200" style={{ width: '100%', minWidth: isCashDepositTab ? '1100px' : '1020px' }}>
           <thead className="bg-gray-50">
             <tr>
               <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-semibold text-gray-700" />
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
-                {isCashDepositTab ? 'Period' : 'Date'}
+                {isCashDepositTab ? 'Period' : 'Summary Date'}
               </th>
+              {!isCashDepositTab ? (
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Submitted Date</th>
+              ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
                 {isCashDepositTab ? 'Cash to Deposit' : 'Amount'}
               </th>
@@ -849,13 +852,13 @@ const DailySummarySalesApprovalPage = () => {
           <tbody className="bg-white divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 9 : 9} className="px-4 py-8 text-center text-gray-500">
                   Loading...
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={isCashDepositTab ? 9 : 8} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={isCashDepositTab ? 9 : 9} className="px-4 py-8 text-center text-gray-500">
                   {isCashDepositTab ? 'No cash deposit summaries found.' : 'No daily summaries found.'}
                 </td>
               </tr>
@@ -864,6 +867,11 @@ const DailySummarySalesApprovalPage = () => {
                 <tr key={record[recordIdField] ?? `summary-row-${rowIndex}`}>
                   <td className="px-4 py-3 text-sm text-gray-900">{record.branch_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-900">{formatPeriod(record)}</td>
+                  {!isCashDepositTab ? (
+                    <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">
+                      {record.submitted_at ? formatDateManila(record.submitted_at) : '-'}
+                    </td>
+                  ) : null}
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">
                     {formatCurrency(
                       isCashDepositTab ? record.total_deposit_amount : endOfShiftListAmount(record)
