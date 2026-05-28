@@ -146,10 +146,12 @@ const MonthlyOperationalDashboardView = ({
   );
   const enrollmentDashboard = data?.enrollment_dashboard || {};
   const totalPaymentsAmount = useMemo(() => {
-    const invoice = Number(data?.totals?.daily_sales_amount) || 0;
-    const ar = Number(data?.totals?.ar_sales_amount) || 0;
-    return invoice + ar;
-  }, [data?.totals?.daily_sales_amount, data?.totals?.ar_sales_amount]);
+    // Keep this card aligned with Payment Logs monthly total:
+    // Completed payments only (verified + not-yet-verified), excluding returned/rejected.
+    const verified = Number(data?.totals?.pay_verified_amount) || 0;
+    const unverified = Number(data?.totals?.pay_unverified_amount) || 0;
+    return verified + unverified;
+  }, [data?.totals?.pay_verified_amount, data?.totals?.pay_unverified_amount]);
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
@@ -336,19 +338,15 @@ const MonthlyOperationalDashboardView = ({
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
             tooltip={MONTHLY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}
           />
-          <CombinedStatsCard
-            title="Enrollment Dashboard"
+          <StatsCard
+            title="Re-enrollment Rate"
+            value={`${Number(enrollmentDashboard.re_enrollment_rate || 0).toFixed(2)}%`}
             iconName="chartBar"
             accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            metrics={[
-              { label: 'Active', value: formatNumber(enrollmentDashboard.active_students || 0) },
-              { label: 'Inactive', value: formatNumber(enrollmentDashboard.inactive_students || 0) },
-              {
-                label: 'Overall enrollment rate',
-                value: `${Number(enrollmentDashboard.enrollment_rate || 0).toFixed(2)}%`,
-              },
-            ]}
-            tooltip={MONTHLY_OPERATIONAL.enrollmentSnapshot}
+            tooltip={MONTHLY_OPERATIONAL.reEnrollmentSnapshot(
+              formatNumber(enrollmentDashboard.re_enrollment_rate_retained_count || 0),
+              formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
+            )}
           />
         </div>
 

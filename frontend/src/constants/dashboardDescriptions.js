@@ -26,6 +26,8 @@ export const DAILY_OPERATIONAL = {
     `${txnCount} paid merchandise sale(s). Quantity is total items released.`,
   enrollmentRate: (enrolled, total) =>
     `${enrolled} active phase enrollments across phases ÷ ${total} cohort student(s) on this date × 100. Rate is by program phase (not the same as “new enrollees” above).`,
+  reEnrollmentRate: (retained, prior, scopeLabel = 'this date') =>
+    `Re-enrollment rate for ${scopeLabel}: ${retained} retained student(s) ÷ ${prior} enrolled in prior phase × 100.`,
   payVerified: (amount, date) =>
     `${amount} — completed payments finance has verified · ${date}`,
   payNotVerifiedYet: (amount, date) =>
@@ -58,10 +60,12 @@ export const MONTHLY_OPERATIONAL = {
   combinedSales:
     'Invoice sales use payment issue date in the month. AR sales match the AR list for the same month.',
   totalPayments:
-    'Invoice sales plus acknowledgement receipt sales for this month (same scope as the two lines above).',
+    'Matches Payment Logs total for this month: completed payment lines only (verified + not verified yet), excluding returned and rejected.',
   merchandise: (txnCount) => `${txnCount} paid merchandise sale(s) in this month.`,
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase enrollment rate (see Enrollment Dashboard for details).',
+  reEnrollmentSnapshot: (retained, prior) =>
+    `Monthly re-enrollment retention: ${retained} retained student(s) ÷ ${prior} enrolled in prior phase × 100.`,
   payVerified: (amount) => `${amount} — verified completed payments in this month`,
   payNotVerifiedYet: (amount) => `${amount} — completed, not verified yet, in this month`,
   arVerified: (amount) => `${amount} — verified or applied package ARs in this month`,

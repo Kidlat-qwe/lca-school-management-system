@@ -717,9 +717,25 @@ export const loadEnrollmentRatePhaseStudentsExport = async (queryFn, options = {
 
 export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
   const { branchId = null, enrolledOnDate = null, enrolledFrom = null, enrolledTo = null } = options;
-  const [statusSnapshot, rateSummary] = await Promise.all([
+  const toNextYmd = (ymd) => {
+    if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return null;
+    const d = new Date(`${ymd}T00:00:00.000Z`);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const matrixFrom = enrolledFrom || enrolledOnDate || null;
+  const matrixTo = enrolledTo || (enrolledOnDate ? toNextYmd(enrolledOnDate) : null);
+
+  const [statusSnapshot, rateSummary, reEnrollmentSummary] = await Promise.all([
     loadEnrollmentStatusSnapshot(queryFn, { branchId }),
     loadEnrollmentRateByPhase(queryFn, { branchId, enrolledOnDate, enrolledFrom, enrolledTo }),
+    loadStudentPhaseEnrollmentMatrix(queryFn, {
+      branchId,
+      enrolledFrom: matrixFrom,
+      enrolledTo: matrixTo,
+    }),
   ]);
 
   return {
@@ -729,6 +745,11 @@ export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
     enrollment_rate_student_count: rateSummary.student_count,
     enrollment_rate_phases_summary_label: rateSummary.phases_summary_label,
     enrollment_rate_by_phase: rateSummary.by_phase,
+    re_enrollment_rate: Number(reEnrollmentSummary?.total_re_enrollment_rate ?? 0) || 0,
+    re_enrollment_rate_retained_count:
+      parseInt(reEnrollmentSummary?.total_re_enrolled_count, 10) || 0,
+    re_enrollment_rate_prior_count:
+      parseInt(reEnrollmentSummary?.total_prior_phase_enrolled_count, 10) || 0,
   };
 };
 

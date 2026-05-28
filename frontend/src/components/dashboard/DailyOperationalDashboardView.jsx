@@ -332,13 +332,13 @@ const DailyOperationalDashboardView = ({
             tooltip={DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}
           />
           <StatsCard
-            title="Enrollment Dashboard"
-            value={`${Number(enrollmentDashboard.enrollment_rate || 0).toFixed(2)}%`}
+            title="Re-enrollment Rate"
+            value={`${Number(enrollmentDashboard.re_enrollment_rate || 0).toFixed(2)}%`}
             iconName="chartBar"
             accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            tooltip={DAILY_OPERATIONAL.enrollmentRate(
-              formatNumber(enrollmentDashboard.enrollment_rate_enrolled_count || 0),
-              formatNumber(enrollmentDashboard.enrollment_rate_student_count || 0)
+            tooltip={DAILY_OPERATIONAL.reEnrollmentRate(
+              formatNumber(enrollmentDashboard.re_enrollment_rate_retained_count || 0),
+              formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
             )}
           />
         </div>

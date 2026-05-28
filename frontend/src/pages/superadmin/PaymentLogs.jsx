@@ -310,23 +310,37 @@ const PaymentLogs = () => {
         createdTo: filterCreatedDateTo,
       });
       Object.entries(dateParams).forEach(([k, v]) => params.set(k, v));
+      const useUnifiedEndpoint = branchLogTab === 'main';
       if (branchLogTab === 'return') {
         params.set('approval_status', 'Returned');
       } else if (branchLogTab === 'rejected') {
         params.set('approval_status', 'Rejected');
       } else if (filterFinanceApproval === 'approved') {
-        params.set('status', 'Completed');
-        params.set('approval_status', 'Approved');
-        params.set('exclude_approval_status', 'Returned,Rejected');
+        if (useUnifiedEndpoint) {
+          params.set('approval_status', 'Approved');
+        } else {
+          params.set('status', 'Completed');
+          params.set('approval_status', 'Approved');
+          params.set('exclude_approval_status', 'Returned,Rejected');
+        }
       } else if (filterFinanceApproval === 'pending') {
-        params.set('status', 'Completed');
-        params.set('exclude_approval_status', 'Approved,Returned,Rejected');
+        if (useUnifiedEndpoint) {
+          params.set('pending_only', '1');
+        } else {
+          params.set('status', 'Completed');
+          params.set('exclude_approval_status', 'Approved,Returned,Rejected');
+        }
       } else {
-        params.set('status', 'Completed');
-        params.set('exclude_approval_status', 'Returned,Rejected');
+        if (useUnifiedEndpoint) {
+          params.set('pending_only', '0');
+        } else {
+          params.set('status', 'Completed');
+          params.set('exclude_approval_status', 'Returned,Rejected');
+        }
       }
       if (filterPaymentMethod) params.set('payment_method', filterPaymentMethod);
-      const response = await apiRequest(`/payments?${params.toString()}`);
+      const endpoint = useUnifiedEndpoint ? '/payments/finance-unified' : '/payments';
+      const response = await apiRequest(`${endpoint}?${params.toString()}`);
       if (fetchId !== latestFetchIdRef.current) return;
       setPayments(response.data || []);
       if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
@@ -1472,9 +1486,17 @@ const PaymentLogs = () => {
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
+                          const isUnappliedAr = payment.source_type === 'UNAPPLIED_AR';
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
+                          if (isUnappliedAr) {
+                            return (
+                              <span className="inline-flex max-w-full px-2 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700">
+                                <span className="truncate">Pending attachment</span>
+                              </span>
+                            );
+                          }
                           return (
                             <div className="relative min-w-0 max-w-full">
                               <button
