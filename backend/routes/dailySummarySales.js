@@ -13,12 +13,15 @@ import { query } from '../config/database.js';
 import {
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
+  verifySMTPConnection,
+  isSmtpConfigured,
 } from '../utils/emailService.js';
 import {
   DEFAULT_SCHOOL_NAME,
   logTemplateRenderWarning,
   renderMessagingTemplate,
 } from '../utils/templateRenderService.js';
+import { resolveEodStakeholderEmails, SUPERADMIN_USER_TYPE_SQL } from '../utils/eodEmailRecipients.js';
 
 const router = express.Router();
 router.use(verifyFirebaseToken);
@@ -858,6 +861,13 @@ const sendEodEmailNotifications = async ({
   submittedByUserId,
 }) => {
   try {
+    if (!isSmtpConfigured()) {
+      console.warn(
+        '[EOD email] SMTP not configured on this server. Set SMTP_HOST, SMTP_USER, and SMTP_PASSWORD in backend/.env on Linode, then restart the API.'
+      );
+      return;
+    }
+
     const [branchResult, submitterResult, stakeholderRecipientsResult, branchAdminsResult] =
       await Promise.all([
       query(
@@ -873,14 +883,10 @@ const sendEodEmailNotifications = async ({
         [submittedByUserId]
       ),
       // Stakeholder digest: Superadmin only (by userstbl), plus optional EOD_STAKEHOLDER_EMAILS in .env.
-      // Per product rules, Finance/Superfinance no longer receive an EOD
-      // notification when a Branch Admin submits End of Shift (bell + email).
-      // The Cash Deposit submission flow is separate and still notifies Finance.
       query(
-        `SELECT DISTINCT TRIM(email) AS email
+        `SELECT user_id, TRIM(email) AS email, firebase_uid
          FROM userstbl
-         WHERE LOWER(REGEXP_REPLACE(TRIM(COALESCE(user_type, '')), '[[:space:]]+', '', 'g')) = 'superadmin'
-           AND COALESCE(TRIM(email), '') <> ''`
+         WHERE ${SUPERADMIN_USER_TYPE_SQL}`
       ),
       query(
         `SELECT DISTINCT TRIM(email) AS email
@@ -898,10 +904,10 @@ const sendEodEmailNotifications = async ({
     const submitterName = submitterResult.rows[0]?.full_name || submitterEmail || 'Branch Admin';
     const submittedBranchName = branchResult.rows[0]?.branch_name || `Branch ${submittedBranchId}`;
 
-    const uniqueStakeholderEmails = normalizeNotificationRecipients([
-      ...(stakeholderRecipientsResult.rows || []).map((row) => row.email),
-      ...parseEodStakeholderEmailsFromEnv(),
-    ]);
+    const uniqueStakeholderEmails = await resolveEodStakeholderEmails(
+      stakeholderRecipientsResult.rows || [],
+      parseEodStakeholderEmailsFromEnv()
+    );
 
     const branchAdminEmails = normalizeNotificationRecipients(
       (branchAdminsResult.rows || []).map((row) => row.email)
@@ -936,7 +942,9 @@ const sendEodEmailNotifications = async ({
       });
 
       if (rendered?.enabled === false) {
-        console.log('[EOD email] template_eod_summary disabled; skipping emails.');
+        console.warn(
+          '[EOD email] template_eod_summary is disabled in Settings → Templates; skipping emails. Enable it on production (Superadmin → Settings).'
+        );
         return;
       }
 
@@ -970,7 +978,7 @@ const sendEodEmailNotifications = async ({
         }
       } else {
         console.warn(
-          '[EOD email] No stakeholder recipients: add non-empty userstbl.email for Superadmin users, and/or set EOD_STAKEHOLDER_EMAILS in server .env (comma-separated). Also confirm SMTP_HOST, SMTP_USER, SMTP_PASSWORD on this server.'
+          '[EOD email] No stakeholder recipients: ensure Superadmin users have email in Personnel (userstbl), and/or set EOD_STAKEHOLDER_EMAILS=you@example.com in backend/.env on the server. Firebase login email is used as fallback when userstbl.email is empty.'
         );
       }
     } catch (err) {

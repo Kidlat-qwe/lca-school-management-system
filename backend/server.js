@@ -53,6 +53,7 @@ import './config/firebase.js';
 import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
 import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
 import { startOverdueInvoiceEmailScheduler } from './jobs/overdueInvoiceEmailScheduler.js';
+import { verifySMTPConnection, getSmtpConfigSummary } from './utils/emailService.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -198,6 +199,25 @@ app.listen(PORT, HOST, () => {
 
   startOverdueInvoiceEmailScheduler();
   console.log(`⏰ Overdue invoice auto-email scheduler started`);
+
+  const smtpSummary = getSmtpConfigSummary();
+  if (!smtpSummary.configured) {
+    console.warn(
+      '⚠️  SMTP not configured (SMTP_HOST / SMTP_USER / SMTP_PASSWORD). EOD and other system emails will not send until backend/.env is set on this server.'
+    );
+  } else {
+    verifySMTPConnection()
+      .then((ok) => {
+        if (!ok) {
+          console.warn(
+            '⚠️  SMTP verify failed. Check backend/.env on Linode (host, port, credentials). Some hosts block outbound port 465 — try SMTP_PORT=587 and SMTP_SECURE=false.'
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('⚠️  SMTP verify error:', err?.message || err);
+      });
+  }
 });
 
 export default app;

@@ -37,6 +37,18 @@ if (rawSmtpUser && rawSmtpFrom && rawSmtpFrom.toLowerCase() !== rawSmtpUser.toLo
 const SMTP_FROM_EMAIL = envelopeFromEmail;
 const SMTP_FROM = SMTP_FROM_EMAIL ? `no-reply <${SMTP_FROM_EMAIL}>` : undefined;
 
+export const isSmtpConfigured = () =>
+  Boolean(SMTP_HOST && SMTP_USER && SMTP_PASSWORD);
+
+export const getSmtpConfigSummary = () => ({
+  configured: isSmtpConfigured(),
+  host: SMTP_HOST || null,
+  port: SMTP_PORT,
+  secure: SMTP_SECURE,
+  user: SMTP_USER || null,
+  from: SMTP_FROM_EMAIL || null,
+});
+
 // Create transporter
 const transporter = nodemailer.createTransport({
   host: SMTP_HOST,
@@ -45,6 +57,12 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: SMTP_USER,
     pass: SMTP_PASSWORD,
+  },
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 20000,
+  tls: {
+    rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
   },
 });
 
@@ -712,6 +730,8 @@ export const sendSystemNotificationEmailToEach = async ({ recipients, subject, h
 
 export default {
   verifySMTPConnection,
+  isSmtpConfigured,
+  getSmtpConfigSummary,
   sendInvoiceEmail,
   sendSuspensionEmail,
   sendOverduePaymentReminderEmail,
