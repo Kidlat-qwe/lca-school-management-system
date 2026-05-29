@@ -1,4 +1,3 @@
-import nodemailer from 'nodemailer';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { resolve } from 'path';
@@ -11,74 +10,41 @@ import {
   renderMessagingTemplate,
   wrapBrandedEmailHtml,
 } from './templateRenderService.js';
+import {
+  sendMail,
+  verifyEmailConnection,
+  verifySMTPConnection,
+  isEmailConfigured,
+  isSmtpConfigured,
+  getEmailConfigSummary,
+  getSmtpConfigSummary,
+  getNodemailerFromHeader,
+  logSmtpFromMismatchWarning,
+} from './emailTransport.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: resolve(__dirname, '../.env') });
 
-// SMTP Configuration
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
-const SMTP_SECURE = process.env.SMTP_SECURE === 'true'; // true for 465, false for other ports
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASSWORD = process.env.SMTP_PASSWORD;
-// IMPORTANT: Many SMTP servers (incl. SpaceMail/cPanel) reject mail when From ≠ authenticated SMTP_USER.
-const rawSmtpFrom = (process.env.SMTP_FROM || '').trim();
-const rawSmtpUser = (SMTP_USER || '').trim();
-let envelopeFromEmail = rawSmtpFrom || rawSmtpUser;
-if (rawSmtpUser && rawSmtpFrom && rawSmtpFrom.toLowerCase() !== rawSmtpUser.toLowerCase()) {
-  console.warn(
-    `[emailService] SMTP_FROM (${rawSmtpFrom}) does not match SMTP_USER (${rawSmtpUser}). Using SMTP_USER as the From address so messages are accepted. Set SMTP_FROM to the same mailbox as SMTP_USER in .env if you use a different display name only via a provider that allows aliases.`
-  );
-  envelopeFromEmail = rawSmtpUser;
-} else if (!envelopeFromEmail) {
-  envelopeFromEmail = rawSmtpUser || rawSmtpFrom;
-}
-const SMTP_FROM_EMAIL = envelopeFromEmail;
-const SMTP_FROM = SMTP_FROM_EMAIL ? `no-reply <${SMTP_FROM_EMAIL}>` : undefined;
+logSmtpFromMismatchWarning();
 
-export const isSmtpConfigured = () =>
-  Boolean(SMTP_HOST && SMTP_USER && SMTP_PASSWORD);
+const SMTP_FROM = getNodemailerFromHeader();
 
-export const getSmtpConfigSummary = () => ({
-  configured: isSmtpConfigured(),
-  host: SMTP_HOST || null,
-  port: SMTP_PORT,
-  secure: SMTP_SECURE,
-  user: SMTP_USER || null,
-  from: SMTP_FROM_EMAIL || null,
-});
-
-// Create transporter
-const transporter = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: SMTP_PORT,
-  secure: SMTP_SECURE, // true for 465, false for other ports
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASSWORD,
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-  tls: {
-    rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
-  },
-});
-
-/**
- * Verify SMTP connection
- * @returns {Promise<boolean>} True if connection is successful
- */
-export const verifySMTPConnection = async () => {
-  try {
-    await transporter.verify();
-    console.log('✅ SMTP server is ready to send emails');
-    return true;
-  } catch (error) {
-    console.error('❌ SMTP connection error:', error);
-    return false;
+const requireEmailConfigured = () => {
+  if (!isEmailConfigured()) {
+    throw new Error(
+      'Email is not configured. Set SENDGRID_API_KEY (recommended on Linode) or SMTP_HOST/SMTP_USER/SMTP_PASSWORD in backend/.env.'
+    );
   }
+};
+
+export {
+  verifyEmailConnection,
+  verifySMTPConnection,
+  isEmailConfigured,
+  isSmtpConfigured,
+  getEmailConfigSummary,
+  getSmtpConfigSummary,
 };
 
 /**
@@ -103,10 +69,7 @@ export const sendInvoiceEmail = async ({
     throw new Error('Missing required email parameters');
   }
 
-  // Validate SMTP configuration
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
-    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
-  }
+  requireEmailConfigured();
 
   const mailOptions = {
     from: SMTP_FROM,
@@ -212,7 +175,12 @@ export const sendInvoiceEmail = async ({
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail({
+      to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      attachments: mailOptions.attachments,
+    });
     console.log('✅ Invoice email sent successfully:', {
       to,
       messageId: info.messageId,
@@ -258,10 +226,7 @@ export const sendSuspensionEmail = async ({
     throw new Error('Missing required email parameters');
   }
 
-  // Validate SMTP configuration
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
-    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
-  }
+  requireEmailConfigured();
 
   // Format rescheduling message
   const rescheduleMessage = autoReschedule
@@ -390,7 +355,12 @@ export const sendSuspensionEmail = async ({
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail({
+      to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      attachments: mailOptions.attachments,
+    });
     console.log('✅ Suspension email sent successfully:', {
       to,
       studentName,
@@ -446,10 +416,7 @@ export const sendOverduePaymentReminderEmail = async ({
     throw new Error('Missing required email parameters');
   }
 
-  // Validate SMTP configuration
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
-    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
-  }
+  requireEmailConfigured();
 
   const formattedAmount = formatPhp(amount);
   const formattedDueDate = formatDateDisplay(dueDate);
@@ -533,7 +500,12 @@ export const sendOverduePaymentReminderEmail = async ({
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail({
+      to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      attachments: mailOptions.attachments,
+    });
     console.log('✅ Overdue payment reminder email sent successfully:', {
       to,
       studentName,
@@ -587,9 +559,7 @@ export const sendMonthlyInvoiceNoticeEmail = async ({
     throw new Error('Missing required email parameters');
   }
 
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
-    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
-  }
+  requireEmailConfigured();
 
   const fbLink = 'https://www.facebook.com/littlechampionsacademy';
   const qrBlock = `
@@ -624,7 +594,12 @@ export const sendMonthlyInvoiceNoticeEmail = async ({
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail({
+      to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      attachments: mailOptions.attachments,
+    });
     console.log('✅ Monthly invoice notice email sent:', {
       to: normalizedRecipients,
       invoiceId,
@@ -660,8 +635,8 @@ export const sendSystemNotificationEmail = async ({
     throw new Error('Missing required email parameters');
   }
 
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
-    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
+  if (!isEmailConfigured()) {
+    throw new Error('Email is not configured. Please check your .env file.');
   }
 
   const mailOptions = {
@@ -672,7 +647,11 @@ export const sendSystemNotificationEmail = async ({
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail({
+      to: normalizedRecipients,
+      subject,
+      html,
+    });
     console.log('✅ System notification email sent successfully:', {
       to: normalizedRecipients,
       messageId: info.messageId,
@@ -729,8 +708,11 @@ export const sendSystemNotificationEmailToEach = async ({ recipients, subject, h
 };
 
 export default {
+  verifyEmailConnection,
   verifySMTPConnection,
+  isEmailConfigured,
   isSmtpConfigured,
+  getEmailConfigSummary,
   getSmtpConfigSummary,
   sendInvoiceEmail,
   sendSuspensionEmail,

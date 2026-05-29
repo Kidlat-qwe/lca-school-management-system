@@ -13,8 +13,7 @@ import { query } from '../config/database.js';
 import {
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
-  verifySMTPConnection,
-  isSmtpConfigured,
+  isEmailConfigured,
 } from '../utils/emailService.js';
 import {
   DEFAULT_SCHOOL_NAME,
@@ -861,9 +860,9 @@ const sendEodEmailNotifications = async ({
   submittedByUserId,
 }) => {
   try {
-    if (!isSmtpConfigured()) {
+    if (!isEmailConfigured()) {
       console.warn(
-        '[EOD email] SMTP not configured on this server. Set SMTP_HOST, SMTP_USER, and SMTP_PASSWORD in backend/.env on Linode, then restart the API.'
+        '[EOD email] Email not configured on this server. Set SENDGRID_API_KEY (recommended on Linode — SMTP ports are blocked) or SMTP_* in backend/.env, then restart the API.'
       );
       return;
     }

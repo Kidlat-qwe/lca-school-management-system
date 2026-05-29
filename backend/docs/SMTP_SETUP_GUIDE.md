@@ -179,7 +179,32 @@ SMTP_FROM=noreply@yourdomain.com
 - Verify 2FA is enabled on your Gmail account
 - Check that there are no spaces in the App Password
 
-### Error: "Connection timeout"
+### Error: "Connection timeout" (Linode / VPS)
+
+If `node scripts/diagnoseEodEmail.js` shows **BLOCKED** for ports 465 and 587, your VPS provider blocks outbound SMTP. SpaceMail/cPanel SMTP will **not** work from that server.
+
+**Recommended fix — SendGrid (HTTPS, port 443):**
+
+1. Sign up at [SendGrid](https://sendgrid.com) (free tier available).
+2. **Settings → Sender Authentication → Single Sender Verification** — verify `lca@little-champion.com`.
+3. **Settings → API Keys** — create a key with **Mail Send** permission.
+4. Add to `backend/.env` on Linode:
+
+```env
+EMAIL_PROVIDER=sendgrid
+SENDGRID_API_KEY=SG.your_api_key_here
+SENDGRID_FROM_EMAIL=lca@little-champion.com
+```
+
+5. Restart the API and run:
+
+```bash
+node scripts/diagnoseEodEmail.js --send-test your@email.com
+```
+
+Local development can keep using SpaceMail SMTP; production on Linode should use SendGrid.
+
+### Error: "Connection timeout" (general)
 - **Solution**: Check your firewall settings
 - Verify the SMTP_HOST and SMTP_PORT are correct
 - Try using port 465 with SMTP_SECURE=true
