@@ -8,6 +8,7 @@ import {
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
+import { plainTextToEmailHtml } from '../utils/templateRenderService.js';
 import { formatYmdLocal } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
@@ -521,6 +522,8 @@ const notifyPaymentReturnedToBranch = async ({
     const invLabel = invoiceId != null ? `INV-${invoiceId}` : `Payment #${paymentId}`;
     const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
     const detailBody = `${returnedBy} returned ${invLabel} (${studentLabel}) at ${branchName} for reference or attachment correction.${reasonText}`;
+    const returnTitleMain = 'Payment returned — action needed';
+    const returnTitleSuper = 'Payment returned — superadmin review';
 
     if (!hasTargetUserIdColumn) {
       // Fallback for environments that have not applied target_user_id migration yet.
@@ -529,7 +532,7 @@ const notifyPaymentReturnedToBranch = async ({
         `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
          VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
         [
-          'Payment returned — action needed',
+          returnTitleMain,
           detailBody,
           ['Admin'],
           branchId,
@@ -549,7 +552,7 @@ const notifyPaymentReturnedToBranch = async ({
 
       if (ownerTargetIds.length > 0) {
         await Promise.all(
-          ownerTargetIds.map((targetUserId) => {
+          ownerTargetIds.map(async (targetUserId) => {
             const targetBody =
               Number(targetUserId) === Number(returnedByUserId)
                 ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
@@ -558,7 +561,7 @@ const notifyPaymentReturnedToBranch = async ({
               `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
                VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
               [
-                'Payment returned — action needed',
+                returnTitleMain,
                 targetBody,
                 ['All'],
                 branchId,
@@ -598,7 +601,7 @@ const notifyPaymentReturnedToBranch = async ({
                 `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
                  VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
                 [
-                  'Payment returned — superadmin review',
+                  returnTitleSuper,
                   detailBody,
                   ['All'],
                   branchId,
@@ -632,18 +635,13 @@ const notifyPaymentReturnedToBranch = async ({
         const [to] = normalizeNotificationRecipients([rawEmail]);
         if (to) {
           const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
-          const subject = `Payment returned — ${invLabel} (${branchName})`;
-          const html = `
-            <!DOCTYPE html>
-            <html><head><meta charset="UTF-8"></head>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <p>Hi ${escapeHtml(ownerFirst)},</p>
-              <p><strong>${escapeHtml(returnedBy)}</strong> returned <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong> so you can fix the reference or attachment.</p>
-              ${reason && String(reason).trim() ? `<p><strong>Note from Finance:</strong> ${escapeHtml(String(reason).trim())}</p>` : ''}
-              <p>Open <strong>Payment Logs</strong> and use the <strong>Return</strong> tab to update this payment.</p>
-              <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
-            </body></html>`;
-          await sendSystemNotificationEmail({ to, subject, html });
+          const emailSubject = `Payment returned — ${invLabel} (${branchName})`;
+          const emailBody = `Hi ${ownerFirst},\n\n${returnedBy} returned ${invLabel} for student ${studentLabel} at ${branchName} so you can fix the reference or attachment.${reason && String(reason).trim() ? `\n\nNote from Finance: ${String(reason).trim()}` : ''}\n\nOpen Payment Logs and use the Return tab to update this payment.`;
+          await sendSystemNotificationEmail({
+            to,
+            subject: emailSubject,
+            html: plainTextToEmailHtml(emailBody),
+          });
         }
       } catch (emailErr) {
         console.error(
@@ -683,12 +681,13 @@ const notifyPaymentResubmittedForVerification = async ({
     const submittedBy = userRes.rows[0]?.full_name || userRes.rows[0]?.email || 'Branch staff';
     const studentLabel = payRes.rows[0]?.student_label || 'Student';
     const invLabel = invoiceId != null ? `INV-${invoiceId}` : `Payment #${paymentId}`;
-    const body = `${submittedBy} resubmitted ${invLabel} (${studentLabel}) at ${branchName} for finance verification. Please review it in Payment Logs.`;
+    const resubmitTitle = 'Payment resubmitted for verification';
+    const resubmitBody = `${submittedBy} resubmitted ${invLabel} (${studentLabel}) at ${branchName} for finance verification. Please review it in Payment Logs.`;
 
     await query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
        VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
-      ['Payment resubmitted for verification', body, ['Finance'], branchId, resubmittedByUserId, 'payment-logs', 'notificationTab=main']
+      [resubmitTitle, resubmitBody, ['Finance'], branchId, resubmittedByUserId, 'payment-logs', 'notificationTab=main']
     );
 
     try {
@@ -709,20 +708,12 @@ const notifyPaymentResubmittedForVerification = async ({
         (financeRecipientsRes.rows || []).map((r) => r.email)
       );
       if (recipients.length > 0) {
-        const subject = `Payment resubmitted for verification — ${invLabel} (${branchName})`;
-        const html = `
-          <!DOCTYPE html>
-          <html><head><meta charset="UTF-8"></head>
-          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <p>Hi Finance Team,</p>
-            <p><strong>${escapeHtml(submittedBy)}</strong> resubmitted <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong>.</p>
-            <p>Please review this payment in <strong>Payment Logs</strong> under your main verification queue.</p>
-            <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
-          </body></html>`;
+        const emailSubject = `Payment resubmitted for verification — ${invLabel} (${branchName})`;
+        const emailBody = `${submittedBy} resubmitted ${invLabel} for student ${studentLabel} at ${branchName}. Please review this payment in Payment Logs under your main verification queue.`;
         await sendSystemNotificationEmailToEach({
           recipients,
-          subject,
-          html,
+          subject: emailSubject,
+          html: plainTextToEmailHtml(emailBody),
         });
       }
     } catch (emailErr) {
@@ -768,13 +759,15 @@ const notifyPaymentRejectedToBranch = async ({
     const invLabel = invoiceId != null ? `INV-${invoiceId}` : `Payment #${paymentId}`;
     const reasonText = reason && String(reason).trim() ? ` Reason: ${String(reason).trim()}` : '';
     const detailBody = `${rejectedBy} rejected ${invLabel} (${studentLabel}) at ${branchName}.${reasonText}`;
+    const rejectTitleMain = 'Payment rejected — action needed';
+    const rejectTitleSuper = 'Payment rejected — superadmin review';
 
     if (!hasTargetUserIdColumn) {
       await query(
         `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
          VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
         [
-          'Payment rejected — action needed',
+          rejectTitleMain,
           detailBody,
           ['Admin'],
           branchId,
@@ -794,13 +787,14 @@ const notifyPaymentRejectedToBranch = async ({
 
       if (ownerTargetIds.length > 0) {
         await Promise.all(
-          ownerTargetIds.map((targetUserId) =>
-            query(
+          ownerTargetIds.map(async (targetUserId) => {
+            const targetBody = `${invLabel} (${studentLabel}) was rejected by ${rejectedBy}.${reasonText}`;
+            return query(
               `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
                VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
               [
-                'Payment rejected — action needed',
-                `${invLabel} (${studentLabel}) was rejected by ${rejectedBy}.${reasonText}`,
+                rejectTitleMain,
+                targetBody,
                 ['All'],
                 branchId,
                 rejectedByUserId,
@@ -808,8 +802,8 @@ const notifyPaymentRejectedToBranch = async ({
                 'payment-logs',
                 'notificationTab=rejected',
               ]
-            )
-          )
+            );
+          })
         );
       }
 
@@ -832,7 +826,7 @@ const notifyPaymentRejectedToBranch = async ({
               `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
                VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
               [
-                'Payment rejected — superadmin review',
+                rejectTitleSuper,
                 detailBody,
                 ['All'],
                 branchId,
@@ -860,18 +854,13 @@ const notifyPaymentRejectedToBranch = async ({
         const [to] = normalizeNotificationRecipients([rawEmail]);
         if (to) {
           const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
-          const subject = `Payment rejected — ${invLabel} (${branchName})`;
-          const html = `
-            <!DOCTYPE html>
-            <html><head><meta charset="UTF-8"></head>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <p>Hi ${escapeHtml(ownerFirst)},</p>
-              <p><strong>${escapeHtml(rejectedBy)}</strong> rejected <strong>${escapeHtml(invLabel)}</strong> for student <strong>${escapeHtml(studentLabel)}</strong> at <strong>${escapeHtml(branchName)}</strong>.</p>
-              <p><strong>Reason:</strong> ${escapeHtml(String(reason || '').trim())}</p>
-              <p>Open <strong>Payment Logs</strong> and use the <strong>Rejected</strong> tab to review the payment, then go to the invoice to record a new payment.</p>
-              <p style="color:#666;font-size:12px;">This is an automated message from the school management system.</p>
-            </body></html>`;
-          await sendSystemNotificationEmail({ to, subject, html });
+          const emailSubject = `Payment rejected — ${invLabel} (${branchName})`;
+          const emailBody = `Hi ${ownerFirst},\n\n${rejectedBy} rejected ${invLabel} for student ${studentLabel} at ${branchName}.\n\nReason: ${String(reason || '').trim()}\n\nOpen Payment Logs and use the Rejected tab to review the payment, then go to the invoice to record a new payment.`;
+          await sendSystemNotificationEmail({
+            to,
+            subject: emailSubject,
+            html: plainTextToEmailHtml(emailBody),
+          });
         }
       } catch (emailErr) {
         console.error(
@@ -1700,9 +1689,10 @@ router.get(
 
 /**
  * GET /api/sms/payments/finance-unified
- * Unified finance/superfinance logs:
+ * Unified payment logs (main tab):
  * - regular payment rows
  * - unapplied verified package AR rows (no payment_id/invoice_id yet)
+ * Access: Finance, Superfinance, Superadmin, Admin (branch-scoped via user branch or branch_id query)
  */
 router.get(
   '/finance-unified',
@@ -1735,7 +1725,7 @@ router.get(
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     handleValidationErrors,
   ],
-  requireRole('Finance', 'Superfinance'),
+  requireRole('Finance', 'Superfinance', 'Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
       const {

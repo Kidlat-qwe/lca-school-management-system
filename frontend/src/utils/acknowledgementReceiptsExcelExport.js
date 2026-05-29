@@ -48,6 +48,7 @@ export function downloadAcknowledgementReceiptsXlsx(rows, filename = 'Acknowledg
     { wch: 10 }, // AR ID
     { wch: 28 }, // Student Name
     { wch: 28 }, // Guardian Name
+    { wch: 18 }, // Mobile Number
     { wch: 42 }, // Package / Items
     { wch: 16 }, // Level Tag
     { wch: 18 }, // Total Amount

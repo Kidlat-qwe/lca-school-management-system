@@ -56,6 +56,7 @@ router.get(
         whereClause += ` AND (
           LOWER(g.guardian_name) LIKE $${paramCount}
           OR LOWER(g.email) LIKE $${paramCount}
+          OR LOWER(COALESCE(g.guardian_phone_number, '')) LIKE $${paramCount}
           OR LOWER(g.relationship) LIKE $${paramCount}
           OR LOWER(g.address) LIKE $${paramCount}
           OR LOWER(u.full_name) LIKE $${paramCount}

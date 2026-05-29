@@ -14,6 +14,11 @@ import {
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
+import {
+  DEFAULT_SCHOOL_NAME,
+  logTemplateRenderWarning,
+  renderMessagingTemplate,
+} from '../utils/templateRenderService.js';
 
 const router = express.Router();
 router.use(verifyFirebaseToken);
@@ -853,7 +858,7 @@ const sendEodEmailNotifications = async ({
   submittedByUserId,
 }) => {
   try {
-    const [branchResult, submitterResult, stakeholderRecipientsResult, branchAdminsResult, activeBranchesResult, submittedBranchesResult] =
+    const [branchResult, submitterResult, stakeholderRecipientsResult, branchAdminsResult] =
       await Promise.all([
       query(
         `SELECT COALESCE(branch_nickname, branch_name) AS branch_name
@@ -885,20 +890,6 @@ const sendEodEmailNotifications = async ({
            AND COALESCE(TRIM(email), '') <> ''`,
         [submittedBranchId]
       ),
-      query(
-        `SELECT branch_id, COALESCE(branch_nickname, branch_name) AS branch_name
-         FROM branchestbl
-         WHERE COALESCE(status, 'Active') = 'Active'
-         ORDER BY COALESCE(branch_nickname, branch_name) ASC`
-      ),
-      query(
-        `SELECT d.branch_id, COALESCE(b.branch_nickname, b.branch_name) AS branch_name
-         FROM daily_summary_salestbl d
-         LEFT JOIN branchestbl b ON d.branch_id = b.branch_id
-         WHERE d.summary_date = $1::date
-         ORDER BY COALESCE(b.branch_nickname, b.branch_name) ASC`,
-        [summaryDate]
-      ),
     ]);
 
     const submitterEmail = submitterResult.rows[0]?.email
@@ -920,105 +911,42 @@ const sendEodEmailNotifications = async ({
       submitterEmail,
     ]);
 
-    const submittedBranchIds = new Set((submittedBranchesResult.rows || []).map((row) => Number(row.branch_id)));
-    const submittedBranchNames = (submittedBranchesResult.rows || [])
-      .map((row) => row.branch_name)
-      .filter(Boolean);
-    const missingBranchNames = (activeBranchesResult.rows || [])
-      .filter((row) => !submittedBranchIds.has(Number(row.branch_id)))
-      .map((row) => row.branch_name)
-      .filter(Boolean);
-
     const formattedTotal = Number(totalAmount || 0).toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-    const dateFormal = formatBusinessDateFormal(summaryDate);
-    const payLabel =
-      Number(paymentCount) === 1 ? '1 payment transaction' : `${escapeHtml(String(paymentCount))} payment transactions`;
 
-    const stakeholderSubject = `[PSMS] End of Day recorded — ${submittedBranchName} (${summaryDate})`;
-    const stakeholderInner = `
-            <p style="margin:0 0 16px;color:#374151;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;">Physical School Management System</p>
-            <h2 style="margin:0 0 16px;font-size:18px;font-weight:700;color:#111827;line-height:1.35;">End of Day — Management Notification</h2>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Dear Management Team,
-            </p>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Please be advised that an <strong style="color:#0f172a;">End of Day (EOD)</strong> cash closure has been recorded for the business date indicated below. This message is provided for your oversight of branch compliance and consolidated reporting.
-            </p>
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
-              <tr>
-                <td style="padding:12px 14px;background-color:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:12px;font-weight:600;color:#374151;text-transform:uppercase;letter-spacing:0.04em;">Submission summary</td>
-              </tr>
-              <tr>
-                <td style="padding:14px 16px;background-color:#ffffff;">
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:14px;color:#111827;">
-                    <tr><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;"><span style="color:#6b7280;">Recorded by</span></td><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;color:#0f172a;">${escapeHtml(submitterName)}</td></tr>
-                    <tr><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;"><span style="color:#6b7280;">Branch</span></td><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;color:#0f172a;">${escapeHtml(submittedBranchName)}</td></tr>
-                    <tr><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;"><span style="color:#6b7280;">Business date</span></td><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;text-align:right;">${escapeHtml(dateFormal)} <span style="color:#9ca3af;font-size:12px;">(${escapeHtml(summaryDate)})</span></td></tr>
-                    <tr><td style="padding:6px 0;"><span style="color:#6b7280;">Total amount declared</span></td><td style="padding:6px 0;text-align:right;font-weight:700;color:#0f172a;">PHP ${escapeHtml(formattedTotal)}</td></tr>
-                    <tr><td style="padding:6px 0 0;"><span style="color:#6b7280;">Supporting transactions</span></td><td style="padding:6px 0 0;text-align:right;">${payLabel}</td></tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#111827;text-transform:uppercase;letter-spacing:0.03em;">Branches — EOD completed (${submittedBranchNames.length})</p>
-            <ul style="margin:0 0 18px 20px;padding:0;color:#111827;line-height:1.55;">
-              ${(submittedBranchNames.length ? submittedBranchNames : ['None']).map((name) => `<li style="margin-bottom:4px;">${escapeHtml(name)}</li>`).join('')}
-            </ul>
-            <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#111827;text-transform:uppercase;letter-spacing:0.03em;">Branches — EOD outstanding (${missingBranchNames.length})</p>
-            <ul style="margin:0 0 20px 20px;padding:0;color:#111827;line-height:1.55;">
-              ${(missingBranchNames.length ? missingBranchNames : ['None']).map((name) => `<li style="margin-bottom:4px;">${escapeHtml(name)}</li>`).join('')}
-            </ul>
-            <p style="margin:0 0 12px;color:#111827;line-height:1.6;">
-              Kindly follow up with branches that have not yet filed their End of Day, as required by internal policy.
-            </p>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Respectfully yours,<br/>
-              <span style="color:#6b7280;font-size:14px;">Physical School Management System (PSMS)</span>
-            </p>
-            <p style="margin:0;padding-top:14px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;line-height:1.5;">
-              This is an automated message. Please do not reply to this email. For assistance, contact your system administrator.
-            </p>`;
-    const stakeholderHtml = wrapEodNotificationHtml(stakeholderInner);
+    const templateVariables = {
+      summaryDate,
+      totalAmount: `₱${formattedTotal}`,
+      paymentCount: String(paymentCount || 0),
+      submittedBy: submitterName,
+      branchName: submittedBranchName,
+      schoolName: DEFAULT_SCHOOL_NAME,
+    };
 
-    const submitterSubject = `[PSMS] Confirmation — End of Day submitted (${summaryDate})`;
-    const submitterInner = `
-            <p style="margin:0 0 16px;color:#374151;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;">Physical School Management System</p>
-            <h2 style="margin:0 0 16px;font-size:18px;font-weight:700;color:#111827;line-height:1.35;">End of Day — Acknowledgement of Receipt</h2>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Dear Colleague,
-            </p>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              This email confirms that the <strong style="color:#0f172a;">End of Day (EOD)</strong> submission for your branch has been received and recorded in PSMS for the business date stated below.
-            </p>
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 20px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
-              <tr>
-                <td style="padding:12px 14px;background-color:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:12px;font-weight:600;color:#374151;text-transform:uppercase;letter-spacing:0.04em;">Your submission</td>
-              </tr>
-              <tr>
-                <td style="padding:14px 16px;background-color:#ffffff;">
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:14px;color:#111827;">
-                    <tr><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;"><span style="color:#6b7280;">Branch</span></td><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;color:#0f172a;">${escapeHtml(submittedBranchName)}</td></tr>
-                    <tr><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;"><span style="color:#6b7280;">Business date</span></td><td style="padding:6px 0;border-bottom:1px solid #f3f4f6;text-align:right;">${escapeHtml(dateFormal)} <span style="color:#9ca3af;font-size:12px;">(${escapeHtml(summaryDate)})</span></td></tr>
-                    <tr><td style="padding:6px 0;"><span style="color:#6b7280;">Total amount declared</span></td><td style="padding:6px 0;text-align:right;font-weight:700;color:#0f172a;">PHP ${escapeHtml(formattedTotal)}</td></tr>
-                    <tr><td style="padding:6px 0 0;"><span style="color:#6b7280;">Supporting transactions</span></td><td style="padding:6px 0 0;text-align:right;">${payLabel}</td></tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Thank you for completing your End of Day procedures in a timely manner.
-            </p>
-            <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
-              Respectfully yours,<br/>
-              <span style="color:#6b7280;font-size:14px;">Physical School Management System (PSMS)</span>
-            </p>
-            <p style="margin:0;padding-top:14px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;line-height:1.5;">
-              This is an automated message. Please do not reply to this email.
-            </p>`;
-    const submitterHtml = wrapEodNotificationHtml(submitterInner);
+    let subject = `[PSMS] End of Day - ${submittedBranchName} - ${summaryDate}`;
+    let html = `<p>EOD summary for ${submittedBranchName} on ${summaryDate}. Total: ₱${formattedTotal}. Payments: ${paymentCount || 0}. Submitted by: ${submitterName}</p>`;
+
+    try {
+      const rendered = await renderMessagingTemplate({
+        templateKey: 'template_eod_summary',
+        branchId: submittedBranchId,
+        variables: templateVariables,
+      });
+
+      if (rendered?.enabled === false) {
+        console.log('[EOD email] template_eod_summary disabled; skipping emails.');
+        return;
+      }
+
+      if (rendered?.enabled) {
+        subject = rendered.subject?.trim() || rendered.title?.trim() || subject;
+        html = rendered.bodyHtml;
+      }
+    } catch (templateErr) {
+      await logTemplateRenderWarning('sendEodEmailNotifications template load', templateErr);
+    }
 
     // 1) Superadmin only: one email each (whole-branch submitted / not submitted lists).
     //    Finance / Superfinance are intentionally excluded from EOD notifications.
@@ -1026,8 +954,8 @@ const sendEodEmailNotifications = async ({
       if (uniqueStakeholderEmails.length > 0) {
         const summary = await sendSystemNotificationEmailToEach({
           recipients: uniqueStakeholderEmails,
-          subject: stakeholderSubject,
-          html: stakeholderHtml,
+          subject,
+          html,
         });
         console.log('[EOD email] Stakeholder digest:', {
           attempted: summary.attempted,
@@ -1054,8 +982,8 @@ const sendEodEmailNotifications = async ({
       if (branchConfirmationEmails.length > 0) {
         const summary = await sendSystemNotificationEmailToEach({
           recipients: branchConfirmationEmails,
-          subject: submitterSubject,
-          html: submitterHtml,
+          subject,
+          html,
         });
         console.log('[EOD email] Branch confirmation:', {
           attempted: summary.attempted,
@@ -1103,7 +1031,42 @@ const createDailySummarySubmissionNotification = async ({
   const branchName = branchResult.rows[0]?.branch_name || `Branch ${branchId}`;
   const submittedBy = userResult.rows[0]?.full_name || userResult.rows[0]?.email || 'Branch Admin';
 
-  const body = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${Number(totalAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
+  const formattedTotal = Number(totalAmount || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+  const fallbackTitle = 'End of Shift Submitted';
+  const fallbackBody = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${formattedTotal} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
+
+  let title = fallbackTitle;
+  let body = fallbackBody;
+
+  try {
+    const rendered = await renderMessagingTemplate({
+      templateKey: 'template_eod_summary',
+      branchId,
+      variables: {
+        summaryDate,
+        totalAmount: `₱${formattedTotal}`,
+        paymentCount: String(paymentCount || 0),
+        submittedBy,
+        branchName,
+        schoolName: DEFAULT_SCHOOL_NAME,
+      },
+    });
+
+    if (rendered?.enabled === false) {
+      return;
+    }
+
+    if (rendered?.enabled) {
+      title = rendered.title?.trim() || fallbackTitle;
+      body = rendered.body?.trim() || fallbackBody;
+    }
+  } catch (templateErr) {
+    console.warn('[EOD notification] template load failed:', templateErr?.message || templateErr);
+  }
 
   // No Finance / Superfinance group bell notification for EOD (per product rules).
   // Cash deposit submissions still use the Finance group in cashDepositSummaries.js.
@@ -1123,7 +1086,7 @@ const createDailySummarySubmissionNotification = async ({
           `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
            VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
           [
-            'End of Shift Submitted',
+            title,
             body,
             ['All'],
             branchId,

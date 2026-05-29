@@ -2157,7 +2157,7 @@ router.post(
 
       // Get students linked to this invoice
       const studentsResult = await client.query(
-        `SELECT inv_student.*, u.full_name, u.email
+        `SELECT inv_student.*, u.full_name, u.email, u.phone_number AS student_phone
          FROM invoicestudentstbl inv_student
          JOIN userstbl u ON inv_student.student_id = u.user_id
          WHERE inv_student.invoice_id = $1`,
@@ -2234,7 +2234,7 @@ router.post(
       for (const student of studentsResult.rows) {
         // Send to BOTH: guardian email (if exists) and the student's registered email
         const guardianResult = await client.query(
-          `SELECT guardian_name, email
+          `SELECT guardian_name, email, guardian_phone_number
            FROM guardianstbl
            WHERE student_id = $1
            ORDER BY guardian_id ASC
@@ -2246,6 +2246,7 @@ router.post(
         const recipientEmails = Array.from(
           new Set([guardian?.email, student.email].filter((e) => e && String(e).trim() !== ''))
         );
+        const phoneNumbers = [guardian?.guardian_phone_number, student.student_phone];
 
         if (recipientEmails.length === 0) {
           emailResults.push({
@@ -2269,7 +2270,9 @@ router.post(
             dueDate: invoice.due_date,
             className: className,
             centerName: invoice.branch_name || null,
+            branchId: invoice.branch_id ?? null,
             facebookLink: 'https://www.facebook.com/littlechampionsacademy',
+            phoneNumbers,
           });
 
           emailResults.push({

@@ -4,6 +4,10 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { getEffectiveSettings } from '../utils/settingsService.js';
+import {
+  DEFAULT_SCHOOL_NAME,
+  renderMessagingTemplate,
+} from '../utils/templateRenderService.js';
 
 const router = express.Router();
 
@@ -192,13 +196,42 @@ const createCashDepositSubmissionNotification = async ({
     maximumFractionDigits: 2,
   });
 
-  const body = `${submittedBy} submitted Cash Deposit Summary for ${branchName} (${startDate} to ${endDate}). Deposit amount: ₱${formattedDeposit}; Total cash: ₱${formattedCash}; Payments: ${paymentCount || 0}.`;
+  const fallbackTitle = 'Cash Deposit Summary Pending Verification';
+  const fallbackBody = `${submittedBy} submitted Cash Deposit Summary for ${branchName} (${startDate} to ${endDate}). Deposit amount: ₱${formattedDeposit}; Total cash: ₱${formattedCash}; Payments: ${paymentCount || 0}.`;
+
+  let title = fallbackTitle;
+  let body = fallbackBody;
+
+  try {
+    const rendered = await renderMessagingTemplate({
+      templateKey: 'template_cash_deposit',
+      branchId,
+      variables: {
+        branchName,
+        depositDate: `${startDate} to ${endDate}`,
+        cashTotal: `₱${formattedCash}`,
+        submittedBy,
+        schoolName: DEFAULT_SCHOOL_NAME,
+      },
+    });
+
+    if (rendered?.enabled === false) {
+      return;
+    }
+
+    if (rendered?.enabled) {
+      title = rendered.title?.trim() || fallbackTitle;
+      body = rendered.body?.trim() || fallbackBody;
+    }
+  } catch (templateErr) {
+    console.warn('[cashDeposit] template load failed:', templateErr?.message || templateErr);
+  }
 
   await query(
     `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
      VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
     [
-      'Cash Deposit Summary Pending Verification',
+      title,
       body,
       ['All'],
       branchId,
@@ -226,7 +259,7 @@ const createCashDepositSubmissionNotification = async ({
           `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
            VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
           [
-            'Cash Deposit Summary Pending Verification',
+            title,
             body,
             ['All'],
             branchId,

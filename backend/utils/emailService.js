@@ -3,6 +3,14 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { resolve } from 'path';
 import { dirname } from 'path';
+import {
+  computeDaysOverdue,
+  formatDateDisplay,
+  formatPhp,
+  logTemplateRenderWarning,
+  renderMessagingTemplate,
+  wrapBrandedEmailHtml,
+} from './templateRenderService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -406,6 +414,8 @@ export const sendOverduePaymentReminderEmail = async ({
   className,
   centerName,
   facebookLink,
+  branchId = null,
+  phoneNumbers = [],
 }) => {
   // Validate required fields
   if (!to || !invoiceId || !invoiceNumber || amount === undefined || !dueDate) {
@@ -423,28 +433,77 @@ export const sendOverduePaymentReminderEmail = async ({
     throw new Error('SMTP configuration is incomplete. Please check your .env file.');
   }
 
-  // Format amount as currency
-  const formattedAmount = new Intl.NumberFormat('en-PH', {
-    style: 'currency',
-    currency: 'PHP',
-  }).format(amount);
-
-  // Format due date
-  const d = new Date(dueDate);
-  const formattedDueDate = Number.isNaN(d.getTime()) ? String(dueDate) : [
-    String(d.getUTCDate()).padStart(2, '0'),
-    String(d.getUTCMonth() + 1).padStart(2, '0'),
-    d.getUTCFullYear(),
-  ].join('/');
-
+  const formattedAmount = formatPhp(amount);
+  const formattedDueDate = formatDateDisplay(dueDate);
+  const daysOverdue = computeDaysOverdue(dueDate);
   const fbLink = facebookLink || 'https://www.facebook.com/littlechampionsacademy';
   const greetingName = parentName || studentName || 'Parent/Guardian';
   const visitCenterName = centerName || className || 'Little Champions Academy';
 
+  const templateVariables = {
+    recipientName: greetingName,
+    studentName: studentName || 'Student',
+    invoiceNumber: invoiceNumber || `INV-${invoiceId}`,
+    dueDate: formattedDueDate,
+    amountDue: formattedAmount,
+    daysOverdue: String(daysOverdue),
+    schoolName: visitCenterName,
+    branchName: visitCenterName,
+  };
+
+  let subject = `Payment Reminder - Overdue Invoice ${invoiceNumber}`;
+  let bodyHtml = wrapBrandedEmailHtml(`
+    <p style="margin:0 0 16px;color:#111827;line-height:1.6;">Hello ${greetingName},</p>
+    <p style="margin:0 0 16px;color:#111827;line-height:1.6;">This is a reminder that invoice ${invoiceNumber} for ${studentName || 'Student'} is ${daysOverdue} day(s) past due.</p>
+    <p style="margin:0 0 16px;color:#111827;line-height:1.6;">Amount due: ${formattedAmount}<br/>Due date: ${formattedDueDate}</p>
+  `);
+
+  try {
+    const rendered = await renderMessagingTemplate({
+      templateKey: 'template_payment_reminder',
+      branchId,
+      variables: templateVariables,
+    });
+
+    if (rendered && rendered.enabled === false) {
+      console.log('[emailService] Payment reminder template disabled; skipping email.', {
+        invoiceId,
+        invoiceNumber,
+      });
+      return { success: true, skipped: true, reason: 'template_disabled', smsSkipped: true };
+    }
+
+    if (rendered?.enabled) {
+      subject =
+        rendered.subject?.trim() ||
+        rendered.title?.trim() ||
+        subject;
+      bodyHtml = rendered.bodyHtml;
+    }
+  } catch (templateErr) {
+    await logTemplateRenderWarning('sendOverduePaymentReminderEmail template load', templateErr);
+  }
+
+  const qrBlock = `
+    <div style="margin:20px 0;text-align:center;">
+      <img style="width:100%;max-width:560px;border-radius:8px;border:1px solid #e5e7eb;display:block;margin:0 auto;"
+           src="cid:payment_qr" alt="Payment QR Codes" />
+    </div>
+    <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
+      For assistance, message us via our Facebook Page
+      <a href="${fbLink}" style="color:#F7C844;">${fbLink}</a>
+      or visit <strong>${visitCenterName}</strong>.
+    </p>`;
+
+  bodyHtml = bodyHtml.replace(
+    '<div style="background-color:#f5f5f5;',
+    `${qrBlock}<div style="background-color:#f5f5f5;`
+  );
+
   const mailOptions = {
     from: SMTP_FROM,
     to,
-    subject: `Payment Reminder - Overdue Invoice ${invoiceNumber}`,
+    subject,
     attachments: [
       {
         filename: 'payment-qr.png',
@@ -452,153 +511,7 @@ export const sendOverduePaymentReminderEmail = async ({
         cid: 'payment_qr',
       },
     ],
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              line-height: 1.6;
-              color: #333;
-              max-width: 600px;
-              margin: 0 auto;
-              padding: 20px;
-            }
-            .header {
-              background-color: #F7C844;
-              padding: 20px;
-              text-align: center;
-              border-radius: 5px 5px 0 0;
-            }
-            .content {
-              background-color: #ffffff;
-              padding: 30px;
-              border: 1px solid #e0e0e0;
-              border-top: none;
-            }
-            .footer {
-              background-color: #f5f5f5;
-              padding: 20px;
-              text-align: center;
-              border-radius: 0 0 5px 5px;
-              font-size: 12px;
-              color: #666;
-            }
-            h1 {
-              color: #000;
-              margin: 0;
-            }
-            h2 {
-              color: #d32f2f;
-              margin: 20px 0 10px 0;
-            }
-            p {
-              margin: 15px 0;
-            }
-            .warning-box {
-              background-color: #fff3cd;
-              border-left: 4px solid #ffc107;
-              padding: 15px;
-              border-radius: 5px;
-              margin: 20px 0;
-            }
-            .invoice-info {
-              background-color: #f9f9f9;
-              padding: 15px;
-              border-radius: 5px;
-              margin: 20px 0;
-            }
-            .invoice-info strong {
-              color: #333;
-            }
-            .info-row {
-              margin: 8px 0;
-            }
-            .amount-highlight {
-              font-size: 18px;
-              font-weight: bold;
-              color: #d32f2f;
-            }
-            .contact-info {
-              background-color: #e3f2fd;
-              padding: 15px;
-              border-radius: 5px;
-              margin: 20px 0;
-            }
-            a {
-              color: #F7C844;
-              text-decoration: none;
-            }
-            a:hover {
-              text-decoration: underline;
-            }
-            .qr-wrap {
-              margin: 20px 0;
-              text-align: center;
-            }
-            .qr-img {
-              width: 100%;
-              max-width: 560px;
-              border-radius: 8px;
-              border: 1px solid #e5e7eb;
-              display: block;
-              margin: 0 auto;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>LITTLE CHAMPIONS ACADEMY INC.</h1>
-          </div>
-          <div class="content">
-            <p>Hello ${greetingName},</p>
-
-            <p>Good day! This is from Little Champions Academy.</p>
-
-            <p>
-              This is a gentle reminder that your child’s account has an outstanding balance.
-              To avoid any disruption in their classes, we encourage you to settle it at your earliest convenience
-              using the attached payment QR codes.
-            </p>
-
-            <p>
-              <strong>The information in this email applies to the branch where your child is enrolled: ${visitCenterName}.</strong>
-            </p>
-
-            <div class="invoice-info">
-              <div class="info-row"><strong>Invoice:</strong> ${invoiceNumber}</div>
-              ${invoiceDescription ? `<div class="info-row"><strong>Description:</strong> ${invoiceDescription}</div>` : ''}
-              <div class="info-row"><strong>Due Date:</strong> ${formattedDueDate}</div>
-              <div class="info-row"><strong>Outstanding Balance:</strong> <span class="amount-highlight">${formattedAmount}</span></div>
-            </div>
-
-            <div class="qr-wrap">
-              <img class="qr-img" src="cid:payment_qr" alt="Payment QR Codes" />
-            </div>
-
-            <p>If you’ve already paid, kindly disregard this message.</p>
-
-            <p>
-              For assistance or payment arrangements, you may message us via our Facebook Page
-              <a href="${fbLink}">${fbLink}</a> or visit <strong>${visitCenterName}</strong> (the branch where your child is enrolled).
-            </p>
-
-            <p>Thank you, and we look forward to continuing your child’s learning journey!</p>
-
-            <p>Warm regards,<br>
-              <strong>Little Champions Academy, Inc.</strong><br>
-              Play. Learn. Succeed.
-            </p>
-          </div>
-          <div class="footer">
-            <p>This is an automated email. Please do not reply to this message.</p>
-            <p>© ${new Date().getFullYear()} Little Champions Academy, Inc. All rights reserved.</p>
-          </div>
-        </body>
-      </html>
-    `,
+    html: bodyHtml,
   };
 
   try {
@@ -610,12 +523,100 @@ export const sendOverduePaymentReminderEmail = async ({
       invoiceNumber,
       messageId: info.messageId,
     });
+
+    let sms = { skipped: true, reason: 'not_attempted' };
+    try {
+      const { sendPairedTemplateSms } = await import('./sms/templateSmsService.js');
+      sms = await sendPairedTemplateSms({
+        templateKey: 'template_payment_reminder',
+        branchId,
+        variables: templateVariables,
+        phoneNumbers,
+      });
+    } catch (smsErr) {
+      console.error('[emailService] Payment reminder SMS after email:', smsErr?.message || smsErr);
+      sms = { success: false, error: smsErr?.message || String(smsErr) };
+    }
+
     return {
       success: true,
       messageId: info.messageId,
+      sms,
     };
   } catch (error) {
     console.error('❌ Error sending overdue payment reminder email:', error);
+    throw error;
+  }
+};
+
+/**
+ * Email sent when a monthly installment invoice is auto-generated (25th issue, due 5th).
+ * Includes payment QR codes (same as overdue reminder).
+ */
+export const sendMonthlyInvoiceNoticeEmail = async ({
+  to,
+  subject,
+  bodyHtml,
+  invoiceId,
+  invoiceNumber,
+  studentName,
+}) => {
+  const normalizedRecipients = Array.isArray(to)
+    ? to.map((x) => String(x || '').trim()).filter(Boolean)
+    : [String(to || '').trim()].filter(Boolean);
+
+  if (normalizedRecipients.length === 0 || !subject || !bodyHtml) {
+    throw new Error('Missing required email parameters');
+  }
+
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) {
+    throw new Error('SMTP configuration is incomplete. Please check your .env file.');
+  }
+
+  const fbLink = 'https://www.facebook.com/littlechampionsacademy';
+  const qrBlock = `
+    <div style="margin:20px 0;text-align:center;">
+      <img style="width:100%;max-width:560px;border-radius:8px;border:1px solid #e5e7eb;display:block;margin:0 auto;"
+           src="cid:payment_qr" alt="Payment QR Codes" />
+    </div>
+    <p style="margin:0 0 16px;color:#111827;line-height:1.6;">
+      For assistance, message us via our Facebook Page
+      <a href="${fbLink}" style="color:#F7C844;">${fbLink}</a>.
+    </p>`;
+
+  let html = bodyHtml;
+  if (html.includes('<div style="background-color:#f5f5f5;')) {
+    html = html.replace('<div style="background-color:#f5f5f5;', `${qrBlock}<div style="background-color:#f5f5f5;`);
+  } else {
+    html = `${html}${qrBlock}`;
+  }
+
+  const mailOptions = {
+    from: SMTP_FROM,
+    to: normalizedRecipients,
+    subject,
+    attachments: [
+      {
+        filename: 'payment-qr.png',
+        path: fileURLToPath(new URL('../assets/payment-qr.png', import.meta.url)),
+        cid: 'payment_qr',
+      },
+    ],
+    html,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Monthly invoice notice email sent:', {
+      to: normalizedRecipients,
+      invoiceId,
+      invoiceNumber,
+      studentName,
+      messageId: info.messageId,
+    });
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('❌ Error sending monthly invoice notice email:', error);
     throw error;
   }
 };
@@ -714,6 +715,7 @@ export default {
   sendInvoiceEmail,
   sendSuspensionEmail,
   sendOverduePaymentReminderEmail,
+  sendMonthlyInvoiceNoticeEmail,
   sendSystemNotificationEmail,
   sendSystemNotificationEmailToEach,
   normalizeNotificationRecipients,

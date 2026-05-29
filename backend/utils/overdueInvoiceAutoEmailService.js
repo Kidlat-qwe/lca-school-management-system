@@ -54,15 +54,18 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
         g.guardian_name as parent_name,
         u.email as student_email,
         g.email as guardian_email,
+        u.phone_number as student_phone,
+        g.guardian_phone_number as guardian_phone,
         i.invoice_description,
         i.due_date,
         i.status,
+        i.branch_id,
         b.branch_name
       FROM invoicestudentstbl invs
       JOIN invoicestbl i ON i.invoice_id = invs.invoice_id
       JOIN userstbl u ON u.user_id = invs.student_id
       LEFT JOIN LATERAL (
-        SELECT guardian_name, email
+        SELECT guardian_name, email, guardian_phone_number
         FROM guardianstbl
         WHERE student_id = invs.student_id
         ORDER BY guardian_id ASC
@@ -170,7 +173,9 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
             dueDate: r.due_date,
             className,
             centerName: r.branch_name || null,
+            branchId: r.branch_id ?? null,
             facebookLink: 'https://www.facebook.com/littlechampionsacademy',
+            phoneNumbers: [r.guardian_phone, r.student_phone],
           });
 
           emailed += 1;

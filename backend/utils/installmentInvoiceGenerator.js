@@ -584,7 +584,30 @@ export const processDueInstallmentInvoices = async () => {
           total_phases: installmentInvoice.total_phases,
           phase_start: installmentInvoice.phase_start,
         });
-        
+
+        try {
+          const { sendMonthlyInvoiceGeneratedNotice } = await import(
+            './monthlyInvoiceNoticeEmailService.js'
+          );
+          const emailResult = await sendMonthlyInvoiceGeneratedNotice({
+            invoiceId: invoiceData.invoice_id,
+          });
+          if (emailResult?.sent > 0) {
+            console.log(
+              `[Generator] Monthly invoice notice sent for invoice_id=${invoiceData.invoice_id} (${emailResult.sent} recipient group(s))`
+            );
+          } else if (emailResult?.skipped) {
+            console.log(
+              `[Generator] Monthly invoice notice skipped for invoice_id=${invoiceData.invoice_id}: ${emailResult.reason || 'unknown'}`
+            );
+          }
+        } catch (emailErr) {
+          console.error(
+            `[Generator] Monthly invoice notice email failed for invoice_id=${invoiceData.invoice_id}:`,
+            emailErr?.message || emailErr
+          );
+        }
+
         processed.push(invoiceData);
       } catch (error) {
         console.error(`Error processing installment invoice ${installmentInvoice.installmentinvoicedtl_id}:`, error);

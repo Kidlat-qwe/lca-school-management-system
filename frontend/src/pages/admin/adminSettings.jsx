@@ -1,80 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../config/api';
+import TemplateEditorCard from '../../components/settings/TemplateEditorCard';
+import {
+  TEMPLATE_DEFS,
+  TEMPLATE_KEYS,
+  buildEmptyTemplatesState,
+  emptyTemplate,
+  normalizeTemplateValue,
+} from '../../constants/templateDefinitions';
+import { useTemplateUnsavedGuard } from '../../hooks/useTemplateUnsavedGuard';
+import {
+  areTemplatesDirty,
+  cloneTemplatesState,
+} from '../../utils/templateSettingsSnapshot';
 
 const TABS = [
   { id: 'billing', label: 'Billing & Penalties' },
   { id: 'schedule', label: 'Invoice Schedule' },
   { id: 'templates', label: 'Templates' },
 ];
-
-// Template metadata for the Templates tab. The keys mirror the backend
-// SETTINGS_DEFINITIONS for category 'templates'. Each value stored on the
-// server has the shape { title, subject, body, enabled }.
-const TEMPLATE_DEFS = [
-  {
-    key: 'template_general_notification',
-    label: 'General Notification',
-    description: 'In-app notification template for system-wide announcements.',
-    showSubject: false,
-    variables: ['{recipientName}', '{schoolName}', '{branchName}', '{date}'],
-  },
-  {
-    key: 'template_general_email',
-    label: 'General Email',
-    description: 'Generic email template for ad-hoc school-to-parent emails.',
-    showSubject: true,
-    variables: ['{recipientName}', '{schoolName}', '{branchName}', '{date}'],
-  },
-  {
-    key: 'template_eod_summary',
-    label: 'End of Day Summary',
-    description: 'Sent to stakeholders after a branch submits its EOD summary.',
-    showSubject: true,
-    variables: ['{summaryDate}', '{totalAmount}', '{paymentCount}', '{submittedBy}', '{branchName}'],
-  },
-  {
-    key: 'template_cash_deposit',
-    label: 'Cash Deposit Submission',
-    description: 'In-app/email notification when a cash deposit is submitted.',
-    showSubject: true,
-    variables: ['{depositDate}', '{cashTotal}', '{branchName}', '{submittedBy}'],
-  },
-  {
-    key: 'template_payment_confirmation',
-    label: 'Payment Confirmation',
-    description: 'Email sent to the student/guardian after a payment is recorded.',
-    showSubject: true,
-    variables: ['{recipientName}', '{studentName}', '{invoiceNumber}', '{amountPaid}', '{paymentDate}', '{schoolName}'],
-  },
-  {
-    key: 'template_payment_reminder',
-    label: 'Payment Reminder',
-    description: 'Overdue payment reminder sent to the student/guardian.',
-    showSubject: true,
-    variables: ['{recipientName}', '{studentName}', '{invoiceNumber}', '{dueDate}', '{amountDue}', '{daysOverdue}', '{schoolName}'],
-  },
-];
-
-const TEMPLATE_KEYS = TEMPLATE_DEFS.map((t) => t.key);
-
-const emptyTemplate = () => ({ title: '', subject: '', body: '', enabled: true });
-
-const normalizeTemplateValue = (raw) => {
-  const base = emptyTemplate();
-  if (!raw || typeof raw !== 'object') return base;
-  return {
-    title: typeof raw.title === 'string' ? raw.title : base.title,
-    subject: typeof raw.subject === 'string' ? raw.subject : base.subject,
-    body: typeof raw.body === 'string' ? raw.body : base.body,
-    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : base.enabled,
-  };
-};
-
-const buildEmptyTemplatesState = () =>
-  TEMPLATE_KEYS.reduce((acc, key) => {
-    acc[key] = emptyTemplate();
-    return acc;
-  }, {});
 
 const todayStr = () => {
   const d = new Date();
@@ -129,6 +73,8 @@ const AdminSettings = () => {
   const [templateSuccess, setTemplateSuccess] = useState('');
   const [templateEffective, setTemplateEffective] = useState(null);
   const [templates, setTemplates] = useState(buildEmptyTemplatesState);
+  const [templatesBaseline, setTemplatesBaseline] = useState(buildEmptyTemplatesState);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState(TEMPLATE_DEFS[0].key);
 
   // ── Fetch billing settings ────────────────────────────────────────────────
   const fetchBillingSettings = async () => {
@@ -202,6 +148,7 @@ const AdminSettings = () => {
         next[key] = normalizeTemplateValue(settings?.[key]?.value);
       }
       setTemplates(next);
+      setTemplatesBaseline(cloneTemplatesState(next));
     } catch (e) {
       setTemplateError(e?.message || 'Failed to load templates');
     } finally {
@@ -228,11 +175,68 @@ const AdminSettings = () => {
     return meta;
   }, [templateEffective]);
 
+  const selectedTemplateDef = useMemo(
+    () => TEMPLATE_DEFS.find((d) => d.key === selectedTemplateKey) || TEMPLATE_DEFS[0],
+    [selectedTemplateKey]
+  );
+
   const updateTemplateField = (key, field, value) => {
     setTemplates((prev) => ({
       ...prev,
       [key]: { ...(prev[key] || emptyTemplate()), [field]: value },
     }));
+  };
+
+  const templatesDirty = useMemo(
+    () => areTemplatesDirty(templates, templatesBaseline),
+    [templates, templatesBaseline]
+  );
+
+  const discardTemplateChanges = useCallback(() => {
+    setTemplates(cloneTemplatesState(templatesBaseline));
+  }, [templatesBaseline]);
+
+  const onSaveTemplates = useCallback(async () => {
+    setTemplateSaving(true);
+    setTemplateError('');
+    setTemplateSuccess('');
+    try {
+      const settingsPayload = {};
+      for (const key of TEMPLATE_KEYS) {
+        settingsPayload[key] = normalizeTemplateValue(templates[key]);
+      }
+
+      await apiRequest('/settings/batch', {
+        method: 'PUT',
+        body: {
+          scope: 'branch',
+          settings: settingsPayload,
+        },
+      });
+
+      const savedSnapshot = cloneTemplatesState(templates);
+      setTemplates(savedSnapshot);
+      setTemplatesBaseline(savedSnapshot);
+      setTemplateSuccess('Templates saved successfully.');
+      return true;
+    } catch (e) {
+      setTemplateError(e?.message || 'Failed to save templates');
+      return false;
+    } finally {
+      setTemplateSaving(false);
+    }
+  }, [templates]);
+
+  const { runGuardedAction } = useTemplateUnsavedGuard({
+    isDirty: templatesDirty,
+    onSave: onSaveTemplates,
+    onDiscard: discardTemplateChanges,
+    enabled: !templateLoading,
+  });
+
+  const handleTabChange = (tabId) => {
+    if (tabId === activeTab) return;
+    runGuardedAction(() => setActiveTab(tabId));
   };
 
   useEffect(() => {
@@ -316,34 +320,6 @@ const AdminSettings = () => {
     }
   };
 
-  // ── Save template settings ────────────────────────────────────────────────
-  const onSaveTemplates = async () => {
-    setTemplateSaving(true);
-    setTemplateError('');
-    setTemplateSuccess('');
-    try {
-      const settingsPayload = {};
-      for (const key of TEMPLATE_KEYS) {
-        settingsPayload[key] = normalizeTemplateValue(templates[key]);
-      }
-
-      await apiRequest('/settings/batch', {
-        method: 'PUT',
-        body: {
-          scope: 'branch',
-          settings: settingsPayload,
-        },
-      });
-
-      setTemplateSuccess('Templates saved successfully.');
-      await fetchTemplateSettings();
-    } catch (e) {
-      setTemplateError(e?.message || 'Failed to save templates');
-    } finally {
-      setTemplateSaving(false);
-    }
-  };
-
   // ── Helper ────────────────────────────────────────────────────────────────
   const ScopeTag = ({ scopeVal }) => {
     const color =
@@ -380,7 +356,7 @@ const AdminSettings = () => {
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => handleTabChange(tab.id)}
                   className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors duration-150 focus:outline-none whitespace-nowrap ${
                     activeTab === tab.id
                       ? 'border-[#F7C844] text-gray-900'
@@ -388,6 +364,11 @@ const AdminSettings = () => {
                   }`}
                 >
                   {tab.label}
+                  {templatesDirty && tab.id === 'templates' ? (
+                    <span className="ml-1 text-amber-600" title="Unsaved template changes" aria-hidden>
+                      •
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </nav>
@@ -631,99 +612,40 @@ const AdminSettings = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                  {TEMPLATE_DEFS.map((def) => {
-                    const tpl = templates[def.key] || emptyTemplate();
-                    const disabled = templateLoading || templateSaving;
-                    return (
-                      <div
-                        key={def.key}
-                        className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h3 className="text-sm font-semibold text-gray-900">{def.label}</h3>
-                            <p className="mt-0.5 text-xs text-gray-500">{def.description}</p>
-                          </div>
-                          <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs text-gray-700">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]/40"
-                              checked={!!tpl.enabled}
-                              onChange={(e) => updateTemplateField(def.key, 'enabled', e.target.checked)}
-                              disabled={disabled}
-                            />
-                            Enabled
-                          </label>
-                        </div>
-
-                        <p className="mt-2 flex items-center gap-1.5 text-xs text-gray-500">
-                          Source: <ScopeTag scopeVal={templateScopeMeta[def.key]} />
-                        </p>
-
-                        <div className="mt-3 space-y-3">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-700">Title</label>
-                            <input
-                              type="text"
-                              value={tpl.title}
-                              onChange={(e) => updateTemplateField(def.key, 'title', e.target.value)}
-                              disabled={disabled}
-                              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
-                            />
-                          </div>
-
-                          {def.showSubject && (
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700">Subject</label>
-                              <input
-                                type="text"
-                                value={tpl.subject}
-                                onChange={(e) => updateTemplateField(def.key, 'subject', e.target.value)}
-                                disabled={disabled}
-                                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
-                              />
-                            </div>
-                          )}
-
-                          <div>
-                            <label className="block text-xs font-medium text-gray-700">Body</label>
-                            <textarea
-                              rows={5}
-                              value={tpl.body}
-                              onChange={(e) => updateTemplateField(def.key, 'body', e.target.value)}
-                              disabled={disabled}
-                              className="mt-1 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm leading-relaxed focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
-                            />
-                          </div>
-
-                          {def.variables.length > 0 && (
-                            <div>
-                              <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                                Available variables
-                              </p>
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {def.variables.map((v) => (
-                                  <code
-                                    key={v}
-                                    className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700"
-                                  >
-                                    {v}
-                                  </code>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="mb-4">
+                  <label htmlFor="template-select" className="block text-sm font-medium text-gray-700">
+                    Template
+                  </label>
+                  <select
+                    id="template-select"
+                    className="mt-1 w-full max-w-md rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
+                    value={selectedTemplateKey}
+                    onChange={(e) => setSelectedTemplateKey(e.target.value)}
+                  >
+                    {TEMPLATE_DEFS.map((def) => (
+                      <option key={def.key} value={def.key}>
+                        {def.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+
+                <TemplateEditorCard
+                  templateDef={selectedTemplateDef}
+                  templateValue={templates[selectedTemplateDef.key] || emptyTemplate()}
+                  disabled={templateLoading || templateSaving}
+                  scopeTag={<ScopeTag scopeVal={templateScopeMeta[selectedTemplateDef.key]} />}
+                  onFieldChange={(field, value) =>
+                    updateTemplateField(selectedTemplateDef.key, field, value)
+                  }
+                />
 
                 <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-gray-500">
-                    Note: Templates are stored now and will be applied by outgoing messages in
-                    a follow-up wiring step.
+                    {templatesDirty
+                      ? 'You have unsaved template changes. Save before leaving this page.'
+                      : 'Saved templates are used by outgoing emails and in-app notifications.'}{' '}
+                    Variable tokens are auto-detected and locked after insertion.
                   </p>
                   <button
                     type="button"

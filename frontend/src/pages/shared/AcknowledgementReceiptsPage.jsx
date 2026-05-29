@@ -20,6 +20,15 @@ import { getArListLineTotal, getArListPackagePrimaryLabel } from '../../utils/ac
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
+const isValidPhilippineMobile = (phone) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return false;
+  if (digits.length === 11 && digits.startsWith('09')) return true;
+  if (digits.length === 12 && digits.startsWith('639')) return true;
+  if (digits.length === 10 && digits.startsWith('9')) return true;
+  return false;
+};
+
 /**
  * Short, business-facing description for each Acknowledgement Receipt
  * status. Surfaced as a hover tooltip on a small info icon next to the
@@ -175,6 +184,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     prospect_student_name: '',
     prospect_student_contact: '',
     prospect_student_email: '',
+    prospect_student_phone: '',
     prospect_student_notes: '',
     level_tag: '',
     reference_number: '',
@@ -198,6 +208,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     prospect_student_name: '',
     prospect_student_contact: '',
     prospect_student_email: '',
+    prospect_student_phone: '',
     prospect_student_notes: '',
     package_id: '',
     payment_amount: '',
@@ -236,6 +247,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     prospect_student_name: '',
     prospect_student_contact: '',
     prospect_student_email: '',
+    prospect_student_phone: '',
     prospect_student_notes: '',
     level_tag: '',
     reference_number: '',
@@ -531,6 +543,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_name: '',
       prospect_student_contact: '',
       prospect_student_email: '',
+      prospect_student_phone: '',
       prospect_student_notes: '',
       package_id: '',
       payment_amount: '',
@@ -745,6 +758,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         'Acknowledgement Receipt ID': r.ack_receipt_id ?? '-',
         'Student Name': r.prospect_student_name || '-',
         'Guardian Name': r.prospect_student_contact || '-',
+        'Mobile Number': r.prospect_student_phone || '-',
         'Package / Items': getArPackageOrItems(r),
         'Level Tag': r.level_tag || '-',
         'Total Amount (PHP)': getArListLineTotal(r).toFixed(2),
@@ -825,7 +839,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       ...prev,
       package_id: '',
       payment_amount: '',
-      prospect_student_contact: newType === 'Package' ? prev.prospect_student_contact : '',
+      prospect_student_contact: prev.prospect_student_contact,
     }));
     const branchId = isSuperadmin ? parseInt(selectedBranchId, 10) : userBranchId;
     if (newType === 'Merchandise' && branchId) {
@@ -1232,8 +1246,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       appAlert('Please enter a valid client email before resubmitting.');
       return;
     }
+    const phone = (viewFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(phone)) {
+      appAlert('Please enter a valid mobile number for SMS notifications before resubmitting.');
+      return;
+    }
     if (!(viewFormData.prospect_student_name || '').trim()) {
       appAlert('Student name is required.');
+      return;
+    }
+    if (!(viewFormData.prospect_student_contact || '').trim()) {
+      appAlert('Guardian name is required.');
       return;
     }
     if (!(viewFormData.package_id || '').trim()) {
@@ -1273,6 +1296,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         prospect_student_name: (viewFormData.prospect_student_name || '').trim(),
         prospect_student_contact: (viewFormData.prospect_student_contact || '').trim() || null,
         prospect_student_email: email || null,
+        prospect_student_phone: phone,
         prospect_student_notes: (viewFormData.prospect_student_notes || '').trim() || null,
         level_tag: (viewFormData.level_tag || '').trim() || null,
         reference_number: (viewFormData.reference_number || '').trim() || null,
@@ -1323,6 +1347,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       errors.issue_date = isMerch ? 'Payment date is required' : 'Issue date is required';
     }
 
+    const guardianName = (createFormData.prospect_student_contact || '').trim();
+    if (!guardianName) {
+      errors.prospect_student_contact = 'Guardian name is required';
+    }
+
     if (isMerch) {
       const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
       if (merchandiseSelections.length === 0 || configuredCount === 0) {
@@ -1335,10 +1364,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         errors.level_tag = 'Level tag is required';
       }
     } else {
-      const guardianName = (createFormData.prospect_student_contact || '').trim();
-      if (!guardianName) {
-        errors.prospect_student_contact = 'Guardian name is required';
-      }
       if (!createFormData.package_id) {
         errors.package_id = 'Package is required';
       }
@@ -1354,6 +1379,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
     if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
       errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    const arPhone = (createFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(arPhone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)';
     }
     if (createFormData.tip_amount !== '' && Number(createFormData.tip_amount) < 0) {
       errors.tip_amount = 'Tip amount cannot be negative';
@@ -1387,7 +1417,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         payload = {
           ar_type: 'Merchandise',
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
           prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+          prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
           prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
           level_tag: (createFormData.level_tag || '').trim() || undefined,
           merchandise_items: merchandiseSelections
@@ -1417,6 +1449,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
           prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
           prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+          prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
           prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
           package_id: parseInt(createFormData.package_id, 10),
           payment_amount: parseFloat(createFormData.payment_amount),
@@ -1601,6 +1634,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_name: receipt.prospect_student_name || '',
       prospect_student_contact: receipt.prospect_student_contact || '',
       prospect_student_email: receipt.prospect_student_email || '',
+      prospect_student_phone: receipt.prospect_student_phone || '',
       prospect_student_notes: receipt.prospect_student_notes || '',
       level_tag: receipt.level_tag || '',
       reference_number: receipt.reference_number || '',
@@ -1635,6 +1669,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_name: receipt.prospect_student_name || '',
       prospect_student_contact: receipt.prospect_student_contact || '',
       prospect_student_email: receipt.prospect_student_email || '',
+      prospect_student_phone: receipt.prospect_student_phone || '',
       prospect_student_notes: receipt.prospect_student_notes || '',
       level_tag: receipt.level_tag || '',
       reference_number: receipt.reference_number || '',
@@ -1659,6 +1694,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_name: '',
       prospect_student_contact: '',
       prospect_student_email: '',
+      prospect_student_phone: '',
       prospect_student_notes: '',
       level_tag: '',
       reference_number: '',
@@ -1704,9 +1740,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (!(editFormData.prospect_student_name || '').trim()) {
       errors.prospect_student_name = 'Student name is required';
     }
+    if (!(editFormData.prospect_student_contact || '').trim()) {
+      errors.prospect_student_contact = 'Guardian name is required';
+    }
     const email = (editFormData.prospect_student_email || '').trim();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    const phone = (editFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(phone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation';
     }
     if (!AR_PAYMENT_METHOD_OPTIONS.includes(editFormData.payment_method || '')) {
       errors.payment_method = 'Payment method is required';
@@ -1735,6 +1779,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         prospect_student_name: (editFormData.prospect_student_name || '').trim(),
         prospect_student_contact: (editFormData.prospect_student_contact || '').trim() || null,
         prospect_student_email: (editFormData.prospect_student_email || '').trim() || null,
+        prospect_student_phone: (editFormData.prospect_student_phone || '').trim(),
         prospect_student_notes: (editFormData.prospect_student_notes || '').trim() || null,
         level_tag: (editFormData.level_tag || '').trim() || null,
         reference_number: (editFormData.reference_number || '').trim() || null,
@@ -2157,12 +2202,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1520px' }}
+                style={{ width: '100%', minWidth: '1620px' }}
               >
                 <thead className="bg-gray-50 table-header-stable">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Student Name</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Guardian Name</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Mobile</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Package / Items</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Level Tag</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Total Amount</th>
@@ -2183,7 +2229,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 13 : 12} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 14 : 13} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
@@ -2200,6 +2246,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       </td>
                       <td className="px-4 py-3 text-gray-900">
                         {r.prospect_student_contact || <span className="text-gray-300">–</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900 whitespace-nowrap">
+                        {r.prospect_student_phone || <span className="text-gray-300">–</span>}
                       </td>
                       <td className="px-4 py-3">
                         {r.ar_type === 'Merchandise' ? (
@@ -2722,34 +2771,70 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 )}
                 {arType === 'Merchandise' ? (
                   <>
-                    <div>
-                      <label className="label-field text-xs">
-                        Student Name <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        name="prospect_student_name"
-                        value={createFormData.prospect_student_name}
-                        onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
-                      />
-                      {createFormErrors.prospect_student_name && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
-                      )}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">
+                          Student Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_name"
+                          value={createFormData.prospect_student_name}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
+                        />
+                        {createFormErrors.prospect_student_name && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Guardian Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_contact"
+                          value={createFormData.prospect_student_contact}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_contact ? 'border-red-500' : ''}`}
+                        />
+                        {createFormErrors.prospect_student_contact && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                      <input
-                        type="email"
-                        name="prospect_student_email"
-                        value={createFormData.prospect_student_email}
-                        onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
-                        placeholder="client@example.com"
-                      />
-                      {createFormErrors.prospect_student_email && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
-                      )}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          name="prospect_student_email"
+                          value={createFormData.prospect_student_email}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                          placeholder="client@example.com"
+                        />
+                        {createFormErrors.prospect_student_email && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          name="prospect_student_phone"
+                          value={createFormData.prospect_student_phone}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                          placeholder="09171234567"
+                          autoComplete="tel"
+                        />
+                        {createFormErrors.prospect_student_phone && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="label-field text-xs">
@@ -3054,19 +3139,38 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                  <input
-                    type="email"
-                    name="prospect_student_email"
-                    value={createFormData.prospect_student_email}
-                    onChange={handleCreateInputChange}
-                    className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
-                    placeholder="client@example.com"
-                  />
-                  {createFormErrors.prospect_student_email && (
-                    <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
-                  )}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                    <input
+                      type="email"
+                      name="prospect_student_email"
+                      value={createFormData.prospect_student_email}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                      placeholder="client@example.com"
+                    />
+                    {createFormErrors.prospect_student_email && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">
+                      Mobile Number (SMS) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      name="prospect_student_phone"
+                      value={createFormData.prospect_student_phone}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                      placeholder="09171234567"
+                      autoComplete="tel"
+                    />
+                    {createFormErrors.prospect_student_phone && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -3485,6 +3589,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           {r.prospect_student_email}
                         </p>
                       ) : null}
+                      {r.prospect_student_phone ? (
+                        <p className="mt-1 text-xs text-gray-500">
+                          <span className="font-medium">Mobile: </span>
+                          {r.prospect_student_phone}
+                        </p>
+                      ) : null}
                       {r.reference_number ? (
                         <p className="mt-1 text-xs text-gray-500">
                           <span className="font-medium">Reference: </span>
@@ -3616,6 +3726,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           <p className="mt-2 text-xs text-gray-500">
                             <span className="font-medium">Client email: </span>
                             {r.prospect_student_email}
+                          </p>
+                        ) : null}
+                        {r.prospect_student_phone ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Mobile: </span>
+                            {r.prospect_student_phone}
                           </p>
                         ) : null}
                         {r.reference_number ? (
@@ -3771,15 +3887,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
 
                   <div>
-                    <label className="label-field text-xs">Guardian Name</label>
+                    <label className="label-field text-xs">
+                      Guardian Name <span className="text-red-500">*</span>
+                    </label>
                     <input
                       type="text"
                       name="prospect_student_contact"
                       value={editFormData.prospect_student_contact}
                       onChange={handleEditInputChange}
-                      className="input-field text-sm"
+                      className={`input-field text-sm ${editFormErrors.prospect_student_contact ? 'border-red-500' : ''}`}
                       disabled={editSaving}
                     />
+                    {editFormErrors.prospect_student_contact && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_contact}</p>
+                    )}
                   </div>
 
                   <div>
@@ -3794,6 +3915,25 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     />
                     {editFormErrors.prospect_student_email && (
                       <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_email}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">
+                      Mobile Number (SMS) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      name="prospect_student_phone"
+                      value={editFormData.prospect_student_phone}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                      placeholder="09171234567"
+                      autoComplete="tel"
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_phone && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_phone}</p>
                     )}
                   </div>
 
@@ -4056,14 +4196,25 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         />
                       </div>
                     </div>
-                    <div>
-                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                      <input
-                        type="email"
-                        readOnly
-                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                        value={viewReceipt.prospect_student_email || ''}
-                      />
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={viewReceipt.prospect_student_email || ''}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Mobile Number (SMS)</label>
+                        <input
+                          type="tel"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={viewReceipt.prospect_student_phone || ''}
+                        />
+                      </div>
                     </div>
                     <div>
                       <label className="label-field text-xs">Notes</label>
@@ -4090,7 +4241,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         />
                       </div>
                       <div>
-                        <label className="label-field text-xs">Guardian Name</label>
+                        <label className="label-field text-xs">
+                          Guardian Name <span className="text-red-500">*</span>
+                        </label>
                         <input
                           type="text"
                           name="prospect_student_contact"
@@ -4101,16 +4254,33 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         />
                       </div>
                     </div>
-                    <div>
-                      <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                      <input
-                        type="email"
-                        name="prospect_student_email"
-                        className="input-field text-sm"
-                        value={viewFormData.prospect_student_email}
-                        onChange={handleViewInputChange}
-                        disabled={viewResubmitSaving}
-                      />
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          name="prospect_student_email"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_email}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          name="prospect_student_phone"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_phone}
+                          onChange={handleViewInputChange}
+                          placeholder="09171234567"
+                          autoComplete="tel"
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
                     </div>
                     <div>
                       <label className="label-field text-xs">Notes</label>

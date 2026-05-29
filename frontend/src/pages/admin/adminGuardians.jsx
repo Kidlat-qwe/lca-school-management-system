@@ -18,6 +18,7 @@ const AdminGuardians = () => {
   const [editForm, setEditForm] = useState({
     guardian_name: '',
     email: '',
+    guardian_phone_number: '',
     relationship: '',
     address: '',
     student_id: '',
@@ -82,7 +83,7 @@ const AdminGuardians = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search guardian, email, student..."
+            placeholder="Search guardian, email, phone, student..."
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#F7C844] focus:ring-[#F7C844]"
           />
         </div>
@@ -111,7 +112,7 @@ const AdminGuardians = () => {
           >
             <table
               className="divide-y divide-gray-200"
-              style={{ width: '100%', minWidth: '900px' }}
+              style={{ width: '100%', minWidth: '1020px' }}
             >
               <thead className="bg-white">
                 <tr>
@@ -120,6 +121,9 @@ const AdminGuardians = () => {
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Email
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Phone Number
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Relationship
@@ -138,7 +142,7 @@ const AdminGuardians = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {guardians.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center">
+                    <td colSpan={7} className="px-6 py-12 text-center">
                       <p className="text-gray-500">No guardians found.</p>
                     </td>
                   </tr>
@@ -150,6 +154,9 @@ const AdminGuardians = () => {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="text-sm text-gray-900">{g.email || '-'}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{g.guardian_phone_number || '-'}</div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="text-sm text-gray-900">{g.relationship || '-'}</div>
@@ -168,6 +175,7 @@ const AdminGuardians = () => {
                           setEditForm({
                             guardian_name: g.guardian_name || '',
                             email: g.email || '',
+                            guardian_phone_number: g.guardian_phone_number || '',
                             relationship: g.relationship || '',
                             address: g.address || '',
                             student_id: g.student_id || '',
@@ -239,6 +247,21 @@ const AdminGuardians = () => {
                   onChange={(e) => setEditForm((prev) => ({ ...prev, email: e.target.value }))}
                 />
               </div>
+              <div>
+                <label className="label-field text-xs">Phone Number</label>
+                <input
+                  type="tel"
+                  className="input-field text-sm"
+                  value={editForm.guardian_phone_number}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({ ...prev, guardian_phone_number: e.target.value }))
+                  }
+                  placeholder="e.g. 09171234567 or +639171234567"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Used for SMS payment reminders and confirmations.
+                </p>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="label-field text-xs">Relationship</label>
@@ -296,12 +319,18 @@ const AdminGuardians = () => {
                       body: JSON.stringify({
                         guardian_name: editForm.guardian_name?.trim(),
                         email: editForm.email?.trim(),
+                        guardian_phone_number: editForm.guardian_phone_number?.trim() || null,
                         relationship: editForm.relationship?.trim(),
                         address: editForm.address?.trim(),
                         student_id: editForm.student_id ? parseInt(editForm.student_id, 10) : null,
                       }),
                     });
-                    const response = await apiRequest('/guardians');
+                    const params = new URLSearchParams({
+                      limit: String(itemsPerPage),
+                      page: String(currentPage),
+                    });
+                    if (searchDebounced.trim()) params.set('search', searchDebounced.trim());
+                    const response = await apiRequest(`/guardians?${params.toString()}`);
                     setGuardians(response.data || []);
                     setEditingGuardian(null);
                   } catch (err) {

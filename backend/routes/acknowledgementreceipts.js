@@ -25,6 +25,7 @@ import {
   drawArCutGuideLines,
 } from '../lib/ackReceiptPdfLayout.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
+import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -897,6 +898,7 @@ router.post(
     body('prospect_student_name').notEmpty().isString().withMessage('Student name is required'),
     body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
     body('prospect_student_email').optional({ nullable: true, checkFalsy: true }).isEmail().withMessage('Client email must be a valid email'),
+    body('prospect_student_phone').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
     body('prospect_student_notes').optional().isString().withMessage('Notes must be a string'),
     body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
     body('payment_amount').optional({ nullable: true }).isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
@@ -950,6 +952,7 @@ router.post(
         prospect_student_name,
         prospect_student_contact,
         prospect_student_email,
+        prospect_student_phone,
         prospect_student_notes,
         package_id,
         issue_date,
@@ -965,6 +968,26 @@ router.post(
       } = req.body;
 
       let branchId = bodyBranchId || req.user.branchId || null;
+
+      const arPhoneNumbers = collectPhilippineMobiles(prospect_student_phone);
+      if (arPhoneNumbers.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
+        });
+      }
+      const normalizedProspectPhone = arPhoneNumbers[0];
+
+      if (!prospect_student_contact?.trim()) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Guardian name is required for acknowledgement receipt',
+        });
+      }
+
       /** When true, create two Package AR rows (sequential AR numbers); leader links phase via paired_ack_receipt_id. */
       let isSplitDualPackageAr = false;
       let splitDownpaymentAmt = 0;
@@ -1062,14 +1085,6 @@ router.post(
         }
       } else {
         // ── PACKAGE AR ─────────────────────────────────────────────────────
-        if (!prospect_student_contact || !prospect_student_contact.trim()) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'Guardian name is required for package acknowledgement receipt',
-          });
-        }
-
         if (!package_id) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -1186,6 +1201,7 @@ router.post(
           prospect_student_name,
           prospect_student_contact?.trim() || null,
           prospect_student_email?.trim()?.toLowerCase() || null,
+          normalizedProspectPhone,
           prospect_student_notes?.trim() || null,
           linkedStudentId || null,
           branchId,
@@ -1215,6 +1231,7 @@ router.post(
                prospect_student_name,
                prospect_student_contact,
                prospect_student_email,
+               prospect_student_phone,
                prospect_student_notes,
                student_id,
                branch_id,
@@ -1237,9 +1254,9 @@ router.post(
                verified_at
              )
              VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL, NULL, $22,
-               $23, $24
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               $14, $15, $16, $17, $18, $19, $20, $21, $22, NULL, NULL, $23,
+               $24, $25
              )
              RETURNING *`,
               insertParamsWithVerifier
@@ -1252,6 +1269,7 @@ router.post(
                prospect_student_name,
                prospect_student_contact,
                prospect_student_email,
+               prospect_student_phone,
                prospect_student_notes,
                student_id,
                branch_id,
@@ -1272,8 +1290,8 @@ router.post(
                created_by
              )
              VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL, NULL, $22
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               $14, $15, $16, $17, $18, $19, $20, $21, $22, NULL, NULL, $23
              )
              RETURNING *`,
               insertParams
@@ -2647,6 +2665,7 @@ router.put(
     body('prospect_student_name').optional({ nullable: true }).isString().withMessage('Student name must be a string'),
     body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
     body('prospect_student_email').optional({ nullable: true }).isEmail().withMessage('Email must be valid'),
+    body('prospect_student_phone').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
     body('prospect_student_notes').optional({ nullable: true }).isString().withMessage('Notes must be a string'),
     body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
     body('reference_number').optional({ nullable: true }).isString().withMessage('Reference number must be a string'),
@@ -2738,10 +2757,28 @@ router.put(
         pushUpdate('prospect_student_name', String(raw.prospect_student_name || '').trim() || null);
       }
       if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_contact')) {
-        pushUpdate('prospect_student_contact', String(raw.prospect_student_contact || '').trim() || null);
+        const contact = String(raw.prospect_student_contact || '').trim();
+        if (!contact) {
+          return res.status(400).json({
+            success: false,
+            message: 'Guardian name is required for acknowledgement receipt',
+          });
+        }
+        pushUpdate('prospect_student_contact', contact);
       }
       if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_email')) {
         pushUpdate('prospect_student_email', String(raw.prospect_student_email || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_phone')) {
+        const phones = collectPhilippineMobiles(raw.prospect_student_phone);
+        if (phones.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
+          });
+        }
+        pushUpdate('prospect_student_phone', phones[0]);
       }
       if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_notes')) {
         pushUpdate('prospect_student_notes', String(raw.prospect_student_notes || '').trim() || null);

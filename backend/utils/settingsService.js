@@ -78,33 +78,7 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
   // --- Templates (notification / email / EOD / cash deposit / payment / reminder) ---
   // Stored as JSON with a consistent shape:
   //   { title, subject, body, enabled }
-  // Variables referenced in the body (e.g. {studentName}) are placeholders for a
-  // future rendering phase; this phase only manages the stored content.
-  template_general_notification: {
-    key: 'template_general_notification',
-    type: 'json',
-    category: 'templates',
-    description:
-      'Generic in-app notification template used for system-wide announcements.',
-    defaultValue: {
-      title: 'System Notification',
-      subject: '',
-      body: 'Hello {recipientName}, this is a notification from {schoolName} ({branchName}).',
-      enabled: true,
-    },
-  },
-  template_general_email: {
-    key: 'template_general_email',
-    type: 'json',
-    category: 'templates',
-    description: 'Generic email template used for ad-hoc school-to-parent emails.',
-    defaultValue: {
-      title: '',
-      subject: 'Update from {schoolName}',
-      body: 'Hello {recipientName},\n\nThis is an update from {schoolName} ({branchName}) on {date}.\n\nThank you,\n{schoolName}',
-      enabled: true,
-    },
-  },
+  // Variables in {curlyBraces} are substituted by templateRenderService.js at send time.
   template_eod_summary: {
     key: 'template_eod_summary',
     type: 'json',
@@ -138,6 +112,9 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
       title: 'Payment Received',
       subject: 'Payment Received - {invoiceNumber}',
       body: 'Hello {recipientName},\n\nWe have received your payment of {amountPaid} for {studentName} (Invoice {invoiceNumber}) on {paymentDate}.\n\nThank you,\n{schoolName}',
+      sms_enabled: true,
+      sms_body:
+        'LCA: Payment received {amountPaid} for {studentName} ({invoiceNumber}) on {paymentDate}. Thank you!',
       enabled: true,
     },
   },
@@ -150,6 +127,33 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
       title: 'Payment Reminder - {invoiceNumber}',
       subject: 'Payment Reminder - {invoiceNumber}',
       body: 'Hello {recipientName},\n\nThis is a reminder that invoice {invoiceNumber} for {studentName} is {daysOverdue} day(s) past due.\nAmount due: {amountDue}\nDue date: {dueDate}\n\nThank you,\n{schoolName}',
+      sms_enabled: true,
+      sms_body:
+        'LCA: Reminder - {invoiceNumber} for {studentName} is {daysOverdue} day(s) overdue. Amount due: {amountDue}. Due: {dueDate}.',
+      enabled: true,
+    },
+  },
+  template_monthly_invoice_notice: {
+    key: 'template_monthly_invoice_notice',
+    type: 'json',
+    category: 'templates',
+    description:
+      'Email sent when a monthly installment invoice is auto-generated (issued on the 25th, due on the 5th of the next month).',
+    defaultValue: {
+      title: 'Monthly Invoice - {invoiceNumber}',
+      subject: 'Monthly Invoice {invoiceNumber} - Due {dueDate}',
+      body:
+        'Hello {recipientName},\n\n' +
+        'Your monthly tuition invoice for {studentName} has been generated for {billingPeriod}.\n\n' +
+        'Invoice: {invoiceNumber}\n' +
+        'Issue date: {issueDate}\n' +
+        'Due date: {dueDate}\n' +
+        'Amount due: {amountDue}\n\n' +
+        'Payment is due on {dueDate}. If you have already made a payment for this billing period, please disregard this message.\n\n' +
+        'Thank you,\n{schoolName}',
+      sms_enabled: true,
+      sms_body:
+        'LCA: Invoice {invoiceNumber} for {studentName} ({billingPeriod}). Amount due {amountDue}, due {dueDate}. Ignore if already paid.',
       enabled: true,
     },
   },
