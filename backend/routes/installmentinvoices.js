@@ -19,6 +19,10 @@ import {
   syncProgramPaymentStatusForInvoice,
 } from '../utils/programPaymentStatusService.js';
 import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
+import {
+  mapPhaseChainsToLocalSlots,
+  normalizeAdjacentPhaseDisplayDates,
+} from '../utils/installmentPhaseRowMapping.js';
 
 const router = express.Router();
 
@@ -294,10 +298,11 @@ router.get(
  *
  * Phase numbering rule: invoices linked to the profile (excluding the
  * downpayment) are grouped by chain root (so a re-billed/balance
- * invoice is counted once per chain), ordered by issue_date ASC, then
- * assigned phase numbers 1..N. Phases beyond N up to total_phases are
- * returned as "Not Generated" placeholders so the UI can show the
- * complete schedule at a glance.
+ * invoice is counted once per chain), then mapped to phase slots using
+ * TARGET_PHASE / remarks / description when available (absolute class
+ * phase converted to profile-local 1..N). Chains without phase hints
+ * fill remaining slots in invoice_id (creation) order. Phases beyond
+ * N up to total_phases are returned as "Not Generated" placeholders.
  *
  * Access: any authenticated user with branch access (already enforced
  * by router.use(verifyFirebaseToken) + requireBranchAccess above).
@@ -369,6 +374,7 @@ router.get(
                 i.invoice_ar_number,
                 i.amount,
                 i.status,
+                i.remarks,
                 TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
                 TO_CHAR(i.due_date, 'YYYY-MM-DD')   AS due_date,
                 COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
@@ -442,12 +448,10 @@ router.get(
           phaseChains.push(chain);
         }
       }
-      // Sort phase chains by the chain root invoice_id (creation order).
-      // We deliberately avoid sorting by issue_date because advance-paid
-      // invoices are created today (earlier date) while auto-generated
-      // invoices carry future scheduled dates, which would swap phases.
-      // The invoice_id sequence always matches the generation order.
-      phaseChains.sort((a, b) => Number(a.chain_root_id) - Number(b.chain_root_id));
+      // Map chains to profile-local phase slots (1..total_phases) using
+      // TARGET_PHASE when present; fallback to billing issue_date order;
+      // repair adjacent slots when issue dates run backwards.
+      const chainByLocalPhase = mapPhaseChainsToLocalSlots(phaseChains, profile);
 
       const todayYmd = (() => {
         const now = new Date();
@@ -501,9 +505,12 @@ router.get(
       const totalPhases =
         profile.total_phases != null ? Math.max(0, Number(profile.total_phases)) : phaseChains.length;
       const phases = [];
-      for (let i = 0; i < Math.max(totalPhases, phaseChains.length); i += 1) {
-        phases.push(buildPhaseRow(i + 1, phaseChains[i] || null));
+      const maxPhaseRows = Math.max(totalPhases, chainByLocalPhase.size);
+      for (let localPhase = 1; localPhase <= maxPhaseRows; localPhase += 1) {
+        phases.push(buildPhaseRow(localPhase, chainByLocalPhase.get(localPhase) || null));
       }
+
+      const normalizedPhases = normalizeAdjacentPhaseDisplayDates(phases, computeStatus);
 
       const downpaymentRep = downpaymentChain?.representative || null;
       const downpayment = downpaymentRep
@@ -522,7 +529,7 @@ router.get(
           }
         : null;
 
-      const totalPaidPhases = phases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
+      const totalPaidPhases = normalizedPhases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
       const totalPaidDownpayment = downpayment ? Number(downpayment.paid_amount || 0) : 0;
       const totalPaid = totalPaidPhases + totalPaidDownpayment;
 
@@ -532,7 +539,7 @@ router.get(
       // Include the downpayment when present.
       const profilePhaseAmount =
         profile.amount != null ? Number(profile.amount) : 0;
-      const totalBilledPhases = phases.reduce((sum, p) => {
+      const totalBilledPhases = normalizedPhases.reduce((sum, p) => {
         if (p.is_generated && p.amount != null) return sum + Number(p.amount);
         if (!p.is_generated) return sum + profilePhaseAmount;
         return sum;
@@ -543,11 +550,11 @@ router.get(
       // Outstanding per generated phase: amount minus paid (floored at
       // 0). Per ungenerated phase: full profile per-phase amount.
       // Plus any unpaid portion of the downpayment.
-      const outstandingGenerated = phases.reduce((sum, p) => {
+      const outstandingGenerated = normalizedPhases.reduce((sum, p) => {
         if (!p.is_generated || p.amount == null) return sum;
         return sum + Math.max(0, Number(p.amount) - Number(p.paid_amount || 0));
       }, 0);
-      const outstandingNotGenerated = phases.reduce(
+      const outstandingNotGenerated = normalizedPhases.reduce(
         (sum, p) => sum + (p.is_generated ? 0 : profilePhaseAmount),
         0
       );
@@ -586,7 +593,7 @@ router.get(
             downpayment_paid: profile.downpayment_paid === true,
           },
           downpayment,
-          phases,
+          phases: normalizedPhases,
           totals: {
             total_paid: totalPaid,
             total_paid_phases: totalPaidPhases,
@@ -1994,7 +2001,7 @@ router.post(
           profile.branch_id || null,
           invoiceAmount,
           'Paid',
-          `Advance payment — Phase ${absolutePhaseNumber} (profile #${id})`,
+          `Advance payment — Phase ${absolutePhaseNumber};TARGET_PHASE:${absolutePhaseNumber} (profile #${id})`,
           issueDateYmd,
           dueDateYmd,
           creatorUserId,

@@ -7,7 +7,8 @@ import { insertInvoiceWithArNumber } from './invoiceArNumber.js';
 
 const INV_DESCRIPTION_PATTERN = /^INV-\d+$/i;
 
-const parseTargetPhase = (remarks) => {
+/** Absolute class phase number from invoice remarks (TARGET_PHASE, REJOIN_PHASE, etc.). */
+export const parseTargetPhase = (remarks) => {
   const text = String(remarks || '');
   const targetMatch = text.match(/TARGET_PHASE:(\d+)/i);
   if (targetMatch) return parseInt(targetMatch[1], 10);
