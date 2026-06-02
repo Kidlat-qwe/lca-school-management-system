@@ -11,33 +11,23 @@ import EnrollmentRatePhaseVerifyModal from '../../components/dashboard/Enrollmen
 import StudentPhaseEnrollmentMatrixChart from '../../components/dashboard/StudentPhaseEnrollmentMatrixChart';
 import { ENROLLMENT_DASHBOARD, PHASE_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { reEnrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
-import { issueDateRangeFromManilaMonth } from '../../utils/dateUtils';
+import { issueDateRangeFromManilaYear } from '../../utils/dateUtils';
 
-const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
-
-const OverallToggle = ({ checked, onChange, disabled = false }) => (
-  <div className="inline-flex items-center gap-2">
-    <span className="text-xs font-medium text-gray-600">Overall</span>
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label="Show overall enrollment rate"
-      disabled={disabled}
-      onClick={onChange}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-        checked ? 'border-gray-900 bg-gray-900' : 'border-gray-300 bg-white'
-      }`}
-    >
-      <span
-        aria-hidden
-        className={`pointer-events-none absolute top-0.5 inline-block h-4 w-4 rounded-full shadow transition-transform duration-200 ${
-          checked ? 'translate-x-5 bg-white' : 'translate-x-0.5 bg-gray-900'
-        }`}
-      />
-    </button>
-  </div>
+const CURRENT_YEAR = parseInt(
+  new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 4),
+  10
 );
+
+const DEFAULT_MIN_YEAR = 2023;
+
+const buildYearOptions = (minYear, maxYear) => {
+  const years = [];
+  const safeMin = Math.min(minYear, maxYear);
+  for (let y = maxYear; y >= safeMin; y -= 1) {
+    years.push(y);
+  }
+  return years;
+};
 
 const PhaseEnrollmentDashboard = () => {
   const navigate = useNavigate();
@@ -51,30 +41,33 @@ const PhaseEnrollmentDashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  // Default to the current Manila month so the "Enrollments by Month" trend defaults to
-  // "this month" on first paint. Users can still pick another month from the picker.
-  const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
+  const [selectedYear, setSelectedYear] = useState(String(CURRENT_YEAR));
+  const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [enrollmentRateOverall, setEnrollmentRateOverall] = useState(false);
-  const [phaseMatrixOverall, setPhaseMatrixOverall] = useState(false);
-  const [enrollmentRateByPhase, setEnrollmentRateByPhase] = useState([]);
-  const [enrollmentRateLoading, setEnrollmentRateLoading] = useState(false);
-  const [enrollmentRateError, setEnrollmentRateError] = useState('');
   const [verifyPhase, setVerifyPhase] = useState(null);
 
-  const buildEnrollmentParams = (scope, matrixScope) => {
+  const yearRange = useMemo(() => {
+    const minYear = data?.year_range?.min_year ?? DEFAULT_MIN_YEAR;
+    const maxYear = Math.max(data?.year_range?.max_year ?? CURRENT_YEAR, CURRENT_YEAR);
+    return { minYear, maxYear };
+  }, [data?.year_range]);
+
+  const yearOptions = useMemo(
+    () => buildYearOptions(yearRange.minYear, yearRange.maxYear),
+    [yearRange.minYear, yearRange.maxYear]
+  );
+
+  const displayYear = data?.selected_year ?? selectedYear;
+
+  const buildEnrollmentParams = () => {
     const params = new URLSearchParams();
     if (selectedBranchId) params.set('branch_id', selectedBranchId);
-    if (selectedMonth) params.set('month', selectedMonth);
+    if (selectedYear) params.set('year', selectedYear);
+    if (selectedProgramId) params.set('program_id', selectedProgramId);
     if (selectedClassId) params.set('class_id', selectedClassId);
-    params.set('enrollment_rate_scope', scope);
-    params.set('phase_matrix_scope', matrixScope ?? (phaseMatrixOverall ? 'overall' : 'month'));
+    params.set('enrollment_rate_scope', 'month');
+    params.set('phase_matrix_scope', 'month');
     return params;
-  };
-
-  const openVerifyPhase = (row) => {
-    if (!row?.phase_number) return;
-    setVerifyPhase(row);
   };
 
   const openEnrollmentReport = ({ phaseNumber, enrolledOnly }) => {
@@ -82,8 +75,8 @@ const PhaseEnrollmentDashboard = () => {
     params.set('tab', 'program_enrollment_status');
     if (selectedBranchId) params.set('branch_id', String(selectedBranchId));
     if (phaseNumber) params.set('phase_number', String(phaseNumber));
-    if (!enrollmentRateOverall && selectedMonth) {
-      const range = issueDateRangeFromManilaMonth(selectedMonth);
+    if (selectedYear) {
+      const range = issueDateRangeFromManilaYear(selectedYear);
       if (range.from) params.set('enrolled_date_from', range.from);
       if (range.to) params.set('enrolled_date_to', range.to);
     }
@@ -91,30 +84,12 @@ const PhaseEnrollmentDashboard = () => {
     navigate(`${reportBasePath}/report?${params.toString()}`);
   };
 
-  const fetchEnrollmentRateTable = async (scopeOverride) => {
-    const scope = scopeOverride ?? (enrollmentRateOverall ? 'overall' : 'month');
-    try {
-      setEnrollmentRateLoading(true);
-      setEnrollmentRateError('');
-      const res = await apiRequest(`/dashboard/enrollment?${buildEnrollmentParams(scope).toString()}`);
-      setEnrollmentRateByPhase(res.data?.enrollment_rate_by_phase ?? []);
-    } catch (err) {
-      setEnrollmentRateError(err?.message || 'Failed to load enrollment rate table.');
-    } finally {
-      setEnrollmentRateLoading(false);
-    }
-  };
-
-  const fetchData = async (scopeOverride) => {
+  const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const scope = scopeOverride ?? (enrollmentRateOverall ? 'overall' : 'month');
-      const params = buildEnrollmentParams(scope);
-      const res = await apiRequest(`/dashboard/enrollment?${params.toString()}`);
+      const res = await apiRequest(`/dashboard/enrollment?${buildEnrollmentParams().toString()}`);
       setData(res.data);
-      setEnrollmentRateByPhase(res.data?.enrollment_rate_by_phase ?? []);
-      setEnrollmentRateError('');
     } catch (err) {
       setError(err?.message || 'Failed to load phase enrollment dashboard.');
     } finally {
@@ -122,52 +97,67 @@ const PhaseEnrollmentDashboard = () => {
     }
   };
 
-  const handleEnrollmentRateOverallToggle = () => {
-    const nextOverall = !enrollmentRateOverall;
-    setEnrollmentRateOverall(nextOverall);
-    fetchData(nextOverall ? 'overall' : 'month');
-  };
-
-  const handlePhaseMatrixOverallToggle = () => {
-    setPhaseMatrixOverall((prev) => !prev);
-  };
-
   useEffect(() => {
     fetchData();
-  }, [selectedBranchId, selectedMonth, selectedClassId, phaseMatrixOverall]);
+  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId]);
+
+  useEffect(() => {
+    if (!data?.year_range) return;
+    const { minYear, maxYear } = yearRange;
+    const y = parseInt(selectedYear, 10);
+    if (!Number.isFinite(y) || y < minYear || y > maxYear) {
+      const clamped = Math.min(Math.max(Number.isFinite(y) ? y : CURRENT_YEAR, minYear), maxYear);
+      setSelectedYear(String(clamped));
+    }
+  }, [data?.year_range, yearRange.minYear, yearRange.maxYear]);
 
   const studentPhaseMatrix = useMemo(() => data?.student_phase_enrollment_matrix ?? null, [data]);
+  const programs = useMemo(() => data?.programs ?? [], [data]);
   const classes = useMemo(() => data?.classes ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
+
+  useEffect(() => {
+    if (!selectedProgramId) return;
+    if (!programs.some((p) => String(p.program_id) === String(selectedProgramId))) {
+      setSelectedProgramId('');
+      setSelectedClassId('');
+    }
+  }, [programs, selectedBranchId]);
+
+  useEffect(() => {
+    if (!selectedClassId) return;
+    if (!classes.some((c) => String(c.class_id) === String(selectedClassId))) {
+      setSelectedClassId('');
+    }
+  }, [classes, selectedProgramId]);
+
+  const selectedProgramName = useMemo(() => {
+    if (!selectedProgramId) return 'All programs';
+    const row = programs.find((p) => String(p.program_id) === String(selectedProgramId));
+    return row?.program_name ?? 'Selected program';
+  }, [programs, selectedProgramId]);
+
   const selectedClassName = useMemo(() => {
     if (!selectedClassId) return 'All classes';
     const row = classes.find((c) => String(c.class_id) === String(selectedClassId));
     return row?.class_name ?? 'Selected class';
   }, [classes, selectedClassId]);
+
   const selectedBranchName = useMemo(() => {
     if (!selectedBranchId) return 'All Branches';
     const b = branches.find((x) => String(x.branch_id) === String(selectedBranchId));
     return b?.branch_name ?? 'All Branches';
   }, [selectedBranchId, branches]);
 
-  const phaseMatrixScopeLabel = useMemo(() => {
-    const scope = data?.phase_matrix_scope ?? (phaseMatrixOverall ? 'overall' : 'month');
-    if (scope === 'overall') return ENROLLMENT_DASHBOARD.phaseMatrixScopeOverall;
-    const monthLabel = selectedMonth
-      ? new Date(`${selectedMonth}-01T12:00:00`).toLocaleDateString('en-US', {
-          month: 'long',
-          year: 'numeric',
-          timeZone: 'UTC',
-        })
-      : 'selected month';
-    return ENROLLMENT_DASHBOARD.phaseMatrixScopeMonth(monthLabel);
-  }, [data?.phase_matrix_scope, phaseMatrixOverall, selectedMonth]);
+  const phaseMatrixScopeLabel = useMemo(
+    () => ENROLLMENT_DASHBOARD.phaseMatrixScopeYear(displayYear),
+    [displayYear]
+  );
 
   const enrollmentVerifyScopeLabel = useMemo(() => {
-    const parts = [selectedBranchName];
-    parts.push(enrollmentRateOverall ? 'Overall scope' : `Month: ${selectedMonth}`);
+    const parts = [selectedBranchName, `Year: ${displayYear}`];
     return parts.filter(Boolean).join(' · ');
-  }, [selectedBranchName, enrollmentRateOverall, selectedMonth]);
+  }, [selectedBranchName, displayYear]);
 
   const totalReEnrollmentRate = useMemo(
     () => reEnrollmentRateFromMatrixStats(studentPhaseMatrix?.phase_stats ?? []),
@@ -202,22 +192,26 @@ const PhaseEnrollmentDashboard = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Phase Enrollment Dashboard</h1>
-          <p className="mt-1 text-sm text-gray-500">{ENROLLMENT_DASHBOARD.pageIntro}</p>
-          {selectedMonth ? (
-            <p className="mt-1 text-xs font-medium text-amber-700">{ENROLLMENT_DASHBOARD.monthFilterNote}</p>
+          <h1 className="text-2xl font-bold text-gray-900">Phase Re-enrollment</h1>
+          <p className="mt-1 text-sm text-gray-500">{PHASE_ENROLLMENT_DASHBOARD.pageIntro(displayYear)}</p>
+          {selectedYear ? (
+            <p className="mt-1 text-xs font-medium text-amber-700">{ENROLLMENT_DASHBOARD.yearFilterNote}</p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <label className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Month</span>
-            <input
-              type="month"
-              value={selectedMonth}
-              max={CURRENT_MONTH}
-              onChange={(e) => setSelectedMonth(e.target.value)}
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Year</span>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value)}
               className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
-            />
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </select>
           </label>
           <button
             type="button"
@@ -274,15 +268,11 @@ const PhaseEnrollmentDashboard = () => {
           value={`${totalReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
           iconName="chartBar"
           accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-          tooltip={
-            enrollmentRateLoading
-              ? ENROLLMENT_DASHBOARD.enrollmentRateLoading
-              : PHASE_ENROLLMENT_DASHBOARD.reEnrollmentRate(
-                  totalReEnrollmentRate.reEnrolledCount,
-                  totalReEnrollmentRate.priorEnrolledCount,
-                  phaseMatrixOverall ? 'all phases' : 'the selected month'
-                )
-          }
+          tooltip={PHASE_ENROLLMENT_DASHBOARD.reEnrollmentRate(
+            totalReEnrollmentRate.reEnrolledCount,
+            totalReEnrollmentRate.priorEnrolledCount,
+            displayYear
+          )}
         />
         <EnrollmentStatsCard
           title="Reserved Students"
@@ -296,21 +286,35 @@ const PhaseEnrollmentDashboard = () => {
       <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-3">
-              <h3 className="text-lg font-semibold text-gray-900">Student Phase Enrollment Matrix</h3>
-              <OverallToggle
-                checked={phaseMatrixOverall}
-                onChange={handlePhaseMatrixOverallToggle}
-                disabled={loading}
-              />
-            </div>
+            <h3 className="text-lg font-semibold text-gray-900">
+              Student Phase Re-enrollment Matrix — {displayYear}
+            </h3>
             <p className="mt-1 text-sm text-gray-500">
               {PHASE_ENROLLMENT_DASHBOARD.matrixLegend} {PHASE_ENROLLMENT_DASHBOARD.matrixRateTooltip}
             </p>
             <p className="mt-1 text-xs font-medium text-amber-800">{phaseMatrixScopeLabel}</p>
           </div>
-          <div className="flex flex-shrink-0">
-            <label className="inline-flex w-full flex-col gap-1 sm:w-auto sm:min-w-[240px] sm:max-w-[300px]">
+          <div className="flex w-full flex-shrink-0 flex-col gap-3 sm:w-auto sm:flex-row">
+            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Program</span>
+              <select
+                value={selectedProgramId}
+                onChange={(e) => {
+                  setSelectedProgramId(e.target.value);
+                  setSelectedClassId('');
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              >
+                <option value="">All programs</option>
+                {programs.map((p) => (
+                  <option key={p.program_id} value={String(p.program_id)}>
+                    {p.program_name}
+                  </option>
+                ))}
+              </select>
+              <span className="sr-only">Selected: {selectedProgramName}</span>
+            </label>
+            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Class</span>
               <select
                 value={selectedClassId}
@@ -338,7 +342,7 @@ const PhaseEnrollmentDashboard = () => {
         open={Boolean(verifyPhase)}
         phaseNumber={verifyPhase?.phase_number}
         phaseRow={verifyPhase}
-        queryParams={buildEnrollmentParams(enrollmentRateOverall ? 'overall' : 'month').toString()}
+        queryParams={buildEnrollmentParams().toString()}
         scopeLabel={enrollmentVerifyScopeLabel}
         onClose={() => setVerifyPhase(null)}
         onOpenReport={openEnrollmentReport}

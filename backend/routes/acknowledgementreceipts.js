@@ -10,22 +10,19 @@ import {
   determineRejoinAwarePhaseStatus,
   ensurePendingEnrollmentAfterDownpaymentPaid,
 } from '../utils/enrollmentStatus.js';
-import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import {
   sendArPaymentConfirmationByAckId,
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
 import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
-import {
-  ACK_RECEIPT_PAGE_MARGIN,
-  ACK_RECEIPT_PDF_OPTIONS,
-  drawArCutGuideLines,
-} from '../lib/ackReceiptPdfLayout.js';
+import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
+import {
+  countInvoiceOnlyArListRows,
+  fetchInvoiceOnlyArListRows,
+} from '../utils/arInvoiceOnlyListRows.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -80,278 +77,152 @@ const announcementstblHasTargetUserIdColumn = async () => {
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
-/** Strip internal ack_receipt_number from API payloads (still stored for uniqueness). */
-function omitAckReceiptNumber(row) {
+/** Strip raw ack_receipt_number; expose safe display fields for the AR list/API. */
+function formatArListApiRow(row) {
   if (!row || typeof row !== 'object') return row;
+  const ackNum =
+    row.ack_receipt_number != null && String(row.ack_receipt_number).trim() !== ''
+      ? String(row.ack_receipt_number).trim()
+      : null;
+  const invAr =
+    row.invoice_ar_number != null && String(row.invoice_ar_number).trim() !== ''
+      ? String(row.invoice_ar_number).trim()
+      : null;
+  const linkedInvoiceId =
+    row.linked_invoice_id != null && Number(row.linked_invoice_id) > 0
+      ? Number(row.linked_invoice_id)
+      : null;
   const { ack_receipt_number: _n, ...rest } = row;
-  return rest;
+  const invoiceOnly = Boolean(row.invoice_only_payment);
+  return {
+    ...rest,
+    linked_invoice_id: linkedInvoiceId,
+    invoice_only_payment: invoiceOnly,
+    receipt_ar_number: ackNum,
+    // AR#: from Invoice page when linked; else receipt number issued at AR creation.
+    display_ar_number: invAr || ackNum || null,
+    invoice_ar_number: invAr,
+  };
 }
 
-/** Row shape for AR PDF: acknowledgement_receiptstbl + issue_date_fmt + branch_* + package pricing for dual-page PDF */
-const ACK_RECEIPT_PDF_SELECT_SQL = `
-  SELECT ar.*,
-         TO_CHAR(ar.issue_date, 'YYYY-MM-DD')         AS issue_date_fmt,
-         b.branch_address,
-         b.branch_phone_number,
-         b.branch_email,
-         COALESCE(b.branch_nickname, b.branch_name)   AS branch_display_name,
-         p.package_name       AS pkg_join_name,
-         p.downpayment_amount AS pkg_join_downpayment,
-         p.package_price      AS pkg_join_monthly
-  FROM acknowledgement_receiptstbl ar
-  LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
-  LEFT JOIN packagestbl p ON ar.package_id = p.package_id
-  WHERE ar.ack_receipt_id = $1
+/** Linked invoice for list/detail: AR# and INV# follow invoicestbl (same as Invoice page). */
+const AR_INVOICE_LINK_LATERAL_SQL = `
+  LEFT JOIN LATERAL (
+    SELECT i.invoice_id, i.invoice_ar_number
+    FROM invoicestbl i
+    WHERE i.invoice_id = ar.invoice_id
+       OR i.ack_receipt_id = ar.ack_receipt_id
+       OR (ar.paired_ack_receipt_id IS NOT NULL AND i.ack_receipt_id = ar.paired_ack_receipt_id)
+       OR (
+         ar.payment_id IS NOT NULL
+         AND i.invoice_id = (
+           SELECT p.invoice_id FROM paymenttbl p WHERE p.payment_id = ar.payment_id LIMIT 1
+         )
+       )
+       OR (
+         ar.ack_receipt_number IS NOT NULL AND TRIM(ar.ack_receipt_number) <> ''
+         AND i.invoice_ar_number = TRIM(ar.ack_receipt_number)
+       )
+    ORDER BY
+      CASE
+        WHEN ar.invoice_id IS NOT NULL AND i.invoice_id = ar.invoice_id THEN 0
+        WHEN i.ack_receipt_id = ar.ack_receipt_id THEN 1
+        WHEN ar.paired_ack_receipt_id IS NOT NULL AND i.ack_receipt_id = ar.paired_ack_receipt_id THEN 2
+        WHEN ar.payment_id IS NOT NULL AND i.invoice_id = (
+          SELECT p.invoice_id FROM paymenttbl p WHERE p.payment_id = ar.payment_id LIMIT 1
+        ) THEN 3
+        WHEN ar.ack_receipt_number IS NOT NULL AND i.invoice_ar_number = TRIM(ar.ack_receipt_number) THEN 4
+        ELSE 5
+      END,
+      i.invoice_id DESC
+    LIMIT 1
+  ) inv_link ON TRUE
 `;
 
-/**
- * Validates two Package AR rows for a combined Downpayment + Phase 1 PDF:
- * - Linked via paired_ack_receipt_id (leader → phase), or
- * - Legacy pair: one row installment_option downpayment_only, sibling without that option.
- */
-function isDualPackageInstallmentPairForPdf(a, b) {
-  if (!a || !b) return false;
-  if (Number(a.ack_receipt_id) === Number(b.ack_receipt_id)) return false;
-  if (String(a.ar_type || '').toLowerCase() !== 'package') return false;
-  if (String(b.ar_type || '').toLowerCase() !== 'package') return false;
-  if (Number(a.branch_id) !== Number(b.branch_id)) return false;
-  if (Number(a.package_id || 0) !== Number(b.package_id || 0)) return false;
-  const d1 = String(a.issue_date_fmt || '').slice(0, 10);
-  const d2 = String(b.issue_date_fmt || '').slice(0, 10);
-  if (!d1 || d1 !== d2) return false;
-  if (String(a.prospect_student_name || '').trim() !== String(b.prospect_student_name || '').trim()) return false;
-  if (String(a.reference_number || '').trim() !== String(b.reference_number || '').trim()) return false;
+const AR_LINKED_INVOICE_SELECT_SQL = `
+  COALESCE(
+    inv_link.invoice_id,
+    (SELECT i.invoice_id FROM invoicestbl i WHERE i.invoice_id = ar.invoice_id LIMIT 1)
+  ) AS linked_invoice_id,
+  (
+    SELECT i2.invoice_ar_number
+    FROM invoicestbl i2
+    WHERE i2.invoice_id = COALESCE(
+      inv_link.invoice_id,
+      (SELECT i.invoice_id FROM invoicestbl i WHERE i.invoice_id = ar.invoice_id LIMIT 1)
+    )
+    LIMIT 1
+  ) AS invoice_ar_number
+`;
 
-  if (Number(a.paired_ack_receipt_id) === Number(b.ack_receipt_id)) return true;
-  if (Number(b.paired_ack_receipt_id) === Number(a.ack_receipt_id)) return true;
+/** AR list text search — includes linked invoice_ar_number (e.g. 260878 on INV-1213). */
+function appendArListTextSearchClause(sql, params, paramCount, search) {
+  const trimmed = String(search || '').trim();
+  if (!trimmed) return { sql, params, paramCount };
 
-  const optA = String(a.installment_option || '').toLowerCase();
-  const optB = String(b.installment_option || '').toLowerCase();
-  const aDp = optA === 'downpayment_only';
-  const bDp = optB === 'downpayment_only';
-  return aDp !== bDp;
+  paramCount += 1;
+  const likeIdx = paramCount;
+  params.push(`%${trimmed}%`);
+
+  sql += ` AND (
+    ar.prospect_student_name ILIKE $${likeIdx}
+    OR COALESCE(ar.prospect_student_contact, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.reference_number, '') ILIKE $${likeIdx}
+    OR COALESCE(inv_link.invoice_ar_number, '') ILIKE $${likeIdx}
+    OR COALESCE(inv_link.invoice_id::text, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.ack_receipt_number, '') ILIKE $${likeIdx}
+    OR EXISTS (
+      SELECT 1 FROM invoicestbl i_s
+      WHERE COALESCE(i_s.invoice_ar_number, '') ILIKE $${likeIdx}
+        AND (
+          i_s.ack_receipt_id = ar.ack_receipt_id
+          OR ar.invoice_id = i_s.invoice_id
+          OR (
+            ar.payment_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM paymenttbl p_s
+              WHERE p_s.payment_id = ar.payment_id AND p_s.invoice_id = i_s.invoice_id
+            )
+          )
+          OR (
+            ar.ack_receipt_number IS NOT NULL
+            AND TRIM(ar.ack_receipt_number) <> ''
+            AND i_s.invoice_ar_number = TRIM(ar.ack_receipt_number)
+          )
+        )
+    )
+  )`;
+
+  return { sql, params, paramCount };
 }
 
-/** Returns [downpaymentRow, phaseRow] for a valid pair. */
-function orderDualPackageArRowsForPdf(a, b) {
-  if (Number(a.paired_ack_receipt_id) === Number(b.ack_receipt_id)) return [a, b];
-  if (Number(b.paired_ack_receipt_id) === Number(a.ack_receipt_id)) return [b, a];
-  const aDp = String(a.installment_option || '').toLowerCase() === 'downpayment_only';
-  return aDp ? [a, b] : [b, a];
+/** Hide downpayment row when phase row exists — skip during search so AR#/invoice AR numbers resolve. */
+function appendArPairedRowHideClause(sql, applyHide) {
+  if (!applyHide) return sql;
+  return `${sql} AND NOT EXISTS (
+    SELECT 1 FROM acknowledgement_receiptstbl ar_parent
+    WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
+  )`;
 }
 
-/** Two virtual row shapes for PDF pages from one AR (Downpayment + Phase 1 single row). */
-function buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt) {
-  const pkgDisp = String(ar.pkg_join_name || '').trim() || 'Installment';
-  const stud = String(ar.prospect_student_name || '').trim() || 'N/A';
-  const lvl = String(ar.level_tag || '').trim() || '-';
-  const tip = parseFloat(ar.tip_amount || 0) || 0;
-  const dpDesc = `Downpayment for ${pkgDisp}`;
-  const phDesc = `(Phase 1) Installment plan for ${stud} - ${lvl}`;
-  const base = { ...ar };
-  return [
-    {
-      ...base,
-      payment_amount: dpAmt,
-      tip_amount: tip,
-      package_name_snapshot: dpDesc,
-      package_amount_snapshot: dpAmt,
-    },
-    {
-      ...base,
-      payment_amount: moAmt,
-      tip_amount: 0,
-      package_name_snapshot: phDesc,
-      package_amount_snapshot: moAmt,
-    },
-  ];
-}
-
-function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
-  const isMerchandise = (ar.ar_type || '').toLowerCase() === 'merchandise';
-  const paymentAmount = parseFloat(ar.payment_amount || 0) || 0;
-  const tipAmount = parseFloat(ar.tip_amount || 0) || 0;
-  const totalAmount = paymentAmount + tipAmount;
-
-  let itemDescriptions = [];
-  if (isMerchandise && ar.merchandise_items_snapshot) {
-    try {
-      const snapItems =
-        typeof ar.merchandise_items_snapshot === 'string'
-          ? JSON.parse(ar.merchandise_items_snapshot)
-          : ar.merchandise_items_snapshot;
-      if (Array.isArray(snapItems) && snapItems.length > 0) {
-        for (const item of snapItems) {
-          const name = item.merchandise_name || 'Item';
-          const size = item.size ? ` (${item.size})` : '';
-          itemDescriptions.push(`${name}${size}`);
-        }
-      }
-    } catch {
-      /* ignore malformed snapshot */
-    }
-  }
-
-  const packageDesc = ar.package_name_snapshot;
-  const mergedDesc =
-    itemDescriptions.length > 0
-      ? itemDescriptions.join(' | ')
-      : packageDesc || 'Acknowledgement Receipt';
-
-  const arNumber = ar.ack_receipt_number || `AR-${ar.ack_receipt_id}`;
-  const studentName = (ar.prospect_student_name || 'N/A').trim();
-  const classLabel = (ar.level_tag || '-').trim();
-
-  const rawDateStr = ar.issue_date_fmt || '';
-  const formatDate = (ymd) => {
-    if (!ymd) return '-';
-    const [year, month, day] = ymd.split('-');
-    if (!year || !month || !day) return ymd;
-    return `${day}/${month}/${year}`;
-  };
-  const arDate = formatDate(rawDateStr);
-
-  const formatCurrency = (value) =>
-    `PHP ${(Number(value) || 0).toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
-
-  const pageWidth = doc.page.width;
-  const left = ACK_RECEIPT_PAGE_MARGIN;
-  const right = pageWidth - ACK_RECEIPT_PAGE_MARGIN;
-  const contentWidth = right - left;
-  const titleY = ACK_RECEIPT_PAGE_MARGIN - 4;
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(20)
-    .fillColor('#111827')
-    .text('ACKNOWLEDGEMENT RECEIPT', left, titleY, {
-      width: contentWidth,
-      align: 'center',
-    });
-
-  let y = titleY + 40;
-
-  if (hasLogo) {
-    doc.image(logoPath, left, y + 2, { width: 42, height: 42 });
-  }
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(13)
-    .fillColor('#111827')
-    .text('Little Champions Academy Inc.', hasLogo ? left + 52 : left, y + 4, { width: 360 });
-  doc
-    .font('Helvetica')
-    .fontSize(9)
-    .fillColor('#374151')
-    .text(ar.branch_address || '-', hasLogo ? left + 52 : left, y + 22, { width: 360 });
-  doc
-    .font('Helvetica')
-    .fontSize(9)
-    .fillColor('#374151')
-    .text(`Contact: ${ar.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 34, { width: 360 });
-  doc
-    .font('Helvetica')
-    .fontSize(9)
-    .fillColor('#374151')
-    .text(`Email: ${ar.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
-
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(11)
-    .fillColor('#111827')
-    .text(`No. ${arNumber}`, right - 180, y + 28, { width: 180, align: 'right' });
-  y += 74;
-
-  const metaStartY = y;
-  doc.font('Helvetica').fontSize(10).fillColor('#111827');
-  doc.text(`DATE: ${arDate}`, right - 230, metaStartY, { width: 230, align: 'right' });
-  doc.text(`STUDENT NAME: ${studentName}`, left, metaStartY, {
-    width: contentWidth - 20,
-  });
-  y += 20;
-  doc.text(`CLASS: ${classLabel}`, left, y, { width: 320 });
-  y += 24;
-
-  const tLeft = left;
-  const tWidth = contentWidth;
-  const rowH = 24;
-  const headerH = 24;
-  const detailRows = 4;
-  const footerRows = 1;
-  const totalRows = detailRows + footerRows;
-  const descW = tWidth * 0.5;
-  const rateW = tWidth * 0.25;
-  const amountW = tWidth - descW - rateW;
-  const xDesc = tLeft + 8;
-  const xRate = tLeft + descW + 8;
-  const xAmount = tLeft + descW + rateW + 8;
-
-  doc.save();
-  doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
-  doc.restore();
-  doc
-    .rect(tLeft, y, tWidth, headerH + rowH * totalRows)
-    .lineWidth(1)
-    .strokeColor('#111827')
-    .stroke();
-  doc
-    .moveTo(tLeft + descW, y)
-    .lineTo(tLeft + descW, y + headerH + rowH * totalRows)
-    .stroke();
-  doc
-    .moveTo(tLeft + descW + rateW, y)
-    .lineTo(tLeft + descW + rateW, y + headerH + rowH * totalRows)
-    .stroke();
-
-  for (let i = 1; i <= totalRows; i += 1) {
-    const yLine = y + headerH + rowH * i;
-    doc.moveTo(tLeft, yLine).lineTo(tLeft + tWidth, yLine).stroke();
-  }
-
-  doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
-  doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
-  doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
-  doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
-
-  doc.font('Helvetica').fontSize(9).fillColor('#111827');
-  doc.text(mergedDesc, xDesc, y + headerH + 8, { width: descW - 16 });
-  doc.text(formatCurrency(paymentAmount), xRate, y + headerH + 8, {
-    width: rateW - 16,
-    align: 'right',
-  });
-  doc.text(formatCurrency(totalAmount), xAmount, y + headerH + 8, {
-    width: amountW - 16,
-    align: 'right',
-  });
-
-  const footerRowY = y + headerH + rowH * detailRows + 8;
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(10)
-    .fillColor('#111827')
-    .text(`TOTAL  ${formatCurrency(totalAmount)}`, xRate, footerRowY, {
-      width: rateW + amountW - 16,
-      align: 'right',
-    });
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(11)
-    .fillColor('#111827')
-    .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, {
-      width: descW - 16,
-      align: 'center',
-    });
-
-  y += headerH + rowH * totalRows + 20;
-  doc.font('Helvetica').fontSize(9).fillColor('#111827');
-  doc.text('Prepared by:', left, y);
-  doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
-  doc.text('Received by:', right - 200, y);
-  doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
-
-  drawArCutGuideLines(doc, y + 30, left);
+/** Match AR rows linked to a specific invoice (cross-link from Invoice page). */
+function appendArInvoiceIdFilterClause(sql, params, paramCount, invoiceId) {
+  const id = Number(invoiceId);
+  if (!Number.isFinite(id) || id <= 0) return { sql, params, paramCount };
+  paramCount += 1;
+  sql += ` AND (
+    ar.invoice_id = $${paramCount}
+    OR EXISTS (
+      SELECT 1 FROM invoicestbl i_f
+      WHERE i_f.invoice_id = $${paramCount} AND i_f.ack_receipt_id = ar.ack_receipt_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM paymenttbl p_f
+      WHERE p_f.invoice_id = $${paramCount} AND p_f.payment_id = ar.payment_id
+    )
+  )`;
+  params.push(id);
+  return { sql, params, paramCount };
 }
 
 const createArSubmissionNotification = async ({
@@ -560,6 +431,7 @@ router.get(
       .isIn(['0', '1', 'true', 'false'])
       .withMessage('only_unused must be 0, 1, true, or false'),
     queryValidator('exclude_status').optional().isString().withMessage('exclude_status must be a string'),
+    queryValidator('invoice_id').optional().isInt({ min: 1 }).withMessage('invoice_id must be a positive integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
@@ -574,6 +446,7 @@ router.get(
         limit = 20,
         only_unused,
         exclude_status,
+        invoice_id: invoiceIdFilter,
         payment_date_from: paymentDateFrom,
         payment_date_to: paymentDateTo,
         issue_date_from: issueDateFrom,
@@ -612,6 +485,8 @@ router.get(
       const offset = (pageNum - 1) * limitNum;
 
       const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
+      const trimmedSearch = String(search || '').trim();
+      const applyPairedRowHide = hidePairedPhaseRows && !trimmedSearch && !invoiceIdFilter;
 
       const listPairJoin = hidePairedPhaseRows
         ? `
@@ -639,26 +514,31 @@ router.get(
       let sql = `
         SELECT
           ar.*,
+          prep_u.full_name AS prepared_by_name,
+          TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           p.package_name,
-          u.full_name AS student_name
+          u.full_name AS student_name,
+          ${AR_LINKED_INVOICE_SELECT_SQL}
           ${listPairSelect}
         FROM acknowledgement_receiptstbl ar
         LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
         LEFT JOIN packagestbl p ON ar.package_id = p.package_id
         LEFT JOIN userstbl u ON ar.student_id = u.user_id
+        LEFT JOIN userstbl prep_u ON prep_u.user_id = ar.created_by
+        ${AR_INVOICE_LINK_LATERAL_SQL}
         ${listPairJoin}
         WHERE 1=1
       `;
 
-      if (hidePairedPhaseRows) {
+      if (applyPairedRowHide) {
         sql += ` AND NOT EXISTS (
           SELECT 1 FROM acknowledgement_receiptstbl ar_parent
           WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
         )`;
       }
 
-      const params = [];
+      let params = [];
       let paramCount = 0;
 
       // Receipts that are not already consumed (enrollment: one use per AR)
@@ -699,14 +579,16 @@ router.get(
       }
 
       if (search) {
-        paramCount += 1;
-        const likeParam = `%${search}%`;
-        sql += ` AND (
-          ar.prospect_student_name ILIKE $${paramCount}
-          OR COALESCE(ar.prospect_student_contact, '') ILIKE $${paramCount}
-          OR COALESCE(ar.reference_number, '') ILIKE $${paramCount}
-        )`;
-        params.push(likeParam);
+        ({ sql, params, paramCount } = appendArListTextSearchClause(sql, params, paramCount, search));
+      }
+
+      if (invoiceIdFilter) {
+        ({ sql, params, paramCount } = appendArInvoiceIdFilterClause(
+          sql,
+          params,
+          paramCount,
+          invoiceIdFilter
+        ));
       }
 
       if (payment_method) {
@@ -753,15 +635,49 @@ router.get(
 
       const result = await query(sql, params);
 
-      // Total count for pagination
-      let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar WHERE 1=1`;
-      if (hidePairedPhaseRows) {
-        countSql += ` AND NOT EXISTS (
-          SELECT 1 FROM acknowledgement_receiptstbl ar_parent
-          WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
-        )`;
+      const statusListForInvoiceOnly = status
+        ? String(status).split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+
+      const invoiceOnlyFilters = {
+        search: trimmedSearch,
+        invoiceId: invoiceIdFilter,
+        branchId:
+          req.user.userType !== 'Superadmin' && req.user.branchId
+            ? req.user.branchId
+            : branch_id || null,
+        paymentFrom,
+        paymentTo,
+        issueFrom: arFrom,
+        issueTo: arTo,
+        createdFrom,
+        createdTo,
+        paymentMethod: payment_method || null,
+        statusFilter: statusListForInvoiceOnly,
+      };
+
+      let invoiceOnlyRows = [];
+      if (trimmedSearch || invoiceIdFilter) {
+        invoiceOnlyRows = await fetchInvoiceOnlyArListRows(invoiceOnlyFilters);
       }
-      const countParams = [];
+
+      const mergedRows = [...invoiceOnlyRows, ...result.rows];
+      const linkedInvoiceIdsFromAr = new Set(
+        result.rows
+          .map((row) => Number(row.linked_invoice_id || row.invoice_id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      );
+      const dedupedRows = mergedRows.filter((row, idx, arr) => {
+        if (!row.invoice_only_payment) return true;
+        const invId = Number(row.linked_invoice_id);
+        if (linkedInvoiceIdsFromAr.has(invId)) return false;
+        return arr.findIndex((r) => r.invoice_only_payment && Number(r.linked_invoice_id) === invId) === idx;
+      });
+
+      // Total count for pagination
+      let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar ${AR_INVOICE_LINK_LATERAL_SQL} WHERE 1=1`;
+      countSql = appendArPairedRowHideClause(countSql, applyPairedRowHide);
+      let countParams = [];
       let countParamCount = 0;
 
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
@@ -800,14 +716,21 @@ router.get(
       }
 
       if (search) {
-        countParamCount += 1;
-        const likeParam = `%${search}%`;
-        countSql += ` AND (
-          ar.prospect_student_name ILIKE $${countParamCount}
-          OR COALESCE(ar.prospect_student_contact, '') ILIKE $${countParamCount}
-          OR COALESCE(ar.reference_number, '') ILIKE $${countParamCount}
-        )`;
-        countParams.push(likeParam);
+        ({ sql: countSql, params: countParams, paramCount: countParamCount } = appendArListTextSearchClause(
+          countSql,
+          countParams,
+          countParamCount,
+          search
+        ));
+      }
+
+      if (invoiceIdFilter) {
+        ({ sql: countSql, params: countParams, paramCount: countParamCount } = appendArInvoiceIdFilterClause(
+          countSql,
+          countParams,
+          countParamCount,
+          invoiceIdFilter
+        ));
       }
 
       if (payment_method) {
@@ -850,7 +773,15 @@ router.get(
       }
 
       const countResult = await query(countSql, countParams);
-      const total = parseInt(countResult.rows[0].total, 10) || 0;
+      let total = parseInt(countResult.rows[0].total, 10) || 0;
+      let invoiceOnlyCount = 0;
+      let invoiceOnlyLineTotal = 0;
+      if (trimmedSearch || invoiceIdFilter) {
+        const io = await countInvoiceOnlyArListRows(invoiceOnlyFilters);
+        invoiceOnlyCount = io.count;
+        invoiceOnlyLineTotal = io.totalLineAmount;
+        total += invoiceOnlyCount;
+      }
       const sumLineExpr = hidePairedPhaseRows
         ? `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0) + COALESCE((
              SELECT COALESCE(pay.payment_amount, 0) + COALESCE(pay.tip_amount, 0)
@@ -863,11 +794,12 @@ router.get(
         `SELECT COALESCE(SUM(${sumLineExpr}), 0)::numeric AS total_line_amount`
       );
       const sumResult = await query(sumSql, countParams);
-      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
+      const filterTotalLineAmount =
+        (parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0) + invoiceOnlyLineTotal;
 
       res.json({
         success: true,
-        data: result.rows.map(omitAckReceiptNumber),
+        data: dedupedRows.map(formatArListApiRow),
         filterTotalLineAmount,
         pagination: {
           page: pageNum,
@@ -1549,13 +1481,13 @@ router.post(
         // Include ack_receipt_number for the creator so the post-creation
         // modal can display and print the receipt without a separate lookup.
         data: {
-          ...omitAckReceiptNumber(ackReceipt),
+          ...formatArListApiRow(ackReceipt),
           ack_receipt_number: ackReceipt.ack_receipt_number,
         },
         ...(pairedAckReceipt
           ? {
               paired_acknowledgement_receipt: {
-                ...omitAckReceiptNumber(pairedAckReceipt),
+                ...formatArListApiRow(pairedAckReceipt),
                 ack_receipt_number: pairedAckReceipt.ack_receipt_number,
               },
               message:
@@ -1594,13 +1526,18 @@ router.get(
       const sql = `
         SELECT
           ar.*,
+          prep_u.full_name AS prepared_by_name,
+          TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           p.package_name,
-          u.full_name AS student_name
+          u.full_name AS student_name,
+          ${AR_LINKED_INVOICE_SELECT_SQL}
         FROM acknowledgement_receiptstbl ar
         LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
         LEFT JOIN packagestbl p ON ar.package_id = p.package_id
         LEFT JOIN userstbl u ON ar.student_id = u.user_id
+        LEFT JOIN userstbl prep_u ON prep_u.user_id = ar.created_by
+        ${AR_INVOICE_LINK_LATERAL_SQL}
         WHERE ar.ack_receipt_id = $1
       `;
       const result = await query(sql, [id]);
@@ -1624,7 +1561,7 @@ router.get(
 
       res.json({
         success: true,
-        data: omitAckReceiptNumber(ar),
+        data: formatArListApiRow(ar),
       });
     } catch (err) {
       next(err);
@@ -1663,13 +1600,30 @@ router.get(
           ? Number(pairedRaw)
           : null;
 
-      const arResult = await query(ACK_RECEIPT_PDF_SELECT_SQL, [idNum]);
-
-      if (arResult.rows.length === 0) {
-        return res.status(404).json({ success: false, message: 'Acknowledgement receipt not found' });
+      if (pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0 && pairedNum === idNum) {
+        return res.status(400).json({
+          success: false,
+          message: 'paired_id must differ from the receipt id.',
+        });
       }
 
-      const ar = arResult.rows[0];
+      let buffer;
+      let filename;
+      let ar;
+      try {
+        ({ buffer, filename, ar } = await generateAckReceiptPdfBuffer(idNum, query, {
+          pairedAckReceiptId: pairedNum,
+        }));
+      } catch (pdfErr) {
+        const msg = pdfErr?.message || 'Failed to generate acknowledgement receipt PDF';
+        if (msg.includes('not found')) {
+          return res.status(404).json({ success: false, message: msg });
+        }
+        if (msg.includes('cannot be combined') || msg.includes('Invalid Downpayment')) {
+          return res.status(400).json({ success: false, message: msg });
+        }
+        throw pdfErr;
+      }
 
       if (
         req.user.userType !== 'Superadmin' &&
@@ -1679,103 +1633,9 @@ router.get(
       ) {
         return res.status(403).json({ success: false, message: 'Access denied' });
       }
-
-      const logoPath = path.resolve(process.cwd(), '../frontend/public/LCA Icon.png');
-      const hasLogo = fs.existsSync(logoPath);
-
-      let pageRows = [ar];
-
-      if (pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0) {
-        if (pairedNum === idNum) {
-          return res.status(400).json({
-            success: false,
-            message: 'paired_id must differ from the receipt id.',
-          });
-        }
-
-        const ar2Result = await query(ACK_RECEIPT_PDF_SELECT_SQL, [pairedNum]);
-        if (ar2Result.rows.length === 0) {
-          return res.status(404).json({ success: false, message: 'Paired acknowledgement receipt not found' });
-        }
-        const ar2 = ar2Result.rows[0];
-
-        if (
-          req.user.userType !== 'Superadmin' &&
-          req.user.branchId != null &&
-          ar2.branch_id != null &&
-          Number(ar2.branch_id) !== Number(req.user.branchId)
-        ) {
-          return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-
-        if (!isDualPackageInstallmentPairForPdf(ar, ar2)) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'These two receipts cannot be combined in one PDF. Use paired_id only for a Downpayment + Phase 1 package pair from the same submission.',
-          });
-        }
-
-        pageRows = orderDualPackageArRowsForPdf(ar, ar2);
-      } else if (ar.paired_ack_receipt_id) {
-        const ar2Result = await query(ACK_RECEIPT_PDF_SELECT_SQL, [ar.paired_ack_receipt_id]);
-        if (ar2Result.rows.length === 0) {
-          return res.status(404).json({ success: false, message: 'Paired acknowledgement receipt not found' });
-        }
-        const ar2 = ar2Result.rows[0];
-        if (
-          req.user.userType !== 'Superadmin' &&
-          req.user.branchId != null &&
-          ar2.branch_id != null &&
-          Number(ar2.branch_id) !== Number(req.user.branchId)
-        ) {
-          return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        if (!isDualPackageInstallmentPairForPdf(ar, ar2)) {
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid Downpayment + Phase 1 acknowledgement receipt pair.',
-          });
-        }
-        pageRows = orderDualPackageArRowsForPdf(ar, ar2);
-      } else if (
-        pairedNum == null &&
-        String(ar.ar_type || '').toLowerCase() === 'package' &&
-        String(ar.installment_option || '').toLowerCase() === 'downpayment_plus_phase1' &&
-        ar.package_id != null
-      ) {
-        const dpAmt = parseFloat(ar.pkg_join_downpayment) || 0;
-        const moAmt = parseFloat(ar.pkg_join_monthly) || 0;
-        if (dpAmt > 0 && moAmt > 0) {
-          pageRows = buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt);
-        }
-      }
-
-      const doc = new PDFDocument({ ...ACK_RECEIPT_PDF_OPTIONS });
       res.setHeader('Content-Type', 'application/pdf');
-      const pairedIdForName =
-        pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0
-          ? pairedNum
-          : ar.paired_ack_receipt_id
-            ? Number(ar.paired_ack_receipt_id)
-            : null;
-      const filename =
-        pageRows.length > 1
-          ? pairedIdForName
-            ? `acknowledgement-receipt-${idNum}-and-${pairedIdForName}.pdf`
-            : `acknowledgement-receipt-${idNum}-dp-phase1.pdf`
-          : `acknowledgement-receipt-${idNum}.pdf`;
       res.setHeader('Content-Disposition', `inline; filename=${filename}`);
-      doc.pipe(res);
-
-      for (let i = 0; i < pageRows.length; i += 1) {
-        if (i > 0) {
-          doc.addPage({ ...ACK_RECEIPT_PDF_OPTIONS });
-        }
-        drawAcknowledgementReceiptPage(doc, pageRows[i], logoPath, hasLogo);
-      }
-
-      doc.end();
+      res.send(buffer);
     } catch (err) {
       next(err);
     }
@@ -2636,7 +2496,7 @@ router.post(
         message: 'Acknowledgement receipt attached and payment recorded successfully',
         data: {
           acknowledgement_receipt: {
-            ...omitAckReceiptNumber(ack),
+            ...formatArListApiRow(ack),
             status: 'Applied',
             invoice_id,
             payment_id: newPayment.payment_id,
@@ -2875,7 +2735,7 @@ router.put(
       return res.json({
         success: true,
         message: 'Acknowledgement receipt updated successfully',
-        data: omitAckReceiptNumber(updateRes.rows[0]),
+        data: formatArListApiRow(updateRes.rows[0]),
       });
     } catch (err) {
       return next(err);
@@ -3100,7 +2960,7 @@ router.put(
       return res.json({
         success: true,
         message: successMessage,
-        data: omitAckReceiptNumber(updateRes.rows[0]),
+        data: formatArListApiRow(updateRes.rows[0]),
       });
     } catch (err) {
       return next(err);
@@ -3195,7 +3055,7 @@ router.put(
       return res.json({
         success: true,
         message: 'Acknowledgement receipt resubmitted successfully',
-        data: omitAckReceiptNumber(updateRes.rows[0]),
+        data: formatArListApiRow(updateRes.rows[0]),
       });
     } catch (err) {
       return next(err);

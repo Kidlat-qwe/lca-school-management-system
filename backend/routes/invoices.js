@@ -174,6 +174,74 @@ function buildInvoiceListWhereClause({
 }
 
 /**
+ * Server-side text search for invoice list (replaces client-only filter on current page).
+ * @param {{ whereSql: string, params: unknown[], paramCount: number }} clause
+ * @param {{ search?: string, studentSearch?: string }} filters
+ */
+function applyInvoiceListTextSearch(clause, { search = '', studentSearch = '' } = {}) {
+  let { whereSql, params, paramCount } = clause;
+  const trimmedStudent = String(studentSearch || '').trim();
+  const trimmedSearch = String(search || '').trim();
+
+  if (trimmedStudent) {
+    paramCount += 1;
+    const like = `%${trimmedStudent}%`;
+    whereSql += ` AND (
+      EXISTS (
+        SELECT 1 FROM invoicestudentstbl inv_s
+        INNER JOIN userstbl u ON u.user_id = inv_s.student_id
+        WHERE inv_s.invoice_id = i.invoice_id AND u.full_name ILIKE $${paramCount}
+      )
+      OR EXISTS (
+        SELECT 1 FROM acknowledgement_receiptstbl ar_s
+        WHERE ar_s.ack_receipt_id = i.ack_receipt_id AND ar_s.prospect_student_name ILIKE $${paramCount}
+      )
+      OR COALESCE(ar.prospect_student_name, '') ILIKE $${paramCount}
+    )`;
+    params.push(like);
+  }
+
+  if (trimmedSearch) {
+    paramCount += 1;
+    const like = `%${trimmedSearch}%`;
+    const likeIdx = paramCount;
+    params.push(like);
+
+    const invExact = trimmedSearch.match(/^inv[-\s#]?(\d+)$/i);
+    let exactIdIdx = null;
+    if (invExact) {
+      paramCount += 1;
+      exactIdIdx = paramCount;
+      params.push(parseInt(invExact[1], 10));
+    }
+
+    whereSql += ` AND (
+      i.invoice_id::text ILIKE $${likeIdx}
+      OR ('INV-' || i.invoice_id::text) ILIKE $${likeIdx}
+      OR COALESCE(i.invoice_ar_number, '') ILIKE $${likeIdx}
+      OR COALESCE(i.invoice_description, '') ILIKE $${likeIdx}
+      OR COALESCE(i.remarks, '') ILIKE $${likeIdx}
+      OR COALESCE(ar.prospect_student_name, '') ILIKE $${likeIdx}
+      OR EXISTS (
+        SELECT 1 FROM invoicestudentstbl inv_s
+        INNER JOIN userstbl u ON u.user_id = inv_s.student_id
+        WHERE inv_s.invoice_id = i.invoice_id AND u.full_name ILIKE $${likeIdx}
+      )
+      OR EXISTS (
+        SELECT 1 FROM branchestbl b
+        WHERE b.branch_id = i.branch_id
+          AND (
+            COALESCE(b.branch_name, '') ILIKE $${likeIdx}
+            OR COALESCE(b.branch_nickname, '') ILIKE $${likeIdx}
+          )
+      )${exactIdIdx ? ` OR i.invoice_id = $${exactIdIdx}::int` : ''}
+    )`;
+  }
+
+  return { whereSql, params, paramCount };
+}
+
+/**
  * Header totals for paginated invoice list (matches active status + date filters).
  * Payment-date scope: sum completed payment lines in range for invoices in scope.
  * All statuses: includes rejected-approval payment lines. Issue-date scope: per-invoice billed + tips.
@@ -387,7 +455,7 @@ router.get(
         // Continue with invoice fetching even if expiration check fails
       }
 
-      const { branch_id, status, statuses: statusesRaw, page: pageRaw, limit: limitRaw } = req.query;
+      const { branch_id, status, statuses: statusesRaw, page: pageRaw, limit: limitRaw, search: searchRaw, student_search: studentSearchRaw } = req.query;
       const paymentDateFrom = parseYmdQuery(req.query.payment_date_from);
       const paymentDateTo = parseYmdQuery(req.query.payment_date_to);
       const issueDateFrom = parseYmdQuery(req.query.issue_date_from);
@@ -432,15 +500,21 @@ router.get(
         issueDateTo,
       });
 
-      const listWhereFiltered = buildInvoiceListWhereClause({
-        user: req.user,
-        branch_id,
-        statusesList,
-        paymentDateFrom,
-        paymentDateTo,
-        issueDateFrom,
-        issueDateTo,
-      });
+      const listWhereFiltered = applyInvoiceListTextSearch(
+        buildInvoiceListWhereClause({
+          user: req.user,
+          branch_id,
+          statusesList,
+          paymentDateFrom,
+          paymentDateTo,
+          issueDateFrom,
+          issueDateTo,
+        }),
+        {
+          search: searchRaw != null ? String(searchRaw) : '',
+          studentSearch: studentSearchRaw != null ? String(studentSearchRaw) : '',
+        }
+      );
 
       let totalCount = 0;
       const statusCounts = {};
@@ -891,6 +965,60 @@ router.get(
         invoiceRow.status !== 'Paid' &&
         invoiceRow.status !== 'Cancelled';
 
+      const lastPaymentDateYmd = (
+        await query(
+          `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_date
+           FROM paymenttbl p
+           WHERE p.invoice_id = $1
+             AND p.status = 'Completed'
+             AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
+          [id]
+        )
+      ).rows?.[0]?.last_payment_date || null;
+
+      const preparedByResult = await query(
+        `SELECT
+           u.full_name AS prepared_by_name
+         FROM paymenttbl p
+         LEFT JOIN userstbl u ON u.user_id = p.created_by
+         WHERE p.invoice_id = $1
+           AND p.status = 'Completed'
+           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+         ORDER BY p.issue_date DESC, p.payment_id DESC
+         LIMIT 1`,
+        [id]
+      );
+      const prepared_by_name = preparedByResult.rows?.[0]?.prepared_by_name || null;
+
+      const receivedByResult = await query(
+        `SELECT COALESCE(
+           (
+             SELECT NULLIF(TRIM(ar.prospect_student_contact), '')
+             FROM acknowledgement_receiptstbl ar
+             WHERE ar.invoice_id = $1
+             ORDER BY ar.ack_receipt_id DESC
+             LIMIT 1
+           ),
+           (
+             SELECT NULLIF(TRIM(gg.guardian_name), '')
+             FROM invoicestudentstbl ist
+             LEFT JOIN LATERAL (
+               SELECT guardian_name
+               FROM guardianstbl
+               WHERE student_id = ist.student_id
+               ORDER BY guardian_id ASC
+               LIMIT 1
+             ) gg ON TRUE
+             WHERE ist.invoice_id = $1
+             ORDER BY ist.student_id ASC
+             LIMIT 1
+           )
+         ) AS guardian_name`,
+        [id]
+      );
+      const received_by_guardian_name =
+        receivedByResult.rows?.[0]?.guardian_name || null;
+
       res.json({
         success: true,
         data: {
@@ -899,16 +1027,10 @@ router.get(
           amount: effectiveAmount,
           total_tip_amount: totalTip,
           total_received_amount: totalPaid + totalTip,
-          last_payment_date: (
-            await query(
-              `SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD') AS last_payment_date
-               FROM paymenttbl p
-               WHERE p.invoice_id = $1
-                 AND p.status = 'Completed'
-                 AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
-              [id]
-            )
-          ).rows?.[0]?.last_payment_date || null,
+          last_payment_date: lastPaymentDateYmd,
+          prepared_by_name,
+          prepared_by_date_ymd: lastPaymentDateYmd,
+          received_by_guardian_name,
           display_description: displayDescription,
           items,
           students: studentsWithDisplayName,
@@ -1293,10 +1415,63 @@ router.get(
           .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, { width: descW - 16, align: 'center' });
 
         y += headerH + rowH * totalRows + 24;
+        let preparedByName = '-';
+        let receivedByName = '-';
+        try {
+          const preparedByRes = await query(
+            `SELECT u.full_name AS prepared_by_name
+             FROM paymenttbl p
+             LEFT JOIN userstbl u ON u.user_id = p.created_by
+             WHERE p.invoice_id = $1
+               AND p.status = 'Completed'
+               AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+             ORDER BY p.issue_date DESC, p.payment_id DESC
+             LIMIT 1`,
+            [id]
+          );
+          preparedByName = preparedByRes.rows?.[0]?.prepared_by_name || '-';
+        } catch {
+          /* ignore */
+        }
+
+        try {
+          const receivedByRes = await query(
+            `SELECT COALESCE(
+               (
+                 SELECT NULLIF(TRIM(ar.prospect_student_contact), '')
+                 FROM acknowledgement_receiptstbl ar
+                 WHERE ar.invoice_id = $1
+                 ORDER BY ar.ack_receipt_id DESC
+                 LIMIT 1
+               ),
+               (
+                 SELECT NULLIF(TRIM(gg.guardian_name), '')
+                 FROM invoicestudentstbl ist
+                 LEFT JOIN LATERAL (
+                   SELECT guardian_name
+                   FROM guardianstbl
+                   WHERE student_id = ist.student_id
+                   ORDER BY guardian_id ASC
+                   LIMIT 1
+                 ) gg ON TRUE
+                 WHERE ist.invoice_id = $1
+                 ORDER BY ist.student_id ASC
+                 LIMIT 1
+               )
+             ) AS guardian_name`,
+            [id]
+          );
+          receivedByName = receivedByRes.rows?.[0]?.guardian_name || '-';
+        } catch {
+          /* ignore */
+        }
+
         doc.font('Helvetica').fontSize(9).fillColor('#111827');
         doc.text('Prepared by:', left, y);
+        doc.text(preparedByName || '-', left + 68, y + 1, { width: 182 });
         doc.moveTo(left + 68, y + 10).lineTo(left + 250, y + 10).stroke();
         doc.text('Received by:', right - 200, y);
+        doc.text(receivedByName || '-', right - 118, y + 1, { width: 110 });
         doc.moveTo(right - 118, y + 10).lineTo(right, y + 10).stroke();
 
         drawArCutGuideLines(doc, y + 22, 40);

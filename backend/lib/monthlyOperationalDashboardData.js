@@ -9,12 +9,14 @@
  * Acknowledgement Receipt Sales (ar_sales) matches GET /acknowledgement-receipts list totals for the
  * same issue-date month and main-tab semantics (exclude Returned only; paired-row combine when enabled).
  *
- * New enrollees / re-enrollment / dropped counts come from classstudentstbl.program_enrollment_status
+ * New enrollees / dropped / rejoin counts come from classstudentstbl.program_enrollment_status
  * and enrolled_at / removed_at (Asia/Manila calendar day), not paymenttbl.
+ * Re-enrollment / dropped / rejoin counts match the Month Re-enrollment matrix for the
+ * selected month (including calendar-date overlays for new, dropped, and rejoin).
  */
 
 import { query } from '../config/database.js';
-import { loadEnrollmentDashboardMetrics } from './enrollmentRateMetrics.js';
+import { loadMonthMatrixOperationalStatsForMonth } from './enrollmentRateMetrics.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
@@ -404,11 +406,36 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
 
   const monthEndInclusive = getMonthEndInclusiveYmd(monthRange);
 
-  const enrollmentDashboard = await loadEnrollmentDashboardMetrics(runQuery, {
+  const monthMatrixStats = await loadMonthMatrixOperationalStatsForMonth(runQuery, {
     branchId: branchFilter,
-    enrolledFrom: monthStart,
-    enrolledTo: monthEndExclusive,
+    monthKey: monthRange.key,
   });
+
+  const enrollmentDashboard = {
+    re_enrollment_rate: Number(monthMatrixStats.re_enrollment_rate ?? 0) || 0,
+    re_enrollment_rate_retained_count: monthMatrixStats.re_enrollment_rate_retained_count,
+    re_enrollment_rate_prior_count: monthMatrixStats.re_enrollment_rate_prior_count,
+  };
+
+  const branchBreakdownWithMatrixStats = branchBreakdown.map((row) =>
+    branchFilter
+      ? {
+          ...row,
+          new_enrollees: monthMatrixStats.new_enrollees_count,
+          re_enrollment_count: monthMatrixStats.re_enrollment_count,
+          dropped_unenrolled_count: monthMatrixStats.dropped_unenrolled_count,
+          rejoin_count: monthMatrixStats.rejoin_count,
+        }
+      : row
+  );
+
+  const totalsWithMatrixStats = {
+    ...totals,
+    new_enrollees: monthMatrixStats.new_enrollees_count,
+    re_enrollment_count: monthMatrixStats.re_enrollment_count,
+    dropped_unenrolled_count: monthMatrixStats.dropped_unenrolled_count,
+    rejoin_count: monthMatrixStats.rejoin_count,
+  };
 
   return {
     summary_month: monthRange.key,
@@ -416,11 +443,11 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     month_end_exclusive: monthEndExclusive,
     month_end_inclusive: monthEndInclusive,
     verification_as_of: `${monthStart}–${monthEndInclusive}`,
-    totals,
+    totals: totalsWithMatrixStats,
     enrollment_dashboard: enrollmentDashboard,
-    branch_breakdown: branchBreakdown,
+    branch_breakdown: branchBreakdownWithMatrixStats,
     charts: {
-      branch_metrics: branchBreakdown.map((row) => ({
+      branch_metrics: branchBreakdownWithMatrixStats.map((row) => ({
         branch_id: row.branch_id,
         branch_name: row.branch_name,
         new_enrollees: row.new_enrollees,
@@ -442,12 +469,12 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         ar_unverified_amount: row.ar_unverified_amount,
       })),
       activity_mix: [
-        { name: 'New Enrollees', value: totals.new_enrollees },
+        { name: 'New Enrollees', value: totalsWithMatrixStats.new_enrollees },
         { name: 'Acknowledgement Receipt Sales', value: totals.ar_sales_count },
         { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
-        { name: 'Re-enrollment', value: totals.re_enrollment_count },
-        { name: 'Rejoin', value: totals.rejoin_count },
-        { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
+        { name: 'Re-enrollment', value: totalsWithMatrixStats.re_enrollment_count },
+        { name: 'Rejoin', value: totalsWithMatrixStats.rejoin_count },
+        { name: 'Dropped / Unenrolled', value: totalsWithMatrixStats.dropped_unenrolled_count },
       ],
       sales_last_6_months: salesLast6Months,
     },

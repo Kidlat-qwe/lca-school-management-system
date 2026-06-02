@@ -18,3 +18,20 @@ export function getArListCombinedPackageAmount(r) {
   if (v != null && v !== '' && !Number.isNaN(Number(v))) return Number(v);
   return Number(r?.package_amount_snapshot || 0);
 }
+
+/** INV-{id} — only when a row exists in invoicestbl (same as Invoice page). */
+export function formatArLinkedInvoiceLabel(row) {
+  const id = Number(row?.linked_invoice_id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return `INV-${id}`;
+}
+
+/** AR# for list: linked invoice_ar_number (Invoice page), else receipt number issued at AR creation. */
+export function formatArLinkedInvoiceArNumber(row) {
+  const display = String(row?.display_ar_number ?? '').trim();
+  if (display) return display;
+  const fromInvoice = String(row?.invoice_ar_number ?? '').trim();
+  if (fromInvoice) return fromInvoice;
+  const fromReceipt = String(row?.receipt_ar_number ?? '').trim();
+  return fromReceipt || null;
+}

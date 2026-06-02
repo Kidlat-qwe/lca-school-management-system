@@ -10,6 +10,8 @@ const SortIcon = ({ active, direction }) => {
   );
 };
 
+export { SortIcon };
+
 const SortableHeader = ({
   label,
   sortKey,

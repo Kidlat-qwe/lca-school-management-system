@@ -50,9 +50,9 @@ export const MONTHLY_OPERATIONAL = {
   pageIntro:
     'Same metrics as the daily dashboard, added up for the month you select.',
   newEnrolleesReenroll:
-    'Unique students whose enrollment date falls in this month — first-time (new) or returning / level-up.',
+    'New enrollees and re-enrollment counts match the Month Re-enrollment matrix table for this month (green “new” and purple “re-enrolled” cells).',
   droppedRejoin:
-    'Dropped: students removed from a class this month. Rejoin: students who re-entered after a gap this month.',
+    'Dropped / unenrolled and rejoin counts match the Month Re-enrollment matrix table for this month (pink “dropped/unenrolled” and orange “rejoin” cells).',
   invoiceSales:
     'Completed invoice payments in this month (amount due + tips). Returned and rejected are excluded.',
   arSales: (receiptCount) =>
@@ -63,9 +63,9 @@ export const MONTHLY_OPERATIONAL = {
     'Matches Payment Logs total for this month: completed payment lines only (verified + not verified yet), excluding returned and rejected.',
   merchandise: (txnCount) => `${txnCount} paid merchandise sale(s) in this month.`,
   enrollmentSnapshot:
-    'Students with activity this month: active / inactive counts and overall phase enrollment rate (see Enrollment Dashboard for details).',
+    'Students with activity this month: active / inactive counts and overall phase re-enrollment rate (see Re-enrollment Dashboard for details).',
   reEnrollmentSnapshot: (retained, prior) =>
-    `Monthly re-enrollment retention: ${retained} retained student(s) ÷ ${prior} enrolled in prior phase × 100.`,
+    `Re-enrollment rate for this month: ${retained} retained student(s) ÷ ${prior} enrolled in the prior month × 100. Matches the Month Re-enrollment matrix.`,
   payVerified: (amount) => `${amount} — verified completed payments in this month`,
   payNotVerifiedYet: (amount) => `${amount} — completed, not verified yet, in this month`,
   arVerified: (amount) => `${amount} — verified or applied package ARs in this month`,
@@ -85,6 +85,8 @@ export const ENROLLMENT_DASHBOARD = {
     'Track who joined, who left, who is active, and how enrollment rate changes over time.',
   monthFilterNote:
     'The month picker updates active/inactive, new & re-enrollment, dropped, rejoin, and charts. Use Overall on the phase matrix to see all-time data.',
+  yearFilterNote:
+    'The year picker updates active/inactive, new & re-enrollment, dropped, rejoin, and the phase matrix for that calendar year.',
   activeInactive:
     'Students with an enrollment date in this month. Active = currently in class (new, returning, level-up, or rejoin). Inactive = dropped, finished, or not in an active status.',
   newReenroll:
@@ -105,6 +107,7 @@ export const ENROLLMENT_DASHBOARD = {
   chartRateByMonth:
     "Each student's enrollment per phase (1 = active or completed, - = not enrolled). Default: selected month only. Turn on Overall for all-time data.",
   phaseMatrixScopeMonth: (month) => `Showing enrollments in ${month}.`,
+  phaseMatrixScopeYear: (year) => `Showing enrollments in ${year}.`,
   phaseMatrixScopeOverall: 'Showing all-time enrollment data.',
   chartActiveByBranch: 'Active vs inactive students in the selected month, grouped by branch.',
 };
@@ -159,6 +162,8 @@ export const OPERATIONAL_DASHBOARD = {
 };
 
 export const PHASE_ENROLLMENT_DASHBOARD = {
+  pageIntro: (year) =>
+    `Track student re-enrollment by program phase and retention for ${year}.`,
   reEnrollmentRate: (retainedSum, priorPhaseSum, scope) =>
     `Total re-enrollment rate (${scope}): ${retainedSum.toLocaleString()} students retained ÷ ${priorPhaseSum.toLocaleString()} enrolled in the prior phase × 100. Phase 1 is N/A. First-time ("new") enrollments are never counted.`,
   matrixLegend:
@@ -169,7 +174,7 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
 
 export const MONTHLY_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
-    `Track each student's enrollment across Jan – Dec ${year} and monthly re-enrollment retention.`,
+    `Track each student's re-enrollment across Jan – Dec ${year} and monthly retention.`,
   reEnrollmentRate: (retainedSum, priorMonthSum, year) =>
     `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} students retained ÷ ${priorMonthSum.toLocaleString()} enrolled in the prior month × 100. Sums Feb–Dec plus Jan vs Dec ${Number(year) - 1}. First-time ("new") enrollments are never counted.`,
   matrixTitleTooltip: (year) =>

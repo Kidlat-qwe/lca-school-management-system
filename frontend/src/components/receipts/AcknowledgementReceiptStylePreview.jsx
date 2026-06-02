@@ -22,6 +22,10 @@ export default function AcknowledgementReceiptStylePreview({
   studentName = '—',
   classLabel = '-',
   receiptDateDisplay = '—',
+  /** Prepared by signature text (should include the issuer name and issued date). */
+  preparedByText = '',
+  /** Received by signature text (usually parent/guardian name). */
+  receivedByText = '',
   /** { description, rate, amount } numeric rate/amount for PHP display */
   tableRows = [],
   /** Grand total for footer (PHP); if omitted, sums table row amounts */
@@ -147,11 +151,15 @@ export default function AcknowledgementReceiptStylePreview({
       <div className="flex flex-col justify-between gap-6 px-4 pb-6 pt-4 text-[11px] sm:flex-row sm:px-6 sm:text-xs">
         <div className="flex-1">
           <span className="font-semibold">Prepared by:</span>
-          <span className="ml-2 inline-block min-w-[12rem] border-b border-gray-900 align-bottom sm:min-w-[16rem]" />
+          <span className="ml-2 inline-block min-w-[12rem] border-b border-gray-900 align-bottom sm:min-w-[16rem]">
+            {preparedByText || ''}
+          </span>
         </div>
         <div className="flex-1 sm:text-right">
           <span className="font-semibold">Received by:</span>
-          <span className="ml-2 inline-block min-w-[10rem] border-b border-gray-900 align-bottom sm:min-w-[12rem]" />
+          <span className="ml-2 inline-block min-w-[10rem] border-b border-gray-900 align-bottom sm:min-w-[12rem]">
+            {receivedByText || ''}
+          </span>
         </div>
       </div>
     </div>

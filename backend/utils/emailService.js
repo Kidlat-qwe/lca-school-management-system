@@ -626,6 +626,7 @@ export const sendSystemNotificationEmail = async ({
   to,
   subject,
   html,
+  attachments = [],
 }) => {
   const normalizedRecipients = Array.isArray(to)
     ? to.map((x) => String(x || '').trim()).filter(Boolean)
@@ -639,18 +640,23 @@ export const sendSystemNotificationEmail = async ({
     throw new Error('Email is not configured. Please check your .env file.');
   }
 
-  const mailOptions = {
-    from: SMTP_FROM,
-    to: normalizedRecipients,
-    subject,
-    html,
-  };
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments
+        .filter((att) => att && (att.content || att.path))
+        .map((att) => ({
+          filename: att.filename || 'attachment.pdf',
+          content: att.content,
+          path: att.path,
+          contentType: att.contentType || 'application/pdf',
+        }))
+    : [];
 
   try {
     const info = await sendMail({
       to: normalizedRecipients,
       subject,
       html,
+      attachments: normalizedAttachments,
     });
     console.log('✅ System notification email sent successfully:', {
       to: normalizedRecipients,
@@ -690,12 +696,17 @@ export const normalizeNotificationRecipients = (list) => {
  * Send the same system notification to each recipient in separate SMTP transactions.
  * More reliable than one message with many To: addresses on strict providers.
  */
-export const sendSystemNotificationEmailToEach = async ({ recipients, subject, html }) => {
+export const sendSystemNotificationEmailToEach = async ({
+  recipients,
+  subject,
+  html,
+  attachments = [],
+}) => {
   const unique = normalizeNotificationRecipients(recipients);
   const summary = { attempted: unique.length, sent: 0, failed: 0, errors: [] };
   for (const email of unique) {
     try {
-      await sendSystemNotificationEmail({ to: email, subject, html });
+      await sendSystemNotificationEmail({ to: email, subject, html, attachments });
       summary.sent += 1;
     } catch (e) {
       summary.failed += 1;

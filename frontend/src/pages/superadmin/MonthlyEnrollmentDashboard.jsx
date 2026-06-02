@@ -40,6 +40,7 @@ const MonthlyEnrollmentDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedYear, setSelectedYear] = useState(String(CURRENT_YEAR));
+  const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
 
   const yearRange = useMemo(() => {
@@ -57,6 +58,7 @@ const MonthlyEnrollmentDashboard = () => {
     const params = new URLSearchParams();
     if (selectedBranchId) params.set('branch_id', selectedBranchId);
     if (selectedYear) params.set('year', selectedYear);
+    if (selectedProgramId) params.set('program_id', selectedProgramId);
     if (selectedClassId) params.set('class_id', selectedClassId);
     params.set('enrollment_rate_scope', 'month');
     params.set('phase_matrix_scope', 'overall');
@@ -78,7 +80,7 @@ const MonthlyEnrollmentDashboard = () => {
 
   useEffect(() => {
     fetchData();
-  }, [selectedBranchId, selectedYear, selectedClassId]);
+  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId]);
 
   useEffect(() => {
     if (!data?.year_range) return;
@@ -91,8 +93,24 @@ const MonthlyEnrollmentDashboard = () => {
   }, [data?.year_range, yearRange.minYear, yearRange.maxYear]);
 
   const studentMonthMatrix = useMemo(() => data?.student_month_enrollment_matrix ?? null, [data]);
+  const programs = useMemo(() => data?.programs ?? [], [data]);
   const classes = useMemo(() => data?.classes ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
+
+  useEffect(() => {
+    if (!selectedProgramId) return;
+    if (!programs.some((p) => String(p.program_id) === String(selectedProgramId))) {
+      setSelectedProgramId('');
+      setSelectedClassId('');
+    }
+  }, [programs, selectedBranchId]);
+
+  useEffect(() => {
+    if (!selectedClassId) return;
+    if (!classes.some((c) => String(c.class_id) === String(selectedClassId))) {
+      setSelectedClassId('');
+    }
+  }, [classes, selectedProgramId]);
   const displayYear = data?.selected_year ?? selectedYear;
 
   const totalReEnrollmentRate = useMemo(
@@ -134,7 +152,7 @@ const MonthlyEnrollmentDashboard = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Monthly Enrollment Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Month Re-enrollment</h1>
           <p className="mt-1 text-sm text-gray-500">
             {MONTHLY_ENROLLMENT_DASHBOARD.pageIntro(displayYear)}
             <MatrixInfoTooltip label="About this dashboard">
@@ -231,27 +249,47 @@ const MonthlyEnrollmentDashboard = () => {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div className="min-w-0 flex-1">
             <h3 className="flex flex-wrap items-center gap-1 text-lg font-semibold text-gray-900">
-              <span>Monthly Student Enrollment Matrix — {displayYear}</span>
+              <span>Month Student Re-enrollment Matrix — {displayYear}</span>
               <MatrixInfoTooltip label="How to read this matrix">
                 {MONTHLY_ENROLLMENT_DASHBOARD.matrixTitleTooltip(displayYear)}
               </MatrixInfoTooltip>
             </h3>
           </div>
-          <label className="inline-flex w-full flex-col gap-1 sm:w-auto sm:min-w-[260px] sm:max-w-[320px]">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Class</span>
-            <select
-              value={selectedClassId}
-              onChange={(e) => setSelectedClassId(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
-            >
-              <option value="">All classes</option>
-              {classes.map((c) => (
-                <option key={c.class_id} value={String(c.class_id)}>
-                  {c.class_name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Program</span>
+              <select
+                value={selectedProgramId}
+                onChange={(e) => {
+                  setSelectedProgramId(e.target.value);
+                  setSelectedClassId('');
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              >
+                <option value="">All programs</option>
+                {programs.map((p) => (
+                  <option key={p.program_id} value={String(p.program_id)}>
+                    {p.program_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Class</span>
+              <select
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              >
+                <option value="">All classes</option>
+                {classes.map((c) => (
+                  <option key={c.class_id} value={String(c.class_id)}>
+                    {c.class_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         <div className="mt-5 min-h-0">

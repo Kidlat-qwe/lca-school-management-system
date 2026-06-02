@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isInvoiceListFocused } from './arInvoiceCrossLink.js';
 import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
@@ -31,8 +32,126 @@ export function buildInvoiceNavigateStateFromRejectedPayment(payment) {
 }
 
 export function isInvoiceFocusedFromPaymentLogs(invoice, paymentLogsFocus) {
-  if (!paymentLogsFocus?.invoiceId || !invoice?.invoice_id) return false;
-  return Number(invoice.invoice_id) === Number(paymentLogsFocus.invoiceId);
+  return isInvoiceListFocused(invoice, paymentLogsFocus);
+}
+
+export { isInvoiceListFocused };
+
+/**
+ * Focus an invoice row when opened from AR page (?invoice_id=).
+ * Uses layout effect so cross-link fetch runs before list auto-fetch effects.
+ */
+export function useInvoiceFocusFromQuery({
+  searchParams,
+  setSearchParams,
+  setNameSearchTerm,
+  mergeInvoiceIntoList,
+  clearListDateFilters,
+  refetchListForCrossLink,
+  suppressAutoListFetchRef,
+  apiRequest,
+}) {
+  const [queryFocus, setQueryFocus] = useState(null);
+  const handledRef = useRef(null);
+  const refetchRef = useRef(refetchListForCrossLink);
+  refetchRef.current = refetchListForCrossLink;
+
+  useEffect(() => {
+    if (!searchParams.get('invoice_id')) {
+      handledRef.current = null;
+    }
+  }, [searchParams]);
+
+  useLayoutEffect(() => {
+    const raw = searchParams.get('invoice_id');
+    if (raw == null || raw === '') return;
+
+    const invoiceId = Number(raw);
+    if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('invoice_id');
+      setSearchParams(next, { replace: true });
+      return;
+    }
+
+    if (handledRef.current === invoiceId) return;
+    handledRef.current = invoiceId;
+
+    const search = `INV-${invoiceId}`;
+    if (suppressAutoListFetchRef) suppressAutoListFetchRef.current = true;
+    clearListDateFilters?.();
+    setQueryFocus({ invoiceId });
+    setNameSearchTerm?.(search);
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        await refetchRef.current?.(search);
+        if (cancelled) return;
+        const response = await apiRequest(`/invoices/${invoiceId}`);
+        if (cancelled) return;
+        const invoice = response?.data ?? response;
+        if (invoice?.invoice_id) {
+          mergeInvoiceIntoList?.(invoice);
+        }
+      } catch (err) {
+        console.error('Failed to load invoice from AR cross-link:', err);
+      } finally {
+        if (suppressAutoListFetchRef) suppressAutoListFetchRef.current = false;
+        if (!cancelled) {
+          const next = new URLSearchParams(searchParams);
+          next.delete('invoice_id');
+          setSearchParams(next, { replace: true });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (suppressAutoListFetchRef) suppressAutoListFetchRef.current = false;
+    };
+  }, [
+    searchParams,
+    setSearchParams,
+    setNameSearchTerm,
+    mergeInvoiceIntoList,
+    clearListDateFilters,
+    refetchListForCrossLink,
+    suppressAutoListFetchRef,
+    apiRequest,
+  ]);
+
+  return queryFocus;
+}
+
+/** Jump to the page containing the focused invoice and scroll the row into view. */
+export function useScrollToFocusedInvoiceRow(
+  invoiceListFocus,
+  sortedInvoices,
+  currentPage,
+  setCurrentPage,
+  itemsPerPage
+) {
+  useEffect(() => {
+    if (!invoiceListFocus?.invoiceId) return;
+    const idx = sortedInvoices.findIndex(
+      (inv) => Number(inv.invoice_id) === Number(invoiceListFocus.invoiceId)
+    );
+    if (idx < 0) return;
+    const page = Math.floor(idx / itemsPerPage) + 1;
+    setCurrentPage(page);
+  }, [invoiceListFocus?.invoiceId, sortedInvoices, itemsPerPage, setCurrentPage]);
+
+  useEffect(() => {
+    if (!invoiceListFocus?.invoiceId) return;
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`invoice-row-${invoiceListFocus.invoiceId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [invoiceListFocus?.invoiceId, currentPage]);
 }
 
 /** Column values from the rejected payment row (Payment Logs selection). */
@@ -123,33 +242,4 @@ export function useOpenInvoiceFromPaymentLogsNavigation({
   const clearPaymentLogsFocus = useCallback(() => setPaymentLogsFocus(null), []);
 
   return { paymentLogsFocus, clearPaymentLogsFocus };
-}
-
-/** Jump to the page containing the focused invoice and scroll the row into view. */
-export function useScrollToFocusedInvoiceRow(
-  paymentLogsFocus,
-  sortedInvoices,
-  currentPage,
-  setCurrentPage,
-  itemsPerPage
-) {
-  useEffect(() => {
-    if (!paymentLogsFocus?.invoiceId) return;
-    const idx = sortedInvoices.findIndex(
-      (inv) => Number(inv.invoice_id) === Number(paymentLogsFocus.invoiceId)
-    );
-    if (idx < 0) return;
-    const page = Math.floor(idx / itemsPerPage) + 1;
-    setCurrentPage(page);
-  }, [paymentLogsFocus?.invoiceId, sortedInvoices, itemsPerPage, setCurrentPage]);
-
-  useEffect(() => {
-    if (!paymentLogsFocus?.invoiceId) return;
-    const timer = window.setTimeout(() => {
-      document
-        .getElementById(`invoice-row-${paymentLogsFocus.invoiceId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [paymentLogsFocus?.invoiceId, currentPage]);
 }

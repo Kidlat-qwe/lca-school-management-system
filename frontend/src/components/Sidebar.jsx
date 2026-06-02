@@ -76,14 +76,14 @@ const Sidebar = ({ isOpen, onClose }) => {
           roles: ['Superadmin', 'Admin'],
         },
         {
-          name: 'Enrollment',
+          name: 'Re-enrollment',
           children: [
             {
-              name: 'Phase Enrollment Dashboard',
+              name: 'Phase Re-enrollment Dashboard',
               path: `${basePath}/phase-enrollment-dashboard`,
             },
             {
-              name: 'Monthly Enrollment Dashboard',
+              name: 'Month Re-enrollment',
               path: `${basePath}/monthly-enrollment-dashboard`,
             },
           ],
@@ -453,8 +453,8 @@ const Sidebar = ({ isOpen, onClose }) => {
           if (child.name === 'Daily Operational Dashboard') path = `${basePath}/daily-operational-dashboard`;
           if (child.name === 'Monthly Operational Dashboard') path = `${basePath}/monthly-operational-dashboard`;
           if (child.name === 'Operational summary') path = `${basePath}/operational-dashboard`;
-          if (child.name === 'Phase Enrollment Dashboard') path = `${basePath}/phase-enrollment-dashboard`;
-          if (child.name === 'Monthly Enrollment Dashboard') path = `${basePath}/monthly-enrollment-dashboard`;
+          if (child.name === 'Phase Re-enrollment Dashboard') path = `${basePath}/phase-enrollment-dashboard`;
+          if (child.name === 'Month Re-enrollment') path = `${basePath}/monthly-enrollment-dashboard`;
           return { ...child, path };
         };
         children = item.children

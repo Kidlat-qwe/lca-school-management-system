@@ -15,7 +15,23 @@ import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import AcknowledgementReceiptStylePreview from '../../components/receipts/AcknowledgementReceiptStylePreview';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
-import { getArListLineTotal, getArListPackagePrimaryLabel } from '../../utils/acknowledgementReceiptDisplay';
+import {
+  formatArLinkedInvoiceArNumber,
+  formatArLinkedInvoiceLabel,
+  getArListLineTotal,
+  getArListPackagePrimaryLabel,
+} from '../../utils/acknowledgementReceiptDisplay';
+import {
+  getArListRowDomId,
+  isAckReceiptListFocused,
+  useAckReceiptFocusFromQuery,
+} from '../../utils/arInvoiceCrossLink';
+import {
+  getInitialArSearchFromParams,
+  hasArCrossLinkParam,
+  shouldClearArDateFiltersOnLanding,
+} from '../../utils/billingListCrossLink';
+import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -89,7 +105,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const currentUserId = Number(userInfo?.user_id || userInfo?.userId || 0) || null;
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get('status') || '';
-  const initialSearch = searchParams.get('search') || '';
+  const initialSearch = getInitialArSearchFromParams(searchParams);
   const initialPaymentMethod = searchParams.get('payment_method') || '';
   const initialArAdminTab =
     (userType === 'Superadmin' || userType === 'Admin') && searchParams.get('tab') === 'return'
@@ -118,7 +134,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   // Always boot the Month picker with the current Manila month, even when
   // the URL is hydrating one of the other modes — the user may swap modes
   // afterwards and we want the Month picker pre-populated.
-  const initialIssueMonth = receiptDateFilterUtil.defaultMonth();
+  const initialIssueMonth = shouldClearArDateFiltersOnLanding(searchParams)
+    ? ''
+    : receiptDateFilterUtil.defaultMonth();
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -145,9 +163,21 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     });
   };
 
+  const clearArListDateFilters = useCallback(() => {
+    setDateFilterMode(receiptDateFilterUtil.DEFAULT_MODE);
+    setFilterIssueMonth('');
+    setListPaymentDateFrom('');
+    setListPaymentDateTo('');
+    setListIssueDateFrom('');
+    setListIssueDateTo('');
+  }, []);
+
   const [listRefreshing, setListRefreshing] = useState(false);
   const initialDataLoadedRef = useRef(false);
   const searchHydratedRef = useRef(false);
+  const arListFetchSeqRef = useRef(0);
+  const suppressAutoListFetchRef = useRef(hasArCrossLinkParam(searchParams));
+  const pendingArCrossLinkRef = useRef(hasArCrossLinkParam(searchParams));
   const statusHydratedRef = useRef(false);
   const paymentMethodHydratedRef = useRef(false);
   const [arAdminTab, setArAdminTab] = useState(initialArAdminTab);
@@ -279,6 +309,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       String(receipt.prospect_student_notes || '').includes('[Returned]'));
 
   useEffect(() => {
+    if (suppressAutoListFetchRef.current) return;
     fetchReceipts(initialPage);
 
     if (canApplyGlobalBranchFilter) {
@@ -310,11 +341,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         fetchMerchandise(null);
       }
     }
+    if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canApplyGlobalBranchFilter, isSuperadmin, selectedBranchId]);
 
-  const fetchReceipts = async (page = 1, limitOverride) => {
+  const fetchReceipts = async (page = 1, limitOverride, options = {}) => {
+    arListFetchSeqRef.current += 1;
+    const fetchSeq = arListFetchSeqRef.current;
     try {
       if (!initialDataLoadedRef.current) {
         setLoading(true);
@@ -327,10 +361,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       const params = buildReceiptQueryParams({
         page,
         limit: effectiveLimit,
+        searchOverride: options.searchOverride,
+        skipDateFilters: options.skipDateFilters,
+        invoiceIdOverride: options.invoiceIdOverride,
       });
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
-      setReceipts(response.data || []);
+      if (fetchSeq !== arListFetchSeqRef.current) return [];
+      const rows = response.data || [];
+      setReceipts(rows);
       if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
         setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
       } else {
@@ -356,19 +395,28 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           else next.delete('status');
           next.delete('tab');
         }
-        if (searchTerm.trim()) next.set('search', searchTerm.trim());
-        else next.delete('search');
+        if (options.searchOverride !== undefined) {
+          const trimmed = String(options.searchOverride || '').trim();
+          if (trimmed) next.set('search', trimmed);
+          else next.delete('search');
+        } else if (searchTerm.trim()) {
+          next.set('search', searchTerm.trim());
+        } else {
+          next.delete('search');
+        }
         if (paymentMethodFilter) next.set('payment_method', paymentMethodFilter);
         else next.delete('payment_method');
-        // Sync the URL to whichever date params the active mode emits.
-        const activeDateParams = receiptDateFilterUtil.buildParams({
-          mode: dateFilterMode,
-          month: filterIssueMonth,
-          paymentFrom: listPaymentDateFrom,
-          paymentTo: listPaymentDateTo,
-          issueFrom: listIssueDateFrom,
-          issueTo: listIssueDateTo,
-        });
+        next.delete('ar_focus');
+        const activeDateParams = options.skipDateFilters
+          ? {}
+          : receiptDateFilterUtil.buildParams({
+              mode: dateFilterMode,
+              month: filterIssueMonth,
+              paymentFrom: listPaymentDateFrom,
+              paymentTo: listPaymentDateTo,
+              issueFrom: listIssueDateFrom,
+              issueTo: listIssueDateTo,
+            });
         if (activeDateParams.payment_date_from) next.set('payment_date_from', activeDateParams.payment_date_from);
         else next.delete('payment_date_from');
         if (activeDateParams.payment_date_to) next.set('payment_date_to', activeDateParams.payment_date_to);
@@ -383,16 +431,72 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         next.set('limit', String(effectiveLimit));
         return next;
       });
+      return rows;
     } catch (err) {
+      if (fetchSeq !== arListFetchSeqRef.current) return [];
       console.error('Error fetching acknowledgement receipts:', err);
       setError('Failed to load acknowledgement receipts. Please try again.');
       setFilterTotalLineAmount(null);
+      return [];
     } finally {
-      setLoading(false);
-      setListRefreshing(false);
-      initialDataLoadedRef.current = true;
+      if (fetchSeq === arListFetchSeqRef.current) {
+        setLoading(false);
+        setListRefreshing(false);
+        initialDataLoadedRef.current = true;
+      }
     }
   };
+
+  const refetchArListForCrossLink = useCallback(
+    (search, { invoiceId = null } = {}) =>
+      fetchReceipts(1, undefined, {
+        searchOverride: search,
+        skipDateFilters: true,
+        invoiceIdOverride: invoiceId,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searchTerm, statusFilter, paymentMethodFilter, dateFilterMode, filterIssueMonth, selectedBranchId]
+  );
+
+  const { focusAckReceiptId, focusInvoiceOnlyId, crossLinkLoadedReceipt } = useAckReceiptFocusFromQuery({
+    searchParams,
+    setSearchParams,
+    setSearchTerm,
+    clearListDateFilters: clearArListDateFilters,
+    refetchListForCrossLink: refetchArListForCrossLink,
+    suppressAutoListFetchRef,
+    pendingArCrossLinkRef,
+    apiRequest,
+    sortedReceipts: receipts,
+    paginationPage: pagination.page,
+  });
+
+  useEffect(() => {
+    if (!crossLinkLoadedReceipt) return;
+    const rowKey = crossLinkLoadedReceipt.invoice_only_payment
+      ? `inv:${crossLinkLoadedReceipt.linked_invoice_id}`
+      : crossLinkLoadedReceipt.ack_receipt_id
+        ? `ar:${crossLinkLoadedReceipt.ack_receipt_id}`
+        : null;
+    if (!rowKey) return;
+    setReceipts((prev) => {
+      const exists = prev.some((row) => {
+        if (crossLinkLoadedReceipt.invoice_only_payment) {
+          return (
+            row.invoice_only_payment &&
+            Number(row.linked_invoice_id) === Number(crossLinkLoadedReceipt.linked_invoice_id)
+          );
+        }
+        return Number(row.ack_receipt_id) === Number(crossLinkLoadedReceipt.ack_receipt_id);
+      });
+      if (exists) return prev;
+      return [crossLinkLoadedReceipt, ...prev];
+    });
+  }, [crossLinkLoadedReceipt]);
+
+  const shouldSkipAutoArListFetch = () =>
+    suppressAutoListFetchRef.current || pendingArCrossLinkRef.current;
+
   const handleLimitChange = (nextLimit) => {
     setPagination((prev) => ({ ...prev, limit: nextLimit, page: 1 }));
     fetchReceipts(1, nextLimit);
@@ -445,6 +549,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       searchHydratedRef.current = true;
       return;
     }
+    if (shouldSkipAutoArListFetch()) return;
     const timer = setTimeout(() => {
       fetchReceipts(1);
     }, 300);
@@ -457,6 +562,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       statusHydratedRef.current = true;
       return;
     }
+    if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
@@ -466,6 +572,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       paymentMethodHydratedRef.current = true;
       return;
     }
+    if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentMethodFilter]);
@@ -476,6 +583,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       arAdminTabHydratedRef.current = true;
       return;
     }
+    if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arAdminTab, isAdminOrSuperadmin]);
@@ -485,6 +593,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       arListDateFilterHydratedRef.current = true;
       return;
     }
+    if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -580,7 +689,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
    * - Otherwise we derive the date params from the active date-filter mode
    *   (Month / Payment date / Issue Date) via `receiptDateFilterUtil`.
    */
-  const buildReceiptQueryParams = ({ page, limit, dateOverride = null, forceBranchId = undefined }) => {
+  const buildReceiptQueryParams = ({
+    page,
+    limit,
+    dateOverride = null,
+    forceBranchId = undefined,
+    searchOverride,
+    skipDateFilters = false,
+    invoiceIdOverride = null,
+  }) => {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(limit));
@@ -592,21 +709,32 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         params.set('exclude_status', 'Returned');
       }
     }
-    if (searchTerm.trim()) params.set('search', searchTerm.trim());
+    if (searchOverride !== undefined) {
+      const trimmed = String(searchOverride || '').trim();
+      if (trimmed) params.set('search', trimmed);
+    } else if (searchTerm.trim()) {
+      params.set('search', searchTerm.trim());
+    }
     if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
+    const invId = Number(invoiceIdOverride);
+    if (Number.isFinite(invId) && invId > 0) {
+      params.set('invoice_id', String(invId));
+    }
     if (forceBranchId !== undefined && forceBranchId !== null && String(forceBranchId).trim() !== '') {
       params.set('branch_id', String(forceBranchId));
     } else if (canApplyGlobalBranchFilter && selectedBranchId) {
       params.set('branch_id', selectedBranchId);
     }
-    const dateParamPairs = dateOverride || receiptDateFilterUtil.buildParams({
-      mode: dateFilterMode,
-      month: filterIssueMonth,
-      paymentFrom: listPaymentDateFrom,
-      paymentTo: listPaymentDateTo,
-      issueFrom: listIssueDateFrom,
-      issueTo: listIssueDateTo,
-    });
+    const dateParamPairs = skipDateFilters
+      ? {}
+      : dateOverride || receiptDateFilterUtil.buildParams({
+          mode: dateFilterMode,
+          month: filterIssueMonth,
+          paymentFrom: listPaymentDateFrom,
+          paymentTo: listPaymentDateTo,
+          issueFrom: listIssueDateFrom,
+          issueTo: listIssueDateTo,
+        });
     Object.entries(dateParamPairs).forEach(([k, v]) => {
       if (v) params.set(k, v);
     });
@@ -757,6 +885,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       const exportRows = rowsForExport.map((r) => ({
         'Acknowledgement Receipt ID': r.ack_receipt_id ?? '-',
         'Student Name': r.prospect_student_name || '-',
+        'Invoice ID': formatArLinkedInvoiceLabel(r) || '-',
+        'Acknowledgement Receipt#': formatArLinkedInvoiceArNumber(r) || '-',
         'Guardian Name': r.prospect_student_contact || '-',
         'Mobile Number': r.prospect_student_phone || '-',
         'Package / Items': getArPackageOrItems(r),
@@ -1828,6 +1958,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const sortedReceipts = sortRows(receipts, sortConfig, {
+    invoice: { accessor: (r) => formatArLinkedInvoiceLabel(r) || '', type: 'string' },
+    ar_number: { accessor: (r) => formatArLinkedInvoiceArNumber(r) || '', type: 'string' },
     branch: { accessor: 'branch_name', type: 'string' },
     status: { accessor: 'status', type: 'string' },
     issue_date: { accessor: 'issue_date', type: 'date' },
@@ -2001,8 +2133,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              placeholder="Name, contact, reference..."
-              title="Search by name, contact, or reference number"
+              placeholder="Name, contact, INV#, AR#..."
+              title="Search by name, contact, reference, invoice ID, or acknowledgement receipt number"
             />
           </div>
           <div>
@@ -2202,11 +2334,30 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1620px' }}
+                style={{ width: '100%', minWidth: '1780px' }}
               >
                 <thead className="bg-gray-50 table-header-stable">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Student Name</th>
+                    <SortableHeader
+                      label="Invoice"
+                      sortKey="invoice"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap"
+                    />
+                    <SortableHeader
+                      label={
+                        <>
+                          <span className="block">Acknowledgement</span>
+                          <span className="block">Receipt#</span>
+                        </>
+                      }
+                      sortKey="ar_number"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap"
+                    />
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Guardian Name</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Mobile</th>
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Package / Items</th>
@@ -2229,20 +2380,49 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 14 : 13} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 16 : 15} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
                   ) : (
-                    sortedReceipts.map((r) => (
+                    sortedReceipts.map((r) => {
+                    const isFocusedFromCrossLink = isAckReceiptListFocused(
+                      r,
+                      focusAckReceiptId,
+                      focusInvoiceOnlyId
+                    );
+                    const rowDomId = getArListRowDomId(r);
+                    const rowKey = r.invoice_only_payment
+                      ? `invoice-only-${r.linked_invoice_id}`
+                      : r.ack_receipt_id;
+                    return (
                     <tr
-                      key={r.ack_receipt_id}
-                      className={r.status === 'Returned' ? 'bg-red-50/70' : ''}
+                      key={rowKey}
+                      id={rowDomId || undefined}
+                      className={
+                        isFocusedFromCrossLink
+                          ? 'bg-primary-50 ring-2 ring-inset ring-primary-300'
+                          : r.status === 'Returned'
+                            ? 'bg-red-50/70'
+                            : ''
+                      }
                     >
                       <td className="px-4 py-3">
                         <div className="text-gray-900 font-medium">
                           {r.prospect_student_name || '-'}
                         </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-900">
+                        <ArInvoiceIdLink userType={userType} receipt={r} />
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600" style={{ maxWidth: '140px' }}>
+                        <span title={formatArLinkedInvoiceArNumber(r) || ''}>
+                          {formatArLinkedInvoiceArNumber(r) || (
+                            <span className="text-gray-300" title="No acknowledgement receipt number">
+                              —
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-gray-900">
                         {r.prospect_student_contact || <span className="text-gray-300">–</span>}
@@ -2376,6 +2556,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                         <td className="px-4 py-3">
                           {(() => {
+                            if (r.invoice_only_payment) {
+                              return (
+                                <span
+                                  className="text-xs text-gray-500"
+                                  title="Payment was recorded on the Invoice page; there is no acknowledgement receipt record for this AR number."
+                                >
+                                  —
+                                </span>
+                              );
+                            }
                             const financeCanAct =
                               isFinanceOrSuperfinance &&
                               r.ar_type === 'Package' &&
@@ -2414,7 +2604,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         </td>
                       )}
                     </tr>
-                  ))
+                  );
+                  })
                   )}
                 </tbody>
               </table>
@@ -3551,6 +3742,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       ? `Invoice #${merchandiseArCreatedSummary.invoiceId}`
                       : '—');
 
+                  const preparedByName =
+                    r.prepared_by_name ||
+                    userInfo?.full_name ||
+                    userInfo?.fullName ||
+                    userInfo?.email ||
+                    '—';
+                  const preparedByText = preparedByName;
+                  const receivedByText = r.prospect_student_contact || '';
+
                   const merchRows = items.map((row) => {
                     const qty = Number(row.quantity) || 1;
                     const unit = Number(row.price) || 0;
@@ -3574,6 +3774,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         studentName={r.prospect_student_name || '—'}
                         classLabel={r.level_tag || '-'}
                         receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                        preparedByText={preparedByText}
+                        receivedByText={receivedByText}
                         tableRows={merchRows}
                         totalAmount={totalWithTip}
                       />
@@ -3678,6 +3880,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       (Number(r.payment_amount) || 0) + (Number(r.tip_amount) || 0);
                     const receiptNo = r.ack_receipt_number || '—';
 
+                    const preparedByName =
+                      r.prepared_by_name ||
+                      userInfo?.full_name ||
+                      userInfo?.fullName ||
+                      userInfo?.email ||
+                      '—';
+                    const preparedByText = preparedByName;
+                    const receivedByText = r.prospect_student_contact || '';
+
                     const packageRows = [
                       {
                         description: r.package_name_snapshot || 'Package',
@@ -3713,6 +3924,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           studentName={r.prospect_student_name || '—'}
                           classLabel={r.level_tag || '-'}
                           receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                          preparedByText={preparedByText}
+                          receivedByText={receivedByText}
                           tableRows={packageRows}
                           totalAmount={totalWithTip}
                         />
@@ -4155,6 +4368,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </span>
                   <span className="mx-2 text-gray-300">|</span>
                   <span className="font-semibold">Branch:</span> {viewReceipt.branch_name || '—'}
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">Invoice:</span>{' '}
+                  {formatArLinkedInvoiceLabel(viewReceipt) || '—'}
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">AR#:</span>{' '}
+                  {formatArLinkedInvoiceArNumber(viewReceipt) || '—'}
                 </div>
 
                 {viewReceipt.ar_type === 'Merchandise' ? (

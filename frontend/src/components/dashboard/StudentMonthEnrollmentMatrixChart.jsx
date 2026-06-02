@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -8,39 +9,30 @@ import {
   YAxis,
 } from 'recharts';
 import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
+import {
+  sortMatrixStudentsByEnrollmentDate,
+  toggleEnrollmentDateSort,
+} from '../../utils/enrollmentMatrixSort';
+import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
+import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';
+import EnrollmentMatrixStudentColumnHeader, {
+  enrollmentMatrixStudentNameTitle,
+} from './EnrollmentMatrixStudentColumnHeader';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 
 const RATE_HEADER_HEIGHT_PX = 44;
 const COLUMN_HEADER_HEIGHT_PX = 44;
 
-const CellBadge = ({ cell }) => {
-  const mark = cell?.mark ?? '-';
-  const label = cell?.label ?? '';
-  const isEnrolled = mark === '1';
-
-  return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span
-        className={`inline-flex min-w-[2rem] items-center justify-center rounded-md px-2 py-1 text-xs font-semibold tabular-nums ${
-          isEnrolled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
-        }`}
-        title={label || (isEnrolled ? 'Enrolled' : 'Not enrolled')}
-      >
-        {isEnrolled ? '1' : '-'}
-      </span>
-      {label ? (
-        <span className="text-[10px] leading-3 text-gray-500">{label}</span>
-      ) : null}
-    </div>
-  );
-};
-
 /**
  * Student × month enrollment matrix (Jan–Dec for selected year).
  */
 const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = '' }) => {
+  const [studentSortDirection, setStudentSortDirection] = useState('asc');
   const months = matrix?.months ?? [];
-  const students = matrix?.students ?? [];
+  const students = useMemo(
+    () => sortMatrixStudentsByEnrollmentDate(matrix?.students ?? [], studentSortDirection),
+    [matrix?.students, studentSortDirection]
+  );
   const monthStats = matrix?.month_stats ?? [];
   const cohortSize = students.length;
   const showRateHeader = cohortSize > 0 && monthStats.length > 0;
@@ -73,6 +65,8 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
           {tooltipText}
         </MatrixInfoTooltip>
       </p>
+
+      <EnrollmentMatrixStatusLegend />
 
       {/* Scroll container: vertical scroll stays inside this box so sticky headers work */}
       <div
@@ -130,7 +124,10 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                   height: COLUMN_HEADER_HEIGHT_PX,
                 }}
               >
-                Student
+                <EnrollmentMatrixStudentColumnHeader
+                  sortDirection={studentSortDirection}
+                  onToggleSort={() => setStudentSortDirection(toggleEnrollmentDateSort)}
+                />
               </th>
               {months.map((m) => (
                 <th
@@ -151,13 +148,13 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                   <td
                     className="sticky left-0 z-[1] bg-white px-4 py-2.5 font-medium text-gray-900 shadow-[2px_0_4px_rgba(0,0,0,0.04)] group-hover:bg-gray-50"
                     style={{ minWidth: '160px', maxWidth: '220px' }}
-                    title={student.full_name}
+                    title={enrollmentMatrixStudentNameTitle(student)}
                   >
                     <span className="block truncate">{student.full_name}</span>
                   </td>
                   {months.map((m) => (
                     <td key={`${student.student_id}-${m.key}`} className="bg-white px-3 py-2.5 text-center group-hover:bg-gray-50">
-                      <CellBadge cell={student.months?.[m.key]} />
+                      <EnrollmentMatrixCellBadge cell={student.months?.[m.key]} />
                     </td>
                   ))}
                 </tr>

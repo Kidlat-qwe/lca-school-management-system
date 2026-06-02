@@ -14,6 +14,8 @@ export function buildInvoiceListRequestParams({
   paymentTo = '',
   issueFrom = '',
   issueTo = '',
+  search = '',
+  studentSearch = '',
 } = {}) {
   const params = new URLSearchParams({
     page: String(page),
@@ -23,6 +25,10 @@ export function buildInvoiceListRequestParams({
   if (Array.isArray(statuses) && statuses.length > 0) {
     params.set('statuses', statuses.join(','));
   }
+  const trimmedSearch = String(search || '').trim();
+  const trimmedStudentSearch = String(studentSearch || '').trim();
+  if (trimmedSearch) params.set('search', trimmedSearch);
+  if (trimmedStudentSearch) params.set('student_search', trimmedStudentSearch);
   const dateParams = invoiceDateFilterUtil.buildParams({
     mode: dateFilterMode,
     month,

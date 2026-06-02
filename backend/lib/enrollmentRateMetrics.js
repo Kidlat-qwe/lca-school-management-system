@@ -7,6 +7,17 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
+/** Sort matrix students by earliest enrolled_at (Manila), not by name. */
+export const sortEnrollmentMatrixStudents = (students, direction = 'asc') => {
+  const mult = direction === 'desc' ? -1 : 1;
+  return [...students].sort((a, b) => {
+    const aTime = a.first_enrolled_at ? new Date(a.first_enrolled_at).getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.first_enrolled_at ? new Date(b.first_enrolled_at).getTime() : Number.POSITIVE_INFINITY;
+    if (aTime !== bTime) return mult * (aTime - bTime);
+    return (a.student_id || 0) - (b.student_id || 0);
+  });
+};
+
 const buildMonthEnrolledAtFilter = (paramFromIdx, paramToIdx) => `
   AND cs.enrolled_at IS NOT NULL
   AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${paramFromIdx}::date
@@ -770,12 +781,13 @@ export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
  *   in that Manila calendar month are included.
  *
  * @param {Function} queryFn
- * @param {{ branchId?: number|null, curriculumId?: number|null, classId?: number|null, maxPhase?: number, enrolledFrom?: string|null, enrolledTo?: string|null }} options
+ * @param {{ branchId?: number|null, curriculumId?: number|null, programId?: number|null, classId?: number|null, maxPhase?: number, enrolledFrom?: string|null, enrolledTo?: string|null }} options
  */
 export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) => {
   const {
     branchId = null,
     curriculumId = null,
+    programId = null,
     classId = null,
     maxPhase = 10,
     enrolledFrom = null,
@@ -787,6 +799,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
   let paramIdx = 2;
   let branchJoin = '';
   let curriculumJoin = '';
+  let programJoin = '';
   let classJoin = '';
   if (branchId) {
     branchJoin = `AND c.branch_id = $${paramIdx}`;
@@ -796,6 +809,11 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
   if (curriculumId) {
     curriculumJoin = `INNER JOIN programstbl p ON c.program_id = p.program_id AND p.curriculum_id = $${paramIdx}`;
     params.push(curriculumId);
+    paramIdx += 1;
+  }
+  if (programId) {
+    programJoin = `AND c.program_id = $${paramIdx}`;
+    params.push(programId);
     paramIdx += 1;
   }
   if (classId) {
@@ -840,11 +858,18 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
         WHERE COALESCE(cs.phase_number, 0) BETWEEN 1 AND $1::int
           AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          ${programJoin}
           ${classJoin}
           ${monthFilter}
       ),
       cohort AS (
         SELECT DISTINCT student_id FROM scoped_rows
+      ),
+      student_first_enrolled AS (
+        SELECT student_id, MIN(enrolled_at) AS first_enrolled_at
+        FROM scoped_rows
+        WHERE enrolled_at IS NOT NULL
+        GROUP BY student_id
       ),
       student_phase_latest AS (
         -- Pick the latest row per student-phase (handles re-enroll/drop/rejoin history).
@@ -881,10 +906,12 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         m.phase_number,
         m.program_enrollment_status,
         m.removed_at,
-        m.is_full_payment
+        m.is_full_payment,
+        sfe.first_enrolled_at
       FROM matrix m
       INNER JOIN userstbl u ON u.user_id = m.student_id
-      ORDER BY u.full_name ASC NULLS LAST, m.student_id ASC, m.phase_number ASC
+      LEFT JOIN student_first_enrolled sfe ON sfe.student_id = m.student_id
+      ORDER BY sfe.first_enrolled_at ASC NULLS LAST, m.student_id ASC, m.phase_number ASC
     `,
     params
   );
@@ -915,6 +942,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
       studentMap.set(studentId, {
         student_id: studentId,
         full_name: row.full_name || `Student ${studentId}`,
+        first_enrolled_at: row.first_enrolled_at || null,
         phases: {},
       });
     }
@@ -934,7 +962,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     };
   }
 
-  const students = Array.from(studentMap.values());
+  const students = sortEnrollmentMatrixStudents(Array.from(studentMap.values()));
   // Display-only normalization:
   // - Show "new" only on the student's first enrolled phase cell.
   // - If later enrolled phase cells still have status 'new' in DB, display as 're-enrolled'.
@@ -1025,12 +1053,12 @@ const normalizeEnrollmentLabel = (status) => {
  *   Cohort = students with at least one billing_month inside the display window.
  *
  * @param {Function} queryFn
- * @param {{ branchId?: number|null, classId?: number|null, year?: number|string|null, fromMonth?: string, toMonth?: string }} options
+ * @param {{ branchId?: number|null, programId?: number|null, classId?: number|null, year?: number|string|null, fromMonth?: string, toMonth?: string }} options
  *   year — calendar year (Jan–Dec). Takes precedence over fromMonth/toMonth.
  *   fromMonth / toMonth — YYYY-MM strings (inclusive). Used only when year is omitted.
  */
 export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) => {
-  const { branchId = null, classId = null, year = null, fromMonth = null, toMonth = null } = options;
+  const { branchId = null, programId = null, classId = null, year = null, fromMonth = null, toMonth = null } = options;
 
   const nowManila = new Date(
     new Date().toLocaleString('en-CA', { timeZone: 'Asia/Manila' })
@@ -1068,10 +1096,16 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   const buildScopeJoins = (startIdx, targetParams) => {
     let idx = startIdx;
     let branchJoinSql = '';
+    let programJoinSql = '';
     let classJoinSql = '';
     if (branchId) {
       branchJoinSql = `AND c.branch_id = $${idx}`;
       targetParams.push(branchId);
+      idx += 1;
+    }
+    if (programId) {
+      programJoinSql = `AND c.program_id = $${idx}`;
+      targetParams.push(programId);
       idx += 1;
     }
     if (classId) {
@@ -1079,14 +1113,15 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       targetParams.push(classId);
       idx += 1;
     }
-    return { branchJoin: branchJoinSql, classJoin: classJoinSql };
+    return { branchJoin: branchJoinSql, programJoin: programJoinSql, classJoin: classJoinSql };
   };
 
   const params = [queryFromMonthStart, toMonthStart, fromMonthStart];
-  const { branchJoin, classJoin } = buildScopeJoins(4, params);
+  const { branchJoin, programJoin, classJoin } = buildScopeJoins(4, params);
 
   const scopeParams = [];
-  const { branchJoin: scopeBranchJoin, classJoin: scopeClassJoin } = buildScopeJoins(1, scopeParams);
+  const { branchJoin: scopeBranchJoin, programJoin: scopeProgramJoin, classJoin: scopeClassJoin } =
+    buildScopeJoins(1, scopeParams);
 
   const result = await queryFn(
     `
@@ -1121,6 +1156,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
           )
+          ${programJoin}
           ${classJoin}
       ),
 
@@ -1250,6 +1286,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
           )
+          ${scopeProgramJoin}
           ${scopeClassJoin}
       ),
       anchor AS (
@@ -1268,6 +1305,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           sr.phase_number,
           sr.program_enrollment_status,
           sr.removed_at,
+          sr.is_full_payment,
           CASE
             WHEN sr.is_full_payment AND sr.class_start_date IS NOT NULL THEN
               (
@@ -1292,20 +1330,49 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           AND program_enrollment_status IN ${ENROLLED_STATUSES}
           AND removed_at IS NULL
         GROUP BY student_id
+      ),
+      last_full_pay AS (
+        SELECT
+          student_id,
+          MAX(billing_month) AS last_full_pay_billing_month
+        FROM phase_billing
+        WHERE billing_month IS NOT NULL
+          AND is_full_payment = true
+          AND program_enrollment_status IN ${ENROLLED_STATUSES}
+          AND removed_at IS NULL
+        GROUP BY student_id
+      ),
+      student_first_enrolled AS (
+        SELECT student_id, MIN(enrolled_at) AS first_enrolled_at
+        FROM scoped_rows
+        WHERE enrolled_at IS NOT NULL
+        GROUP BY student_id
       )
       SELECT
-        student_id,
-        TO_CHAR(first_billing_month, 'YYYY-MM') AS first_enrolled_month_key
-      FROM first_enrolled
+        sfe.student_id,
+        sfe.first_enrolled_at,
+        TO_CHAR(fe.first_billing_month, 'YYYY-MM') AS first_enrolled_month_key,
+        TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key
+      FROM student_first_enrolled sfe
+      LEFT JOIN first_enrolled fe ON fe.student_id = sfe.student_id
+      LEFT JOIN last_full_pay lfp ON lfp.student_id = sfe.student_id
     `,
     scopeParams
   );
 
   const firstEnrolledByStudent = new Map();
+  const firstEnrolledAtByStudent = new Map();
+  const lastFullPayMonthByStudent = new Map();
   for (const row of firstEnrollResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
     if (row.first_enrolled_month_key) {
       firstEnrolledByStudent.set(studentId, row.first_enrolled_month_key);
+    }
+    if (row.first_enrolled_at) {
+      firstEnrolledAtByStudent.set(studentId, row.first_enrolled_at);
+    }
+    if (row.last_full_pay_month_key) {
+      lastFullPayMonthByStudent.set(studentId, row.last_full_pay_month_key);
     }
   }
 
@@ -1336,6 +1403,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         student_id: studentId,
         full_name: row.full_name || `Student ${studentId}`,
         first_enrolled_month_key: firstEnrolledByStudent.get(studentId) || null,
+        first_enrolled_at: firstEnrolledAtByStudent.get(studentId) || null,
+        last_full_pay_month_key: lastFullPayMonthByStudent.get(studentId) || null,
         months: {},
       });
     }
@@ -1358,11 +1427,163 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     };
   }
 
-  const students = Array.from(studentMap.values());
+  const displayMonthKeys = new Set(months.map((m) => m.key));
+  const displayEnrolledToExclusive = (() => {
+    const end = new Date(`${toYM}-01T00:00:00.000Z`);
+    end.setUTCMonth(end.getUTCMonth() + 1);
+    return end.toISOString().slice(0, 10);
+  })();
+  const calendarOverlayParams = [fromMonthStart, displayEnrolledToExclusive];
+  const {
+    branchJoin: calendarBranchJoin,
+    programJoin: calendarProgramJoin,
+    classJoin: calendarClassJoin,
+  } = buildScopeJoins(3, calendarOverlayParams);
+
+  const ensureMatrixStudent = (studentId, fullName) => {
+    if (!studentMap.has(studentId)) {
+      studentMap.set(studentId, {
+        student_id: studentId,
+        full_name: fullName || `Student ${studentId}`,
+        first_enrolled_month_key: firstEnrolledByStudent.get(studentId) || null,
+        first_enrolled_at: firstEnrolledAtByStudent.get(studentId) || null,
+        last_full_pay_month_key: lastFullPayMonthByStudent.get(studentId) || null,
+        months: {},
+      });
+    }
+    return studentMap.get(studentId);
+  };
+
+  // Dropped/unenrolled by removed_at calendar month (matches operational dashboard).
+  const droppedCalendarResult = await queryFn(
+    `
+      SELECT DISTINCT
+        cs.student_id,
+        u.full_name,
+        TO_CHAR(TIMEZONE('Asia/Manila', cs.removed_at), 'YYYY-MM') AS month_key
+      FROM classstudentstbl cs
+      INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+      WHERE cs.program_enrollment_status = 'dropped'
+        AND cs.removed_at IS NOT NULL
+        AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+        AND (
+          (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)
+          OR (
+            cs.enrolled_at IS NULL
+            AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
+          )
+        )
+        AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $1::date
+        AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $2::date
+        ${calendarProgramJoin}
+        ${calendarClassJoin}
+    `,
+    calendarOverlayParams
+  );
+
+  for (const row of droppedCalendarResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(studentId, row.full_name);
+    student.months[monthKey] = {
+      mark: '-',
+      label: 'dropped/unenrolled',
+      status: 'dropped',
+      calendar_dropped: true,
+      is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+    };
+  }
+
+  // Rejoin by enrolled_at calendar month (matches operational dashboard).
+  const rejoinCalendarResult = await queryFn(
+    `
+      SELECT DISTINCT
+        cs.student_id,
+        u.full_name,
+        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key
+      FROM classstudentstbl cs
+      INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+      WHERE cs.program_enrollment_status = 'rejoin'
+        AND cs.enrolled_at IS NOT NULL
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date
+        ${calendarProgramJoin}
+        ${calendarClassJoin}
+    `,
+    calendarOverlayParams
+  );
+
+  for (const row of rejoinCalendarResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(studentId, row.full_name);
+    student.months[monthKey] = {
+      mark: '1',
+      label: 'rejoin',
+      status: 'rejoin',
+      calendar_rejoin: true,
+      is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+    };
+  }
+
+  // New by enrolled_at calendar month — applied last so it wins over billing-month dropped.
+  // Phase 1 only: installment phase 2+ rows are often stored as status 'new' when paid but are
+  // continuations; those stay on billing-month logic and display as re-enrolled.
+  const newCalendarResult = await queryFn(
+    `
+      SELECT DISTINCT
+        cs.student_id,
+        u.full_name,
+        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key
+      FROM classstudentstbl cs
+      INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+      WHERE cs.program_enrollment_status = 'new'
+        AND COALESCE(cs.phase_number, 1) = 1
+        AND cs.enrolled_at IS NOT NULL
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date
+        ${calendarProgramJoin}
+        ${calendarClassJoin}
+    `,
+    calendarOverlayParams
+  );
+
+  for (const row of newCalendarResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(studentId, row.full_name);
+    const firstBillingKey =
+      student.first_enrolled_month_key || firstEnrolledByStudent.get(studentId) || null;
+    // Only the student's first-ever billing month can be forced to "new" (not a 2nd class phase 1).
+    if (firstBillingKey && monthKey !== firstBillingKey) continue;
+
+    student.months[monthKey] = {
+      mark: '1',
+      label: 'new',
+      status: 'new',
+      calendar_new: true,
+      is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+    };
+
+    if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
+      student.first_enrolled_month_key = monthKey;
+    }
+  }
+
+  const students = sortEnrollmentMatrixStudents(Array.from(studentMap.values()));
 
   // Display-only:
   // - "new" only on first enrolled month; later DB "new" → "re-enrolled"
-  // - Full-payment: last enrolled month → "completed" (same rule as phase matrix)
+  // - Full-payment: final package billing month → "completed" (not last month in calendar year view)
   for (const student of students) {
     const firstEnrolledKey =
       student.first_enrolled_month_key ||
@@ -1374,24 +1595,20 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     if (!firstEnrolledKey) continue;
 
-    let maxFullPayMonthKey = null;
+    const lastFullPayMonthKey = student.last_full_pay_month_key || null;
+
     for (const m of months) {
       const cell = student.months?.[m.key];
       if (!cell || cell.mark !== '1') continue;
-      if (cell.is_full_payment) {
-        if (!maxFullPayMonthKey || m.key > maxFullPayMonthKey) {
-          maxFullPayMonthKey = m.key;
-        }
-      }
-      if (cell.status === 'new' && m.key !== firstEnrolledKey) {
+      if (cell.status === 'new' && m.key !== firstEnrolledKey && !cell.calendar_new) {
         cell.label = 're-enrolled';
       } else if (cell.status === 're_enrolled') {
         cell.label = 're-enrolled';
       }
     }
 
-    if (maxFullPayMonthKey && maxFullPayMonthKey > firstEnrolledKey) {
-      const lastCell = student.months[maxFullPayMonthKey];
+    if (lastFullPayMonthKey && lastFullPayMonthKey > firstEnrolledKey) {
+      const lastCell = student.months[lastFullPayMonthKey];
       if (lastCell?.mark === '1') {
         lastCell.label = 'completed';
       }
@@ -1415,3 +1632,79 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     selected_year: selectedYear,
   };
 };
+
+/**
+ * Count matrix cell labels for one display month (after calendar overlays + display rules).
+ * Matches visible cells on the Month Re-enrollment matrix table.
+ */
+export const countMonthMatrixStatusLabels = (students, monthKey) => {
+  let newEnrolleesCount = 0;
+  let reEnrollmentCount = 0;
+  let droppedUnenrolledCount = 0;
+  let rejoinCount = 0;
+
+  for (const student of students) {
+    const cell = student.months?.[monthKey];
+    if (!cell?.label) continue;
+
+    switch (cell.label) {
+      case 'new':
+        newEnrolleesCount += 1;
+        break;
+      case 're-enrolled':
+      case 'upsell':
+        reEnrollmentCount += 1;
+        break;
+      case 'dropped/unenrolled':
+        droppedUnenrolledCount += 1;
+        break;
+      case 'rejoin':
+        rejoinCount += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    new_enrollees_count: newEnrolleesCount,
+    re_enrollment_count: reEnrollmentCount,
+    dropped_unenrolled_count: droppedUnenrolledCount,
+    rejoin_count: rejoinCount,
+  };
+};
+
+/**
+ * Month matrix KPIs for the monthly operational dashboard — one matrix load, same rules as
+ * the Month Re-enrollment matrix (including calendar overlays for new / dropped / rejoin).
+ */
+export const loadMonthMatrixOperationalStatsForMonth = async (queryFn, options = {}) => {
+  const { branchId = null, programId = null, classId = null, monthKey } = options;
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(String(monthKey))) {
+    throw new Error('monthKey must be YYYY-MM');
+  }
+
+  const year = parseInt(String(monthKey).slice(0, 4), 10);
+  const matrix = await loadStudentMonthEnrollmentMatrix(queryFn, {
+    branchId,
+    programId,
+    classId,
+    year,
+  });
+
+  const monthRateStat =
+    (matrix.month_stats || []).find((row) => row.month_key === monthKey) || null;
+  const statusCounts = countMonthMatrixStatusLabels(matrix.students || [], monthKey);
+
+  return {
+    month_key: monthKey,
+    ...statusCounts,
+    re_enrollment_rate_retained_count: monthRateStat?.re_enrolled_count ?? 0,
+    re_enrollment_rate_prior_count: monthRateStat?.prior_month_enrolled_count ?? 0,
+    re_enrollment_rate: monthRateStat?.re_enrollment_rate ?? null,
+    has_prior_month: Boolean(monthRateStat?.has_prior_month),
+  };
+};
+
+/** @deprecated Use loadMonthMatrixOperationalStatsForMonth */
+export const loadMonthReEnrollmentStatForMonth = loadMonthMatrixOperationalStatsForMonth;

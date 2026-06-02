@@ -5109,6 +5109,15 @@ router.post(
             ],
             explicitPrepaidAr
           );
+
+          if (prepaidAckIdForRow && downpaymentInvoice?.invoice_id) {
+            await client.query(
+              `UPDATE acknowledgement_receiptstbl
+               SET invoice_id = $1
+               WHERE ack_receipt_id = $2 AND invoice_id IS NULL`,
+              [downpaymentInvoice.invoice_id, prepaidAckIdForRow]
+            );
+          }
           
           // Link student to downpayment invoice
           await client.query(
@@ -5173,6 +5182,15 @@ router.post(
           ],
           explicitPrepaidArMain
         );
+
+        if (prepaidAckIdForRowMain && newInvoice?.invoice_id) {
+          await client.query(
+            `UPDATE acknowledgement_receiptstbl
+             SET invoice_id = $1
+             WHERE ack_receipt_id = $2 AND invoice_id IS NULL`,
+            [newInvoice.invoice_id, prepaidAckIdForRowMain]
+          );
+        }
       }
 
       // Handle promo if provided (main invoice) OR on downpayment only (Installment packages)

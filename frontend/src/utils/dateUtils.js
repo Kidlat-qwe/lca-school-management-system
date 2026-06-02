@@ -75,6 +75,17 @@ export const issueDateRangeFromManilaMonth = (yyyyMm) => {
 };
 
 /**
+ * Inclusive first/last calendar days for a calendar year (YYYY).
+ * @param {string|number} yyyy
+ * @returns {{ from: string, to: string }}
+ */
+export const issueDateRangeFromManilaYear = (yyyy) => {
+  const year = parseInt(String(yyyy || '').trim(), 10);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return { from: '', to: '' };
+  return { from: `${year}-01-01`, to: `${year}-12-31` };
+};
+
+/**
  * Format session code: p{phase}s{session}_{MMDDYY}_{HHMMam/pm}
  * Example: p1s1_020926_0100PM
  * @param {number} phaseNumber - Phase number

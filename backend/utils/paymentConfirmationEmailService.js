@@ -2,6 +2,7 @@ import {
   normalizeNotificationRecipients,
   sendSystemNotificationEmailToEach,
 } from './emailService.js';
+import { buildArPdfAttachmentForPaymentConfirmation } from './paymentArPdfAttachment.js';
 import { collectPhilippineMobiles } from './sms/semaphoreSmsService.js';
 import { sendPairedTemplateSms } from './sms/templateSmsService.js';
 import {
@@ -46,6 +47,9 @@ const buildInvoicePaidHtmlFallback = ({
       ${branchName ? `<div><strong>Branch:</strong> ${escapeHtml(branchName)}</div>` : ''}
     </div>
     <p style="margin:0 0 12px 0">
+      Your acknowledgement receipt is attached to this email as a PDF for your records.
+    </p>
+    <p style="margin:0 0 12px 0">
       Thank you for your payment. If you have questions, please message our Facebook page:
       <a href="https://www.facebook.com/littlechampionsacademy">Little Champions Academy</a>.
     </p>
@@ -85,10 +89,24 @@ const buildArPaidHtml = ({
       <div><strong>Paid Amount:</strong> ${escapeHtml(formatPhp(amountPaid))}</div>
       ${referenceNumber ? `<div><strong>Reference Number:</strong> ${escapeHtml(referenceNumber)}</div>` : ''}
     </div>
+    <p style="margin:0 0 12px 0">
+      Your acknowledgement receipt is attached to this email as a PDF for your records.
+    </p>
     <p style="margin:0">Thank you for choosing ${escapeHtml(DEFAULT_SCHOOL_NAME)}</p>
   </div>
 `;
 };
+
+function toEmailAttachments(pdfResult) {
+  if (!pdfResult?.buffer) return [];
+  return [
+    {
+      filename: pdfResult.filename || 'acknowledgement-receipt.pdf',
+      content: pdfResult.buffer,
+      contentType: 'application/pdf',
+    },
+  ];
+}
 
 export const sendInvoicePaymentConfirmationByInvoiceId = async (client, invoiceId) => {
   const invoiceRes = await client.query(
@@ -134,7 +152,18 @@ export const sendInvoicePaymentConfirmationByInvoiceId = async (client, invoiceI
   const paymentDate = paymentTotalRes.rows[0]?.latest_payment_date || invoice.issue_date;
   const invoiceNumber = invoice.invoice_description || `INV-${invoice.invoice_id}`;
 
-  const summary = { attempted: 0, sent: 0, failed: 0, smsSent: 0, errors: [] };
+  let arPdfAttachment = [];
+  try {
+    const pdf = await buildArPdfAttachmentForPaymentConfirmation(client, { invoiceId });
+    arPdfAttachment = toEmailAttachments(pdf);
+  } catch (pdfErr) {
+    console.error(
+      `sendInvoicePaymentConfirmationByInvoiceId: AR PDF attachment failed for invoice ${invoiceId}:`,
+      pdfErr?.message || pdfErr
+    );
+  }
+
+  const summary = { attempted: 0, sent: 0, failed: 0, smsSent: 0, errors: [], arPdfAttached: arPdfAttachment.length > 0 };
   for (const row of studentsRes.rows) {
     const recipients = normalizeNotificationRecipients([row.student_email, row.guardian_email]);
     if (recipients.length === 0) continue;
@@ -191,6 +220,7 @@ export const sendInvoicePaymentConfirmationByInvoiceId = async (client, invoiceI
       recipients,
       subject,
       html,
+      attachments: arPdfAttachment,
     });
     summary.attempted += result.attempted;
     summary.sent += result.sent;
@@ -272,13 +302,25 @@ export const sendArPaymentConfirmationByAckId = async (client, ackReceiptId) => 
     await logTemplateRenderWarning('sendArPaymentConfirmationByAckId template load', templateErr);
   }
 
-  const summary = { attempted: 0, sent: 0, failed: 0, smsSent: 0, errors: [] };
+  let arPdfAttachment = [];
+  try {
+    const pdf = await buildArPdfAttachmentForPaymentConfirmation(client, { ackReceiptId });
+    arPdfAttachment = toEmailAttachments(pdf);
+  } catch (pdfErr) {
+    console.error(
+      `sendArPaymentConfirmationByAckId: AR PDF attachment failed for AR ${ackReceiptId}:`,
+      pdfErr?.message || pdfErr
+    );
+  }
+
+  const summary = { attempted: 0, sent: 0, failed: 0, smsSent: 0, errors: [], arPdfAttached: arPdfAttachment.length > 0 };
 
   if (recipients.length > 0) {
     const result = await sendSystemNotificationEmailToEach({
       recipients,
       subject,
       html,
+      attachments: arPdfAttachment,
     });
     summary.attempted += result.attempted;
     summary.sent += result.sent;

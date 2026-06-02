@@ -86,6 +86,114 @@ export function programEnrollmentStatusBadgeClass(status) {
   return STATUS_TONES[key] || 'bg-slate-100 text-slate-800';
 }
 
+/**
+ * Matrix cell colors — distinct per status, aligned with dashboard chart palette
+ * (#F7C844 amber, #4F46E5 indigo, #22C55E green, #F97316 orange, #14B8A6 teal).
+ */
+export const ENROLLMENT_MATRIX_STATUS_ITEMS = [
+  {
+    key: 'new',
+    label: 'New',
+    tone: 'bg-emerald-100 text-emerald-800',
+    description: 'First enrollment in the program path (one cell per student).',
+  },
+  {
+    key: 're_enrolled',
+    label: 'Re-enrolled',
+    tone: 'bg-indigo-100 text-indigo-800',
+    description: 'Returning student enrolled in a later phase or billing month.',
+  },
+  {
+    key: 'completed',
+    label: 'Completed',
+    tone: 'bg-amber-100 text-amber-900',
+    description: 'Student finished the final enrolled phase (common for full-payment).',
+  },
+  {
+    key: 'rejoin',
+    label: 'Rejoin',
+    tone: 'bg-orange-100 text-orange-800',
+    description: 'First active phase after returning from a prior drop.',
+  },
+  {
+    key: 'upsell',
+    label: 'Upsell',
+    tone: 'bg-teal-100 text-teal-800',
+    description: 'Student moved to a higher or additional program level.',
+  },
+  {
+    key: 'pending_enrollment',
+    label: 'Pending enrollment',
+    tone: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200',
+    description: 'Enrollment started but not yet finalized.',
+  },
+  {
+    key: 'dropped',
+    label: 'Dropped / unenrolled',
+    tone: 'bg-rose-100 text-rose-800',
+    description: 'Dropped or removed from this phase or billing month.',
+  },
+  {
+    key: 'not_enrolled',
+    label: 'Not enrolled',
+    tone: 'bg-slate-100 text-slate-500',
+    description: 'No enrollment for this phase or billing month (—).',
+  },
+];
+
+const MATRIX_STATUS_BY_KEY = Object.fromEntries(
+  ENROLLMENT_MATRIX_STATUS_ITEMS.map((item) => [item.key, item])
+);
+
+const normalizeMatrixLabelKey = (label) =>
+  String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const MATRIX_LABEL_TO_KEY = {
+  new: 'new',
+  're-enrolled': 're_enrolled',
+  re_enrolled: 're_enrolled',
+  completed: 'completed',
+  rejoin: 'rejoin',
+  upsell: 'upsell',
+  'pending enrollment': 'pending_enrollment',
+  'dropped/unenrolled': 'dropped',
+  dropped: 'dropped',
+  'not enrolled': 'dropped',
+};
+
+/**
+ * Resolve badge tone for phase/month enrollment matrix cells.
+ * @param {{ mark?: string, label?: string, status?: string|null }} cell
+ */
+export function enrollmentMatrixCellTone(cell) {
+  const mark = cell?.mark ?? '-';
+
+  const labelKey = MATRIX_LABEL_TO_KEY[normalizeMatrixLabelKey(cell?.label)];
+  if (labelKey && MATRIX_STATUS_BY_KEY[labelKey]) {
+    return MATRIX_STATUS_BY_KEY[labelKey].tone;
+  }
+
+  const statusKey = String(cell?.status || '').trim().toLowerCase();
+  if (statusKey && MATRIX_STATUS_BY_KEY[statusKey]) {
+    return MATRIX_STATUS_BY_KEY[statusKey].tone;
+  }
+
+  if (mark === '1') {
+    return MATRIX_STATUS_BY_KEY.re_enrolled.tone;
+  }
+
+  return MATRIX_STATUS_BY_KEY.not_enrolled.tone;
+}
+
+export function enrollmentMatrixCellTitle(cell) {
+  const label = cell?.label?.trim();
+  if (label) return label;
+  return cell?.mark === '1' ? 'Enrolled' : 'Not enrolled';
+}
+
 const ACTIVE_ENROLLMENT_STATUSES = new Set(['new', 're_enrolled', 'upsell', 'rejoin']);
 
 /** One display status when multiple phase rows are merged into a single student row. */

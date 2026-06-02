@@ -45,6 +45,9 @@ export default function PaymentRecordedInvoiceSummaryModal({
   const receiptDateRaw = snapYmd || lastPayYmd || issueYmd;
   const receiptDateDisplay = receiptDateRaw ? formatDateManila(receiptDateRaw) : '—';
 
+  const preparedByText = invoice?.prepared_by_name || '';
+  const receivedByText = invoice?.received_by_guardian_name || '';
+
   const tableRows = [];
   for (const row of items) {
     const amt = Number(row.amount) || 0;
@@ -144,6 +147,8 @@ export default function PaymentRecordedInvoiceSummaryModal({
             studentName={studentForReceipt}
             classLabel="-"
             receiptDateDisplay={receiptDateDisplay}
+            preparedByText={preparedByText}
+            receivedByText={receivedByText}
             tableRows={tableRows}
             totalAmount={totalAmount}
           />

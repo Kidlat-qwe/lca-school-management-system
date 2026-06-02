@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -22,6 +22,7 @@ import {
 } from '../../utils/dateUtils';
 import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
 import { buildInvoiceListRequestParams } from '../../utils/invoiceListApiParams';
+import useDebouncedValue from '../../hooks/useDebouncedValue';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
@@ -32,9 +33,16 @@ import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import {
   getInvoiceRowRejectedPaymentOverlay,
   isInvoiceFocusedFromPaymentLogs,
+  isInvoiceListFocused,
+  useInvoiceFocusFromQuery,
   useOpenInvoiceFromPaymentLogsNavigation,
   useScrollToFocusedInvoiceRow,
 } from '../../utils/invoiceFocusNavigation';
+import { InvoiceArNumberLink } from '../../components/billing/BillingCrossLinks';
+import {
+  getInitialInvoiceSearchFromParams,
+  hasInvoiceCrossLinkParam,
+} from '../../utils/billingListCrossLink';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -55,12 +63,18 @@ const getInvoiceSummaryAmountIncludingTips = (invoice) =>
 const FinanceInvoice = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { userInfo } = useAuth();
+  const billingUserType = userInfo?.user_type || userInfo?.userType || 'Finance';
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [nameSearchTerm, setNameSearchTerm] = useState('');
+  const [nameSearchTerm, setNameSearchTerm] = useState(() =>
+    getInitialInvoiceSearchFromParams(searchParams)
+  );
   const [studentNameSearch, setStudentNameSearch] = useState('');
+  const debouncedNameSearch = useDebouncedValue(nameSearchTerm, 300);
+  const debouncedStudentNameSearch = useDebouncedValue(studentNameSearch, 300);
   const [filterBranch, setFilterBranch] = useState('');
   const [filterStatuses, setFilterStatuses] = useState([]);
   // Date filter: Month | Payment date | Issue Date.
@@ -174,26 +188,13 @@ const FinanceInvoice = () => {
     INVOICE_EXPORT_DEFAULT_STATUSES
   );
   const [exportLoading, setExportLoading] = useState(false);
+  const invoiceListFetchSeqRef = useRef(0);
+  const suppressAutoListFetchRef = useRef(hasInvoiceCrossLinkParam(searchParams));
 
   useEffect(() => {
     fetchBranches();
     fetchStudents();
   }, []);
-
-  // Server-side list (Payment Logs pattern): refetch page 1 when branch, date, or status filters change.
-  useEffect(() => {
-    fetchInvoices(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    filterBranch,
-    dateFilterMode,
-    filterIssueMonth,
-    filterPaymentDateFrom,
-    filterPaymentDateTo,
-    filterIssueDateFrom,
-    filterIssueDateTo,
-    filterStatuses,
-  ]);
 
   // Fetch package details by package name
   const fetchPackageDetails = async (packageName) => {
@@ -330,7 +331,9 @@ const FinanceInvoice = () => {
   };
 
   const fetchInvoices = useCallback(
-    async (page = 1) => {
+    async (page = 1, options = {}) => {
+      invoiceListFetchSeqRef.current += 1;
+      const fetchSeq = invoiceListFetchSeqRef.current;
       try {
         setLoading(true);
         const params = buildInvoiceListRequestParams({
@@ -338,14 +341,17 @@ const FinanceInvoice = () => {
           limit: ITEMS_PER_PAGE,
           branchId: filterBranch,
           statuses: filterStatuses,
-          dateFilterMode,
-          month: filterIssueMonth,
-          paymentFrom: filterPaymentDateFrom,
-          paymentTo: filterPaymentDateTo,
-          issueFrom: filterIssueDateFrom,
-          issueTo: filterIssueDateTo,
+          dateFilterMode: options.skipDateFilters ? invoiceDateFilterUtil.DEFAULT_MODE : dateFilterMode,
+          month: options.skipDateFilters ? '' : filterIssueMonth,
+          paymentFrom: options.skipDateFilters ? '' : filterPaymentDateFrom,
+          paymentTo: options.skipDateFilters ? '' : filterPaymentDateTo,
+          issueFrom: options.skipDateFilters ? '' : filterIssueDateFrom,
+          issueTo: options.skipDateFilters ? '' : filterIssueDateTo,
+          search: options.searchOverride ?? debouncedNameSearch,
+          studentSearch: options.skipStudentSearch ? '' : debouncedStudentNameSearch,
         });
         const response = await apiRequest(`/invoices?${params.toString()}`);
+        if (fetchSeq !== invoiceListFetchSeqRef.current) return;
         setInvoices(response.data || []);
         setServerStatusCounts(response.statusCounts || {});
         setListFilterSummary(response.filterSummary || null);
@@ -368,6 +374,7 @@ const FinanceInvoice = () => {
         }
         setError('');
       } catch (err) {
+        if (fetchSeq !== invoiceListFetchSeqRef.current) return;
         setError(err.message || 'Failed to fetch invoices');
         console.error('Error fetching invoices:', err);
         setInvoices([]);
@@ -375,7 +382,9 @@ const FinanceInvoice = () => {
         setListFilterSummary(null);
         setListPagination({ page: 1, limit: ITEMS_PER_PAGE, total: 0, totalPages: 1 });
       } finally {
-        setLoading(false);
+        if (fetchSeq === invoiceListFetchSeqRef.current) {
+          setLoading(false);
+        }
       }
     },
     [
@@ -387,7 +396,19 @@ const FinanceInvoice = () => {
       filterPaymentDateTo,
       filterIssueDateFrom,
       filterIssueDateTo,
+      debouncedNameSearch,
+      debouncedStudentNameSearch,
     ]
+  );
+
+  const refetchInvoiceListForCrossLink = useCallback(
+    (search) =>
+      fetchInvoices(1, {
+        searchOverride: search,
+        skipDateFilters: true,
+        skipStudentSearch: true,
+      }),
+    [fetchInvoices]
   );
 
   const fetchBranches = async () => {
@@ -651,6 +672,40 @@ const FinanceInvoice = () => {
     clearListDateFilters: clearInvoiceListDateFilters,
     setFilterStatuses,
   });
+
+  const queryInvoiceFocus = useInvoiceFocusFromQuery({
+    searchParams,
+    setSearchParams,
+    setNameSearchTerm,
+    mergeInvoiceIntoList,
+    clearListDateFilters: clearInvoiceListDateFilters,
+    refetchListForCrossLink: refetchInvoiceListForCrossLink,
+    suppressAutoListFetchRef,
+    apiRequest,
+  });
+
+  const invoiceListFocus = paymentLogsFocus?.invoiceId
+    ? paymentLogsFocus
+    : queryInvoiceFocus?.invoiceId
+      ? queryInvoiceFocus
+      : null;
+
+  useEffect(() => {
+    if (suppressAutoListFetchRef.current) return;
+    fetchInvoices(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    filterBranch,
+    dateFilterMode,
+    filterIssueMonth,
+    filterPaymentDateFrom,
+    filterPaymentDateTo,
+    filterIssueDateFrom,
+    filterIssueDateTo,
+    filterStatuses,
+    debouncedNameSearch,
+    debouncedStudentNameSearch,
+  ]);
 
   const openDetailsModal = async (invoice) => {
     // Fetch the latest invoice data with details
@@ -1386,41 +1441,25 @@ const FinanceInvoice = () => {
     0
   );
 
-  // Client-side search on the current server page (branch, date, status are server-side).
-  const matchesNonStatusFilters = (invoice) => {
-    const invoiceIdStr = `INV-${invoice.invoice_id}`;
-    const studentNames = (invoice.students || []).map(s => (s.full_name || '').toLowerCase()).join(' ');
-    const matchesSearch = !nameSearchTerm ||
-      invoiceIdStr.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
-      invoice.invoice_id?.toString().includes(nameSearchTerm) ||
-      (invoice.display_description || invoice.invoice_description || '').toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
-      invoice.invoice_ar_number?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
-      getBranchName(invoice.branch_id)?.toLowerCase().includes(nameSearchTerm.toLowerCase()) ||
-      studentNames.includes(nameSearchTerm.toLowerCase());
-    const matchesStudentName = !studentNameSearch ||
-      (invoice.students || []).some(s => (s.full_name || '').toLowerCase().includes(studentNameSearch.toLowerCase()));
-    return matchesSearch && matchesStudentName;
-  };
-  const displayInvoices = invoices.filter(matchesNonStatusFilters);
-  const invoiceStatusCounts = serverStatusCounts;
-  const unpaidInvoiceCount = invoiceStatusCounts['Unpaid'] || 0;
-  const sortedInvoices = sortRows(displayInvoices, sortConfig, {
+  const sortedInvoices = sortRows(invoices, sortConfig, {
     branch: { accessor: (invoice) => getBranchName(invoice.branch_id) || invoice.branch_name || '', type: 'string' },
     status: { accessor: 'status', type: 'string' },
     issue_date: { accessor: 'issue_date', type: 'date' },
     payment_date: { accessor: 'payment_date', type: 'date' },
   });
   const paginatedInvoices = sortedInvoices;
+  const invoiceStatusCounts = serverStatusCounts;
+  const unpaidInvoiceCount = invoiceStatusCounts['Unpaid'] || 0;
 
   useScrollToFocusedInvoiceRow(
-    paymentLogsFocus,
+    invoiceListFocus,
     sortedInvoices,
     currentPage,
     setCurrentPage,
     ITEMS_PER_PAGE
   );
   const summaryInvoiceCount = listPagination.total;
-  const summaryInvoiceTotal = displayInvoices.reduce(
+  const summaryInvoiceTotal = invoices.reduce(
     (sum, invoice) => sum + getInvoiceSummaryAmountIncludingTips(invoice),
     0
   );
@@ -1433,12 +1472,7 @@ const FinanceInvoice = () => {
 
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
-    setCurrentPage(1);
   };
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [nameSearchTerm, studentNameSearch]);
 
   const calculateItemTotal = (item) => {
     const amount = parseFloat(item.amount) || 0;
@@ -1898,11 +1932,18 @@ const FinanceInvoice = () => {
                   paginatedInvoices.map((invoice) => {
                   const rejectedOverlay = getInvoiceRowRejectedPaymentOverlay(invoice, paymentLogsFocus);
                   const isFocusedFromPaymentLogs = isInvoiceFocusedFromPaymentLogs(invoice, paymentLogsFocus);
+                  const isFocusedFromCrossLink = isInvoiceListFocused(invoice, queryInvoiceFocus);
                   return (
                   <tr
                     key={invoice.invoice_id}
                     id={`invoice-row-${invoice.invoice_id}`}
-                    className={isFocusedFromPaymentLogs ? 'bg-red-50 ring-2 ring-inset ring-red-300' : undefined}
+                    className={
+                      isFocusedFromPaymentLogs
+                        ? 'bg-red-50 ring-2 ring-inset ring-red-300'
+                        : isFocusedFromCrossLink
+                          ? 'bg-primary-50 ring-2 ring-inset ring-primary-300'
+                          : undefined
+                    }
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
@@ -1949,9 +1990,7 @@ const FinanceInvoice = () => {
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600" style={{ maxWidth: '140px' }}>
-                      <span className="text-sm" title={invoice.invoice_ar_number || ''}>
-                        {invoice.invoice_ar_number || '—'}
-                      </span>
+                      <InvoiceArNumberLink userType={billingUserType} invoice={invoice} />
                     </td>
                     <td className="px-6 py-4" style={{ maxWidth: '200px' }}>
                       <div className="text-sm text-gray-900 min-w-0">

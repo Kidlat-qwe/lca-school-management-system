@@ -44,6 +44,21 @@ const buildMonthSequence = (monthsBack = 6, anchorDateInput = new Date()) => {
   return sequence;
 };
 
+const parseYearRange = (yearKey) => {
+  if (!yearKey || !/^\d{4}$/.test(String(yearKey))) return null;
+  const year = parseInt(yearKey, 10);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return null;
+  const start = `${year}-01-01`;
+  const end = new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0)).toISOString().slice(0, 10);
+  return {
+    key: String(year),
+    start,
+    end,
+    anchorDate: new Date(year, 11, 1),
+    type: 'year',
+  };
+};
+
 const parseMonthRange = (monthKey) => {
   if (!monthKey || !/^\d{4}-\d{2}$/.test(String(monthKey))) return null;
   const [yearStr, monthStr] = String(monthKey).split('-');
@@ -1010,6 +1025,7 @@ router.get(
     queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
     queryValidator('year').optional().matches(/^\d{4}$/).withMessage('year must be YYYY'),
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
+    queryValidator('program_id').optional().isInt().withMessage('Program ID must be an integer'),
     queryValidator('class_id').optional().isInt().withMessage('Class ID must be an integer'),
     queryValidator('enrollment_rate_scope')
       .optional()
@@ -1027,35 +1043,46 @@ router.get(
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && (req.user.branchId == null);
       const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
+      const programFilter = req.query.program_id ? parseInt(req.query.program_id, 10) : null;
       const classFilter = req.query.class_id ? parseInt(req.query.class_id, 10) : null;
-      const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
-      const phaseMatrixScope = req.query.phase_matrix_scope === 'overall' ? 'overall' : 'month';
       const monthRange = parseMonthRange(req.query.month);
+      const currentCalendarYear = parseInt(getTodayManila().slice(0, 4), 10);
+      const matrixYear = req.query.year ? parseInt(req.query.year, 10) : null;
+      const yearRange = matrixYear ? parseYearRange(String(matrixYear)) : null;
       if (monthRange && monthRange.key > getCurrentManilaMonthKey()) {
         return res.status(400).json({
           success: false,
           message: 'month cannot be in the future',
         });
       }
-      const currentCalendarYear = parseInt(getTodayManila().slice(0, 4), 10);
-      const matrixYear = req.query.year ? parseInt(req.query.year, 10) : null;
+      if (yearRange && matrixYear > currentCalendarYear) {
+        return res.status(400).json({
+          success: false,
+          message: 'year cannot be in the future',
+        });
+      }
+      const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
+      const phaseMatrixScope = req.query.phase_matrix_scope === 'overall' ? 'overall' : 'month';
       const branchFilter = isSuperadmin || isFinanceNoBranch
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
       const branchParams = branchFilter ? [branchFilter] : [];
-      const effectiveMonthRange = monthRange || parseMonthRange(getCurrentManilaMonthKey());
-      const monthStartDate = effectiveMonthRange.start;
-      const monthEndDate = effectiveMonthRange.end;
+      const effectivePeriodRange = monthRange || yearRange || parseMonthRange(getCurrentManilaMonthKey());
+      const periodStartDate = effectivePeriodRange.start;
+      const periodEndDate = effectivePeriodRange.end;
+      const periodType = monthRange ? 'month' : yearRange ? 'year' : 'month';
 
       const classBranchJoin = branchFilter ? 'AND c.branch_id = $1' : '';
-      const monthParamOffset = branchFilter ? 1 : 0;
-      const monthParams = branchFilter ? [...branchParams, monthStartDate, monthEndDate] : [monthStartDate, monthEndDate];
+      const periodParamOffset = branchFilter ? 1 : 0;
+      const periodParams = branchFilter
+        ? [...branchParams, periodStartDate, periodEndDate]
+        : [periodStartDate, periodEndDate];
 
-      // Active/inactive for selected month (enrolled_at, Manila) — same month scope as new/re-enrollment KPIs.
+      // Active/inactive for selected period (enrolled_at, Manila) — same scope as new/re-enrollment KPIs.
       const monthStatusSnapshot = await loadEnrollmentStatusSnapshotForMonth(query, {
         branchId: branchFilter,
-        enrolledFrom: monthStartDate,
-        enrolledTo: monthEndDate,
+        enrolledFrom: periodStartDate,
+        enrolledTo: periodEndDate,
       });
       const totalStudents = monthStatusSnapshot.total_students;
       const activeStudents = monthStatusSnapshot.active_students;
@@ -1081,7 +1108,7 @@ router.get(
               AND cs.enrolled_at IS NOT NULL
               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${phaseRateParamIdx}::date
               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${phaseRateParamIdx + 1}::date`;
-        phaseRateParams.push(monthStartDate, monthEndDate);
+        phaseRateParams.push(periodStartDate, periodEndDate);
         phaseRateParamIdx += 2;
       }
 
@@ -1146,14 +1173,14 @@ router.get(
           SELECT
             COUNT(DISTINCT CASE
               WHEN cs.program_enrollment_status = 'new'
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${periodParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${periodParamOffset + 2}::date
               THEN cs.student_id
             END) AS new_enrollees_count,
             COUNT(DISTINCT CASE
               WHEN cs.program_enrollment_status IN ('re_enrolled', 'upsell')
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${periodParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${periodParamOffset + 2}::date
               THEN cs.student_id
             END) AS re_enrollment_count,
             COUNT(DISTINCT CASE
@@ -1167,20 +1194,20 @@ router.get(
                    AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
                  )
                )
-               AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $${monthParamOffset + 1}::date
-               AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $${monthParamOffset + 2}::date
+               AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $${periodParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $${periodParamOffset + 2}::date
               THEN cs.student_id
             END) AS dropped_count,
             COUNT(DISTINCT CASE
               WHEN cs.program_enrollment_status = 'rejoin'
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${monthParamOffset + 1}::date
-               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${monthParamOffset + 2}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${periodParamOffset + 1}::date
+               AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${periodParamOffset + 2}::date
               THEN cs.student_id
             END) AS rejoin_count
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id ${classBranchJoin}
         `,
-        monthParams
+        periodParams
       );
       const programStatusSummary = programStatusSummaryResult.rows[0] || {};
       const newEnrolleesCount = parseInt(programStatusSummary.new_enrollees_count, 10) || 0;
@@ -1194,7 +1221,7 @@ router.get(
       });
 
       // Monthly enrollments (last 6 months) for bar chart
-      const monthSequence = buildMonthSequence(6, effectiveMonthRange.anchorDate || new Date());
+      const monthSequence = buildMonthSequence(6, effectivePeriodRange.anchorDate || new Date());
       const monthKeys = monthSequence.map((m) => m.key);
       const enrollmentsByMonthQuery = branchFilter
         ? `
@@ -1202,9 +1229,9 @@ router.get(
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1
           WHERE cs.enrolled_at >= ${
-            monthStartDate ? '($2::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
+            periodStartDate ? '($2::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
           }
-            ${monthStartDate ? 'AND cs.enrolled_at < $3::date' : ''}
+            ${periodStartDate ? 'AND cs.enrolled_at < $3::date' : ''}
           GROUP BY 1 ORDER BY 1
         `
         : `
@@ -1212,14 +1239,14 @@ router.get(
           FROM classstudentstbl cs
           INNER JOIN classestbl c ON cs.class_id = c.class_id
           WHERE cs.enrolled_at >= ${
-            monthStartDate ? '($1::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
+            periodStartDate ? '($1::date - INTERVAL \'5 months\')' : "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'"
           }
-            ${monthStartDate ? 'AND cs.enrolled_at < $2::date' : ''}
+            ${periodStartDate ? 'AND cs.enrolled_at < $2::date' : ''}
           GROUP BY 1 ORDER BY 1
         `;
       const enrollmentsByMonthParams = branchFilter
-        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
-        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
+        ? (periodStartDate ? [...branchParams, periodStartDate, periodEndDate] : branchParams)
+        : (periodStartDate ? [periodStartDate, periodEndDate] : []);
       const enrollmentsByMonthResult = await query(enrollmentsByMonthQuery, enrollmentsByMonthParams);
       const enrollmentMap = enrollmentsByMonthResult.rows.reduce((acc, row) => {
         acc[row.month] = parseInt(row.count, 10);
@@ -1230,7 +1257,7 @@ router.get(
         count: enrollmentMap[m.key] || 0,
       }));
 
-      const chartWindowStart = parseMonthRange(monthSequence[0]?.key)?.start || monthStartDate;
+      const chartWindowStart = parseMonthRange(monthSequence[0]?.key)?.start || periodStartDate;
       const monthlyRateParams = [];
       let monthlyRateParamIdx = 1;
       let monthlyRateBranchJoin = '';
@@ -1239,7 +1266,7 @@ router.get(
         monthlyRateParams.push(branchFilter);
         monthlyRateParamIdx += 1;
       }
-      monthlyRateParams.push(chartWindowStart, monthEndDate);
+      monthlyRateParams.push(chartWindowStart, periodEndDate);
       const monthlyEnrollmentRateResult = await query(
         `
           WITH scoped_rows AS (
@@ -1322,23 +1349,41 @@ router.get(
       const selectedCurriculumRow = curriculumFilter
         ? curriculumRows.find((row) => parseInt(row.curriculum_id, 10) === curriculumFilter)
         : null;
-      const matrixMaxPhase = Math.min(
+
+      let matrixMaxPhase = Math.min(
         Math.max(parseInt(selectedCurriculumRow?.number_of_phase, 10) || 10, 1),
         10
       );
+      if (programFilter) {
+        const programPhaseResult = await query(
+          `
+            SELECT cu.number_of_phase
+            FROM programstbl p
+            LEFT JOIN curriculumstbl cu ON cu.curriculum_id = p.curriculum_id
+            WHERE p.program_id = $1
+          `,
+          [programFilter]
+        );
+        const programPhases = parseInt(programPhaseResult.rows[0]?.number_of_phase, 10);
+        if (Number.isFinite(programPhases) && programPhases > 0) {
+          matrixMaxPhase = Math.min(Math.max(programPhases, 1), 10);
+        }
+      }
 
       const student_phase_enrollment_matrix = await loadStudentPhaseEnrollmentMatrix(query, {
         branchId: branchFilter,
         curriculumId: curriculumFilter,
+        programId: programFilter,
         classId: classFilter,
         maxPhase: matrixMaxPhase,
-        enrolledFrom: phaseMatrixScope === 'month' ? monthStartDate : null,
-        enrolledTo: phaseMatrixScope === 'month' ? monthEndDate : null,
+        enrolledFrom: phaseMatrixScope === 'month' ? periodStartDate : null,
+        enrolledTo: phaseMatrixScope === 'month' ? periodEndDate : null,
       });
 
       // Month matrix — Jan–Dec for selected year, or 12-month rolling window when year omitted.
       const student_month_enrollment_matrix = await loadStudentMonthEnrollmentMatrix(query, {
         branchId: branchFilter,
+        programId: programFilter,
         classId: classFilter,
         year: matrixYear || currentCalendarYear,
       });
@@ -1347,8 +1392,8 @@ router.get(
       let active_inactive_by_branch = [];
       if (!branchFilter) {
         active_inactive_by_branch = await loadActiveInactiveByBranchForMonth(query, {
-          enrolledFrom: monthStartDate,
-          enrolledTo: monthEndDate,
+          enrolledFrom: periodStartDate,
+          enrolledTo: periodEndDate,
         });
       }
 
@@ -1358,18 +1403,46 @@ router.get(
         FROM branchestbl ORDER BY COALESCE(branch_nickname, branch_name)
       `);
 
-      // Classes for dropdown filter (scoped to branch when provided)
-      const classFilterParams = [];
-      let classFilterJoin = '';
+      // Programs for matrix filter dropdown (distinct programs with at least one class in branch scope)
+      const programsListParams = [];
+      const programsListConditions = [];
       if (branchFilter) {
-        classFilterJoin = 'WHERE c.branch_id = $1';
+        programsListConditions.push(`c.branch_id = $${programsListParams.length + 1}`);
+        programsListParams.push(branchFilter);
+      }
+      const programsListWhere = programsListConditions.length
+        ? `WHERE ${programsListConditions.join(' AND ')}`
+        : '';
+      const programsResult = await query(
+        `
+          SELECT DISTINCT p.program_id, p.program_name
+          FROM programstbl p
+          INNER JOIN classestbl c ON c.program_id = p.program_id
+          ${programsListWhere}
+          ORDER BY p.program_name ASC NULLS LAST, p.program_id ASC
+        `,
+        programsListParams
+      );
+
+      // Classes for dropdown filter (scoped to branch and program when provided)
+      const classFilterParams = [];
+      const classFilterConditions = [];
+      if (branchFilter) {
+        classFilterConditions.push(`c.branch_id = $${classFilterParams.length + 1}`);
         classFilterParams.push(branchFilter);
       }
+      if (programFilter) {
+        classFilterConditions.push(`c.program_id = $${classFilterParams.length + 1}`);
+        classFilterParams.push(programFilter);
+      }
+      const classFilterWhere = classFilterConditions.length
+        ? `WHERE ${classFilterConditions.join(' AND ')}`
+        : '';
       const classesResult = await query(
         `
-          SELECT c.class_id, c.class_name
+          SELECT c.class_id, c.class_name, c.program_id
           FROM classestbl c
-          ${classFilterJoin}
+          ${classFilterWhere}
           ORDER BY c.class_name ASC NULLS LAST, c.class_id DESC
         `,
         classFilterParams
@@ -1422,14 +1495,26 @@ router.get(
           student_month_enrollment_matrix,
           active_inactive_by_branch,
           branches: branchesResult.rows.map((r) => ({ branch_id: r.branch_id, branch_name: r.branch_name })),
-          classes: classesResult.rows.map((row) => ({ class_id: row.class_id, class_name: row.class_name })),
-          selected_month: effectiveMonthRange.key,
-          selected_year: student_month_enrollment_matrix.selected_year,
+          programs: programsResult.rows.map((row) => ({
+            program_id: row.program_id,
+            program_name: row.program_name,
+          })),
+          classes: classesResult.rows.map((row) => ({
+            class_id: row.class_id,
+            class_name: row.class_name,
+            program_id: row.program_id,
+          })),
+          selected_month: monthRange?.key ?? null,
+          selected_year: yearRange
+            ? parseInt(yearRange.key, 10)
+            : (matrixYear || student_month_enrollment_matrix.selected_year),
+          period_type: periodType,
           year_range: {
             min_year: monthlyMatrixMinYear,
             max_year: monthlyMatrixMaxYear,
           },
           selected_branch_id: branchFilter,
+          selected_program_id: programFilter,
           selected_class_id: classFilter,
         },
       });
@@ -1439,11 +1524,17 @@ router.get(
   }
 );
 
-const resolveEnrollmentRateScopeDates = (enrollmentRateScope, monthRange) => {
-  if (enrollmentRateScope === 'month' && monthRange) {
-    return { enrolledFrom: monthRange.start, enrolledTo: monthRange.end };
+const resolveEnrollmentRateScopeDates = (enrollmentRateScope, periodRange) => {
+  if (enrollmentRateScope === 'month' && periodRange) {
+    return { enrolledFrom: periodRange.start, enrolledTo: periodRange.end };
   }
   return { enrolledFrom: null, enrolledTo: null };
+};
+
+const resolveEnrollmentPeriodRange = (query) => {
+  const monthRange = parseMonthRange(query.month);
+  const yearRange = query.year ? parseYearRange(String(parseInt(query.year, 10))) : null;
+  return monthRange || yearRange || parseMonthRange(getCurrentManilaMonthKey());
 };
 
 /**
@@ -1455,6 +1546,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('year').optional().matches(/^\d{4}$/).withMessage('year must be YYYY'),
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
     queryValidator('enrollment_rate_scope')
       .optional()
@@ -1469,7 +1561,7 @@ router.get(
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && req.user.branchId == null;
       const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
-      const monthRange = parseMonthRange(req.query.month);
+      const periodRange = resolveEnrollmentPeriodRange(req.query);
       const branchFilter = isSuperadmin || isFinanceNoBranch
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
@@ -1477,7 +1569,7 @@ router.get(
       const phaseNumber = parseInt(req.query.phase_number, 10);
       const { enrolledFrom, enrolledTo } = resolveEnrollmentRateScopeDates(
         enrollmentRateScope,
-        monthRange || parseMonthRange(getCurrentManilaMonthKey())
+        periodRange
       );
 
       const payload = await loadEnrollmentRatePhaseStudents(query, {
@@ -1495,7 +1587,8 @@ router.get(
           enrollment_rate_scope: enrollmentRateScope,
           selected_branch_id: branchFilter,
           selected_curriculum_id: curriculumFilter,
-          selected_month: monthRange?.key ?? null,
+          selected_month: req.query.month ?? null,
+          selected_year: req.query.year ? parseInt(req.query.year, 10) : null,
         },
       });
     } catch (error) {
@@ -1513,6 +1606,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     queryValidator('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+    queryValidator('year').optional().matches(/^\d{4}$/).withMessage('year must be YYYY'),
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
     queryValidator('enrollment_rate_scope')
       .optional()
@@ -1526,14 +1620,14 @@ router.get(
       const isSuperadmin = req.user.userType === 'Superadmin';
       const isFinanceNoBranch = req.user.userType === 'Finance' && req.user.branchId == null;
       const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
-      const monthRange = parseMonthRange(req.query.month);
+      const periodRange = resolveEnrollmentPeriodRange(req.query);
       const branchFilter = isSuperadmin || isFinanceNoBranch
         ? (req.query.branch_id ? parseInt(req.query.branch_id, 10) : null)
         : (req.user.branchId || null);
       const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
       const { enrolledFrom, enrolledTo } = resolveEnrollmentRateScopeDates(
         enrollmentRateScope,
-        monthRange || parseMonthRange(getCurrentManilaMonthKey())
+        periodRange
       );
 
       const rows = await loadEnrollmentRatePhaseStudentsExport(query, {
@@ -1550,7 +1644,8 @@ router.get(
           enrollment_rate_scope: enrollmentRateScope,
           selected_branch_id: branchFilter,
           selected_curriculum_id: curriculumFilter,
-          selected_month: monthRange?.key ?? null,
+          selected_month: req.query.month ?? null,
+          selected_year: req.query.year ? parseInt(req.query.year, 10) : null,
         },
       });
     } catch (error) {
