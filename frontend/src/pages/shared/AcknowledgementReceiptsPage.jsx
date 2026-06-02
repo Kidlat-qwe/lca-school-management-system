@@ -2566,11 +2566,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                                 </span>
                               );
                             }
-                            const financeCanAct =
-                              isFinanceOrSuperfinance &&
-                              r.ar_type === 'Package' &&
-                              (r.status === 'Submitted' || r.status === 'Paid');
-                            const showEllipsis = financeCanAct || isAdminOrSuperadmin;
+                            const financeHasActionMenu =
+                              isFinanceOrSuperfinance && r.ar_type === 'Package';
+                            const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
                             if (!showEllipsis) {
                               return <span className="text-xs text-gray-400">-</span>;
                             }
@@ -2621,12 +2619,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               (() => {
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
                 const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+                const financeHasActionMenuOnRow =
+                  isFinanceOrSuperfinance && actionMenuReceipt.ar_type === 'Package';
                 const financeCanActOnRow =
-                  isFinanceOrSuperfinance &&
-                  actionMenuReceipt.ar_type === 'Package' &&
+                  financeHasActionMenuOnRow &&
                   (actionMenuReceipt.status === 'Submitted' || actionMenuReceipt.status === 'Paid');
+                const verifyDisabledForStatus = !financeCanActOnRow;
                 const itemCount = isFinanceOrSuperfinance
-                  ? (financeCanActOnRow ? 3 : 0)
+                  ? (financeHasActionMenuOnRow ? 3 : 0)
                   : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
@@ -2644,18 +2644,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     role="menu"
                   >
                     {isFinanceOrSuperfinance ? (
-                      financeCanActOnRow ? (
+                      financeHasActionMenuOnRow ? (
                         <>
                           <button
                             type="button"
                             role="menuitem"
                             onClick={() => {
+                              if (verifyDisabledForStatus) return;
                               setOpenActionMenuId(null);
                               setActionMenuRect(null);
                               handleVerifyReceipt(actionMenuReceipt, true);
                             }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
-                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
                             Verify
                           </button>
@@ -2663,12 +2664,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             type="button"
                             role="menuitem"
                             onClick={() => {
+                              if (verifyDisabledForStatus) return;
                               setOpenActionMenuId(null);
                               setActionMenuRect(null);
                               handleVerifyReceipt(actionMenuReceipt, false);
                             }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
-                            className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
                             Return
                           </button>
@@ -2676,12 +2678,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             type="button"
                             role="menuitem"
                             onClick={() => {
+                              if (verifyDisabledForStatus) return;
                               setOpenActionMenuId(null);
                               setActionMenuRect(null);
                               handleRejectReceipt(actionMenuReceipt);
                             }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id}
-                            className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
                             Reject
                           </button>
