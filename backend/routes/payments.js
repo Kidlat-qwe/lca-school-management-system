@@ -15,6 +15,7 @@ import {
   getPhaseDueDateYmd,
   isPhaseInstallmentProfile,
 } from '../utils/phaseInstallmentUtils.js';
+import { paymentLogApprovalFromArVerification } from '../lib/paymentLogArApproval.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
@@ -29,6 +30,7 @@ import {
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../utils/paymentConfirmationEmailService.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
+import { tryIssuePackageMerchandiseOnFirstPayment } from '../lib/merchandiseReleaseLog.js';
 import {
   computeOriginalInvoiceAmount,
   computeOriginalAfterDeletingPayment,
@@ -1541,7 +1543,7 @@ router.get(
  * GET /api/sms/payments/finance-unified
  * Unified payment logs (main tab):
  * - regular payment rows
- * - unapplied verified package AR rows (no payment_id/invoice_id yet); approval mirrors AR verify (verified_by_user_id)
+ * - unapplied verified package AR rows (no payment_id/invoice_id yet); Payment Logs approval when Finance verified (not Admin)
  * Access: Finance, Superfinance, Superadmin, Admin (branch-scoped via user branch or branch_id query)
  */
 router.get(
@@ -1821,6 +1823,7 @@ router.get(
                           creator.full_name AS created_by_name,
                           creator.email AS created_by_email,
                           verifier.full_name AS verified_by_name,
+                          verifier.user_type AS verifier_user_type,
                           COALESCE(b.branch_nickname, b.branch_name) AS branch_name
                    FROM acknowledgement_receiptstbl ar
                    LEFT JOIN userstbl creator ON ar.created_by = creator.user_id
@@ -1906,12 +1909,12 @@ router.get(
 
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
-      // Unapplied verified package AR: finance approval mirrors AR verification (verified_by_user_id).
+      // Unapplied verified package AR: Payment Logs approval only when Finance/Superfinance verified (not Admin).
       const includeUnappliedAr = !pmFilter || pmFilter === 'Acknowledgement Receipt';
       if (includeUnappliedAr) {
         const arRes = await query(arSql, arParams);
         arRows = (arRes.rows || []).map((row) => {
-          const arFinanceApproved = row.verified_by_user_id != null;
+          const plApproval = paymentLogApprovalFromArVerification(row);
           return {
             payment_id: `AR-${row.ack_receipt_id}`,
             invoice_id: null,
@@ -1927,9 +1930,9 @@ router.get(
             payment_attachment_url: row.payment_attachment_url,
             created_by: row.created_by,
             created_at: null,
-            approval_status: arFinanceApproved ? 'Approved' : 'Pending',
-            approved_by: arFinanceApproved ? row.verified_by_user_id : null,
-            approved_at: arFinanceApproved ? row.verified_at : null,
+            approval_status: plApproval.approval_status,
+            approved_by: plApproval.approved_by,
+            approved_at: plApproval.approved_at,
             return_reason: null,
             returned_at: null,
             returned_by: null,
@@ -1941,7 +1944,7 @@ router.get(
             invoice_amount: null,
             invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
             branch_name: row.branch_name,
-            approved_by_name: arFinanceApproved ? row.verified_by_name : null,
+            approved_by_name: plApproval.approved_by_name,
             payment_created_by_name: row.created_by_name || null,
             payment_created_by_email: row.created_by_email || null,
             invoice_issued_by_name: null,
@@ -2761,6 +2764,19 @@ router.post(
               };
               
               await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id);
+
+              const downpaymentMerchIssue = await tryIssuePackageMerchandiseOnFirstPayment(client, {
+                invoice: { ...invoice, package_id: invoice.package_id || profile.package_id },
+                studentId: student_id,
+                paymentId: newPayment.payment_id,
+                paymentIssueDate: issue_date,
+                createdBy: req.user.userId || req.user.user_id || null,
+              });
+              if (downpaymentMerchIssue.issued) {
+                console.log(
+                  `✅ Package merchandise issued on downpayment (payment ${newPayment.payment_id})`
+                );
+              }
               
               // Skip the rest of the installment payment logic since this is just the downpayment
               // The actual installment invoices will be handled separately
@@ -2785,6 +2801,19 @@ router.post(
                   sourceLabel: 'System (Auto-enrolled via installment payment)',
                   invoice,
                 });
+
+                const installmentMerchIssue = await tryIssuePackageMerchandiseOnFirstPayment(client, {
+                  invoice: { ...invoice, package_id: invoice.package_id || profile.package_id },
+                  studentId: student_id,
+                  paymentId: newPayment.payment_id,
+                  paymentIssueDate: issue_date,
+                  createdBy: req.user.userId || req.user.user_id || null,
+                });
+                if (installmentMerchIssue.issued) {
+                  console.log(
+                    `✅ Package merchandise issued on installment payment (payment ${newPayment.payment_id})`
+                  );
+                }
               }
             }
           }
@@ -2802,6 +2831,19 @@ router.post(
             invoice: { ...invoice, status: newInvoiceStatus },
             sourceLabel: 'System (Auto-enrolled via installment payment)',
           });
+
+          const phasePayMerchIssue = await tryIssuePackageMerchandiseOnFirstPayment(client, {
+            invoice: { ...invoice, status: newInvoiceStatus },
+            studentId: student_id,
+            paymentId: newPayment.payment_id,
+            paymentIssueDate: issue_date,
+            createdBy: req.user.userId || req.user.user_id || null,
+          });
+          if (phasePayMerchIssue.issued) {
+            console.log(
+              `✅ Package merchandise issued on phase invoice payment (payment ${newPayment.payment_id})`
+            );
+          }
         } catch (promoteErr) {
           console.error('Error promoting pending enrollment after payment:', promoteErr);
         }
@@ -2872,6 +2914,19 @@ router.post(
 
               if (changedPhaseRows > 0) {
                 console.log(`✅ Full payment: Auto-enrolled/reactivated ${changedPhaseRows} phase row(s) for student ${student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId} after payment`);
+              }
+
+              const fullPayMerchIssue = await tryIssuePackageMerchandiseOnFirstPayment(client, {
+                invoice,
+                studentId: student_id,
+                paymentId: newPayment.payment_id,
+                paymentIssueDate: issue_date,
+                createdBy: req.user.userId || req.user.user_id || null,
+              });
+              if (fullPayMerchIssue.issued) {
+                console.log(
+                  `✅ Package merchandise issued on full payment (payment ${newPayment.payment_id})`
+                );
               }
 
               await syncInstallmentProfileForRejoinInvoice({

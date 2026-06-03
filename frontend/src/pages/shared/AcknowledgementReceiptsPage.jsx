@@ -41,6 +41,18 @@ import {
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
+const isNonCashArPaymentMethod = (method) =>
+  String(method || '').trim().toLowerCase() !== 'cash';
+
+/** Non-cash merchandise AR: branch records payment (Paid); Finance/Superfinance must verify. */
+const financeCanVerifyMerchandiseAr = (receipt) =>
+  receipt?.ar_type === 'Merchandise' &&
+  isNonCashArPaymentMethod(receipt.payment_method) &&
+  String(receipt?.status || '').trim() === 'Paid' &&
+  (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
+
+const financeHasPackageActionMenu = (receipt) => receipt?.ar_type === 'Package';
+
 const isValidPhilippineMobile = (phone) => {
   const digits = String(phone || '').replace(/\D/g, '');
   if (!digits) return false;
@@ -2536,7 +2548,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                               );
                             }
                             const financeHasActionMenu =
-                              isFinanceOrSuperfinance && r.ar_type === 'Package';
+                              isFinanceOrSuperfinance &&
+                              (financeHasPackageActionMenu(r) || financeCanVerifyMerchandiseAr(r));
                             const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
                             if (!showEllipsis) {
                               return <span className="text-xs text-gray-400">-</span>;
@@ -2588,14 +2601,18 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               (() => {
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
                 const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-                const financeHasActionMenuOnRow =
-                  isFinanceOrSuperfinance && actionMenuReceipt.ar_type === 'Package';
+                const isMerchandiseVerifyRow =
+                  isFinanceOrSuperfinance && financeCanVerifyMerchandiseAr(actionMenuReceipt);
+                const financeHasPackageMenuOnRow =
+                  isFinanceOrSuperfinance && financeHasPackageActionMenu(actionMenuReceipt);
+                const financeHasActionMenuOnRow = financeHasPackageMenuOnRow || isMerchandiseVerifyRow;
                 const financeCanActOnRow =
-                  financeHasActionMenuOnRow &&
-                  (actionMenuReceipt.status === 'Submitted' || actionMenuReceipt.status === 'Paid');
+                  isMerchandiseVerifyRow ||
+                  (financeHasPackageMenuOnRow &&
+                    (actionMenuReceipt.status === 'Submitted' || actionMenuReceipt.status === 'Paid'));
                 const verifyDisabledForStatus = !financeCanActOnRow;
                 const itemCount = isFinanceOrSuperfinance
-                  ? (financeHasActionMenuOnRow ? 3 : 0)
+                  ? (isMerchandiseVerifyRow ? 1 : financeHasPackageMenuOnRow ? 3 : 0)
                   : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
@@ -2614,6 +2631,22 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   >
                     {isFinanceOrSuperfinance ? (
                       financeHasActionMenuOnRow ? (
+                        isMerchandiseVerifyRow ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              if (verifyDisabledForStatus) return;
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleVerifyReceipt(actionMenuReceipt, true);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
+                          >
+                            Verify
+                          </button>
+                        ) : (
                         <>
                           <button
                             type="button"
@@ -2658,6 +2691,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             Reject
                           </button>
                         </>
+                        )
                       ) : (
                         <span className="block px-3 py-2 text-xs text-gray-400">No actions available</span>
                       )

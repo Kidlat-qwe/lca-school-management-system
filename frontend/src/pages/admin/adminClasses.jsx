@@ -4263,20 +4263,34 @@ const initializePackageMerchSelections = useCallback(
                 // This ensures non-uniform items (LCA Learning Kit, LCA Bag, etc.) are included
                 allPackageMerch.forEach(selection => {
                   const merchMeta = merchandise.find(m => m.merchandise_id === selection.merchandise_id);
-                  if (merchMeta) {
-                    const typeName = merchMeta.merchandise_name;
-                    const category = getUniformCategory(merchMeta);
-                    const key = `${typeName}-${selection.size || 'no_size'}-${category || 'no_category'}`;
-                    
-                    // Only add if not already in per-student selections (to avoid duplicates)
-                    if (!merchByType.has(key)) {
-                      merchByType.set(key, {
-                        merchandise_id: selection.merchandise_id,
-                        size: selection.size || null,
-                        merchandise_name: typeName,
-                        category: category || null
-                      });
-                    }
+                  if (!merchMeta) return;
+
+                  const typeName = merchMeta.merchandise_name;
+
+                  if (requiresSizingForMerchandise(typeName)) {
+                    const hasTop = studentMerchSelections.some(
+                      (m) => m.merchandise_name === typeName && m.category === 'Top'
+                    );
+                    const hasBottom = studentMerchSelections.some(
+                      (m) => m.merchandise_name === typeName && m.category === 'Bottom'
+                    );
+                    if (hasTop && hasBottom) return;
+                  } else if (
+                    [...merchByType.values()].some((m) => m.merchandise_name === typeName)
+                  ) {
+                    return;
+                  }
+
+                  const category = getUniformCategory(merchMeta);
+                  const key = `${typeName}-${selection.size || 'no_size'}-${category || 'no_category'}`;
+
+                  if (!merchByType.has(key)) {
+                    merchByType.set(key, {
+                      merchandise_id: selection.merchandise_id,
+                      size: selection.size || null,
+                      merchandise_name: typeName,
+                      category: category || null,
+                    });
                   }
                 });
                 

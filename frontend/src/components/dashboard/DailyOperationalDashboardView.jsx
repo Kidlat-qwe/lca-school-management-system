@@ -22,6 +22,7 @@ import { DashboardStatIcon } from './DashboardStatIcons';
 import CombinedStatsCard from './CombinedStatsCard';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
+import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -94,6 +95,7 @@ const DailyOperationalDashboardView = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedDate, setSelectedDate] = useState(getTodayManila());
+  const [merchReleasedModalOpen, setMerchReleasedModalOpen] = useState(false);
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const isAdmin = userType === 'Admin';
   const basePath = isAdmin ? '/admin' : '/superadmin';
@@ -329,7 +331,9 @@ const DailyOperationalDashboardView = ({
             value={formatNumber(totals.merchandise_released_quantity)}
             iconName="sparkles"
             accent="bg-gradient-to-br from-amber-400 to-orange-500"
-            tooltip={DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}
+            tooltip={`${DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}\n\nClick to view release details.`}
+            onClick={() => setMerchReleasedModalOpen(true)}
+            ariaLabel={`View merchandise released details for ${selectedDate}`}
           />
           <StatsCard
             title="Re-enrollment Rate"
@@ -580,6 +584,17 @@ const DailyOperationalDashboardView = ({
           </ChartCard>
         </div>
       </div>
+
+      <MerchandiseReleasedDetailModal
+        open={merchReleasedModalOpen}
+        onClose={() => setMerchReleasedModalOpen(false)}
+        periodMode="daily"
+        summaryDate={selectedDate}
+        branchId={branchId}
+        branchName={branchName}
+        cardQuantity={totals.merchandise_released_quantity}
+        cardEvents={totals.merchandise_released_count}
+      />
     </div>
   );
 };

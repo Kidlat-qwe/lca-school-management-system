@@ -23,7 +23,7 @@ export const DAILY_OPERATIONAL = {
   totalPayments:
     'Invoice sales plus acknowledgement receipt sales for this date (same scope as the two lines above).',
   merchandise: (txnCount) =>
-    `${txnCount} paid merchandise sale(s). Quantity is total items released.`,
+    `${txnCount} release event(s) (merchandise AR + package items on first payment). Quantity is total units (e.g. uniform top + bottom = 2). Re-enroll does not count again.`,
   enrollmentRate: (enrolled, total) =>
     `${enrolled} active phase enrollments across phases ÷ ${total} cohort student(s) on this date × 100. Rate is by program phase (not the same as “new enrollees” above).`,
   reEnrollmentRate: (retained, prior, scopeLabel = 'this date') =>
@@ -43,7 +43,8 @@ export const DAILY_OPERATIONAL = {
   chartBranchActivity: 'Compare branches: enrollments, drops, rejoins, and merchandise for this date.',
   chartInvoiceByBranch: 'Invoice and acknowledgement receipt totals by branch for this date.',
   chartSalesTrend: 'Completed invoice payments over the last 7 days.',
-  chartActivityMix: 'How today’s enrollment and merchandise activity is split (excluding cash sales).',
+  chartActivityMix:
+    'How today’s enrollment and merchandise activity is split. Merchandise = units issued (AR sales + package releases).',
 };
 
 export const MONTHLY_OPERATIONAL = {
@@ -61,7 +62,8 @@ export const MONTHLY_OPERATIONAL = {
     'Invoice sales use payment issue date in the month. AR sales match the AR list for the same month.',
   totalPayments:
     'Matches Payment Logs total for this month: completed payment lines only (verified + not verified yet), excluding returned and rejected.',
-  merchandise: (txnCount) => `${txnCount} paid merchandise sale(s) in this month.`,
+  merchandise: (txnCount) =>
+    `${txnCount} release event(s) this month (merchandise AR + package items on first payment). Re-enroll does not count again.`,
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase re-enrollment rate (see Re-enrollment Dashboard for details).',
   reEnrollmentSnapshot: (retained, prior) =>
@@ -77,7 +79,8 @@ export const MONTHLY_OPERATIONAL = {
   chartBranchActivity: 'Monthly totals by branch: enrollments, drops, rejoins, and merchandise.',
   chartInvoiceByBranch: 'Invoice and acknowledgement receipt totals by branch for this month.',
   chartSalesTrend: 'Completed invoice payments for the last six months (ends with your selected month).',
-  chartActivityMix: 'Share of this month’s enrollment and merchandise activity (excluding cash sales).',
+  chartActivityMix:
+    'Share of this month’s enrollment and merchandise activity. Merchandise = units issued (AR + package enroll).',
 };
 
 export const ENROLLMENT_DASHBOARD = {

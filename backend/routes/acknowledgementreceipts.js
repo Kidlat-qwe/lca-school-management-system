@@ -17,6 +17,11 @@ import {
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
 import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
+import {
+  MERCH_RELEASE_SOURCE,
+  buildMerchandiseArReleaseBatchId,
+  insertMerchandiseReleaseLog,
+} from '../lib/merchandiseReleaseLog.js';
 import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
@@ -25,6 +30,7 @@ import {
   countInvoiceOnlyArListRows,
   fetchInvoiceOnlyArListRows,
 } from '../utils/arInvoiceOnlyListRows.js';
+import { shouldSyncPaymentLogApprovalOnArVerify } from '../lib/paymentLogArApproval.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -1395,12 +1401,13 @@ router.post(
              invoice_id, student_id, branch_id, payment_method, payment_type,
              payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id
            )
-           VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, $6::date, 'Completed', $7, $8, $9, $10, $11)
+           VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, $11, $12)
            RETURNING *`,
               [
                 newInvoice.invoice_id,
                 studentIdForInvoice,
                 branchId,
+                normalizedPaymentMethod,
                 itemTotal,
                 tip_amount || 0,
                 issue_date,
@@ -1416,12 +1423,13 @@ router.post(
              invoice_id, student_id, branch_id, payment_method, payment_type,
              payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url
            )
-           VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, $6::date, 'Completed', $7, $8, $9, $10)
+           VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, $11)
            RETURNING *`,
               [
                 newInvoice.invoice_id,
                 studentIdForInvoice,
                 branchId,
+                normalizedPaymentMethod,
                 itemTotal,
                 tip_amount || 0,
                 issue_date,
@@ -1443,6 +1451,7 @@ router.post(
           [newPayment.payment_id, ackReceipt.ack_receipt_id]
         );
 
+        const merchArReleaseBatchId = buildMerchandiseArReleaseBatchId(ackReceipt.ack_receipt_id);
         for (const item of merchandiseItemsSnapshot) {
           const merchId = item.merchandise_id;
           const qty = parseInt(item.quantity, 10) || 1;
@@ -1450,6 +1459,18 @@ router.post(
             `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
             [qty, merchId]
           );
+          await insertMerchandiseReleaseLog(client, {
+            releaseBatchId: merchArReleaseBatchId,
+            source: MERCH_RELEASE_SOURCE.MERCHANDISE_AR,
+            merchandiseId: merchId,
+            quantity: qty,
+            branchId,
+            merchandiseName: item.merchandise_name,
+            size: item.size,
+            ackReceiptId: ackReceipt.ack_receipt_id,
+            paymentId: newPayment.payment_id,
+            createdBy,
+          });
         }
 
         ackReceipt.status = 'Paid';
@@ -2791,7 +2812,7 @@ router.delete(
 
 /**
  * PUT /api/sms/acknowledgement-receipts/:id/verify
- * Verify or return a package acknowledgement receipt.
+ * Verify or return a package acknowledgement receipt, or verify non-cash merchandise AR (Paid → Verified).
  * Access: Finance, Superfinance
  */
 router.put(
@@ -2827,7 +2848,8 @@ router.put(
       const remarks = String(req.body?.remarks || '').trim() || null;
 
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by, prospect_student_name
+        `SELECT ack_receipt_id, branch_id, ar_type, status, payment_method, verified_by_user_id,
+                prospect_student_notes, created_by, prospect_student_name
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -2841,12 +2863,42 @@ router.put(
       }
 
       const ack = ackResult.rows[0];
+      const isPackageAr = ack.ar_type === 'Package';
+      const isMerchandiseAr = ack.ar_type === 'Merchandise';
 
-      if (ack.ar_type !== 'Package') {
+      if (!isPackageAr && !isMerchandiseAr) {
         return res.status(400).json({
           success: false,
-          message: 'Only Package acknowledgement receipts can be verified/returned/rejected in this flow',
+          message: 'Only Package or Merchandise acknowledgement receipts can be verified in this flow',
         });
+      }
+
+      if (isMerchandiseAr) {
+        if (action !== 'verify') {
+          return res.status(400).json({
+            success: false,
+            message: 'Return and reject are not supported for Merchandise acknowledgement receipts',
+          });
+        }
+        const merchPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
+        if (merchPaymentMethod === 'cash') {
+          return res.status(400).json({
+            success: false,
+            message: 'Cash merchandise acknowledgement receipts do not require finance verification',
+          });
+        }
+        if (String(ack.status || '').trim() !== 'Paid') {
+          return res.status(400).json({
+            success: false,
+            message: 'Merchandise acknowledgement receipt must be Paid before finance verification',
+          });
+        }
+        if (ack.verified_by_user_id != null) {
+          return res.status(400).json({
+            success: false,
+            message: 'This merchandise acknowledgement receipt is already verified',
+          });
+        }
       }
 
       if (req.user.userType === 'Finance' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
@@ -2944,8 +2996,12 @@ router.put(
         });
       }
 
-      // Keep payment logs in sync when a payment row already exists for this AR.
-      if (action === 'verify' && verifierUserId) {
+      // Keep payment logs in sync when Finance verifies and a payment row already exists for this AR.
+      if (
+        action === 'verify' &&
+        verifierUserId &&
+        shouldSyncPaymentLogApprovalOnArVerify(req.user?.userType)
+      ) {
         const linkedPay = await query(
           `SELECT payment_id FROM acknowledgement_receiptstbl
            WHERE ack_receipt_id = $1 AND payment_id IS NOT NULL`,

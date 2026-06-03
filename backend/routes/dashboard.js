@@ -19,6 +19,10 @@ import {
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
   AR_LIST_LINE_AMOUNT_SUM_SQL,
 } from '../lib/ackReceiptPairedColumn.js';
+import {
+  loadMerchandiseReleasedDetails,
+  merchandiseReleaseDashboardCteDaily,
+} from '../lib/merchandiseReleaseLog.js';
 
 const router = express.Router();
 
@@ -666,26 +670,7 @@ router.get(
                 ${arExtraWhere}
               GROUP BY ar.branch_id
             ),
-            merchandise_release AS (
-              SELECT
-                p.branch_id,
-                COUNT(DISTINCT p.payment_id) AS merchandise_released_count,
-                COALESCE(SUM(COALESCE(NULLIF(item.quantity, '')::numeric, 0)), 0) AS merchandise_released_quantity
-              FROM paymenttbl p
-              INNER JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-              INNER JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
-              LEFT JOIN LATERAL jsonb_to_recordset(
-                CASE
-                  WHEN ar.merchandise_items_snapshot IS NULL THEN '[]'::jsonb
-                  ELSE ar.merchandise_items_snapshot::jsonb
-                END
-              ) AS item(merchandise_id INTEGER, quantity TEXT) ON TRUE
-              WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 1}::date
-                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-                AND ar.ar_type = 'Merchandise'
-              GROUP BY p.branch_id
-            ),
+            ${merchandiseReleaseDashboardCteDaily(branchParams.length + 1)},
             re_enrollment AS (
               SELECT
                 c.branch_id,
@@ -1008,6 +993,88 @@ router.get(
       }
       console.error('Error fetching monthly operational dashboard:', error);
       next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/merchandise-released-details
+ * Line-level merchandise release log for operational dashboard card drill-down.
+ * Use summary_date (single Manila day) OR summary_month (YYYY-MM, half-open month range).
+ */
+router.get(
+  '/merchandise-released-details',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('summary_date').optional().isISO8601({ strict: true }).withMessage('summary_date must be YYYY-MM-DD'),
+    queryValidator('summary_month').optional().matches(/^\d{4}-\d{2}$/).withMessage('summary_month must be YYYY-MM'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const isAdmin = req.user.userType === 'Admin';
+      const branchFilter = isAdmin
+        ? (req.user.branchId || null)
+        : req.query.branch_id
+          ? parseInt(req.query.branch_id, 10)
+          : null;
+
+      const summaryDate = req.query.summary_date ? String(req.query.summary_date).trim().slice(0, 10) : '';
+      const summaryMonth = req.query.summary_month ? String(req.query.summary_month).trim() : '';
+
+      if (summaryDate && summaryMonth) {
+        return res.status(400).json({
+          success: false,
+          message: 'Provide summary_date or summary_month, not both',
+        });
+      }
+
+      let dateFrom;
+      let dateToExclusive;
+      let periodLabel;
+
+      if (summaryMonth) {
+        const parsed = parseMonthRange(summaryMonth);
+        if (!parsed) {
+          return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+        }
+        if (parsed.key > getCurrentManilaMonthKey()) {
+          return res.status(400).json({
+            success: false,
+            message: 'summary_month cannot be in the future',
+          });
+        }
+        dateFrom = parsed.start;
+        dateToExclusive = parsed.end;
+        periodLabel = parsed.key;
+      } else {
+        const day = summaryDate || getTodayManila();
+        dateFrom = day;
+        const nextDay = new Date(`${day}T12:00:00+08:00`);
+        nextDay.setDate(nextDay.getDate() + 1);
+        dateToExclusive = nextDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+        periodLabel = day;
+      }
+
+      const payload = await loadMerchandiseReleasedDetails(query, {
+        branchFilter,
+        dateFrom,
+        dateToExclusive,
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          ...payload,
+          period_mode: summaryMonth ? 'monthly' : 'daily',
+          period_label: periodLabel,
+          selected_branch_id: branchFilter,
+        },
+      });
+    } catch (error) {
+      console.error('Error fetching merchandise released details:', error);
+      return next(error);
     }
   }
 );

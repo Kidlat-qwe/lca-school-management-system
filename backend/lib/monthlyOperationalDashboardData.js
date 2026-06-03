@@ -9,6 +9,8 @@
  * Acknowledgement Receipt Sales (ar_sales) matches GET /acknowledgement-receipts list totals for the
  * same issue-date month and main-tab semantics (exclude Returned only; paired-row combine when enabled).
  *
+ * Merchandise Released uses merchandise_release_logtbl (stock deductions: Merchandise AR + package enroll).
+ *
  * New enrollees / dropped / rejoin counts come from classstudentstbl.program_enrollment_status
  * and enrolled_at / removed_at (Asia/Manila calendar day), not paymenttbl.
  * Re-enrollment / dropped / rejoin counts match the Month Re-enrollment matrix for the
@@ -22,6 +24,7 @@ import {
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
   AR_LIST_LINE_AMOUNT_SUM_SQL,
 } from './ackReceiptPairedColumn.js';
+import { merchandiseReleaseDashboardCteMonthly } from './merchandiseReleaseLog.js';
 
 const buildMonthSequence = (monthsBack = 6, anchorDateInput = new Date()) => {
   const today = anchorDateInput instanceof Date ? anchorDateInput : new Date(anchorDateInput);
@@ -104,27 +107,7 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
                 ${arSalesSql.extraWhere}
               GROUP BY ar.branch_id
             ),
-            merchandise_release AS (
-              SELECT
-                p.branch_id,
-                COUNT(DISTINCT p.payment_id) AS merchandise_released_count,
-                COALESCE(SUM(COALESCE(NULLIF(item.quantity, '')::numeric, 0)), 0) AS merchandise_released_quantity
-              FROM paymenttbl p
-              INNER JOIN invoicestbl i ON p.invoice_id = i.invoice_id
-              INNER JOIN acknowledgement_receiptstbl ar ON i.ack_receipt_id = ar.ack_receipt_id
-              LEFT JOIN LATERAL jsonb_to_recordset(
-                CASE
-                  WHEN ar.merchandise_items_snapshot IS NULL THEN '[]'::jsonb
-                  ELSE ar.merchandise_items_snapshot::jsonb
-                END
-              ) AS item(merchandise_id INTEGER, quantity TEXT) ON TRUE
-              WHERE p.status = 'Completed'
-                AND p.issue_date >= $${startIdx}::date
-                AND p.issue_date < $${endIdx}::date
-                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-                AND ar.ar_type = 'Merchandise'
-              GROUP BY p.branch_id
-            ),
+            ${merchandiseReleaseDashboardCteMonthly(startIdx, endIdx)},
             re_enrollment AS (
               SELECT
                 c.branch_id,

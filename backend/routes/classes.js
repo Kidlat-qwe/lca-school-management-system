@@ -22,6 +22,14 @@ import {
 } from '../utils/invoiceArNumber.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
 import { checkScheduleConflict, checkTeacherScheduleConflict } from '../utils/scheduleConflict.js';
+import {
+  MERCH_RELEASE_SOURCE,
+  appendMerchPendingToRemarks,
+  hasPackageMerchandiseBeenIssued,
+  insertMerchandiseReleaseLog,
+  isPackageMerchTypeCovered,
+  linesFromMerchandiseToDeduct,
+} from '../lib/merchandiseReleaseLog.js';
 
 const router = express.Router();
 
@@ -4573,6 +4581,9 @@ router.post(
       // This is important for multiple student enrollments with per-student merchandise selections
       const inventoryValidationErrors = [];
       const merchandiseToDeduct = new Map(); // Track merchandise by ID and size: Map<merchandise_id, Map<size, count>>
+      const enrollMerchReleaseCreatedBy = req.user.userId || req.user.user_id || null;
+      let deferPackageMerchToFirstPayment = false;
+      let packageMerchPendingLines = null;
       
       // Collect all merchandise that needs to be deducted
       // Handle per-student merchandise selections if provided, otherwise use group selections
@@ -4647,11 +4658,9 @@ router.post(
           const mid = parseInt(String(pkgMerchId), 10);
           if (!Number.isFinite(mid) || mid <= 0) continue;
 
-          let covered = 0;
-          for (const [, info] of merchandiseToDeduct.entries()) {
-            if (Number(info.merchandise_id) === mid) covered += info.count || 0;
+          if (isPackageMerchTypeCovered(meta?.merchandise_name, merchandiseToDeduct)) {
+            continue;
           }
-          if (covered >= 1) continue;
 
           const key = `${mid}_package_included`;
           merchandiseToDeduct.set(key, {
@@ -4661,6 +4670,27 @@ router.post(
             category: null,
             count: 1,
           });
+        }
+      }
+
+      // Package merchandise: issue once on first payment (downpayment or Phase 1), not on re-enroll.
+      if (package_id) {
+        const packageMerchAlreadyIssued = await hasPackageMerchandiseBeenIssued(client, {
+          studentId: student_id,
+          packageId: package_id,
+          classId: class_id,
+        });
+        if (packageMerchAlreadyIssued) {
+          merchandiseToDeduct.clear();
+          console.log(
+            `[Merchandise] Already issued for student ${student_id} package ${package_id} class ${class_id} — skip on re-enroll`
+          );
+        } else {
+          deferPackageMerchToFirstPayment = true;
+          packageMerchPendingLines = linesFromMerchandiseToDeduct(merchandiseToDeduct);
+          console.log(
+            `[Merchandise] ${packageMerchPendingLines.length} line(s) pending until first payment (downpayment or Phase 1)`
+          );
         }
       }
       
@@ -4763,8 +4793,9 @@ router.post(
         });
       }
 
-      // Process selected merchandise (supports both package and custom selection)
-      if (selected_merchandise && selected_merchandise.length > 0) {
+      // Process selected merchandise (supports both package and custom selection).
+      // Package lines are deferred to first payment unless already issued (re-enroll).
+      if (!deferPackageMerchToFirstPayment && selected_merchandise && selected_merchandise.length > 0) {
         for (const selectedMerch of selected_merchandise) {
           const merchId = typeof selectedMerch === 'object' ? selectedMerch.merchandise_id : selectedMerch;
           const selectedSize = typeof selectedMerch === 'object' ? selectedMerch.size : null;
@@ -4854,10 +4885,29 @@ router.post(
               [newQuantity, merch.merchandise_id]
             );
           }
+
+          const selectedCategory =
+            typeof selectedMerch === 'object' ? (selectedMerch.category || null) : null;
+          if (!package_id) {
+            await insertMerchandiseReleaseLog(client, {
+              releaseBatchId: `enroll-direct-${class_id}-${student_id}-${Date.now()}`.slice(0, 80),
+              source: MERCH_RELEASE_SOURCE.PACKAGE_ENROLL,
+              merchandiseId: merch.merchandise_id,
+              quantity: 1,
+              branchId: branch_id,
+              merchandiseName: merch.merchandise_name,
+              size: merch.size,
+              category: selectedCategory,
+              studentId: student_id,
+              classId: class_id,
+              createdBy: enrollMerchReleaseCreatedBy,
+            });
+          }
         }
       }
 
       // Stock deduction for package-included lines not represented in selected_merchandise (enroll per phase, etc.)
+      if (!deferPackageMerchToFirstPayment) {
       for (const [deductKey, merchInfo] of merchandiseToDeduct.entries()) {
         if (!deductKey.endsWith('_package_included')) continue;
         const merchLookup = await client.query(
@@ -4867,11 +4917,28 @@ router.post(
         if (merchLookup.rows.length === 0) continue;
         const row = merchLookup.rows[0];
         if (row.quantity === null || row.quantity === undefined) continue;
-        const newQuantity = Math.max(0, (parseInt(row.quantity, 10) || 0) - (merchInfo.count || 1));
+        const deductQty = merchInfo.count || 1;
+        const newQuantity = Math.max(0, (parseInt(row.quantity, 10) || 0) - deductQty);
         await client.query(
           `UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`,
           [newQuantity, row.merchandise_id]
         );
+        if (!package_id) {
+          await insertMerchandiseReleaseLog(client, {
+            releaseBatchId: `enroll-pkginc-${class_id}-${student_id}-${Date.now()}`.slice(0, 80),
+            source: MERCH_RELEASE_SOURCE.PACKAGE_ENROLL,
+            merchandiseId: row.merchandise_id,
+            quantity: deductQty,
+            branchId: branch_id,
+            merchandiseName: merchInfo.merchandise_name,
+            size: merchInfo.size,
+            category: merchInfo.category,
+            studentId: student_id,
+            classId: class_id,
+            createdBy: enrollMerchReleaseCreatedBy,
+          });
+        }
+      }
       }
       
 
@@ -5699,6 +5766,9 @@ router.post(
         if (phaseStartForRemarks !== null && phaseEndForRemarks !== null) {
           invoiceRemarks += `;PHASE_START:${phaseStartForRemarks};PHASE_END:${phaseEndForRemarks}`;
         }
+        if (packageMerchPendingLines?.length) {
+          invoiceRemarks = appendMerchPendingToRemarks(invoiceRemarks, packageMerchPendingLines);
+        }
         await client.query(
           `UPDATE invoicestbl SET remarks = $1 WHERE invoice_id = $2`,
           [invoiceRemarks, newInvoice.invoice_id]
@@ -5715,6 +5785,9 @@ router.post(
         let invoiceRemarks = `CLASS_ID:${class_id}`;
         if (phaseStartForRemarks !== null && phaseEndForRemarks !== null) {
           invoiceRemarks += `;PHASE_START:${phaseStartForRemarks};PHASE_END:${phaseEndForRemarks}`;
+        }
+        if (packageMerchPendingLines?.length) {
+          invoiceRemarks = appendMerchPendingToRemarks(invoiceRemarks, packageMerchPendingLines);
         }
         await client.query(
           `UPDATE invoicestbl SET remarks = $1 WHERE invoice_id = $2`,
@@ -6040,6 +6113,18 @@ router.post(
             enrollmentInvoiceIssueYmd: issueDateStr,
           }
         );
+
+        if (generatedPhaseInvoice?.invoice_id && packageMerchPendingLines?.length) {
+          let genRemarks = `CLASS_ID:${class_id}`;
+          if (phaseStartForRemarks !== null && phaseEndForRemarks !== null) {
+            genRemarks += `;PHASE_START:${phaseStartForRemarks};PHASE_END:${phaseEndForRemarks}`;
+          }
+          genRemarks = appendMerchPendingToRemarks(genRemarks, packageMerchPendingLines);
+          await query(
+            `UPDATE invoicestbl SET remarks = $1, package_id = COALESCE(package_id, $2) WHERE invoice_id = $3`,
+            [genRemarks, package_id || null, generatedPhaseInvoice.invoice_id]
+          );
+        }
       }
 
       // Determine which invoice to return (downpayment invoice for Installment packages, generated phase invoice for phase installments, main invoice otherwise)

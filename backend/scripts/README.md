@@ -4,6 +4,53 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `revokeAdminPaymentLogApprovals.js`
+
+Revokes **Admin approvals on paymenttbl** only (global — **no year/month filter**):
+
+- **paymenttbl**: Cash/bank/etc. rows `Approved` by Admin → `Pending` (e.g. PAY-736, PAY-611)
+- **acknowledgement_receiptstbl**: **not modified** — AR stays Verified/Applied. Admin-verified unapplied AR rows show **Pending Approval** on Payment Logs via `backend/lib/paymentLogArApproval.js` (finance-unified API).
+
+```bash
+node scripts/revokeAdminPaymentLogApprovals.js --dry-run
+node scripts/revokeAdminPaymentLogApprovals.js --apply
+```
+
+**Options:** `--dry-run` (explicit preview), `--apply` (write paymenttbl only), `--help`
+
+### `revokeAdminArVerificationPaymentLogs.js`
+
+**Deprecated.** Previously reverted AR to Submitted — do **not** use. Payment Logs Pending for Admin AR is handled by the API; use `revokeAdminPaymentLogApprovals.js` for cash/bank payment rows only.
+
+```bash
+node scripts/revokeAdminArVerificationPaymentLogs.js --dry-run   # preview only; --apply is blocked
+```
+
+### `restoreAdminArVerificationPaymentLogs.js`
+
+Re-applies the **5 production AR rows** reverted by `revokeAdminArVerificationPaymentLogs.js --apply` (status, verifier, verified_at; linked payments for Applied rows).
+
+```bash
+node scripts/restoreAdminArVerificationPaymentLogs.js --dry-run
+node scripts/restoreAdminArVerificationPaymentLogs.js --apply
+```
+
+### `checkPaymentLogStatusApprovedByAdmin.js`
+
+Audits **Payment Logs status columns** and lists **Admin** approvers from both sources:
+- `paymenttbl.approved_by` (regular payments)
+- `acknowledgement_receiptstbl.verified_by_user_id` (unapplied AR rows shown as Acknowledgement Receipt in Payment Logs)
+
+**Usage:**
+```bash
+node scripts/checkPaymentLogStatusApprovedByAdmin.js
+node scripts/checkPaymentLogStatusApprovedByAdmin.js --detail
+node scripts/checkPaymentLogStatusApprovedByAdmin.js --admin-only --detail
+node scripts/checkPaymentLogStatusApprovedByAdmin.js --branch-id=1 --from=2026-01-01 --to=2026-06-30
+```
+
+**Options:** `--admin-only`, `--detail`, `--branch-id`, `--from`, `--to` (issue_date, Manila), `--limit`, `--help`
+
 ### `listPaymentLogApprovers.js`
 
 Lists **who approved payments** in Payment Logs (`paymenttbl.approved_by` when `approval_status = 'Approved'`).
