@@ -19,6 +19,7 @@ const CURRENT_YEAR = parseInt(
 );
 
 const DEFAULT_MIN_YEAR = 2023;
+const FUTURE_YEAR_BUFFER = 5;
 
 const buildYearOptions = (minYear, maxYear) => {
   const years = [];
@@ -48,9 +49,14 @@ const PhaseEnrollmentDashboard = () => {
 
   const yearRange = useMemo(() => {
     const minYear = data?.year_range?.min_year ?? DEFAULT_MIN_YEAR;
-    const maxYear = Math.max(data?.year_range?.max_year ?? CURRENT_YEAR, CURRENT_YEAR);
+    const selectedYearNum = parseInt(selectedYear, 10);
+    const maxYear = Math.max(
+      data?.year_range?.max_year ?? CURRENT_YEAR + FUTURE_YEAR_BUFFER,
+      CURRENT_YEAR + FUTURE_YEAR_BUFFER,
+      Number.isFinite(selectedYearNum) ? selectedYearNum : CURRENT_YEAR
+    );
     return { minYear, maxYear };
-  }, [data?.year_range]);
+  }, [data?.year_range, selectedYear]);
 
   const yearOptions = useMemo(
     () => buildYearOptions(yearRange.minYear, yearRange.maxYear),

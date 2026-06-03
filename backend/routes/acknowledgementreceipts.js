@@ -2822,8 +2822,8 @@ router.put(
     body('approve').optional({ nullable: true }).isBoolean().withMessage('approve must be boolean'),
     body('action')
       .optional({ nullable: true })
-      .isIn(['verify', 'return', 'reject'])
-      .withMessage("action must be 'verify', 'return' or 'reject'"),
+      .isIn(['verify', 'return', 'reject', 'unverify'])
+      .withMessage("action must be 'verify', 'return', 'reject', or 'unverify'"),
     body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
     handleValidationErrors,
   ],
@@ -2838,10 +2838,10 @@ router.put(
         if (req.body?.approve === true) action = 'verify';
         else if (req.body?.approve === false) action = 'return';
       }
-      if (!['verify', 'return', 'reject'].includes(action)) {
+      if (!['verify', 'return', 'reject', 'unverify'].includes(action)) {
         return res.status(400).json({
           success: false,
-          message: "action must be 'verify', 'return' or 'reject'",
+          message: "action must be 'verify', 'return', 'reject', or 'unverify'",
         });
       }
 
@@ -2874,7 +2874,7 @@ router.put(
       }
 
       if (isMerchandiseAr) {
-        if (action !== 'verify') {
+        if (action !== 'verify' && action !== 'unverify') {
           return res.status(400).json({
             success: false,
             message: 'Return and reject are not supported for Merchandise acknowledgement receipts',
@@ -2942,14 +2942,40 @@ router.put(
         });
       }
 
-      const nextStatus =
-        action === 'verify' ? 'Verified' : action === 'reject' ? 'Rejected' : 'Returned';
+      if (action === 'unverify') {
+        if (ack.verified_by_user_id == null && String(ack.status || '') !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'This acknowledgement receipt is not verified',
+          });
+        }
+        if (isMerchandiseAr && String(ack.status || '').trim() !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only verified merchandise acknowledgement receipts can be unverified',
+          });
+        }
+        if (isPackageAr && String(ack.status || '').trim() !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only verified package acknowledgement receipts can be unverified',
+          });
+        }
+      }
+
+      let nextStatus;
+      if (action === 'unverify') {
+        nextStatus = isMerchandiseAr ? 'Paid' : 'Submitted';
+      } else {
+        nextStatus =
+          action === 'verify' ? 'Verified' : action === 'reject' ? 'Rejected' : 'Returned';
+      }
+
       const updatedNotes = remarks
         ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${nextStatus}] ${remarks}`
         : ack.prospect_student_notes;
 
       const verifierUserId = req.user.userId || req.user.user_id || null;
-      // Track verifier_by/verified_at only on actual verification.
       const verifiedByOnUpdate = action === 'verify' ? verifierUserId : null;
       const verifiedAtOnUpdate = action === 'verify' ? new Date() : null;
 
@@ -2996,18 +3022,19 @@ router.put(
         });
       }
 
+      const linkedPay = await query(
+        `SELECT payment_id FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1 AND payment_id IS NOT NULL`,
+        [id]
+      );
+      const linkedPaymentId = linkedPay.rows[0]?.payment_id;
+
       // Keep payment logs in sync when Finance verifies and a payment row already exists for this AR.
       if (
         action === 'verify' &&
         verifierUserId &&
         shouldSyncPaymentLogApprovalOnArVerify(req.user?.userType)
       ) {
-        const linkedPay = await query(
-          `SELECT payment_id FROM acknowledgement_receiptstbl
-           WHERE ack_receipt_id = $1 AND payment_id IS NOT NULL`,
-          [id]
-        );
-        const linkedPaymentId = linkedPay.rows[0]?.payment_id;
         if (linkedPaymentId) {
           await query(
             `UPDATE paymenttbl
@@ -3021,12 +3048,27 @@ router.put(
         }
       }
 
+      if (action === 'unverify' && linkedPaymentId) {
+        await query(
+          `UPDATE paymenttbl
+           SET approval_status = 'Pending',
+               approved_by = NULL,
+               approved_at = NULL,
+               finance_verified_reference_number = NULL
+           WHERE payment_id = $1
+             AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+          [linkedPaymentId]
+        );
+      }
+
       const successMessage =
-        action === 'verify'
-          ? 'Acknowledgement receipt verified successfully'
-          : action === 'reject'
-            ? 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
-            : 'Acknowledgement receipt returned successfully';
+        action === 'unverify'
+          ? 'Acknowledgement receipt verification revoked'
+          : action === 'verify'
+            ? 'Acknowledgement receipt verified successfully'
+            : action === 'reject'
+              ? 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
+              : 'Acknowledgement receipt returned successfully';
 
       return res.json({
         success: true,

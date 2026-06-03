@@ -133,7 +133,7 @@ router.post(
       const normalizedProgramName = String(program_name || '').trim();
       const isCustomProgramName =
         normalizedProgramName.toLowerCase() === 'others' ||
-        !['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'].includes(normalizedProgramName);
+        !['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'].includes(normalizedProgramName);
 
       // Verify curriculum exists if provided
       const curriculumCheck = await query('SELECT curriculum_id FROM curriculumstbl WHERE curriculum_id = $1', [curriculum_id]);
@@ -217,7 +217,7 @@ router.put(
       const normalizedProgramName = String(program_name || '').trim();
       const isCustomProgramName =
         normalizedProgramName.toLowerCase() === 'others' ||
-        !['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'].includes(normalizedProgramName);
+        !['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'].includes(normalizedProgramName);
 
       const existingProgram = await query('SELECT * FROM programstbl WHERE program_id = $1', [id]);
       if (existingProgram.rows.length === 0) {

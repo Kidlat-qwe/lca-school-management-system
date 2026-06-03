@@ -119,7 +119,7 @@ export const ENROLLMENT_MATRIX_STATUS_ITEMS = [
     key: 'upsell',
     label: 'Upsell',
     tone: 'bg-teal-100 text-teal-800',
-    description: 'Student moved to a higher or additional program level.',
+    description: 'First month in a higher program after completing the previous level (e.g. Pre-K → Kindergarten).',
   },
   {
     key: 'pending_enrollment',

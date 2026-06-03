@@ -39,13 +39,21 @@ export const ACTIVE_ENROLLMENT_STATUSES = [
 ];
 
 /** Ordered program level tags from lowest to highest. */
-const LEVEL_ORDER = [
+export const PROGRAM_LEVEL_ORDER = [
   'Playgroup',
   'Nursery',
   'Pre-Kindergarten',
   'Kindergarten',
   'Grade School',
 ];
+
+/** @deprecated internal alias */
+const LEVEL_ORDER = PROGRAM_LEVEL_ORDER;
+
+export function levelTagIndex(levelTag) {
+  const idx = PROGRAM_LEVEL_ORDER.indexOf(String(levelTag || '').trim());
+  return idx >= 0 ? idx : -1;
+}
 
 /**
  * Determines the correct program_enrollment_status to assign to a new
@@ -76,12 +84,11 @@ export async function determineEnrollmentStatus({ db, studentId, classId, enroll
 
   // Check whether this student has ANY prior class enrollment (any status, any class)
   const priorResult = await db.query(
-    `SELECT c.level_tag
+    `SELECT 1
      FROM classstudentstbl cs
-     JOIN classestbl c ON cs.class_id = c.class_id
      WHERE cs.student_id = $1
        AND cs.class_id != $2
-     LIMIT 50`,
+     LIMIT 1`,
     [studentId, classId]
   );
 
@@ -95,13 +102,23 @@ export async function determineEnrollmentStatus({ db, studentId, classId, enroll
     [classId]
   );
   const currentLevel = currentClassResult.rows[0]?.level_tag || null;
-  const currentLevelIdx = LEVEL_ORDER.indexOf(currentLevel);
+  const currentLevelIdx = levelTagIndex(currentLevel);
 
-  // Upsell: student has a prior enrollment in a LOWER level program
+  // Upsell: completed a lower program level, now enrolling in a higher one.
   if (currentLevelIdx > 0) {
-    const isUpsell = priorResult.rows.some((row) => {
-      const prevIdx = LEVEL_ORDER.indexOf(row.level_tag);
-      return prevIdx !== -1 && prevIdx < currentLevelIdx;
+    const priorLowerCompleted = await db.query(
+      `SELECT DISTINCT c.level_tag
+       FROM classstudentstbl cs
+       INNER JOIN classestbl c ON cs.class_id = c.class_id
+       WHERE cs.student_id = $1
+         AND cs.class_id != $2
+         AND cs.program_enrollment_status = 'completed'
+         AND cs.removed_at IS NULL`,
+      [studentId, classId]
+    );
+    const isUpsell = priorLowerCompleted.rows.some((row) => {
+      const prevIdx = levelTagIndex(row.level_tag);
+      return prevIdx >= 0 && prevIdx < currentLevelIdx;
     });
     if (isUpsell) return PROGRAM_ENROLLMENT_STATUS.UPSELL;
   }
@@ -172,10 +189,26 @@ export async function determineRejoinAwarePhaseStatus({
   phaseNumber,
   defaultStatus = PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED,
 }) {
-  return (
-    (await determineRejoinEnrollmentStatus({ db, studentId, classId, phaseNumber })) ||
-    defaultStatus
-  );
+  const rejoinStatus = await determineRejoinEnrollmentStatus({
+    db,
+    studentId,
+    classId,
+    phaseNumber,
+  });
+  if (rejoinStatus) return rejoinStatus;
+
+  const phase = parseInt(String(phaseNumber), 10);
+  if (!Number.isFinite(phase) || phase <= 1) {
+    return determineEnrollmentStatus({
+      db,
+      studentId,
+      classId,
+      enrollmentType: 'phase',
+      phaseNumber: Number.isFinite(phase) && phase > 0 ? phase : 1,
+    });
+  }
+
+  return defaultStatus;
 }
 
 /**

@@ -1122,12 +1122,6 @@ router.get(
           message: 'month cannot be in the future',
         });
       }
-      if (yearRange && matrixYear > currentCalendarYear) {
-        return res.status(400).json({
-          success: false,
-          message: 'year cannot be in the future',
-        });
-      }
       const enrollmentRateScope = req.query.enrollment_rate_scope === 'overall' ? 'overall' : 'month';
       const phaseMatrixScope = req.query.phase_matrix_scope === 'overall' ? 'overall' : 'month';
       const branchFilter = isSuperadmin || isFinanceNoBranch
@@ -1530,8 +1524,13 @@ router.get(
       );
       const maxClassEndYear =
         parseInt(classYearRangeResult.rows[0]?.max_class_end_year, 10) || currentCalendarYear;
+      const enrollmentMatrixFutureYearBuffer = 5;
       const monthlyMatrixMinYear = 2023;
-      const monthlyMatrixMaxYear = Math.max(maxClassEndYear, currentCalendarYear);
+      const monthlyMatrixMaxYear = Math.max(
+        maxClassEndYear,
+        currentCalendarYear + enrollmentMatrixFutureYearBuffer,
+        matrixYear || currentCalendarYear
+      );
 
       res.json({
         success: true,

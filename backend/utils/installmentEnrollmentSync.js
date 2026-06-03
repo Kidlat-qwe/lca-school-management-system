@@ -116,7 +116,7 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
     const keepFirstPhaseNewResult = await client.query(
       `UPDATE classstudentstbl
        SET program_enrollment_status = CASE
-             WHEN program_enrollment_status = 'rejoin' THEN 'rejoin'
+             WHEN program_enrollment_status IN ('rejoin', 'upsell') THEN program_enrollment_status
              ELSE 'new'
            END
        WHERE student_id = $1

@@ -29,6 +29,8 @@ import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPa
 import {
   isUnappliedArPaymentLogRow,
   verifyUnappliedArFromPaymentLog,
+  setPaymentLogApproval,
+  canApprovePaymentLog,
 } from '../../utils/unappliedArPaymentLog';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
@@ -309,16 +311,7 @@ const FinancePaymentLogs = () => {
     }
   };
 
-  const userType = userInfo?.user_type || userInfo?.userType;
-  const userBranchId = userInfo?.branch_id ?? userInfo?.branchId;
-  const canApprovePayment = (payment) => {
-    if (!userType) return false;
-    if (userType === 'Superadmin') return true;
-    if (userType === 'Finance' && (userBranchId == null || userBranchId === undefined)) return true;
-    if (userType === 'Superfinance') return true;
-    if (userType === 'Finance' && payment.branch_id === userBranchId) return true;
-    return false;
-  };
+  const canApprovePayment = (payment) => canApprovePaymentLog(userInfo, payment);
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
@@ -496,17 +489,16 @@ const FinancePaymentLogs = () => {
     }
   };
 
-  const handleApprovePayment = async (paymentId, approve) => {
-    if (isUnappliedArPaymentLogRow({ payment_id: paymentId, source_type: 'UNAPPLIED_AR' })) {
-      return;
-    }
-    setApprovalLoadingId(paymentId);
+  const handleApprovePayment = async (paymentOrId, approve) => {
+    const payment =
+      paymentOrId != null && typeof paymentOrId === 'object'
+        ? paymentOrId
+        : payments.find((p) => p.payment_id === paymentOrId) || { payment_id: paymentOrId };
+    const loadingKey = payment.payment_id;
+    setApprovalLoadingId(loadingKey);
     setOpenApprovalMenuId(null);
     try {
-      await apiRequest(`/payments/${paymentId}/approve`, {
-        method: 'PUT',
-        body: JSON.stringify({ approve }),
-      });
+      await setPaymentLogApproval(payment, approve);
       await fetchPayments(pagination.page);
       await fetchReturnedPaymentLogCount();
     } catch (err) {
@@ -1262,11 +1254,11 @@ const FinancePaymentLogs = () => {
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
-                          const isUnappliedAr = payment.source_type === 'UNAPPLIED_AR';
+                          const isUnappliedAr = isUnappliedArPaymentLogRow(payment);
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
-                          if (isUnappliedAr) {
+                          if (isUnappliedAr && !isApproved) {
                             return (
                               <UnappliedArPaymentLogStatus
                                 payment={payment}
@@ -1864,7 +1856,7 @@ const FinancePaymentLogs = () => {
               {isApproved ? (
                 <button
                   type="button"
-                  onClick={() => handleApprovePayment(payment.payment_id, false)}
+                  onClick={() => handleApprovePayment(payment, false)}
                   className="block w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-100"
                 >
                   Revoke approval
@@ -1872,7 +1864,7 @@ const FinancePaymentLogs = () => {
               ) : (
                 <button
                   type="button"
-                  onClick={() => handleApprovePayment(payment.payment_id, true)}
+                  onClick={() => handleApprovePayment(payment, true)}
                   className="block w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-100"
                 >
                   Approve

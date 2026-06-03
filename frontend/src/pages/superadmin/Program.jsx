@@ -38,7 +38,7 @@ const Program = () => {
     'Grade School': 'gs',
   };
 
-  const programNames = ['Playgroup', 'Nursery', 'Kindergarten', 'Pre-Kindergarten', 'Grade School'];
+  const programNames = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
   const normalizedProgramName = formData.program_name.trim();
   const isOtherProgramSelected = normalizedProgramName === 'Others';
   const effectiveProgramName = isOtherProgramSelected
