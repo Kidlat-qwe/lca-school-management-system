@@ -160,6 +160,44 @@ const getCashDepositSnapshot = async ({ branchId, startDate, endDate, excludeSum
   };
 };
 
+/** Payment IDs stored in cash_payment_snapshot at submit/resubmit time. */
+function extractPaymentIdsFromCashSnapshot(snapshot) {
+  const rows = Array.isArray(snapshot) ? snapshot : [];
+  const ids = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const pid = Number(row?.payment_id);
+    if (!Number.isFinite(pid) || pid <= 0 || seen.has(pid)) continue;
+    seen.add(pid);
+    ids.push(pid);
+  }
+  return ids;
+}
+
+/**
+ * When Superfinance verifies a cash deposit summary, mark included cash payments Approved on Payment Logs.
+ */
+async function syncPaymentLogApprovalOnCashDepositVerify(
+  client,
+  { paymentIds, verifierUserId, depositReferenceNumber }
+) {
+  if (!paymentIds?.length || !verifierUserId) return 0;
+  const depositRef = String(depositReferenceNumber || '').trim() || null;
+  const result = await client.query(
+    `UPDATE paymenttbl p
+     SET approval_status = 'Approved',
+         approved_by = $1,
+         approved_at = COALESCE(p.approved_at, CURRENT_TIMESTAMP),
+         finance_verified_reference_number = COALESCE(NULLIF(TRIM(p.reference_number), ''), $2)
+     WHERE p.payment_id = ANY($3::int[])
+       AND p.status = 'Completed'
+       AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
+     RETURNING p.payment_id`,
+    [verifierUserId, depositRef, paymentIds]
+  );
+  return result.rowCount;
+}
+
 const createCashDepositSubmissionNotification = async ({
   cashDepositSummaryId,
   branchId,
@@ -926,7 +964,9 @@ router.put(
       }
 
       const checkRes = await query(
-        'SELECT cash_deposit_summary_id, status FROM cash_deposit_summarytbl WHERE cash_deposit_summary_id = $1',
+        `SELECT cash_deposit_summary_id, status, cash_payment_snapshot, reference_number
+         FROM cash_deposit_summarytbl
+         WHERE cash_deposit_summary_id = $1`,
         [id]
       );
 
@@ -947,29 +987,50 @@ router.put(
       }
 
       const isApproved = approve === true || approve === 'true';
+      const verifierUserId = req.user.userId || req.user.user_id || null;
+      let paymentsApprovedCount = 0;
 
-      if (isApproved) {
-        await query(
-          `UPDATE cash_deposit_summarytbl
-           SET status = 'Approved',
-               approved_by = $1,
-               approved_at = CURRENT_TIMESTAMP,
-               remarks = $2,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE cash_deposit_summary_id = $3`,
-          [req.user.userId, remarks || null, id]
-        );
-      } else {
-        await query(
-          `UPDATE cash_deposit_summarytbl
-           SET status = 'Returned',
-               approved_by = NULL,
-               approved_at = NULL,
-               remarks = $1,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE cash_deposit_summary_id = $2`,
-          [remarks || null, id]
-        );
+      const client = await getClient();
+      try {
+        await client.query('BEGIN');
+
+        if (isApproved) {
+          await client.query(
+            `UPDATE cash_deposit_summarytbl
+             SET status = 'Approved',
+                 approved_by = $1,
+                 approved_at = CURRENT_TIMESTAMP,
+                 remarks = $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE cash_deposit_summary_id = $3`,
+            [verifierUserId, remarks || null, id]
+          );
+
+          const paymentIds = extractPaymentIdsFromCashSnapshot(record.cash_payment_snapshot);
+          paymentsApprovedCount = await syncPaymentLogApprovalOnCashDepositVerify(client, {
+            paymentIds,
+            verifierUserId,
+            depositReferenceNumber: record.reference_number,
+          });
+        } else {
+          await client.query(
+            `UPDATE cash_deposit_summarytbl
+             SET status = 'Returned',
+                 approved_by = NULL,
+                 approved_at = NULL,
+                 remarks = $1,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE cash_deposit_summary_id = $2`,
+            [remarks || null, id]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        client.release();
       }
 
       const updated = await query(
@@ -990,8 +1051,13 @@ router.put(
 
       res.json({
         success: true,
-        message: isApproved ? 'Cash deposit summary verified' : 'Cash deposit summary returned for correction',
+        message: isApproved
+          ? paymentsApprovedCount > 0
+            ? `Cash deposit summary verified. ${paymentsApprovedCount} payment log row(s) approved.`
+            : 'Cash deposit summary verified'
+          : 'Cash deposit summary returned for correction',
         data: updated.rows[0],
+        payments_approved_count: isApproved ? paymentsApprovedCount : 0,
       });
     } catch (error) {
       next(error);
