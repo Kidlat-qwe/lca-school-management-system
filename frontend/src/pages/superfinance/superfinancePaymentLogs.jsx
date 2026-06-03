@@ -26,6 +26,7 @@ import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPaymentLogStatus';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -1247,11 +1248,7 @@ const SuperfinancePaymentLogs = () => {
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
                           if (isUnappliedAr) {
-                            return (
-                              <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-800">
-                                Awaiting attachment
-                              </span>
-                            );
+                            return <UnappliedArPaymentLogStatus payment={payment} />;
                           }
                           return (
                             <div className="relative min-w-0 max-w-full">

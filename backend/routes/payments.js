@@ -22,6 +22,7 @@ import {
   isRejoinClassInvoice,
   parseInstallmentProfileIdFromRemarks,
   parseRejoinPhaseFromRemarks,
+  promotePendingEnrollmentIfPhaseInvoicePaid,
   removePendingEnrollmentPlaceholderForProfile,
   syncInstallmentProfileAfterRejoinPayment,
 } from '../utils/enrollmentStatus.js';
@@ -41,6 +42,7 @@ import {
   deriveInvoiceStatusForInvoice,
   invoiceHasRejectedPayment,
 } from '../utils/invoicePaymentStatus.js';
+import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
 
 const router = express.Router();
 
@@ -269,158 +271,6 @@ const assertBranchUserMayEditReturnedPayment = (req, payment) => {
     status: 403,
     message: 'Only the staff member who issued the invoice may fix this returned payment.',
   };
-};
-
-const syncInstallmentEnrollmentForPaidInvoice = async ({
-  client,
-  profileId,
-  profile,
-  studentId,
-  sourceLabel,
-}) => {
-  if (!profileId || !profile?.class_id || Number(profile.student_id) !== Number(studentId)) {
-    return;
-  }
-
-  const { paidPhaseCount: paidInstallmentCount } = await getCanonicalInstallmentPhaseCounts(
-    client,
-    profileId,
-    profile.downpayment_invoice_id || null
-  );
-  if (paidInstallmentCount <= 0) {
-    return;
-  }
-
-  const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start, 10) : 1;
-  const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
-  const maxPhase = totalPhases ? (phaseStart + totalPhases - 1) : null;
-
-  // For rejoin plans a dropped phase has no invoice, so paidInstallmentCount
-  // undercounts the actual billing position (e.g. 4 paid invoices for phases 1,2,4,5
-  // in a 5-phase plan where phase 3 was dropped). The profile's generated_count is
-  // already advanced past skipped phases by alignInstallmentProfileForRejoinInvoice /
-  // syncInstallmentProfileAfterRejoinPayment, so use it as a floor.
-  const storedGeneratedCount = profile.generated_count != null
-    ? parseInt(profile.generated_count, 10)
-    : 0;
-  const effectiveProgressCount = Math.max(paidInstallmentCount, storedGeneratedCount);
-
-  let targetPhase = phaseStart + effectiveProgressCount - 1;
-  if (maxPhase !== null) {
-    targetPhase = Math.min(targetPhase, maxPhase);
-  }
-  const markCompletedIfFullyPaid = async () => {
-    // Use targetPhase vs maxPhase instead of raw paidInstallmentCount vs totalPhases
-    // so that rejoin plans (where a dropped phase was skipped) are handled correctly.
-    if (!(maxPhase !== null && targetPhase >= maxPhase)) return;
-    const keepFirstPhaseNewResult = await client.query(
-      `UPDATE classstudentstbl
-       SET program_enrollment_status = CASE
-             WHEN program_enrollment_status = 'rejoin' THEN 'rejoin'
-             ELSE 'new'
-           END
-       WHERE student_id = $1
-         AND class_id = $2
-         AND phase_number = $3
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
-         AND removed_at IS NULL`,
-      [studentId, profile.class_id, phaseStart]
-    );
-    const reEnrolledResult = await client.query(
-      `UPDATE classstudentstbl
-       SET program_enrollment_status = 're_enrolled'
-       WHERE student_id = $1
-         AND class_id = $2
-         AND phase_number > $3
-         AND phase_number < $4
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'completed')
-         AND removed_at IS NULL`,
-      [studentId, profile.class_id, phaseStart, targetPhase]
-    );
-    const completedResult = await client.query(
-      `UPDATE classstudentstbl
-       SET program_enrollment_status = 'completed'
-       WHERE student_id = $1
-         AND class_id = $2
-         AND phase_number = $3
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
-         AND removed_at IS NULL`,
-      [studentId, profile.class_id, targetPhase]
-    );
-    if (completedResult.rowCount > 0 || reEnrolledResult.rowCount > 0 || keepFirstPhaseNewResult.rowCount > 0) {
-      console.log(
-        `✅ Installment fully paid: phase ${phaseStart} kept as new (${keepFirstPhaseNewResult.rowCount} row[s]), ` +
-        `phase ${targetPhase} marked completed (${completedResult.rowCount} row[s]), ` +
-        `${reEnrolledResult.rowCount} intermediate phase row(s) set to re_enrolled for student ${studentId} class ${profile.class_id}`
-      );
-    }
-  };
-
-  // Business rule:
-  // - first paid installment phase after downpayment => new
-  // - subsequent paid phases (phase 2+) => re_enrolled
-  const installmentDefaultStatus =
-    paidInstallmentCount <= 1
-      ? PROGRAM_ENROLLMENT_STATUS.NEW
-      : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
-  const installmentEnrollStatus = await determineRejoinAwarePhaseStatus({
-    db: client,
-    studentId,
-    classId: profile.class_id,
-    phaseNumber: targetPhase,
-    defaultStatus: installmentDefaultStatus,
-  });
-
-  const promoted = await client.query(
-    `UPDATE classstudentstbl
-     SET program_enrollment_status = $1,
-         enrolled_by = $2,
-         enrolled_at = CURRENT_TIMESTAMP
-     WHERE student_id = $3 AND class_id = $4 AND phase_number = $5
-       AND program_enrollment_status = 'pending_enrollment'
-       AND removed_at IS NULL
-     RETURNING classstudent_id`,
-    [installmentEnrollStatus, sourceLabel, studentId, profile.class_id, targetPhase]
-  );
-  if (promoted.rows.length > 0) {
-    console.log(
-      `✅ Promoted pending_enrollment → ${installmentEnrollStatus} for student ${studentId} class ${profile.class_id} phase ${targetPhase}`
-    );
-    await markCompletedIfFullyPaid();
-    return;
-  }
-
-  const existingPhaseEnrollment = await client.query(
-    `SELECT classstudent_id
-     FROM classstudentstbl
-     WHERE student_id = $1
-       AND class_id = $2
-       AND phase_number = $3
-       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-       AND removed_at IS NULL`,
-    [studentId, profile.class_id, targetPhase]
-  );
-
-  if (existingPhaseEnrollment.rows.length > 0) {
-    await markCompletedIfFullyPaid();
-    return;
-  }
-
-  await client.query(
-    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [
-      studentId,
-      profile.class_id,
-      sourceLabel,
-      targetPhase,
-      installmentEnrollStatus,
-    ]
-  );
-
-  console.log(`✅ Auto-enrolled student ${studentId} in Phase ${targetPhase} after installment payment (status: ${installmentEnrollStatus})`);
-
-  await markCompletedIfFullyPaid();
 };
 
 const createFirstInstallmentRecordAfterDownpayment = async ({
@@ -1691,7 +1541,7 @@ router.get(
  * GET /api/sms/payments/finance-unified
  * Unified payment logs (main tab):
  * - regular payment rows
- * - unapplied verified package AR rows (no payment_id/invoice_id yet)
+ * - unapplied verified package AR rows (no payment_id/invoice_id yet); approval mirrors AR verify (verified_by_user_id)
  * Access: Finance, Superfinance, Superadmin, Admin (branch-scoped via user branch or branch_id query)
  */
 router.get(
@@ -1963,14 +1813,18 @@ router.get(
                           ar.payment_attachment_url,
                           ar.level_tag,
                           ar.status,
+                          ar.verified_by_user_id,
+                          TO_CHAR(ar.verified_at, 'YYYY-MM-DD HH24:MI:SS') as verified_at,
                           TO_CHAR(ar.issue_date, 'YYYY-MM-DD') as issue_date,
                           ar.ack_receipt_number,
                           ar.created_by,
                           creator.full_name AS created_by_name,
                           creator.email AS created_by_email,
+                          verifier.full_name AS verified_by_name,
                           COALESCE(b.branch_nickname, b.branch_name) AS branch_name
                    FROM acknowledgement_receiptstbl ar
                    LEFT JOIN userstbl creator ON ar.created_by = creator.user_id
+                   LEFT JOIN userstbl verifier ON ar.verified_by_user_id = verifier.user_id
                    LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
                    WHERE ar.ar_type = 'Package'
                      AND ar.status = 'Verified'
@@ -2044,54 +1898,65 @@ router.get(
           OR COALESCE(ar.reference_number, '') ILIKE $${arPc}
           OR COALESCE(creator.full_name, '') ILIKE $${arPc}
           OR COALESCE(creator.email, '') ILIKE $${arPc}
+          OR COALESCE(verifier.full_name, '') ILIKE $${arPc}
+          OR COALESCE(verifier.email, '') ILIKE $${arPc}
         )`;
         arParams.push(`%${searchTerm}%`);
       }
 
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
-      // AR rows have a synthetic approval_status of 'Pending'; skip them when caller wants Approved-only.
-      if (approvalStatusFilter !== 'Approved' && (!pmFilter || pmFilter === 'Acknowledgement Receipt')) {
+      // Unapplied verified package AR: finance approval mirrors AR verification (verified_by_user_id).
+      const includeUnappliedAr = !pmFilter || pmFilter === 'Acknowledgement Receipt';
+      if (includeUnappliedAr) {
         const arRes = await query(arSql, arParams);
-        arRows = (arRes.rows || []).map((row) => ({
-          payment_id: `AR-${row.ack_receipt_id}`,
-          invoice_id: null,
-          student_id: null,
-          branch_id: row.branch_id,
-          payment_method: 'Acknowledgement Receipt',
-          payment_type: 'Unapplied Acknowledgement Receipt',
-          payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
-          issue_date: row.issue_date,
-          status: 'Verified',
-          reference_number: row.reference_number,
-          remarks: 'Awaiting enrollment attachment',
-          payment_attachment_url: row.payment_attachment_url,
-          created_by: row.created_by,
-          created_at: null,
-          approval_status: 'Pending',
-          approved_by: null,
-          approved_at: null,
-          return_reason: null,
-          returned_at: null,
-          returned_by: null,
-          returned_by_name: null,
-          student_name: row.prospect_student_name || 'Walk-in / Acknowledgement Receipt',
-          student_email: row.prospect_student_email || null,
-          student_level_tag: row.level_tag || null,
-          invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
-          invoice_amount: null,
-          invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
-          branch_name: row.branch_name,
-          approved_by_name: null,
-          payment_created_by_name: row.created_by_name || null,
-          payment_created_by_email: row.created_by_email || null,
-          invoice_issued_by_name: null,
-          invoice_issued_by_email: null,
-          ar_prospect_student_name: row.prospect_student_name || null,
-          source_type: 'UNAPPLIED_AR',
-          source_id: `AR-${row.ack_receipt_id}`,
-          sort_id: Number(row.ack_receipt_id) || 0,
-        }));
+        arRows = (arRes.rows || []).map((row) => {
+          const arFinanceApproved = row.verified_by_user_id != null;
+          return {
+            payment_id: `AR-${row.ack_receipt_id}`,
+            invoice_id: null,
+            student_id: null,
+            branch_id: row.branch_id,
+            payment_method: 'Acknowledgement Receipt',
+            payment_type: 'Unapplied Acknowledgement Receipt',
+            payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
+            issue_date: row.issue_date,
+            status: 'Verified',
+            reference_number: row.reference_number,
+            remarks: 'Awaiting enrollment attachment',
+            payment_attachment_url: row.payment_attachment_url,
+            created_by: row.created_by,
+            created_at: null,
+            approval_status: arFinanceApproved ? 'Approved' : 'Pending',
+            approved_by: arFinanceApproved ? row.verified_by_user_id : null,
+            approved_at: arFinanceApproved ? row.verified_at : null,
+            return_reason: null,
+            returned_at: null,
+            returned_by: null,
+            returned_by_name: null,
+            student_name: row.prospect_student_name || 'Walk-in / Acknowledgement Receipt',
+            student_email: row.prospect_student_email || null,
+            student_level_tag: row.level_tag || null,
+            invoice_description: row.package_name_snapshot || 'Acknowledgement Receipt (Unapplied)',
+            invoice_amount: null,
+            invoice_ar_number: row.ack_receipt_number || `AR-${row.ack_receipt_id}`,
+            branch_name: row.branch_name,
+            approved_by_name: arFinanceApproved ? row.verified_by_name : null,
+            payment_created_by_name: row.created_by_name || null,
+            payment_created_by_email: row.created_by_email || null,
+            invoice_issued_by_name: null,
+            invoice_issued_by_email: null,
+            ar_prospect_student_name: row.prospect_student_name || null,
+            source_type: 'UNAPPLIED_AR',
+            source_id: `AR-${row.ack_receipt_id}`,
+            sort_id: Number(row.ack_receipt_id) || 0,
+          };
+        });
+        if (approvalStatusFilter === 'Approved') {
+          arRows = arRows.filter((r) => r.approval_status === 'Approved');
+        } else if (pendingOnly) {
+          arRows = arRows.filter((r) => r.approval_status !== 'Approved');
+        }
       }
 
       // ---------- 3) Merge, sort, paginate ----------
@@ -2918,6 +2783,7 @@ router.post(
                   profile,
                   studentId: student_id,
                   sourceLabel: 'System (Auto-enrolled via installment payment)',
+                  invoice,
                 });
               }
             }
@@ -2926,6 +2792,18 @@ router.post(
         } catch (phaseError) {
           // Log error but don't fail payment processing
           console.error('Error processing installment payment:', phaseError);
+        }
+      }
+
+      if (newInvoiceStatus === 'Paid' && !invoice.installmentinvoiceprofiles_id) {
+        try {
+          await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
+            studentId: student_id,
+            invoice: { ...invoice, status: newInvoiceStatus },
+            sourceLabel: 'System (Auto-enrolled via installment payment)',
+          });
+        } catch (promoteErr) {
+          console.error('Error promoting pending enrollment after payment:', promoteErr);
         }
       }
       
@@ -3567,6 +3445,7 @@ router.put(
                       profile,
                       studentId: payment.student_id,
                       sourceLabel: 'System (Auto-enrolled via installment payment)',
+                      invoice,
                     });
                   }
                 }
@@ -3575,6 +3454,18 @@ router.put(
             } catch (phaseError) {
               // Log error but don't fail payment update
               console.error('Error processing installment payment:', phaseError);
+            }
+          }
+
+          if (newInvoiceStatus === 'Paid' && !invoice.installmentinvoiceprofiles_id) {
+            try {
+              await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
+                studentId: payment.student_id,
+                invoice: { ...invoice, status: newInvoiceStatus },
+                sourceLabel: 'System (Auto-enrolled via installment payment)',
+              });
+            } catch (promoteErr) {
+              console.error('Error promoting pending enrollment after payment update:', promoteErr);
             }
           }
         }

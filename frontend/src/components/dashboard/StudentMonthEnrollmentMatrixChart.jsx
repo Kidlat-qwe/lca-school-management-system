@@ -12,6 +12,7 @@ import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescripti
 import {
   sortMatrixStudentsByEnrollmentDate,
   toggleEnrollmentDateSort,
+  matrixTrackDisplayName,
 } from '../../utils/enrollmentMatrixSort';
 import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
 import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';
@@ -79,14 +80,14 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
       >
         <table
           className="border-separate border-spacing-0"
-          style={{ width: '100%', minWidth: `${Math.max(640, 160 + months.length * 88)}px` }}
+          style={{ width: '100%', minWidth: `${Math.max(680, 200 + months.length * 88)}px` }}
         >
           <thead className="[&_th]:align-middle">
             {showRateHeader && (
               <tr className="text-left text-xs font-semibold tracking-wide text-gray-700">
                 <th
                   className="sticky left-0 top-0 z-[70] border-b border-gray-200 bg-amber-50 px-4 py-2.5 shadow-[2px_0_4px_rgba(0,0,0,0.08)]"
-                  style={{ minWidth: '160px', height: RATE_HEADER_HEIGHT_PX }}
+                  style={{ minWidth: '200px', height: RATE_HEADER_HEIGHT_PX }}
                 >
                   Re-enrollment rate
                 </th>
@@ -119,7 +120,7 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
               <th
                 className="sticky left-0 z-[65] border-b-2 border-gray-300 bg-gray-50 px-4 py-3 shadow-[2px_2px_4px_rgba(0,0,0,0.06)]"
                 style={{
-                  minWidth: '160px',
+                  minWidth: '200px',
                   top: columnHeaderTop,
                   height: COLUMN_HEADER_HEIGHT_PX,
                 }}
@@ -144,16 +145,16 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
           <tbody className="divide-y divide-gray-100 text-sm">
             {students.length > 0 ? (
               students.map((student) => (
-                <tr key={student.student_id} className="group bg-white hover:bg-gray-50">
+                <tr key={student.enrollment_track_key || `${student.student_id}-${student.class_id}`} className="group bg-white hover:bg-gray-50">
                   <td
                     className="sticky left-0 z-[1] bg-white px-4 py-2.5 font-medium text-gray-900 shadow-[2px_0_4px_rgba(0,0,0,0.04)] group-hover:bg-gray-50"
-                    style={{ minWidth: '160px', maxWidth: '220px' }}
+                    style={{ minWidth: '200px', maxWidth: '280px' }}
                     title={enrollmentMatrixStudentNameTitle(student)}
                   >
-                    <span className="block truncate">{student.full_name}</span>
+                    <span className="block truncate">{matrixTrackDisplayName(student)}</span>
                   </td>
                   {months.map((m) => (
-                    <td key={`${student.student_id}-${m.key}`} className="bg-white px-3 py-2.5 text-center group-hover:bg-gray-50">
+                    <td key={`${student.enrollment_track_key || student.student_id}-${m.key}`} className="bg-white px-3 py-2.5 text-center group-hover:bg-gray-50">
                       <EnrollmentMatrixCellBadge cell={student.months?.[m.key]} />
                     </td>
                   ))}

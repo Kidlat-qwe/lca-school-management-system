@@ -7,14 +7,49 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
-/** Sort matrix students by earliest enrolled_at (Manila), not by name. */
+/** Stable key for one student × class enrollment track (matrix row). */
+export const enrollmentTrackKey = (studentId, classId) =>
+  `${parseInt(studentId, 10)}:${parseInt(classId, 10)}`;
+
+/** Build a matrix row object for one enrollment track. */
+export const buildEnrollmentMatrixTrackRow = ({
+  studentId,
+  classId,
+  fullName,
+  className = '',
+  firstEnrolledAt = null,
+  firstEnrolledMonthKey = null,
+  lastFullPayMonthKey = null,
+  phases = undefined,
+  months = undefined,
+}) => {
+  const safeName = fullName || `Student ${studentId}`;
+  const row = {
+    student_id: parseInt(studentId, 10),
+    class_id: parseInt(classId, 10),
+    enrollment_track_key: enrollmentTrackKey(studentId, classId),
+    full_name: safeName,
+    class_name: className || '',
+    display_name: className ? `${safeName} — ${className}` : safeName,
+    first_enrolled_at: firstEnrolledAt || null,
+    first_enrolled_month_key: firstEnrolledMonthKey || null,
+    last_full_pay_month_key: lastFullPayMonthKey || null,
+  };
+  if (phases !== undefined) row.phases = phases;
+  if (months !== undefined) row.months = months;
+  return row;
+};
+
+/** Sort matrix tracks by earliest enrolled_at (Manila), not by name. */
 export const sortEnrollmentMatrixStudents = (students, direction = 'asc') => {
   const mult = direction === 'desc' ? -1 : 1;
   return [...students].sort((a, b) => {
     const aTime = a.first_enrolled_at ? new Date(a.first_enrolled_at).getTime() : Number.POSITIVE_INFINITY;
     const bTime = b.first_enrolled_at ? new Date(b.first_enrolled_at).getTime() : Number.POSITIVE_INFINITY;
     if (aTime !== bTime) return mult * (aTime - bTime);
-    return (a.student_id || 0) - (b.student_id || 0);
+    const byStudent = (a.student_id || 0) - (b.student_id || 0);
+    if (byStudent !== 0) return byStudent;
+    return (a.class_id || 0) - (b.class_id || 0);
   });
 };
 
@@ -30,6 +65,64 @@ export const prevCalendarMonthKey = (monthKey) => {
   d.setUTCMonth(d.getUTCMonth() - 1);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 };
+
+/** YYYY-MM in Asia/Manila for a timestamp (used by calendar overlays). */
+const toManilaMonthKey = (dateValue) => {
+  if (!dateValue) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date(dateValue));
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  return year && month ? `${year}-${month}` : null;
+};
+
+/** Earliest month that should display as "new" (billing anchor vs first enrolled_at). */
+const resolveCanonicalFirstNewMonthKey = (firstBillingKey, firstEverMonthKey) => {
+  if (firstBillingKey && firstEverMonthKey) {
+    return firstBillingKey <= firstEverMonthKey ? firstBillingKey : firstEverMonthKey;
+  }
+  return firstBillingKey || firstEverMonthKey || null;
+};
+
+/** When a student has one class in scope, show name only; with multiple classes, include class label. */
+const applyMatrixTrackDisplayNames = (tracks) => {
+  const classCountByStudent = new Map();
+  for (const track of tracks) {
+    const sid = track.student_id;
+    classCountByStudent.set(sid, (classCountByStudent.get(sid) || 0) + 1);
+  }
+  for (const track of tracks) {
+    const multiClass = (classCountByStudent.get(track.student_id) || 0) > 1;
+    track.display_name =
+      multiClass && track.class_name
+        ? `${track.full_name} — ${track.class_name}`
+        : track.full_name;
+  }
+  return tracks;
+};
+
+/**
+ * True when student+class uses class-start billing (no installment profile and no paid downpayment).
+ */
+const IS_FULL_PAYMENT_SQL = `
+  NOT EXISTS (
+    SELECT 1
+    FROM installmentinvoiceprofilestbl ip
+    WHERE ip.student_id = cs.student_id
+      AND ip.class_id = cs.class_id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM invoicestbl i
+    INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id
+    WHERE ist.student_id = cs.student_id
+      AND i.status = 'Paid'
+      AND i.invoice_description ILIKE '%downpayment%'
+      AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')
+  )`;
 
 /**
  * Re-enrollment rate per display month (spreadsheet logic):
@@ -846,12 +939,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.program_enrollment_status,
           cs.removed_at,
           cs.enrolled_at,
-          NOT EXISTS (
-            SELECT 1
-            FROM installmentinvoiceprofilestbl ip
-            WHERE ip.student_id = cs.student_id
-              AND ip.class_id = cs.class_id
-          ) AS is_full_payment
+          ${IS_FULL_PAYMENT_SQL} AS is_full_payment
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         ${curriculumJoin}
@@ -863,55 +951,62 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           ${monthFilter}
       ),
       cohort AS (
-        SELECT DISTINCT student_id FROM scoped_rows
+        SELECT DISTINCT student_id, class_id FROM scoped_rows
       ),
-      student_first_enrolled AS (
-        SELECT student_id, MIN(enrolled_at) AS first_enrolled_at
+      track_first_enrolled AS (
+        SELECT student_id, class_id, MIN(enrolled_at) AS first_enrolled_at
         FROM scoped_rows
         WHERE enrolled_at IS NOT NULL
-        GROUP BY student_id
+        GROUP BY student_id, class_id
       ),
       student_phase_latest AS (
-        -- Pick the latest row per student-phase (handles re-enroll/drop/rejoin history).
+        -- Pick the latest row per student × class × phase (handles re-enroll/drop/rejoin history).
         SELECT
           sr.student_id,
+          sr.class_id,
           sr.phase_number,
           sr.program_enrollment_status,
           sr.removed_at,
           sr.is_full_payment,
           ROW_NUMBER() OVER (
-            PARTITION BY sr.student_id, sr.phase_number
+            PARTITION BY sr.student_id, sr.class_id, sr.phase_number
             ORDER BY COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST, sr.classstudent_id DESC
           ) AS rn
         FROM scoped_rows sr
       ),
       matrix AS (
-        -- Cross-join: every student × every phase slot
+        -- Cross-join: every enrollment track × every phase slot
         SELECT
-          c.student_id,
+          co.student_id,
+          co.class_id,
           ps.phase_number,
           spl.program_enrollment_status,
           spl.removed_at,
           spl.is_full_payment
-        FROM cohort c
+        FROM cohort co
         CROSS JOIN phase_series ps
         LEFT JOIN student_phase_latest spl
-          ON spl.student_id = c.student_id
+          ON spl.student_id = co.student_id
+         AND spl.class_id = co.class_id
          AND spl.phase_number = ps.phase_number
          AND spl.rn = 1
       )
       SELECT
         m.student_id,
+        m.class_id,
+        c.class_name,
         u.full_name,
         m.phase_number,
         m.program_enrollment_status,
         m.removed_at,
         m.is_full_payment,
-        sfe.first_enrolled_at
+        tfe.first_enrolled_at
       FROM matrix m
       INNER JOIN userstbl u ON u.user_id = m.student_id
-      LEFT JOIN student_first_enrolled sfe ON sfe.student_id = m.student_id
-      ORDER BY sfe.first_enrolled_at ASC NULLS LAST, m.student_id ASC, m.phase_number ASC
+      INNER JOIN classestbl c ON c.class_id = m.class_id
+      LEFT JOIN track_first_enrolled tfe
+        ON tfe.student_id = m.student_id AND tfe.class_id = m.class_id
+      ORDER BY tfe.first_enrolled_at ASC NULLS LAST, u.full_name ASC NULLS LAST, m.class_id ASC, m.phase_number ASC
     `,
     params
   );
@@ -937,14 +1032,21 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
 
   for (const row of result.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
     const phaseNumber = parseInt(row.phase_number, 10);
-    if (!studentMap.has(studentId)) {
-      studentMap.set(studentId, {
-        student_id: studentId,
-        full_name: row.full_name || `Student ${studentId}`,
-        first_enrolled_at: row.first_enrolled_at || null,
-        phases: {},
-      });
+    const trackKey = enrollmentTrackKey(studentId, classId);
+    if (!studentMap.has(trackKey)) {
+      studentMap.set(
+        trackKey,
+        buildEnrollmentMatrixTrackRow({
+          studentId,
+          classId,
+          fullName: row.full_name,
+          className: row.class_name,
+          firstEnrolledAt: row.first_enrolled_at,
+          phases: {},
+        })
+      );
     }
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
@@ -954,7 +1056,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     const label = isEnrolled
       ? normalizeStatusLabel(status)
       : (status === 'dropped' || removedAt != null ? 'dropped/unenrolled' : normalizeStatusLabel(status));
-    studentMap.get(studentId).phases[phaseNumber] = {
+    studentMap.get(trackKey).phases[phaseNumber] = {
       mark,
       label,
       status,
@@ -962,7 +1064,9 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     };
   }
 
-  const students = sortEnrollmentMatrixStudents(Array.from(studentMap.values()));
+  const students = applyMatrixTrackDisplayNames(
+    sortEnrollmentMatrixStudents(Array.from(studentMap.values()))
+  );
   // Display-only normalization:
   // - Show "new" only on the student's first enrolled phase cell.
   // - If later enrolled phase cells still have status 'new' in DB, display as 're-enrolled'.
@@ -1142,12 +1246,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.removed_at,
           cs.enrolled_at,
           c.start_date                                                           AS class_start_date,
-          NOT EXISTS (
-            SELECT 1
-            FROM installmentinvoiceprofilestbl ip
-            WHERE ip.student_id = cs.student_id
-              AND ip.class_id   = cs.class_id
-          )                                                                      AS is_full_payment
+          ${IS_FULL_PAYMENT_SQL}                                                                      AS is_full_payment
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
@@ -1175,6 +1274,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       phase_billing AS (
         SELECT
           sr.student_id,
+          sr.class_id,
           sr.phase_number,
           sr.program_enrollment_status,
           sr.removed_at,
@@ -1196,21 +1296,20 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
          AND a.class_id   = sr.class_id
       ),
 
-      -- Cohort = students with at least one billing_month inside the display window.
-      -- This excludes students who enrolled and finished entirely before the window.
+      -- Cohort = enrollment tracks with at least one billing_month inside the display window.
       cohort AS (
-        SELECT DISTINCT student_id
+        SELECT DISTINCT student_id, class_id
         FROM phase_billing
         WHERE billing_month IS NOT NULL
           AND billing_month >= $3::date
           AND billing_month <= $2::date
       ),
 
-      -- Per student per billing_month: pick the best status row.
-      -- Priority: enrolled+active > any > dropped.
+      -- Per track per billing_month: pick the best status row.
       student_month_status AS (
-        SELECT DISTINCT ON (student_id, billing_month)
+        SELECT DISTINCT ON (student_id, class_id, billing_month)
           student_id,
+          class_id,
           billing_month,
           program_enrollment_status,
           removed_at,
@@ -1221,8 +1320,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           AND billing_month <= $2::date
         ORDER BY
           student_id,
+          class_id,
           billing_month,
-          -- Prefer enrolled-and-active rows first
           CASE
             WHEN program_enrollment_status IN ${ENROLLED_STATUSES} AND removed_at IS NULL THEN 0
             ELSE 1
@@ -1234,6 +1333,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       matrix AS (
         SELECT
           co.student_id,
+          co.class_id,
           ms.month_start,
           sms.program_enrollment_status,
           sms.removed_at,
@@ -1242,11 +1342,14 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         CROSS JOIN month_series ms
         LEFT JOIN student_month_status sms
           ON sms.student_id   = co.student_id
+         AND sms.class_id     = co.class_id
          AND sms.billing_month = ms.month_start
       )
 
       SELECT
         m.student_id,
+        m.class_id,
+        c.class_name,
         u.full_name,
         TO_CHAR(m.month_start, 'YYYY-MM')  AS month_key,
         TO_CHAR(m.month_start, 'Mon YYYY') AS month_label,
@@ -1255,7 +1358,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         m.is_full_payment
       FROM matrix m
       INNER JOIN userstbl u ON u.user_id = m.student_id
-      ORDER BY u.full_name ASC NULLS LAST, m.student_id ASC, m.month_start ASC
+      INNER JOIN classestbl c ON c.class_id = m.class_id
+      ORDER BY u.full_name ASC NULLS LAST, m.class_id ASC, m.student_id ASC, m.month_start ASC
     `,
     params
   );
@@ -1272,12 +1376,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.removed_at,
           cs.enrolled_at,
           c.start_date                                                           AS class_start_date,
-          NOT EXISTS (
-            SELECT 1
-            FROM installmentinvoiceprofilestbl ip
-            WHERE ip.student_id = cs.student_id
-              AND ip.class_id   = cs.class_id
-          )                                                                      AS is_full_payment
+          ${IS_FULL_PAYMENT_SQL}                                                                      AS is_full_payment
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${scopeBranchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
@@ -1302,6 +1401,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       phase_billing AS (
         SELECT
           sr.student_id,
+          sr.class_id,
           sr.phase_number,
           sr.program_enrollment_status,
           sr.removed_at,
@@ -1324,55 +1424,62 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       first_enrolled AS (
         SELECT
           student_id,
+          class_id,
           MIN(billing_month) AS first_billing_month
         FROM phase_billing
         WHERE billing_month IS NOT NULL
           AND program_enrollment_status IN ${ENROLLED_STATUSES}
           AND removed_at IS NULL
-        GROUP BY student_id
+        GROUP BY student_id, class_id
       ),
       last_full_pay AS (
         SELECT
           student_id,
+          class_id,
           MAX(billing_month) AS last_full_pay_billing_month
         FROM phase_billing
         WHERE billing_month IS NOT NULL
           AND is_full_payment = true
           AND program_enrollment_status IN ${ENROLLED_STATUSES}
           AND removed_at IS NULL
-        GROUP BY student_id
+        GROUP BY student_id, class_id
       ),
-      student_first_enrolled AS (
-        SELECT student_id, MIN(enrolled_at) AS first_enrolled_at
+      track_first_enrolled AS (
+        SELECT student_id, class_id, MIN(enrolled_at) AS first_enrolled_at
         FROM scoped_rows
         WHERE enrolled_at IS NOT NULL
-        GROUP BY student_id
+        GROUP BY student_id, class_id
       )
       SELECT
-        sfe.student_id,
-        sfe.first_enrolled_at,
+        tfe.student_id,
+        tfe.class_id,
+        tfe.first_enrolled_at,
         TO_CHAR(fe.first_billing_month, 'YYYY-MM') AS first_enrolled_month_key,
         TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key
-      FROM student_first_enrolled sfe
-      LEFT JOIN first_enrolled fe ON fe.student_id = sfe.student_id
-      LEFT JOIN last_full_pay lfp ON lfp.student_id = sfe.student_id
+      FROM track_first_enrolled tfe
+      LEFT JOIN first_enrolled fe
+        ON fe.student_id = tfe.student_id AND fe.class_id = tfe.class_id
+      LEFT JOIN last_full_pay lfp
+        ON lfp.student_id = tfe.student_id AND lfp.class_id = tfe.class_id
     `,
     scopeParams
   );
 
-  const firstEnrolledByStudent = new Map();
-  const firstEnrolledAtByStudent = new Map();
-  const lastFullPayMonthByStudent = new Map();
+  const firstEnrolledByTrack = new Map();
+  const firstEnrolledAtByTrack = new Map();
+  const lastFullPayMonthByTrack = new Map();
   for (const row of firstEnrollResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const trackKey = enrollmentTrackKey(studentId, classId);
     if (row.first_enrolled_month_key) {
-      firstEnrolledByStudent.set(studentId, row.first_enrolled_month_key);
+      firstEnrolledByTrack.set(trackKey, row.first_enrolled_month_key);
     }
     if (row.first_enrolled_at) {
-      firstEnrolledAtByStudent.set(studentId, row.first_enrolled_at);
+      firstEnrolledAtByTrack.set(trackKey, row.first_enrolled_at);
     }
     if (row.last_full_pay_month_key) {
-      lastFullPayMonthByStudent.set(studentId, row.last_full_pay_month_key);
+      lastFullPayMonthByTrack.set(trackKey, row.last_full_pay_month_key);
     }
   }
 
@@ -1396,17 +1503,24 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   for (const row of result.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
     const monthKey = row.month_key;
+    const trackKey = enrollmentTrackKey(studentId, classId);
 
-    if (!studentMap.has(studentId)) {
-      studentMap.set(studentId, {
-        student_id: studentId,
-        full_name: row.full_name || `Student ${studentId}`,
-        first_enrolled_month_key: firstEnrolledByStudent.get(studentId) || null,
-        first_enrolled_at: firstEnrolledAtByStudent.get(studentId) || null,
-        last_full_pay_month_key: lastFullPayMonthByStudent.get(studentId) || null,
-        months: {},
-      });
+    if (!studentMap.has(trackKey)) {
+      studentMap.set(
+        trackKey,
+        buildEnrollmentMatrixTrackRow({
+          studentId,
+          classId,
+          fullName: row.full_name,
+          className: row.class_name,
+          firstEnrolledAt: firstEnrolledAtByTrack.get(trackKey) || null,
+          firstEnrolledMonthKey: firstEnrolledByTrack.get(trackKey) || null,
+          lastFullPayMonthKey: lastFullPayMonthByTrack.get(trackKey) || null,
+          months: {},
+        })
+      );
     }
 
     const status = row.program_enrollment_status || null;
@@ -1419,7 +1533,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         ? 'dropped/unenrolled'
         : normalizeEnrollmentLabel(status);
 
-    studentMap.get(studentId).months[monthKey] = {
+    studentMap.get(trackKey).months[monthKey] = {
       mark,
       label,
       status,
@@ -1440,18 +1554,24 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     classJoin: calendarClassJoin,
   } = buildScopeJoins(3, calendarOverlayParams);
 
-  const ensureMatrixStudent = (studentId, fullName) => {
-    if (!studentMap.has(studentId)) {
-      studentMap.set(studentId, {
-        student_id: studentId,
-        full_name: fullName || `Student ${studentId}`,
-        first_enrolled_month_key: firstEnrolledByStudent.get(studentId) || null,
-        first_enrolled_at: firstEnrolledAtByStudent.get(studentId) || null,
-        last_full_pay_month_key: lastFullPayMonthByStudent.get(studentId) || null,
-        months: {},
-      });
+  const ensureMatrixStudent = (studentId, classId, fullName, className = '') => {
+    const trackKey = enrollmentTrackKey(studentId, classId);
+    if (!studentMap.has(trackKey)) {
+      studentMap.set(
+        trackKey,
+        buildEnrollmentMatrixTrackRow({
+          studentId,
+          classId,
+          fullName,
+          className,
+          firstEnrolledAt: firstEnrolledAtByTrack.get(trackKey) || null,
+          firstEnrolledMonthKey: firstEnrolledByTrack.get(trackKey) || null,
+          lastFullPayMonthKey: lastFullPayMonthByTrack.get(trackKey) || null,
+          months: {},
+        })
+      );
     }
-    return studentMap.get(studentId);
+    return studentMap.get(trackKey);
   };
 
   // Dropped/unenrolled by removed_at calendar month (matches operational dashboard).
@@ -1459,6 +1579,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     `
       SELECT DISTINCT
         cs.student_id,
+        cs.class_id,
+        c.class_name,
         u.full_name,
         TO_CHAR(TIMEZONE('Asia/Manila', cs.removed_at), 'YYYY-MM') AS month_key
       FROM classstudentstbl cs
@@ -1484,10 +1606,11 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   for (const row of droppedCalendarResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
     const monthKey = row.month_key;
     if (!displayMonthKeys.has(monthKey)) continue;
 
-    const student = ensureMatrixStudent(studentId, row.full_name);
+    const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
     student.months[monthKey] = {
       mark: '-',
       label: 'dropped/unenrolled',
@@ -1497,11 +1620,74 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     };
   }
 
+  // Orphan installment (paid downpayment, no profile): class-start month = first "new".
+  const installmentStartParams = [];
+  const {
+    branchJoin: installmentStartBranchJoin,
+    programJoin: installmentStartProgramJoin,
+    classJoin: installmentStartClassJoin,
+  } = buildScopeJoins(1, installmentStartParams);
+
+  const installmentStartResult = await queryFn(
+    `
+      SELECT DISTINCT
+        cs.student_id,
+        cs.class_id,
+        c.class_name,
+        u.full_name,
+        TO_CHAR(
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date,
+          'YYYY-MM'
+        ) AS month_key
+      FROM classstudentstbl cs
+      INNER JOIN classestbl c ON cs.class_id = c.class_id ${installmentStartBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+      INNER JOIN invoicestudentstbl ist ON ist.student_id = cs.student_id
+      INNER JOIN invoicestbl i ON i.invoice_id = ist.invoice_id
+      WHERE cs.removed_at IS NULL
+        AND cs.program_enrollment_status IN ${ENROLLED_STATUSES}
+        AND c.start_date IS NOT NULL
+        AND i.status = 'Paid'
+        AND i.invoice_description ILIKE '%downpayment%'
+        AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM installmentinvoiceprofilestbl ip
+          WHERE ip.student_id = cs.student_id
+            AND ip.class_id = cs.class_id
+        )
+        ${installmentStartProgramJoin}
+        ${installmentStartClassJoin}
+    `,
+    installmentStartParams
+  );
+
+  for (const row of installmentStartResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
+    student.months[monthKey] = {
+      mark: '1',
+      label: 'new',
+      status: 'new',
+      calendar_installment_start: true,
+      is_full_payment: false,
+    };
+    if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
+      student.first_enrolled_month_key = monthKey;
+    }
+  }
+
   // Rejoin by enrolled_at calendar month (matches operational dashboard).
   const rejoinCalendarResult = await queryFn(
     `
       SELECT DISTINCT
         cs.student_id,
+        cs.class_id,
+        c.class_name,
         u.full_name,
         TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key
       FROM classstudentstbl cs
@@ -1519,10 +1705,15 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   for (const row of rejoinCalendarResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
     const monthKey = row.month_key;
     if (!displayMonthKeys.has(monthKey)) continue;
 
-    const student = ensureMatrixStudent(studentId, row.full_name);
+    const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
+    const firstEverMonthKey = toManilaMonthKey(student.first_enrolled_at);
+    // First calendar month in the program should stay "new", not "rejoin".
+    if (firstEverMonthKey && monthKey === firstEverMonthKey) continue;
+
     student.months[monthKey] = {
       mark: '1',
       label: 'rejoin',
@@ -1539,6 +1730,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     `
       SELECT DISTINCT
         cs.student_id,
+        cs.class_id,
+        c.class_name,
         u.full_name,
         TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key
       FROM classstudentstbl cs
@@ -1557,14 +1750,35 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   for (const row of newCalendarResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
     const monthKey = row.month_key;
     if (!displayMonthKeys.has(monthKey)) continue;
 
-    const student = ensureMatrixStudent(studentId, row.full_name);
+    const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
+    const trackKey = enrollmentTrackKey(studentId, classId);
     const firstBillingKey =
-      student.first_enrolled_month_key || firstEnrolledByStudent.get(studentId) || null;
-    // Only the student's first-ever billing month can be forced to "new" (not a 2nd class phase 1).
-    if (firstBillingKey && monthKey !== firstBillingKey) continue;
+      student.first_enrolled_month_key || firstEnrolledByTrack.get(trackKey) || null;
+    const firstEverMonthKey = toManilaMonthKey(student.first_enrolled_at);
+
+    // Phase 1 activated after downpayment/class-start month → continuation month.
+    if (
+      firstBillingKey &&
+      firstEverMonthKey &&
+      monthKey === firstEverMonthKey &&
+      monthKey > firstBillingKey
+    ) {
+      student.months[monthKey] = {
+        mark: '1',
+        label: 're-enrolled',
+        status: 're_enrolled',
+        calendar_continuation: true,
+        is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+      };
+      continue;
+    }
+
+    const canonicalNewKey = resolveCanonicalFirstNewMonthKey(firstBillingKey, firstEverMonthKey);
+    if (canonicalNewKey && monthKey !== canonicalNewKey) continue;
 
     student.months[monthKey] = {
       mark: '1',
@@ -1579,14 +1793,18 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
-  const students = sortEnrollmentMatrixStudents(Array.from(studentMap.values()));
+  const students = applyMatrixTrackDisplayNames(
+    sortEnrollmentMatrixStudents(Array.from(studentMap.values()))
+  );
 
   // Display-only:
   // - "new" only on first enrolled month; later DB "new" → "re-enrolled"
   // - Full-payment: final package billing month → "completed" (not last month in calendar year view)
   for (const student of students) {
+    const firstEverKey = toManilaMonthKey(student.first_enrolled_at);
+    const firstBillingKey = student.first_enrolled_month_key || null;
     const firstEnrolledKey =
-      student.first_enrolled_month_key ||
+      resolveCanonicalFirstNewMonthKey(firstBillingKey, firstEverKey) ||
       months.reduce((first, m) => {
         const cell = student.months?.[m.key];
         if (cell?.mark === '1') return first ?? m.key;
@@ -1600,9 +1818,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     for (const m of months) {
       const cell = student.months?.[m.key];
       if (!cell || cell.mark !== '1') continue;
-      if (cell.status === 'new' && m.key !== firstEnrolledKey && !cell.calendar_new) {
+      if (cell.status === 'new' && m.key !== firstEnrolledKey) {
         cell.label = 're-enrolled';
-      } else if (cell.status === 're_enrolled') {
+      } else if (cell.status === 're_enrolled' || cell.calendar_continuation) {
         cell.label = 're-enrolled';
       }
     }

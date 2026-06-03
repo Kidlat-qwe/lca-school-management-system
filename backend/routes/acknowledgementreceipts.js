@@ -9,6 +9,7 @@ import {
   determineEnrollmentStatus as detEnrollmentStatus,
   determineRejoinAwarePhaseStatus,
   ensurePendingEnrollmentAfterDownpaymentPaid,
+  promotePendingEnrollmentIfPhaseInvoicePaid,
 } from '../utils/enrollmentStatus.js';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import {
@@ -18,6 +19,7 @@ import {
 import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
 import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
+import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
 import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
 import {
   countInvoiceOnlyArListRows,
@@ -26,6 +28,29 @@ import {
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
+
+/**
+ * AR is fully consumed when marked Applied, has a payment, or is linked to a different invoice.
+ * Enrollment pre-links invoice_id before attach-to-invoice; same-invoice + no payment is still attachable.
+ */
+function isAckReceiptAlreadyApplied(ack, targetInvoiceId) {
+  const ackStatusUpper = String(ack?.status || '').trim().toUpperCase();
+  if (ackStatusUpper === 'APPLIED') return true;
+  if (ack?.payment_id) return true;
+
+  const ackInvoiceId =
+    ack?.invoice_id != null && ack.invoice_id !== '' ? Number(ack.invoice_id) : null;
+  const invoiceId = Number(targetInvoiceId);
+  if (
+    ackInvoiceId != null &&
+    Number.isFinite(invoiceId) &&
+    ackInvoiceId !== invoiceId
+  ) {
+    return true;
+  }
+
+  return false;
+}
 let ackVerifierColumnsKnownTrue = false;
 let announcementTargetUserIdKnownTrue = false;
 
@@ -1682,10 +1707,8 @@ router.post(
 
       const ackStatus = String(ack.status || '').trim();
       const ackStatusUpper = ackStatus.toUpperCase();
-      const isAlreadyUsed =
-        Boolean(ack.invoice_id || ack.payment_id) || ackStatusUpper === 'APPLIED';
 
-      if (isAlreadyUsed) {
+      if (isAckReceiptAlreadyApplied(ack, invoice_id)) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
@@ -2098,10 +2121,37 @@ router.post(
               });
               // NOTE: If downpayment_only, student row is pending_enrollment until Phase 1 is paid.
               // If downpayment_plus_phase1, Phase 1 is auto-paid after COMMIT and student is enrolled then.
+            } else if (
+              profile.class_id &&
+              Number(profile.student_id) === Number(student_id) &&
+              !isDownpaymentInvoice
+            ) {
+              await syncInstallmentEnrollmentForPaidInvoice({
+                client,
+                profileId: invoice.installmentinvoiceprofiles_id,
+                profile,
+                studentId: student_id,
+                sourceLabel:
+                  'System (Auto-enrolled via acknowledgement receipt — installment payment)',
+                invoice,
+              });
             }
           }
         } catch (installmentError) {
           console.error('Error processing AR installment downpayment:', installmentError);
+        }
+      }
+
+      if (newInvoiceStatus === 'Paid') {
+        try {
+          await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
+            studentId: student_id,
+            invoice: { ...invoice, status: newInvoiceStatus },
+            sourceLabel:
+              'System (Auto-enrolled via acknowledgement receipt — installment payment)',
+          });
+        } catch (promoteErr) {
+          console.error('Error promoting pending enrollment after AR payment:', promoteErr);
         }
       }
 
@@ -2348,78 +2398,22 @@ router.post(
                   );
                 }
 
-                // Enroll student in first phase (phase_start for Phase packages, else 1)
-                if (class_id) {
-                  const enrollPhase = autoPayPhase1Data.enroll_phase != null ? parseInt(autoPayPhase1Data.enroll_phase) : 1;
-                  const activeEnrollment = await dbQuery(
-                    `SELECT classstudent_id
-                     FROM classstudentstbl
-                     WHERE student_id = $1
-                       AND class_id = $2
-                       AND phase_number = $3
-                       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-                       AND removed_at IS NULL
-                     LIMIT 1`,
-                    [sid, class_id, enrollPhase]
-                  );
-
-                  if (activeEnrollment.rows.length === 0) {
-                    const removedEnrollment = await dbQuery(
-                      `SELECT classstudent_id
-                       FROM classstudentstbl
-                       WHERE student_id = $1
-                         AND class_id = $2
-                         AND phase_number = $3
-                         AND program_enrollment_status = 'dropped'
-                       ORDER BY removed_at DESC NULLS LAST, classstudent_id DESC
-                       LIMIT 1`,
-                      [sid, class_id, enrollPhase]
-                    );
-
-                    // Business rule: first paid installment phase after downpayment is "new",
-                    // unless it is the first comeback phase after a dropped gap.
-                    // Later phases are handled by payments.js and marked "re_enrolled".
-                    const arEnrollStatus = await determineRejoinAwarePhaseStatus({
-                      db: { query: dbQuery },
-                      studentId: sid,
-                      classId: class_id,
-                      phaseNumber: enrollPhase,
-                      defaultStatus: 'new',
-                    });
-
-                    if (removedEnrollment.rows.length > 0) {
-                      await dbQuery(
-                        `UPDATE classstudentstbl
-                         SET program_enrollment_status = $1,
-                             removed_at = NULL,
-                             removed_reason = NULL,
-                             removed_by = NULL,
-                             enrolled_by = $2,
-                             enrolled_at = CURRENT_TIMESTAMP
-                         WHERE classstudent_id = $3`,
-                        [arEnrollStatus, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', removedEnrollment.rows[0].classstudent_id]
-                      );
-                      console.log(`✅ AR Phase 1 re-activated enrollment: student ${sid} class ${class_id} phase ${enrollPhase} (status: ${arEnrollStatus})`);
-                    } else {
-                      await dbQuery(
-                        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-                         VALUES ($1, $2, $3, $4, $5)`,
-                        [sid, class_id, 'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)', enrollPhase, arEnrollStatus]
-                      );
-                      console.log(`✅ AR Phase 1 auto-enrolled: student ${sid} in class ${class_id} phase ${enrollPhase} (status: ${arEnrollStatus})`);
-                    }
-                  } else {
-                    // Keep metadata fresh when installment auto-payment confirms this phase is truly paid.
-                    await dbQuery(
-                      `UPDATE classstudentstbl
-                       SET enrolled_by = $1
-                       WHERE classstudent_id = $2`,
-                      [
-                        'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)',
-                        activeEnrollment.rows[0].classstudent_id,
-                      ]
-                    );
-                  }
+                const profileRowRes = await dbQuery(
+                  `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
+                          ip.downpayment_paid, ip.downpayment_invoice_id, ip.amount, ip.frequency, ip.phase_start
+                   FROM installmentinvoiceprofilestbl ip
+                   WHERE ip.installmentinvoiceprofiles_id = $1`,
+                  [profile_id]
+                );
+                if (profileRowRes.rows.length > 0) {
+                  await syncInstallmentEnrollmentForPaidInvoice({
+                    client: { query: dbQuery },
+                    profileId: profile_id,
+                    profile: profileRowRes.rows[0],
+                    studentId: sid,
+                    sourceLabel:
+                      'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)',
+                  });
                 }
 
                 // Fetch the updated installmentinvoicestbl record for Phase 2 generation
@@ -2948,6 +2942,27 @@ router.put(
           studentName: ack.prospect_student_name,
           reason: remarks,
         });
+      }
+
+      // Keep payment logs in sync when a payment row already exists for this AR.
+      if (action === 'verify' && verifierUserId) {
+        const linkedPay = await query(
+          `SELECT payment_id FROM acknowledgement_receiptstbl
+           WHERE ack_receipt_id = $1 AND payment_id IS NOT NULL`,
+          [id]
+        );
+        const linkedPaymentId = linkedPay.rows[0]?.payment_id;
+        if (linkedPaymentId) {
+          await query(
+            `UPDATE paymenttbl
+             SET approval_status = 'Approved',
+                 approved_by = $1,
+                 approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
+             WHERE payment_id = $2
+               AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+            [verifierUserId, linkedPaymentId]
+          );
+        }
       }
 
       const successMessage =

@@ -26,6 +26,7 @@ import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPaymentLogStatus';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -1491,11 +1492,7 @@ const PaymentLogs = () => {
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
                           if (isUnappliedAr) {
-                            return (
-                              <span className="inline-flex max-w-full px-2 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700">
-                                <span className="truncate">Pending attachment</span>
-                              </span>
-                            );
+                            return <UnappliedArPaymentLogStatus payment={payment} />;
                           }
                           return (
                             <div className="relative min-w-0 max-w-full">

@@ -5763,22 +5763,56 @@ router.post(
           ? parseFloat(installmentPricingPrice)
           : totalAmount;
       }
+
+      let effectiveInstallmentSettings = installment_settings;
+      const requiresInstallmentProfile =
+        Boolean(package_id || hasInstallmentPricing) && installmentProfileAmount > 0;
+      if (
+        requiresInstallmentProfile &&
+        ack_receipt_id != null &&
+        ack_receipt_id !== '' &&
+        (!effectiveInstallmentSettings ||
+          !effectiveInstallmentSettings.invoice_issue_date ||
+          !effectiveInstallmentSettings.billing_month ||
+          !effectiveInstallmentSettings.invoice_due_date ||
+          !effectiveInstallmentSettings.invoice_generation_date ||
+          !effectiveInstallmentSettings.frequency_months)
+      ) {
+        const issueAnchor = parseYmdToLocalNoon(issueDateStr) || new Date();
+        const cycleGenerationDate = new Date(issueAnchor);
+        cycleGenerationDate.setDate(25);
+        const firstBillingMonth = new Date(cycleGenerationDate);
+        firstBillingMonth.setDate(1);
+        firstBillingMonth.setMonth(firstBillingMonth.getMonth() + 1);
+        const firstDueDate = new Date(firstBillingMonth);
+        firstDueDate.setDate(5);
+        effectiveInstallmentSettings = {
+          invoice_issue_date: issueDateStr,
+          billing_month: `${firstBillingMonth.getFullYear()}-${String(firstBillingMonth.getMonth() + 1).padStart(2, '0')}`,
+          invoice_due_date: formatYmdLocal(firstDueDate),
+          invoice_generation_date: formatYmdLocal(cycleGenerationDate),
+          frequency_months:
+            parseInt(effectiveInstallmentSettings?.frequency_months, 10) ||
+            parseInt(installment_settings?.frequency_months, 10) ||
+            1,
+        };
+      }
       
-      if (installment_settings && 
+      if (effectiveInstallmentSettings && 
           (package_id || hasInstallmentPricing) && 
           installmentProfileAmount > 0 &&
-          installment_settings.invoice_issue_date &&
-          installment_settings.billing_month &&
-          installment_settings.invoice_due_date &&
-          installment_settings.invoice_generation_date &&
-          installment_settings.frequency_months) {
+          effectiveInstallmentSettings.invoice_issue_date &&
+          effectiveInstallmentSettings.billing_month &&
+          effectiveInstallmentSettings.invoice_due_date &&
+          effectiveInstallmentSettings.invoice_generation_date &&
+          effectiveInstallmentSettings.frequency_months) {
         try {
-          const frequencyMonths = parseInt(installment_settings.frequency_months, 10) || 1;
+          const frequencyMonths = parseInt(effectiveInstallmentSettings.frequency_months, 10) || 1;
 
           // Fixed cadence:
           // - Generate on 25th of current cycle month
           // - Due on 5th of next month
-          const cycleGenerationDate = new Date(installment_settings.invoice_issue_date || new Date());
+          const cycleGenerationDate = new Date(effectiveInstallmentSettings.invoice_issue_date || new Date());
           cycleGenerationDate.setDate(25);
 
           const firstBillingMonth = new Date(cycleGenerationDate);
@@ -5877,7 +5911,7 @@ router.post(
               branch_id,
               package_id || null, // Can be null for "without-package" option
               installmentProfileAmount, // Calculated amount (may include downpayment adjustment)
-              `${installment_settings.frequency_months} month(s)`,
+              `${effectiveInstallmentSettings.frequency_months} month(s)`,
               `Installment plan for ${studentCheck.rows[0].full_name} - ${classData.program_name}`,
               isPhaseInstallmentPackage && firstPhaseSchedule?.current_due_date
                 ? parseInt(String(firstPhaseSchedule.current_due_date).slice(-2), 10)
@@ -5930,7 +5964,7 @@ router.post(
           if (!hasDownpayment) {
             // Create the first installment invoice record.
             const studentName = studentCheck.rows[0].full_name;
-            const frequency = `${installment_settings.frequency_months} month(s)`;
+            const frequency = `${effectiveInstallmentSettings.frequency_months} month(s)`;
             const scheduledDate = firstDueDate.toISOString().split('T')[0];
             const nextInvoiceMonth = firstBillingMonth.toISOString().split('T')[0];
             const nextGenerationDateYmd = generationDate.toISOString().split('T')[0];

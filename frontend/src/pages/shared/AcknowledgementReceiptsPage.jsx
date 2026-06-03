@@ -32,6 +32,11 @@ import {
   shouldClearArDateFiltersOnLanding,
 } from '../../utils/billingListCrossLink';
 import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
+import AcknowledgementReceiptStatusLegend from '../../components/receipts/AcknowledgementReceiptStatusLegend';
+import {
+  getArStatusBadgeClass,
+  getArStatusLegend,
+} from '../../utils/acknowledgementReceiptStatus';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -44,36 +49,6 @@ const isValidPhilippineMobile = (phone) => {
   if (digits.length === 10 && digits.startsWith('9')) return true;
   return false;
 };
-
-/**
- * Short, business-facing description for each Acknowledgement Receipt
- * status. Surfaced as a hover tooltip on a small info icon next to the
- * status pill in every AR row, so end-users (Admin, Superadmin, Finance,
- * Superfinance) can quickly tell what each pill means.
- */
-const AR_STATUS_LEGENDS = {
-  Pending:
-    'Initial state for newly created receipts that are still being processed (e.g. merchandise sale finishing up).',
-  Submitted:
-    'Non-cash receipt awaiting Finance/Superfinance verification before it can be applied to enrollment.',
-  Verified:
-    'Approved by Finance/Superfinance (or auto-verified for cash). Ready to be applied to an invoice/enrollment.',
-  Returned:
-    'Sent back by Finance for correction. Update the details and resubmit so it can be re-verified.',
-  Applied:
-    'Already used: this receipt was applied to an invoice and the corresponding payment was recorded.',
-  Paid:
-    'Fully paid receipt — typically a merchandise sale that completes the payment in one step.',
-  Enrolled:
-    'Receipt was used for student enrollment; the student is now enrolled in the package/class.',
-  Rejected:
-    'Permanently rejected by Finance. Cannot be re-used for enrollment.',
-  Cancelled:
-    'Manually cancelled. No longer active and cannot be applied to an invoice/enrollment.',
-};
-
-const getArStatusLegend = (status) =>
-  AR_STATUS_LEGENDS[status] || 'No description available for this status.';
 
 /** Normalize DB json/jsonb merchandise snapshot for display rows */
 const parseMerchandiseItemsSnapshotForDisplay = (snap) => {
@@ -2301,6 +2276,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
+      <AcknowledgementReceiptStatusLegend className="shadow-sm" />
+
       <div className="relative bg-white rounded-lg shadow">
         {loading && !initialDataLoadedRef.current ? (
           <div
@@ -2486,15 +2463,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <td className="px-4 py-3">
                         <div className="inline-flex items-center gap-1.5">
                           <span
-                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                              r.status === 'Verified' || r.status === 'Applied' || r.status === 'Enrolled'
-                                ? 'bg-green-100 text-green-800'
-                                : r.status === 'Returned'
-                                ? 'bg-red-100 text-red-800'
-                                : r.status === 'Rejected' || r.status === 'Cancelled'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-yellow-100 text-yellow-800'
-                            }`}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getArStatusBadgeClass(r.status)}`}
                           >
                             {r.status}
                           </span>

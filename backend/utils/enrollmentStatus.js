@@ -231,6 +231,145 @@ export async function ensurePendingEnrollmentAfterDownpaymentPaid(client, profil
   );
 }
 
+const parseClassIdFromInvoiceRemarks = (remarks) => {
+  const text = String(remarks || '');
+  const match = text.match(/CLASS_ID:(\d+)/i);
+  return match ? parseInt(match[1], 10) : null;
+};
+
+const parseTargetPhaseFromInvoiceRemarks = (remarks) => {
+  const text = String(remarks || '');
+  const targetMatch = text.match(/TARGET_PHASE:(\d+)/i);
+  if (targetMatch) return parseInt(targetMatch[1], 10);
+  const startMatch = text.match(/PHASE_START:(\d+)/i);
+  if (startMatch) return parseInt(startMatch[1], 10);
+  return null;
+};
+
+const isInstallmentPhaseInvoiceRow = (invoice) => {
+  const desc = String(invoice?.invoice_description || '').toLowerCase();
+  const remarks = String(invoice?.remarks || '').toLowerCase();
+  if (desc.includes('downpayment')) return false;
+  return (
+    Boolean(invoice?.installmentinvoiceprofiles_id) ||
+    remarks.includes('target_phase:') ||
+    remarks.includes('auto-generated from installment invoice') ||
+    remarks.includes('installment plan for')
+  );
+};
+
+/**
+ * Promote pending_enrollment when a phase/installment invoice is paid but no
+ * installment profile is linked (e.g. profile deleted or never created).
+ *
+ * @returns {Promise<boolean>} true when a pending row was promoted
+ */
+export async function promotePendingEnrollmentIfPhaseInvoicePaid(
+  client,
+  { studentId, invoice, sourceLabel = 'System (Auto-enrolled via installment payment)' }
+) {
+  const sid = Number(studentId);
+  if (!sid || Number.isNaN(sid) || !invoice || String(invoice.status || '') !== 'Paid') {
+    return false;
+  }
+  if (!isInstallmentPhaseInvoiceRow(invoice)) {
+    return false;
+  }
+
+  let classId = parseClassIdFromInvoiceRemarks(invoice.remarks);
+  if (!classId) {
+    const dpRes = await client.query(
+      `SELECT i.remarks
+       FROM invoicestbl i
+       INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id
+       WHERE ist.student_id = $1
+         AND i.status = 'Paid'
+         AND i.invoice_description ILIKE '%downpayment%'
+         AND i.remarks ILIKE '%CLASS_ID:%'
+       ORDER BY i.invoice_id DESC
+       LIMIT 1`,
+      [sid]
+    );
+    classId = parseClassIdFromInvoiceRemarks(dpRes.rows[0]?.remarks);
+  }
+  if (!classId) {
+    const pendingRes = await client.query(
+      `SELECT class_id, phase_number
+       FROM classstudentstbl
+       WHERE student_id = $1
+         AND program_enrollment_status = 'pending_enrollment'
+         AND removed_at IS NULL
+       ORDER BY classstudent_id DESC
+       LIMIT 1`,
+      [sid]
+    );
+    if (pendingRes.rows[0]?.class_id != null) {
+      classId = Number(pendingRes.rows[0].class_id);
+    }
+  }
+  if (!classId) return false;
+
+  let targetPhase = parseTargetPhaseFromInvoiceRemarks(invoice.remarks);
+  if (targetPhase == null || Number.isNaN(targetPhase)) {
+    const pendingPhaseRes = await client.query(
+      `SELECT phase_number
+       FROM classstudentstbl
+       WHERE student_id = $1 AND class_id = $2
+         AND program_enrollment_status = 'pending_enrollment'
+         AND removed_at IS NULL
+       ORDER BY classstudent_id DESC
+       LIMIT 1`,
+      [sid, classId]
+    );
+    targetPhase = pendingPhaseRes.rows[0]?.phase_number != null
+      ? parseInt(String(pendingPhaseRes.rows[0].phase_number), 10)
+      : 1;
+  }
+  if (!Number.isFinite(targetPhase) || targetPhase < 1) targetPhase = 1;
+
+  const dpCheck = await client.query(
+    `SELECT 1
+     FROM invoicestbl i
+     INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id
+     WHERE ist.student_id = $1
+       AND i.status = 'Paid'
+       AND i.invoice_description ILIKE '%downpayment%'
+       AND i.remarks ILIKE $2
+     LIMIT 1`,
+    [sid, `%CLASS_ID:${classId}%`]
+  );
+  if (dpCheck.rows.length === 0) {
+    return false;
+  }
+
+  const enrollStatus = await determineRejoinAwarePhaseStatus({
+    db: client,
+    studentId: sid,
+    classId,
+    phaseNumber: targetPhase,
+    defaultStatus: PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED,
+  });
+
+  const promoted = await client.query(
+    `UPDATE classstudentstbl
+     SET program_enrollment_status = $1,
+         enrolled_by = $2,
+         enrolled_at = COALESCE(enrolled_at, CURRENT_TIMESTAMP)
+     WHERE student_id = $3 AND class_id = $4 AND phase_number = $5
+       AND program_enrollment_status = 'pending_enrollment'
+       AND removed_at IS NULL
+     RETURNING classstudent_id`,
+    [enrollStatus, sourceLabel, sid, classId, targetPhase]
+  );
+  if (promoted.rows.length > 0) {
+    console.log(
+      `✅ Promoted pending_enrollment → ${enrollStatus} for student ${sid} class ${classId} phase ${targetPhase} (orphan installment invoice ${invoice.invoice_id})`
+    );
+    return true;
+  }
+  return false;
+}
+
 /**
  * When downpayment is reverted (invoice unpaid / payment removed), delete the
  * pending_enrollment placeholder row for that installment profile (if any).

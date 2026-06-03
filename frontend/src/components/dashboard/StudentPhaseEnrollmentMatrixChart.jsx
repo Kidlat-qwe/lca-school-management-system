@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   sortMatrixStudentsByEnrollmentDate,
   toggleEnrollmentDateSort,
+  matrixTrackDisplayName,
 } from '../../utils/enrollmentMatrixSort';
 import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
 import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';
@@ -44,13 +45,13 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
           WebkitOverflowScrolling: 'touch',
         }}
       >
-        <table style={{ width: '100%', minWidth: `${Math.max(480, 160 + phases.length * 88)}px` }}>
+        <table style={{ width: '100%', minWidth: `${Math.max(520, 200 + phases.length * 88)}px` }}>
           <thead>
             {showPhaseRateHeader && (
               <tr className="border-b border-gray-200 bg-amber-50 text-left text-xs font-semibold tracking-wide text-gray-700">
                 <th
                   className="sticky left-0 top-0 z-50 h-11 bg-amber-50 px-4 py-2.5"
-                  style={{ minWidth: '160px' }}
+                  style={{ minWidth: '200px' }}
                 >
                   Re-enrollment rate
                 </th>
@@ -99,16 +100,16 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
           <tbody className="divide-y divide-gray-100 text-sm">
             {students.length > 0 ? (
               students.map((student) => (
-                <tr key={student.student_id} className="hover:bg-gray-50/80">
+                <tr key={student.enrollment_track_key || `${student.student_id}-${student.class_id}`} className="hover:bg-gray-50/80">
                   <td
                     className="sticky left-0 z-20 bg-white px-4 py-2.5 font-medium text-gray-900"
-                    style={{ minWidth: '160px', maxWidth: '220px' }}
+                    style={{ minWidth: '200px', maxWidth: '280px' }}
                     title={enrollmentMatrixStudentNameTitle(student)}
                   >
-                    <span className="block truncate">{student.full_name}</span>
+                    <span className="block truncate">{matrixTrackDisplayName(student)}</span>
                   </td>
                   {phases.map((phase) => (
-                    <td key={`${student.student_id}-${phase.key}`} className="px-3 py-2.5 text-center">
+                    <td key={`${student.enrollment_track_key || student.student_id}-${phase.key}`} className="px-3 py-2.5 text-center">
                       <EnrollmentMatrixCellBadge cell={student.phases?.[phase.key]} />
                     </td>
                   ))}

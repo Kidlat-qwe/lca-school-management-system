@@ -1,4 +1,4 @@
-import { formatMatrixEnrollmentDate } from '../../utils/enrollmentMatrixSort';
+import { formatMatrixEnrollmentDate, matrixTrackDisplayName } from '../../utils/enrollmentMatrixSort';
 import { SortIcon } from '../table/SortableHeader';
 
 /**
@@ -29,9 +29,10 @@ const EnrollmentMatrixStudentColumnHeader = ({
 );
 
 export const enrollmentMatrixStudentNameTitle = (student) => {
+  const displayName = matrixTrackDisplayName(student);
   const dateLabel = formatMatrixEnrollmentDate(student?.first_enrolled_at);
-  if (dateLabel) return `${student.full_name} · Enrolled ${dateLabel}`;
-  return student?.full_name || '';
+  if (dateLabel) return `${displayName} · Enrolled ${dateLabel}`;
+  return displayName || '';
 };
 
 export default EnrollmentMatrixStudentColumnHeader;
