@@ -26,6 +26,10 @@ import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPaymentLogStatus';
+import {
+  isUnappliedArPaymentLogRow,
+  verifyUnappliedArFromPaymentLog,
+} from '../../utils/unappliedArPaymentLog';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -452,6 +456,13 @@ const FinancePaymentLogs = () => {
     const paymentId = selectedPaymentForReference.payment_id;
     setReferenceModalUpdating(true);
     try {
+      if (isUnappliedArPaymentLogRow(selectedPaymentForReference)) {
+        await verifyUnappliedArFromPaymentLog(selectedPaymentForReference);
+        closeReferenceModal();
+        await fetchPayments(pagination.page);
+        return;
+      }
+
       const requestBody = {
         approve: true,
         finance_verified_reference_number: enteredRef,
@@ -486,8 +497,7 @@ const FinancePaymentLogs = () => {
   };
 
   const handleApprovePayment = async (paymentId, approve) => {
-    if (String(paymentId).startsWith('AR-')) {
-      appAlert('Unapplied acknowledgement receipt entries cannot be directly approved in Payment Logs. Attach them during enrollment first.');
+    if (isUnappliedArPaymentLogRow({ payment_id: paymentId, source_type: 'UNAPPLIED_AR' })) {
       return;
     }
     setApprovalLoadingId(paymentId);
@@ -1257,7 +1267,14 @@ const FinancePaymentLogs = () => {
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
                           if (isUnappliedAr) {
-                            return <UnappliedArPaymentLogStatus payment={payment} />;
+                            return (
+                              <UnappliedArPaymentLogStatus
+                                payment={payment}
+                                canApprove={canApprove}
+                                onPendingClick={openReferenceModal}
+                                isLoading={approvalLoadingId === payment.payment_id}
+                              />
+                            );
                           }
                           return (
                             <div className="relative min-w-0 max-w-full">

@@ -1830,7 +1830,7 @@ router.get(
                    LEFT JOIN userstbl verifier ON ar.verified_by_user_id = verifier.user_id
                    LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
                    WHERE ar.ar_type = 'Package'
-                     AND ar.status = 'Verified'
+                     AND ar.status IN ('Submitted', 'Verified')
                      AND ar.payment_id IS NULL
                      AND ar.invoice_id IS NULL`;
       const arParams = [];
@@ -1909,7 +1909,7 @@ router.get(
 
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
-      // Unapplied verified package AR: Payment Logs approval only when Finance/Superfinance verified (not Admin).
+      // Unapplied package AR (Submitted or Verified): Payment Logs approval when Finance verified (not Admin).
       const includeUnappliedAr = !pmFilter || pmFilter === 'Acknowledgement Receipt';
       if (includeUnappliedAr) {
         const arRes = await query(arSql, arParams);
@@ -1924,7 +1924,7 @@ router.get(
             payment_type: 'Unapplied Acknowledgement Receipt',
             payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
             issue_date: row.issue_date,
-            status: 'Verified',
+            status: row.status || 'Submitted',
             reference_number: row.reference_number,
             remarks: 'Awaiting enrollment attachment',
             payment_attachment_url: row.payment_attachment_url,

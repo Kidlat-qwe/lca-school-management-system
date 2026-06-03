@@ -6,9 +6,13 @@ Shared UI for finance payment logs and related flows.
 
 | File | Purpose |
 |------|---------|
-| `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs; shows **Approved** and verifier name when the AR was verified on the AR page (`verified_by_user_id`). |
+| `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. **Pending** rows are clickable for Finance/Superfinance (opens reference modal → verifies AR). **Approved** shows verifier name when Finance verified. |
+
+## Related utils
+
+- `frontend/src/utils/unappliedArPaymentLog.js` — parse `AR-{id}` rows and call `PUT /acknowledgement-receipts/:id/verify`
 
 ## Related backend
 
-- `GET /api/sms/payments/finance-unified` — maps unapplied verified AR approval from `acknowledgement_receiptstbl.verified_by_user_id`
-- `PUT /api/sms/acknowledgement-receipts/:id/verify` — sets verifier columns and syncs linked `paymenttbl` when `payment_id` exists
+- `GET /api/sms/payments/finance-unified` — includes unapplied package AR (`Submitted` or `Verified`); approval from `paymentLogArApproval.js`
+- `PUT /api/sms/acknowledgement-receipts/:id/verify` — Finance verify from Payment Logs or AR page
