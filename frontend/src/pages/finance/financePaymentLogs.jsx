@@ -29,6 +29,8 @@ import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPa
 import {
   isUnappliedArPaymentLogRow,
   verifyUnappliedArFromPaymentLog,
+  returnUnappliedArFromPaymentLog,
+  rejectUnappliedArFromPaymentLog,
   setPaymentLogApproval,
   canApprovePaymentLog,
 } from '../../utils/unappliedArPaymentLog';
@@ -373,16 +375,25 @@ const FinancePaymentLogs = () => {
       return;
     }
     setReturnActionLoading(true);
+    const isAr = isUnappliedArPaymentLogRow(selectedPaymentForReference);
     try {
-      await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/return`, {
-        method: 'PUT',
-        body: JSON.stringify({ reason: note }),
-      });
+      if (isAr) {
+        await returnUnappliedArFromPaymentLog(selectedPaymentForReference, note);
+      } else {
+        await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/return`, {
+          method: 'PUT',
+          body: JSON.stringify({ reason: note }),
+        });
+      }
       closeReturnModal();
       closeReferenceModal();
       await fetchPayments(pagination.page);
       await fetchReturnedPaymentLogCount();
-      appAlert('Payment returned to branch for correction.');
+      appAlert(
+        isAr
+          ? 'Acknowledgement receipt returned to branch for correction.'
+          : 'Payment returned to branch for correction.'
+      );
     } catch (err) {
       appAlert(err.message || 'Failed to return payment.');
     } finally {
@@ -399,15 +410,24 @@ const FinancePaymentLogs = () => {
     }
     setReturnActionLoading(true);
     try {
-      await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/reject`, {
-        method: 'PUT',
-        body: JSON.stringify({ reason: note }),
-      });
+      const isAr = isUnappliedArPaymentLogRow(selectedPaymentForReference);
+      if (isAr) {
+        await rejectUnappliedArFromPaymentLog(selectedPaymentForReference, note);
+      } else {
+        await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/reject`, {
+          method: 'PUT',
+          body: JSON.stringify({ reason: note }),
+        });
+      }
       closeRejectModal();
       closeReferenceModal();
       await fetchPayments(1);
       await fetchReturnedPaymentLogCount();
-      appAlert('Payment rejected. The invoice is now marked as Rejected for repayment.');
+      appAlert(
+        isAr
+          ? 'Acknowledgement receipt rejected. The branch must create a new acknowledgement receipt.'
+          : 'Payment rejected. The invoice is now marked as Rejected for repayment.'
+      );
     } catch (err) {
       appAlert(err.message || 'Failed to reject payment.');
     } finally {

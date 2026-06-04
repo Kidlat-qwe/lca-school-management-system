@@ -43,6 +43,38 @@ export async function revokeUnappliedArFromPaymentLog(payment) {
   });
 }
 
+/** Return an unapplied package AR to the branch (Payment Logs → Return to branch). */
+export async function returnUnappliedArFromPaymentLog(payment, reason) {
+  const ackReceiptId = parseUnappliedArAckReceiptId(payment);
+  if (!ackReceiptId) {
+    throw new Error('Invalid acknowledgement receipt row.');
+  }
+  const remarks = String(reason || '').trim();
+  if (!remarks) {
+    throw new Error('Return note is required.');
+  }
+  return apiRequest(`/acknowledgement-receipts/${ackReceiptId}/verify`, {
+    method: 'PUT',
+    body: JSON.stringify({ action: 'return', remarks }),
+  });
+}
+
+/** Reject an unapplied package AR (Payment Logs → Reject). */
+export async function rejectUnappliedArFromPaymentLog(payment, reason) {
+  const ackReceiptId = parseUnappliedArAckReceiptId(payment);
+  if (!ackReceiptId) {
+    throw new Error('Invalid acknowledgement receipt row.');
+  }
+  const remarks = String(reason || '').trim();
+  if (!remarks) {
+    throw new Error('Rejection reason is required.');
+  }
+  return apiRequest(`/acknowledgement-receipts/${ackReceiptId}/verify`, {
+    method: 'PUT',
+    body: JSON.stringify({ action: 'reject', remarks }),
+  });
+}
+
 /**
  * Approve or revoke approval on a payment log row (cash/bank or unapplied AR).
  * @param {object|number|string} paymentOrId — full row or numeric payment_id
