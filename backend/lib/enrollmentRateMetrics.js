@@ -186,6 +186,29 @@ const mergeMonthCellOntoAnchor = (anchor, monthKey, src, { upsell }) => {
   };
 };
 
+const trackIsFullPaymentEnrollment = (track) =>
+  Boolean(track?.last_full_pay_month_key) ||
+  Object.values(track?.months || {}).some((cell) => cell?.is_full_payment);
+
+/** Full-payment upsell: last synthetic month on the anchor row = completed (matches phase matrix). */
+const applyFullPaymentCompletedOnLastMergedUpsellMonth = (
+  anchor,
+  mergedDisplayMonthsInOrder,
+  higherTrack
+) => {
+  if (!mergedDisplayMonthsInOrder?.length || mergedDisplayMonthsInOrder.length <= 1) {
+    return;
+  }
+  if (!trackIsFullPaymentEnrollment(higherTrack)) return;
+
+  const lastKey = mergedDisplayMonthsInOrder[mergedDisplayMonthsInOrder.length - 1];
+  const cell = anchor.months?.[lastKey];
+  if (cell?.mark !== '1') return;
+
+  cell.label = 'completed';
+  cell.status = 'completed';
+};
+
 /**
  * Month matrix: after a lower program is completed, merge higher-program phases onto
  * that same row. First higher phase → upsell (month after completed); each later
@@ -264,6 +287,8 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
         .filter((k) => higherCells[k]?.mark === '1')
         .sort();
 
+      const mergedDisplayMonthsForHigher = [];
+
       for (const srcKey of enrolledBillingMonths) {
         const displayMonth = addCalendarMonthsToKey(upsellMonthKey, higherPhaseIndex);
         const src = { ...higherCells[srcKey], merged_from_class_id: higher.class_id };
@@ -283,10 +308,17 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
             mergeMonthCellOntoAnchor(anchor, displayMonth, src, { upsell: false });
           }
           mergedMonthKeys.add(displayMonth);
+          mergedDisplayMonthsForHigher.push(displayMonth);
         }
 
         higherPhaseIndex += 1;
       }
+
+      applyFullPaymentCompletedOnLastMergedUpsellMonth(
+        anchor,
+        mergedDisplayMonthsForHigher,
+        higher
+      );
 
       if (tracks.some((t) => t.enrollment_track_key === higher.enrollment_track_key)) {
         higher.hide_from_matrix = true;
@@ -2749,7 +2781,6 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   // Display-only:
   // - "new" only on first enrolled month; later DB "new" → "re-enrolled"
-  // - Full-payment: final package billing month → "completed" (not last month in calendar year view)
   for (const student of students) {
     const firstEverKey = toManilaMonthKey(student.first_enrolled_at);
     const firstBillingKey = student.first_enrolled_month_key || null;
@@ -2763,8 +2794,6 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     if (!firstEnrolledKey) continue;
 
-    const lastFullPayMonthKey = student.last_full_pay_month_key || null;
-
     for (const m of months) {
       const cell = student.months?.[m.key];
       if (!cell || cell.mark !== '1') continue;
@@ -2776,13 +2805,6 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         cell.label = 're-enrolled';
       }
     }
-
-    if (lastFullPayMonthKey && lastFullPayMonthKey > firstEnrolledKey) {
-      const lastCell = student.months[lastFullPayMonthKey];
-      if (lastCell?.mark === '1') {
-        lastCell.label = 'completed';
-      }
-    }
   }
 
   applyUpsellMatrixDisplayRules(students, {
@@ -2790,6 +2812,50 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     siblingTracksByStudent,
     displayMonthKeys,
   });
+
+  // Full-payment: final package billing month → "completed" (after upsell merge on anchor row).
+  for (const student of students) {
+    if (student.matrix_merged_upsell_anchor) {
+      const mergedKeys = Object.keys(student.months || {})
+        .filter((k) => {
+          const cell = student.months[k];
+          return (
+            cell?.mark === '1' &&
+            (cell.display_upsell_merged || cell.display_upsell_synthetic)
+          );
+        })
+        .sort();
+      if (
+        mergedKeys.length > 1 &&
+        mergedKeys.some((k) => student.months[k]?.is_full_payment)
+      ) {
+        const lastKey = mergedKeys[mergedKeys.length - 1];
+        student.months[lastKey].label = 'completed';
+        student.months[lastKey].status = 'completed';
+      }
+      continue;
+    }
+
+    const firstEverKey = toManilaMonthKey(student.first_enrolled_at);
+    const firstBillingKey = student.first_enrolled_month_key || null;
+    const firstEnrolledKey =
+      resolveCanonicalFirstNewMonthKey(firstBillingKey, firstEverKey) ||
+      months.reduce((first, m) => {
+        const cell = student.months?.[m.key];
+        if (cell?.mark === '1') return first ?? m.key;
+        return first;
+      }, null);
+
+    if (!firstEnrolledKey) continue;
+
+    const lastFullPayMonthKey = student.last_full_pay_month_key || null;
+    if (lastFullPayMonthKey && lastFullPayMonthKey > firstEnrolledKey) {
+      const lastCell = student.months[lastFullPayMonthKey];
+      if (lastCell?.mark === '1') {
+        lastCell.label = 'completed';
+      }
+    }
+  }
 
   const visibleStudents = filterHiddenMatrixTracks(students);
   const cohortSize = visibleStudents.length;

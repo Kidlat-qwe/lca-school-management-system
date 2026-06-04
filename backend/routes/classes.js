@@ -4297,7 +4297,7 @@ router.post(
               `Reservation Fee - ${packageName || 'Class Reservation'}`,
               branch_id,
               reservationFee || 0,
-              'Pending',
+              'Unpaid',
               formatYmdLocal(issueDate),
               formatYmdLocal(dueDate),
               req.user.userId || null,
@@ -5240,7 +5240,7 @@ router.post(
             invoiceDescription, // Description based on enrollment type
             branch_id,
             totalAmount || 0,
-            'Pending',
+            'Unpaid',
             issueDateStr,
             dueDateStr, // null for full payment, or installment due_date if installment is enabled
             req.user.userId || null,

@@ -22,10 +22,11 @@ const parseYmdQuery = (raw) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
 };
 
-/** Matches list UI status (overdue unpaid shown as Unpaid; legacy Balance Invoiced → Partially Paid). */
+/** Matches list UI status (Pending enrollment invoices → Unpaid; legacy Balance Invoiced → Partially Paid). */
 const INVOICE_COMPUTED_STATUS_SQL = `CASE
   WHEN i.status = 'Balance Invoiced' THEN 'Partially Paid'
-  WHEN i.status IN ('Unpaid', 'Pending', 'Draft') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
+  WHEN i.status = 'Pending' THEN 'Unpaid'
+  WHEN i.status IN ('Unpaid', 'Draft') AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
   THEN 'Unpaid'
   ELSE i.status
 END`;

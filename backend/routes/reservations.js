@@ -1460,7 +1460,7 @@ router.put(
           invoiceDescription,
           branch_id,
           totalAmount || 0,
-          'Pending',
+          'Unpaid',
           issueDateStr,
           dueDateStr,
           req.user.userId || null,
