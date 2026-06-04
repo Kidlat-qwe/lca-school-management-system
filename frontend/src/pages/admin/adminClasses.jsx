@@ -19,6 +19,10 @@ import {
   programEnrollmentStatusBadgeClass,
   studentHasActivePhaseEnrollment,
 } from '../../utils/programEnrollmentStatus';
+import {
+  isUniformTopBottomType,
+  findUniformStockByNameSizeCategory,
+} from '../../utils/uniformMerchandise';
 
 const AdminClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -4056,7 +4060,14 @@ const initializePackageMerchSelections = useCallback(
         });
         return {
           ...prev,
-          [typeName]: [...filtered, { merchandise_id: item.merchandise_id, size: item.size || null }],
+          [typeName]: [
+            ...filtered,
+            {
+              merchandise_id: item.merchandise_id,
+              size: item.size || null,
+              category: itemCategory && itemCategory !== 'General' ? itemCategory : null,
+            },
+          ],
         };
       }
 
@@ -4154,8 +4165,8 @@ const initializePackageMerchSelections = useCallback(
           const itemsForType = getMerchandiseItemsByType(merchName);
           const hasSizes = itemsForType.some(m => m.size);
           
-          if (hasSizes && merchName === 'LCA Uniform') {
-            // For LCA Uniform, check if both Top and Bottom categories have sizes selected (if categories exist)
+          if (hasSizes && isUniformTopBottomType(merchName)) {
+            // For uniforms with Top/Bottom, check both categories have sizes when applicable
             const uniformCategories = Array.from(
               new Set(
                 itemsForType
@@ -4303,30 +4314,18 @@ const initializePackageMerchSelections = useCallback(
                     let finalSize = m.size || null;
                     let finalCategory = m.category || null;
                     
-                    // For uniforms with category, find the exact merchandise_id by name, size, and category
-                    if (m.merchandise_name === 'LCA Uniform' && m.size && m.category) {
-                      const uniformItem = merchandise.find(
-                        item => item.merchandise_name === m.merchandise_name && 
-                                item.size === m.size &&
-                                getUniformCategory(item) === m.category
-                      );
-                      if (uniformItem) {
-                        finalMerchId = uniformItem.merchandise_id;
-                        finalSize = uniformItem.size || m.size;
-                        finalCategory = getUniformCategory(uniformItem);
-                      }
-                    } else if (m.merchandise_name === 'LCA Uniform' && m.size) {
-                      // For uniforms without category, find by name and size
-                      const uniformItem = merchandise.find(
-                        item => item.merchandise_name === m.merchandise_name && 
-                                item.size === m.size
-                      );
-                      if (uniformItem) {
-                        finalMerchId = uniformItem.merchandise_id;
-                        finalSize = uniformItem.size || m.size;
-                        finalCategory = getUniformCategory(uniformItem);
-                      }
-                    } else {
+                    const uniformItem = findUniformStockByNameSizeCategory(
+                      merchandise,
+                      m.merchandise_name,
+                      m.size,
+                      m.category,
+                      getUniformCategory
+                    );
+                    if (uniformItem) {
+                      finalMerchId = uniformItem.merchandise_id;
+                      finalSize = uniformItem.size || m.size;
+                      finalCategory = getUniformCategory(uniformItem);
+                    } else if (!isUniformTopBottomType(m.merchandise_name)) {
                       // For non-uniforms, verify merchandise_id exists in current branch
                       const matchingItem = merchandise.find(
                         item => item.merchandise_id === m.merchandise_id
@@ -4378,25 +4377,16 @@ const initializePackageMerchSelections = useCallback(
               .map(m => {
                 // Find the actual merchandise item to get the correct merchandise_id
                 let actualMerchId = m.merchandise_id;
-                if (m.merchandise_name === 'LCA Uniform' && m.size && m.category) {
-                  // For uniforms with category (Top/Bottom), find by name, size, and category
-                  const matchingItem = merchandise.find(
-                    item => item.merchandise_name === m.merchandise_name && 
-                            item.size === m.size &&
-                            getUniformCategory(item) === m.category
-                  );
-                  if (matchingItem) {
-                    actualMerchId = matchingItem.merchandise_id;
-                  }
-                } else if (m.merchandise_name === 'LCA Uniform' && m.size) {
-                  // For uniforms without category, find by name and size
-                  const matchingItem = merchandise.find(
-                    item => item.merchandise_name === m.merchandise_name && item.size === m.size
-                  );
-                  if (matchingItem) {
-                    actualMerchId = matchingItem.merchandise_id;
-                  }
-                } else {
+                const matchingUniform = findUniformStockByNameSizeCategory(
+                  merchandise,
+                  m.merchandise_name,
+                  m.size,
+                  m.category,
+                  getUniformCategory
+                );
+                if (matchingUniform) {
+                  actualMerchId = matchingUniform.merchandise_id;
+                } else if (!isUniformTopBottomType(m.merchandise_name)) {
                   // For non-uniforms, find by merchandise_id or name
                   const matchingItem = merchandise.find(
                     item => item.merchandise_id === m.merchandise_id || 
@@ -4409,21 +4399,24 @@ const initializePackageMerchSelections = useCallback(
                 return {
                   merchandise_id: actualMerchId,
                   size: m.size || null,
-                  merchandise_name: m.merchandise_name || null
+                  merchandise_name: m.merchandise_name || null,
+                  category: m.category || null,
                 };
               });
           } else {
             // For other enrollment types, use selectedMerchandise
             manualMerchPayload = selectedMerchandise.map(m => {
             let merchandiseId = m.merchandise_id;
-            if (m.merchandise_name === 'LCA Uniform' && m.size) {
-              const matchingItem = merchandise.find(
-                item => item.merchandise_name === m.merchandise_name && item.size === m.size
-              );
-              if (matchingItem) {
-                merchandiseId = matchingItem.merchandise_id;
-              }
-            } else {
+            const matchingUniform = findUniformStockByNameSizeCategory(
+              merchandise,
+              m.merchandise_name,
+              m.size,
+              m.category,
+              getUniformCategory
+            );
+            if (matchingUniform) {
+              merchandiseId = matchingUniform.merchandise_id;
+            } else if (!isUniformTopBottomType(m.merchandise_name)) {
               const matchingItem = merchandise.find(
                 item => item.merchandise_name === m.merchandise_name
               );
@@ -4433,8 +4426,9 @@ const initializePackageMerchSelections = useCallback(
             }
             return {
               merchandise_id: merchandiseId,
-                size: m.size || null,
-                merchandise_name: m.merchandise_name || null
+              size: m.size || null,
+              merchandise_name: m.merchandise_name || null,
+              category: m.category || null,
             };
           });
           }
@@ -12024,7 +12018,11 @@ setFormData({
                                           .filter(m => {
                                             if (m.merchandise_name !== merchItem.merchandise_name) return false;
                                             // For uniforms, filter by category to avoid duplicates
-                                            if (merchItem.merchandise_name === 'LCA Uniform' && merchCategory && merchCategory !== 'General') {
+                                            if (
+                                              isUniformTopBottomType(merchItem.merchandise_name) &&
+                                              merchCategory &&
+                                              merchCategory !== 'General'
+                                            ) {
                                               return getUniformCategory(m) === merchCategory;
                                             }
                                             return true;
@@ -12290,14 +12288,16 @@ setFormData({
                                 // For LCA Uniform, filter to show only one Top and one Bottom
                                 // Use per-student selections if available, otherwise use package selections
                                 let filteredLabels = [];
-                                if (typeName === 'LCA Uniform') {
+                                if (isUniformTopBottomType(typeName)) {
                                   // Get unique Top and Bottom selections
                                   // First, try to get from per-student selections (if students are selected)
                                   if (selectedStudents.length > 0 && Object.keys(studentMerchandiseSelections).length > 0) {
                                     // Get selections from the first student (since package selections are shared)
                                     const firstStudent = selectedStudents[0];
                                     const studentMerchSelections = studentMerchandiseSelections[firstStudent.user_id] || [];
-                                    const uniformSelections = studentMerchSelections.filter(m => m.merchandise_name === 'LCA Uniform');
+                                    const uniformSelections = studentMerchSelections.filter(
+                                      (m) => m.merchandise_name === typeName
+                                    );
                                     
                                     // Group by category and get one of each
                                     const topSelection = uniformSelections.find(m => m.category === 'Top');

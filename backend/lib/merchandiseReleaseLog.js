@@ -84,14 +84,11 @@ export function isPackageMerchTypeCovered(merchName, merchandiseToDeduct) {
   if (!name || !merchandiseToDeduct?.size) return false;
 
   if (PACKAGE_UNIFORM_TYPE_NAMES.includes(name)) {
-    let hasTop = false;
-    let hasBottom = false;
     for (const info of merchandiseToDeduct.values()) {
       if (info.merchandise_name !== name) continue;
-      if (info.category === 'Top') hasTop = true;
-      if (info.category === 'Bottom') hasBottom = true;
+      if (info.category === 'Top' || info.category === 'Bottom') return true;
     }
-    return hasTop && hasBottom;
+    return false;
   }
 
   for (const info of merchandiseToDeduct.values()) {
@@ -155,6 +152,34 @@ export function normalizePackageMerchLines(lines) {
     out.push(line);
   }
   return out;
+}
+
+/**
+ * Resolve Top/Bottom uniform SKU for package issue (1:1 with configured category + size).
+ * @param {import('pg').PoolClient} client
+ */
+export async function resolvePackageUniformMerchandiseId(
+  client,
+  { merchandiseName, size, branchId, category }
+) {
+  const name = String(merchandiseName || '').trim();
+  const cat = String(category || '').trim();
+  if (!PACKAGE_UNIFORM_TYPE_NAMES.includes(name)) return null;
+  if (cat !== 'Top' && cat !== 'Bottom') return null;
+  if (!size || !branchId) return null;
+
+  const r = await client.query(
+    `SELECT merchandise_id
+     FROM merchandisestbl
+     WHERE merchandise_name = $1
+       AND size = $2
+       AND branch_id = $3
+       AND LOWER(COALESCE(type, '')) = LOWER($4)
+     ORDER BY merchandise_id ASC
+     LIMIT 1`,
+    [name, size, branchId, cat]
+  );
+  return r.rows[0]?.merchandise_id ?? null;
 }
 
 export function linesFromMerchandiseToDeduct(merchandiseToDeduct) {
@@ -342,12 +367,27 @@ export async function issuePackageMerchandiseLines(client, params) {
   let totalQty = 0;
 
   for (const line of normalizedLines) {
-    const merchId = Number(line.merchandise_id);
+    let merchId = Number(line.merchandise_id);
     const qty = Math.max(1, parseInt(String(line.quantity ?? 1), 10) || 1);
     if (!Number.isFinite(merchId) || merchId <= 0) continue;
 
+    const uniformName = String(line.merchandise_name || '').trim();
+    if (
+      PACKAGE_UNIFORM_TYPE_NAMES.includes(uniformName) &&
+      (line.category === 'Top' || line.category === 'Bottom') &&
+      line.size
+    ) {
+      const resolvedId = await resolvePackageUniformMerchandiseId(client, {
+        merchandiseName: uniformName,
+        size: line.size,
+        branchId: bid,
+        category: line.category,
+      });
+      if (resolvedId) merchId = Number(resolvedId);
+    }
+
     const stockRes = await client.query(
-      `SELECT merchandise_id, merchandise_name, size, quantity
+      `SELECT merchandise_id, merchandise_name, size, type, quantity
        FROM merchandisestbl
        WHERE merchandise_id = $1`,
       [merchId]

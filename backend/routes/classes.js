@@ -29,6 +29,7 @@ import {
   insertMerchandiseReleaseLog,
   isPackageMerchTypeCovered,
   linesFromMerchandiseToDeduct,
+  PACKAGE_UNIFORM_TYPE_NAMES,
 } from '../lib/merchandiseReleaseLog.js';
 
 const router = express.Router();
@@ -4598,32 +4599,28 @@ router.post(
           if (merchId) {
             // For items with sizes, we need to find the actual merchandise_id by size
             if (merchSize && merchName) {
-              // For uniforms with category (Top/Bottom), find by name, size, and category
-              if (merchName === 'LCA Uniform' && merchCategory && (merchCategory === 'Top' || merchCategory === 'Bottom')) {
-                // Find merchandise by name, size, and category (Top/Bottom)
-                // Note: We check the type field to determine Top/Bottom
-                // Since we're sending the correct merchandise_id from frontend, we can trust it
-                const merchBySizeResult = await client.query(
+              const isUniformTopBottom =
+                PACKAGE_UNIFORM_TYPE_NAMES.includes(String(merchName).trim()) &&
+                merchCategory &&
+                (merchCategory === 'Top' || merchCategory === 'Bottom');
+
+              if (isUniformTopBottom) {
+                const merchByCategoryResult = await client.query(
                   `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, gender, type
-                   FROM merchandisestbl 
+                   FROM merchandisestbl
                    WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
-                   ORDER BY merchandise_id ASC`,
-                  [merchName, merchSize, branch_id]
+                     AND LOWER(COALESCE(type, '')) = LOWER($4)
+                   ORDER BY merchandise_id ASC
+                   LIMIT 1`,
+                  [merchName, merchSize, branch_id, merchCategory]
                 );
-                // Filter by category - check type for Top/Bottom indication
-                if (merchBySizeResult.rows.length > 0) {
-                  // If we have category info, try to match it
-                  // The category is determined by the type field in the database
-                  // For now, we'll use the first match, but ideally we should have a category field
-                  // Since we're sending the correct merchandise_id from frontend, we can trust it
-                  const matchingItem = merchBySizeResult.rows.find(item => item.merchandise_id === merchId) || merchBySizeResult.rows[0];
-                  actualMerchId = matchingItem.merchandise_id;
+                if (merchByCategoryResult.rows.length > 0) {
+                  actualMerchId = merchByCategoryResult.rows[0].merchandise_id;
                 }
               } else {
-                // Find merchandise by name and size (for non-uniforms or uniforms without category)
                 const merchBySizeResult = await client.query(
                   `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
-                   FROM merchandisestbl 
+                   FROM merchandisestbl
                    WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
                    ORDER BY merchandise_id ASC
                    LIMIT 1`,
@@ -4658,7 +4655,12 @@ router.post(
           const mid = parseInt(String(pkgMerchId), 10);
           if (!Number.isFinite(mid) || mid <= 0) continue;
 
-          if (isPackageMerchTypeCovered(meta?.merchandise_name, merchandiseToDeduct)) {
+          const pkgMerchName = String(meta?.merchandise_name || '').trim();
+          if (PACKAGE_UNIFORM_TYPE_NAMES.includes(pkgMerchName)) {
+            continue;
+          }
+
+          if (isPackageMerchTypeCovered(pkgMerchName, merchandiseToDeduct)) {
             continue;
           }
 
@@ -4721,13 +4723,26 @@ router.post(
           // Try to find by name and size if ID doesn't exist
           let fallbackFound = false;
           if (merchName && merchSize) {
-            const fallbackCheck = await client.query(
-              `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
-               FROM merchandisestbl 
-               WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
-               LIMIT 1`,
-              [merchName, merchSize, branch_id]
-            );
+            const isUniformFallback =
+              PACKAGE_UNIFORM_TYPE_NAMES.includes(String(merchName).trim()) &&
+              (merchCategory === 'Top' || merchCategory === 'Bottom');
+            const fallbackCheck = isUniformFallback
+              ? await client.query(
+                  `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
+                   FROM merchandisestbl
+                   WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
+                     AND LOWER(COALESCE(type, '')) = LOWER($4)
+                   ORDER BY merchandise_id ASC
+                   LIMIT 1`,
+                  [merchName, merchSize, branch_id, merchCategory]
+                )
+              : await client.query(
+                  `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
+                   FROM merchandisestbl
+                   WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
+                   LIMIT 1`,
+                  [merchName, merchSize, branch_id]
+                );
             if (fallbackCheck.rows.length > 0) {
               fallbackFound = true;
               inventoryValidationErrors.push(
