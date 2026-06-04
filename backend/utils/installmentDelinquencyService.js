@@ -5,6 +5,8 @@ import {
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from './programPaymentStatusService.js';
+import { parseAbsolutePhaseFromInvoice } from './installmentPhaseRowMapping.js';
+import { resolveProfilePhaseStart } from './phaseInstallmentUtils.js';
 
 const getDefaultBillingSettings = () => ({
   installment_penalty_rate: { value: SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue, scope: 'default' },
@@ -77,6 +79,42 @@ const computeInvoiceTotals = async (client, invoiceId) => {
   const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
 
   return { originalInvoiceAmount, totalPaid, remainingBalance };
+};
+
+/**
+ * Profile-local phase slot (classstudentstbl.phase_number) for an overdue installment invoice.
+ */
+const resolveLocalPhaseForInstallmentInvoice = async (client, { invoiceId, profileId }) => {
+  const invRes = await client.query(
+    `SELECT invoice_id, remarks, invoice_description, issue_date
+     FROM invoicestbl
+     WHERE invoice_id = $1`,
+    [invoiceId]
+  );
+  if (!invRes.rows.length) return null;
+
+  const inv = invRes.rows[0];
+  const absolute = parseAbsolutePhaseFromInvoice(inv);
+  if (absolute != null && Number.isFinite(absolute)) {
+    const profileRes = await client.query(
+      `SELECT phase_start FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1`,
+      [profileId]
+    );
+    const phaseStart = resolveProfilePhaseStart(profileRes.rows[0]);
+    const local = absolute - phaseStart + 1;
+    return local >= 1 ? local : null;
+  }
+
+  const listRes = await client.query(
+    `SELECT invoice_id
+     FROM invoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+       AND COALESCE(invoice_description, '') NOT ILIKE '%downpayment%'
+     ORDER BY issue_date ASC NULLS LAST, invoice_id ASC`,
+    [profileId]
+  );
+  const idx = listRes.rows.findIndex((r) => r.invoice_id === invoiceId);
+  return idx >= 0 ? idx + 1 : null;
 };
 
 /**
@@ -253,7 +291,33 @@ export const processInstallmentDelinquencies = async () => {
         if (isRemovalEligible && row.class_id && row.student_id) {
           // Recompute after any penalty insertion to ensure remaining > 0
           const totalsForRemoval = await computeInvoiceTotals(client, invoiceId);
-          if (totalsForRemoval.remainingBalance > 0) {
+          const invoiceStatus = String(invoice.status || '');
+          const hasPartialPayment =
+            invoiceStatus === 'Partially Paid' && totalsForRemoval.totalPaid > 0;
+
+          if (totalsForRemoval.remainingBalance > 0 && !hasPartialPayment) {
+            const localPhase = await resolveLocalPhaseForInstallmentInvoice(client, {
+              invoiceId,
+              profileId: row.installmentinvoiceprofiles_id,
+            });
+
+            const updateParams = [
+              `Installment delinquency (>= ${
+                Number.isFinite(finalDropoffDays)
+                  ? finalDropoffDays
+                  : SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue
+              } days overdue)`,
+              'System',
+              row.class_id,
+              row.student_id,
+            ];
+
+            let phaseFilterSql = '';
+            if (localPhase != null && Number.isFinite(localPhase)) {
+              phaseFilterSql = ` AND COALESCE(phase_number, 1) = $${updateParams.length + 1}`;
+              updateParams.push(localPhase);
+            }
+
             const updateRes = await client.query(
               `UPDATE classstudentstbl
                SET program_enrollment_status = 'dropped',
@@ -262,17 +326,9 @@ export const processInstallmentDelinquencies = async () => {
                    removed_by = $2
                WHERE class_id = $3
                  AND student_id = $4
-                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')`,
-              [
-                `Installment delinquency (>= ${
-                  Number.isFinite(finalDropoffDays)
-                    ? finalDropoffDays
-                    : SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue
-                } days overdue)`,
-                'System',
-                row.class_id,
-                row.student_id,
-              ]
+                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+                 ${phaseFilterSql}`,
+              updateParams
             );
 
             if ((updateRes.rowCount || 0) > 0) {

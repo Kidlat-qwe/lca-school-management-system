@@ -4995,8 +4995,7 @@ router.post(
         }
         const ar = arRes.rows[0];
         const arStatusUpper = String(ar.status || '').trim().toUpperCase();
-        const isAlreadyUsed =
-          Boolean(ar.invoice_id || ar.payment_id) || arStatusUpper === 'APPLIED';
+        const isAlreadyUsed = Boolean(ar.payment_id) || arStatusUpper === 'APPLIED';
         if (isAlreadyUsed) {
           await client.query('ROLLBACK');
           return res.status(400).json({
@@ -5853,8 +5852,16 @@ router.post(
       }
 
       let effectiveInstallmentSettings = installment_settings;
+      // Fullpayment packages (and non-installment Phase) must not spawn installment profiles / phase invoices
+      // even when package details include a "New Enrollee Installment" pricing row for catalog linkage.
+      const isInstallmentPackageEnrollment = Boolean(
+        packageData &&
+        (packageData.package_type === 'Installment' ||
+          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
+      );
       const requiresInstallmentProfile =
-        Boolean(package_id || hasInstallmentPricing) && installmentProfileAmount > 0;
+        installmentProfileAmount > 0 &&
+        (isInstallmentPackageEnrollment || (!package_id && hasInstallmentPricing));
       if (
         requiresInstallmentProfile &&
         ack_receipt_id != null &&
@@ -5886,14 +5893,15 @@ router.post(
         };
       }
       
-      if (effectiveInstallmentSettings && 
-          (package_id || hasInstallmentPricing) && 
-          installmentProfileAmount > 0 &&
+      if (
+          requiresInstallmentProfile &&
+          effectiveInstallmentSettings &&
           effectiveInstallmentSettings.invoice_issue_date &&
           effectiveInstallmentSettings.billing_month &&
           effectiveInstallmentSettings.invoice_due_date &&
           effectiveInstallmentSettings.invoice_generation_date &&
-          effectiveInstallmentSettings.frequency_months) {
+          effectiveInstallmentSettings.frequency_months
+      ) {
         try {
           const frequencyMonths = parseInt(effectiveInstallmentSettings.frequency_months, 10) || 1;
 
@@ -6150,6 +6158,49 @@ router.post(
           [generatedPhaseInvoice.invoice_id]
         );
         invoiceToReturn = generatedInvoiceResult.rows[0] || invoiceToReturn;
+      }
+
+      if (pendingInstallmentGeneration?.enrollmentAckReuse?.ack_receipt_id && generatedPhaseInvoice?.invoice_id) {
+        await query(
+          `UPDATE acknowledgement_receiptstbl
+           SET invoice_id = $1
+           WHERE ack_receipt_id = $2 AND payment_id IS NULL`,
+          [
+            generatedPhaseInvoice.invoice_id,
+            pendingInstallmentGeneration.enrollmentAckReuse.ack_receipt_id,
+          ]
+        );
+      }
+
+      // AR enrollment: return the invoice this receipt is tied to (downpayment vs phase vs main)
+      if (ack_receipt_id != null && ack_receipt_id !== '') {
+        const ackIdForReturn = parseInt(String(ack_receipt_id), 10);
+        if (Number.isInteger(ackIdForReturn) && ackIdForReturn > 0) {
+          const arLinkRes = await query(
+            `SELECT invoice_id FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
+            [ackIdForReturn]
+          );
+          const linkedInvoiceId = arLinkRes.rows[0]?.invoice_id;
+          if (linkedInvoiceId) {
+            const linkedInvRes = await query('SELECT * FROM invoicestbl WHERE invoice_id = $1', [
+              linkedInvoiceId,
+            ]);
+            if (linkedInvRes.rows[0]) {
+              invoiceToReturn = linkedInvRes.rows[0];
+            }
+          } else {
+            const invByAckRes = await query(
+              `SELECT * FROM invoicestbl
+               WHERE ack_receipt_id = $1
+               ORDER BY invoice_id DESC
+               LIMIT 1`,
+              [ackIdForReturn]
+            );
+            if (invByAckRes.rows[0]) {
+              invoiceToReturn = invByAckRes.rows[0];
+            }
+          }
+        }
       }
       
       if (!invoiceToReturn) {

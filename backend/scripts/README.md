@@ -183,6 +183,48 @@ node scripts/diagnoseStudentInstallment.js --help
 - `--name`: Partial match on `full_name`; if multiple students match, script lists them and exits without querying profiles (narrow the name or use `--user-id`).
 - `--json`: Print a single JSON object instead of tables.
 
+### `repairMatrixReviewStudents.js`
+
+Targeted fix for manual unenroll + paid phases (Herby/Donna pattern) and **phase_start** installment packages (Andrei/Maven pattern).
+
+```bash
+cd backend
+node scripts/repairMatrixReviewStudents.js --dry-run
+node scripts/repairMatrixReviewStudents.js
+```
+
+### `findDelinquencyDropMismatchStudents.js`
+
+Lists students with **`dropped`** rows from installment delinquency who still have **paid** or **partially paid** installment invoices (Skyler-like class-wide drop).
+
+```bash
+cd backend
+node scripts/findDelinquencyDropMismatchStudents.js
+```
+
+### `reinstateSkylerLikeDelinquencyDrops.js`
+
+Bulk reinstate only **eligible** delinquency-dropped phases (paid invoice, partial with payment, or later phase paid). Skips phases with no billing evidence (e.g. phase 9 dropped with only phase 1 paid).
+
+```bash
+cd backend
+node scripts/reinstateSkylerLikeDelinquencyDrops.js --dry-run
+node scripts/reinstateSkylerLikeDelinquencyDrops.js
+node scripts/reinstateSkylerLikeDelinquencyDrops.js --student-id=118
+```
+
+### `reinstateStudentAfterDelinquencyDrop.js`
+
+Restores **`classstudentstbl`** rows that were set to **`dropped`** by the installment delinquency job when the student should stay enrolled (e.g. other phases paid, partial payment on the overdue invoice). Clears **`removed_at`** / **`removed_reason`**; phase 1 → **`new`**, later phases → **`re_enrolled`**. **`student_statustbl`** updates via the existing trigger.
+
+**Usage:**
+```bash
+cd backend
+node scripts/reinstateStudentAfterDelinquencyDrop.js --email=student@school.com
+node scripts/reinstateStudentAfterDelinquencyDrop.js --student-id=21
+node scripts/reinstateStudentAfterDelinquencyDrop.js --email=... --dry-run
+```
+
 ### `repairPhaseInstallmentIssueDateMonotonic.js`
 
 Backfills **`invoicestbl.issue_date`** for phase installment invoices (rows whose **`remarks`** contain `TARGET_PHASE:N`) so that, within each **`installmentinvoiceprofiles_id`**, dates never go backwards when phases are sorted by **N** ascending. Use after fixing the AR enrollment code path, or to clean historical rows (e.g. Phase 2 dated before Phase 1).

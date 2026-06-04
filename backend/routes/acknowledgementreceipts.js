@@ -36,24 +36,41 @@ const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
 /**
- * AR is fully consumed when marked Applied, has a payment, or is linked to a different invoice.
- * Enrollment pre-links invoice_id before attach-to-invoice; same-invoice + no payment is still attachable.
+ * AR is fully consumed when it has a payment or is Applied to a different invoice.
+ * Enrollment may pre-link invoice_id or place ack_receipt_id on a generated phase invoice;
+ * attach-to-invoice must allow the invoice that actually owns this AR.
  */
-function isAckReceiptAlreadyApplied(ack, targetInvoiceId) {
+function isAckReceiptAlreadyApplied(ack, targetInvoiceId, options = {}) {
   const ackStatusUpper = String(ack?.status || '').trim().toUpperCase();
-  if (ackStatusUpper === 'APPLIED') return true;
+  const targetInvoiceAckReceiptId =
+    options.targetInvoiceAckReceiptId != null
+      ? Number(options.targetInvoiceAckReceiptId)
+      : null;
+  const ackId = Number(ack?.ack_receipt_id);
+
   if (ack?.payment_id) return true;
 
+  const invoiceId = Number(targetInvoiceId);
   const ackInvoiceId =
     ack?.invoice_id != null && ack.invoice_id !== '' ? Number(ack.invoice_id) : null;
-  const invoiceId = Number(targetInvoiceId);
-  if (
-    ackInvoiceId != null &&
-    Number.isFinite(invoiceId) &&
-    ackInvoiceId !== invoiceId
-  ) {
+
+  if (ackInvoiceId != null && Number.isFinite(invoiceId) && ackInvoiceId === invoiceId) {
+    return ackStatusUpper === 'APPLIED';
+  }
+
+  if (ackInvoiceId != null && Number.isFinite(invoiceId) && ackInvoiceId !== invoiceId) {
+    if (
+      targetInvoiceAckReceiptId != null &&
+      Number.isFinite(ackId) &&
+      targetInvoiceAckReceiptId === ackId &&
+      ackStatusUpper !== 'APPLIED'
+    ) {
+      return false;
+    }
     return true;
   }
+
+  if (ackStatusUpper === 'APPLIED') return true;
 
   return false;
 }
@@ -1724,12 +1741,44 @@ router.post(
         });
       }
 
-      const ack = ackResult.rows[0];
+      let ack = ackResult.rows[0];
 
       const ackStatus = String(ack.status || '').trim();
       const ackStatusUpper = ackStatus.toUpperCase();
 
-      if (isAckReceiptAlreadyApplied(ack, invoice_id)) {
+      // Verify invoice exists (load ack_receipt_id for attach eligibility)
+      const invoiceCheck = await client.query(
+        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1',
+        [invoice_id]
+      );
+      if (invoiceCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+      }
+
+      const invoice = invoiceCheck.rows[0];
+      const targetAckOnInvoice =
+        invoice.ack_receipt_id != null ? Number(invoice.ack_receipt_id) : null;
+      const ackIdNum = Number(id);
+
+      if (
+        targetAckOnInvoice === ackIdNum &&
+        ack.invoice_id != null &&
+        Number(ack.invoice_id) !== Number(invoice_id) &&
+        !ack.payment_id &&
+        ackStatusUpper !== 'APPLIED'
+      ) {
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET invoice_id = $1 WHERE ack_receipt_id = $2`,
+          [invoice_id, id]
+        );
+        ack = { ...ack, invoice_id: Number(invoice_id) };
+      }
+
+      if (isAckReceiptAlreadyApplied(ack, invoice_id, { targetInvoiceAckReceiptId: invoice.ack_receipt_id })) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
@@ -1784,21 +1833,6 @@ router.post(
           message: 'Student not found',
         });
       }
-
-      // Verify invoice exists
-      const invoiceCheck = await client.query(
-        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1',
-        [invoice_id]
-      );
-      if (invoiceCheck.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({
-          success: false,
-          message: 'Invoice not found',
-        });
-      }
-
-      const invoice = invoiceCheck.rows[0];
 
       // Basic sanity: ensure invoice is not already fully paid
       if (invoice.status === 'Paid') {

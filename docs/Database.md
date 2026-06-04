@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS public.acknowledgement_receiptstbl
     payment_method character varying(50) COLLATE pg_catalog."default" DEFAULT 'Cash'::character varying,
     verified_by_user_id integer,
     verified_at timestamp with time zone,
+    paired_ack_receipt_id integer,
+    prospect_student_phone text COLLATE pg_catalog."default",
     CONSTRAINT acknowledgement_receiptstbl_pkey PRIMARY KEY (ack_receipt_id)
 );
 
@@ -59,6 +61,12 @@ COMMENT ON COLUMN public.acknowledgement_receiptstbl.verified_by_user_id
 
 COMMENT ON COLUMN public.acknowledgement_receiptstbl.verified_at
     IS 'Timestamp when the acknowledgement receipt was verified.';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.paired_ack_receipt_id
+    IS 'For Downpayment + Phase 1 dual AR: downpayment row stores ack_receipt_id of the Phase 1 row. Phase row has NULL. Sibling row is hidden from AR list.';
+
+COMMENT ON COLUMN public.acknowledgement_receiptstbl.prospect_student_phone
+    IS 'Client/guardian mobile for SMS payment confirmation (Philippines format, e.g. 09171234567).';
 
 CREATE TABLE IF NOT EXISTS public.announcement_readstbl
 (
@@ -223,7 +231,7 @@ CREATE TABLE IF NOT EXISTS public.cash_deposit_summarytbl
     total_cash_amount numeric(12, 2) NOT NULL DEFAULT 0,
     payment_count integer NOT NULL DEFAULT 0,
     completed_cash_count integer NOT NULL DEFAULT 0,
-    status character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Submitted'::character varying,
+    status character varying(50) COLLATE pg_catalog."default" NOT NULL DEFAULT 'Pending'::character varying,
     submitted_by integer,
     submitted_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     approved_by integer,
@@ -254,7 +262,7 @@ COMMENT ON COLUMN public.cash_deposit_summarytbl.completed_cash_count
     IS 'Number of Completed Cash payment rows included in total_deposit_amount.';
 
 COMMENT ON COLUMN public.cash_deposit_summarytbl.status
-    IS 'Submitted (awaiting approval), Approved, Rejected';
+    IS 'Pending (awaiting Superfinance verification), Approved, Returned';
 
 COMMENT ON COLUMN public.cash_deposit_summarytbl.reference_number
     IS 'Branch cash deposit reference number (e.g., deposit slip or transaction number).';
@@ -367,15 +375,26 @@ CREATE TABLE IF NOT EXISTS public.classstudentstbl
     enrolled_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     enrolled_by character varying(255) COLLATE pg_catalog."default",
     phase_number integer,
-    enrollment_status character varying(20) COLLATE pg_catalog."default" DEFAULT 'Active'::character varying,
     removed_at timestamp without time zone,
     removed_reason text COLLATE pg_catalog."default",
     removed_by character varying(255) COLLATE pg_catalog."default",
+    program_enrollment_status character varying(30) COLLATE pg_catalog."default" NOT NULL,
     CONSTRAINT classstudentstbl_pkey PRIMARY KEY (classstudent_id)
 );
 
 COMMENT ON COLUMN public.classstudentstbl.phase_number
     IS 'The phase number the student is enrolled in for this class. Automatically determined based on class start date and current phase.';
+
+COMMENT ON COLUMN public.classstudentstbl.program_enrollment_status
+    IS 'Lifecycle state of this student-class enrollment row.
+   reserved           - student paid a reservation fee; not yet fully enrolled.
+   pending_enrollment - downpayment paid but Phase 1 / first monthly invoice not yet settled.
+   new                - first-ever enrollment record for this student (no prior history).
+   re_enrolled        - student has prior enrollment history in any class or continued to later phases.
+   upsell             - student was previously in a lower program level and is now moving up.
+   rejoin             - first active phase after a prior dropped phase in the same class.
+   dropped            - student was unenrolled / removed before completing the program.
+   completed          - student finished the enrolled phase/class (auto-set by cron).';
 
 CREATE TABLE IF NOT EXISTS public.classteacherstbl
 (
@@ -614,6 +633,36 @@ CREATE TABLE IF NOT EXISTS public.invoicestudentstbl
 COMMENT ON COLUMN public.invoicestudentstbl.overdue_email_first_sent_at
     IS 'Timestamp when the system first auto-sent an overdue reminder email for this invoice-student (Asia/Manila). NULL = not yet auto-sent.';
 
+CREATE TABLE IF NOT EXISTS public.merchandise_release_logtbl
+(
+    release_log_id serial NOT NULL,
+    release_batch_id character varying(80) COLLATE pg_catalog."default" NOT NULL,
+    source character varying(32) COLLATE pg_catalog."default" NOT NULL,
+    merchandise_id integer NOT NULL,
+    quantity integer NOT NULL DEFAULT 1,
+    branch_id integer NOT NULL,
+    merchandise_name character varying(255) COLLATE pg_catalog."default",
+    size character varying(50) COLLATE pg_catalog."default",
+    category character varying(50) COLLATE pg_catalog."default",
+    student_id integer,
+    class_id integer,
+    package_id integer,
+    ack_receipt_id integer,
+    payment_id integer,
+    created_by integer,
+    released_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT merchandise_release_logtbl_pkey PRIMARY KEY (release_log_id)
+);
+
+COMMENT ON TABLE public.merchandise_release_logtbl
+    IS 'One row per merchandise unit line deducted from branch stock (Merchandise AR or package enrollment).';
+
+COMMENT ON COLUMN public.merchandise_release_logtbl.release_batch_id
+    IS 'Groups lines from one AR or one enrollment (e.g. ar-123, enroll-45-67-...).';
+
+COMMENT ON COLUMN public.merchandise_release_logtbl.source
+    IS 'merchandise_ar | package_enroll';
+
 CREATE TABLE IF NOT EXISTS public.merchandiserequestlogtbl
 (
     request_id serial NOT NULL,
@@ -816,6 +865,38 @@ CREATE TABLE IF NOT EXISTS public.pricingliststbl
     branch_id integer,
     CONSTRAINT pricingliststbl_pkey PRIMARY KEY (pricinglist_id)
 );
+
+CREATE TABLE IF NOT EXISTS public.program_payment_statustbl
+(
+    program_payment_status_id serial NOT NULL,
+    student_id integer NOT NULL,
+    class_id integer,
+    invoice_id integer NOT NULL,
+    branch_id integer,
+    installmentinvoiceprofiles_id integer,
+    status character varying(30) COLLATE pg_catalog."default" NOT NULL DEFAULT 'wait_for_payment'::character varying,
+    invoice_status_snapshot character varying(50) COLLATE pg_catalog."default",
+    invoice_due_date date,
+    grace_until date,
+    paid_at date,
+    computed_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT program_payment_statustbl_pkey PRIMARY KEY (program_payment_status_id),
+    CONSTRAINT uq_program_payment_status_invoice_student UNIQUE (invoice_id, student_id)
+);
+
+COMMENT ON TABLE public.program_payment_statustbl
+    IS 'Program-facing payment lifecycle per invoice/student. Values: wait_for_payment, paid, under_grace_period, due_date.';
+
+COMMENT ON COLUMN public.program_payment_statustbl.status
+    IS 'wait_for_payment = generated and unpaid before due date; paid = invoice paid; under_grace_period = unpaid after due date within grace; due_date = unpaid after grace period.';
+
+COMMENT ON COLUMN public.program_payment_statustbl.invoice_due_date
+    IS 'Snapshot of invoicestbl.due_date used to compute the lifecycle status.';
+
+COMMENT ON COLUMN public.program_payment_statustbl.grace_until
+    IS 'Last date covered by the configured grace period. The due_date status starts after this date.';
 
 CREATE TABLE IF NOT EXISTS public.programstbl
 (
@@ -1026,6 +1107,27 @@ CREATE TABLE IF NOT EXISTS public.roomstbl
     CONSTRAINT roomstbl_pkey PRIMARY KEY (room_id)
 );
 
+CREATE TABLE IF NOT EXISTS public.student_statustbl
+(
+    student_status_id serial NOT NULL,
+    student_id integer NOT NULL,
+    student_name character varying(255) COLLATE pg_catalog."default",
+    status character varying(10) COLLATE pg_catalog."default" NOT NULL DEFAULT 'inactive'::character varying,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_reason text COLLATE pg_catalog."default",
+    CONSTRAINT student_statustbl_pkey PRIMARY KEY (student_status_id),
+    CONSTRAINT student_statustbl_student_id_key UNIQUE (student_id)
+);
+
+COMMENT ON TABLE public.student_statustbl
+    IS 'One row per student. status=active means the student has at least one
+   active enrollment (program_enrollment_status IN (new, re_enrolled, upsell)).
+   Maintained automatically by trigger fn_sync_student_status.';
+
+COMMENT ON COLUMN public.student_statustbl.student_name
+    IS 'Denormalized copy of userstbl.full_name for quick lookups without a JOIN.
+   Kept in sync by trigger fn_sync_student_status.';
+
 CREATE TABLE IF NOT EXISTS public.suspensionperiodstbl
 (
     suspension_id serial NOT NULL,
@@ -1183,6 +1285,15 @@ ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
     ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.acknowledgement_receiptstbl
+    ADD CONSTRAINT acknowledgement_receiptstbl_paired_ack_receipt_id_fkey FOREIGN KEY (paired_ack_receipt_id)
+    REFERENCES public.acknowledgement_receiptstbl (ack_receipt_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_ack_receipts_paired_ack_receipt_id
+    ON public.acknowledgement_receiptstbl(paired_ack_receipt_id);
 
 
 ALTER TABLE IF EXISTS public.announcement_readstbl
@@ -1638,6 +1749,62 @@ CREATE INDEX IF NOT EXISTS idx_invoicestudent_student_id
     ON public.invoicestudentstbl(student_id);
 
 
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_ack_receipt_id_fkey FOREIGN KEY (ack_receipt_id)
+    REFERENCES public.acknowledgement_receiptstbl (ack_receipt_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_branch_id_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE RESTRICT;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_class_id_fkey FOREIGN KEY (class_id)
+    REFERENCES public.classestbl (class_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_created_by_fkey FOREIGN KEY (created_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_merchandise_id_fkey FOREIGN KEY (merchandise_id)
+    REFERENCES public.merchandisestbl (merchandise_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE RESTRICT;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_package_id_fkey FOREIGN KEY (package_id)
+    REFERENCES public.packagestbl (package_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_payment_id_fkey FOREIGN KEY (payment_id)
+    REFERENCES public.paymenttbl (payment_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.merchandise_release_logtbl
+    ADD CONSTRAINT merchandise_release_logtbl_student_id_fkey FOREIGN KEY (student_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
 ALTER TABLE IF EXISTS public.merchandiserequestlogtbl
     ADD CONSTRAINT merchandiserequestlogtbl_merchandise_id_fkey FOREIGN KEY (merchandise_id)
     REFERENCES public.merchandisestbl (merchandise_id) MATCH SIMPLE
@@ -1797,6 +1964,47 @@ ALTER TABLE IF EXISTS public.pricingliststbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_pricinglist_branch_id
     ON public.pricingliststbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.program_payment_statustbl
+    ADD CONSTRAINT program_payment_status_branch_fkey FOREIGN KEY (branch_id)
+    REFERENCES public.branchestbl (branch_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.program_payment_statustbl
+    ADD CONSTRAINT program_payment_status_class_fkey FOREIGN KEY (class_id)
+    REFERENCES public.classestbl (class_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_program_payment_status_class
+    ON public.program_payment_statustbl(class_id);
+
+
+ALTER TABLE IF EXISTS public.program_payment_statustbl
+    ADD CONSTRAINT program_payment_status_installment_profile_fkey FOREIGN KEY (installmentinvoiceprofiles_id)
+    REFERENCES public.installmentinvoiceprofilestbl (installmentinvoiceprofiles_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.program_payment_statustbl
+    ADD CONSTRAINT program_payment_status_invoice_fkey FOREIGN KEY (invoice_id)
+    REFERENCES public.invoicestbl (invoice_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_program_payment_status_invoice
+    ON public.program_payment_statustbl(invoice_id);
+
+
+ALTER TABLE IF EXISTS public.program_payment_statustbl
+    ADD CONSTRAINT program_payment_status_student_fkey FOREIGN KEY (student_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_program_payment_status_student
+    ON public.program_payment_statustbl(student_id);
 
 
 ALTER TABLE IF EXISTS public.programstbl
@@ -1985,6 +2193,15 @@ ALTER TABLE IF EXISTS public.roomstbl
     ON DELETE NO ACTION;
 CREATE INDEX IF NOT EXISTS idx_room_branch_id
     ON public.roomstbl(branch_id);
+
+
+ALTER TABLE IF EXISTS public.student_statustbl
+    ADD CONSTRAINT student_statustbl_student_id_fkey FOREIGN KEY (student_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS student_statustbl_student_id_key
+    ON public.student_statustbl(student_id);
 
 
 ALTER TABLE IF EXISTS public.suspensionperiodstbl
