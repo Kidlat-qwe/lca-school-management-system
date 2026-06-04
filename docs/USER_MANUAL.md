@@ -525,6 +525,8 @@ The Superadmin dashboard displays:
 
 **Access Level**: Single branch management
 
+> **Live demonstration:** See [admin/BRANCH_ADMIN_DEMO_GUIDE.md](./admin/BRANCH_ADMIN_DEMO_GUIDE.md) for a step-by-step Branch Admin demo script (enrollment, payments, End of Shift, cash deposit). Quick reference: [admin/BRANCH_ADMIN_DEMO_QUICK_REFERENCE.md](./admin/BRANCH_ADMIN_DEMO_QUICK_REFERENCE.md).
+
 ### Dashboard
 
 The Admin dashboard shows:

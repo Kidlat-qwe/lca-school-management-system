@@ -37,6 +37,8 @@
 
 This manual is specifically designed for **Admin** users of the Physical School Management System. As an Admin, you have full access to manage all operations within your assigned branch, but you cannot access data from other branches.
 
+> **For live demonstrations:** use the step-by-step [Branch Admin Demo Guide](./admin/BRANCH_ADMIN_DEMO_GUIDE.md) and [Quick Reference](./admin/BRANCH_ADMIN_DEMO_QUICK_REFERENCE.md).
+
 ### Key Characteristics of Admin Role
 
 - **Access Level**: Single branch (your assigned branch only)

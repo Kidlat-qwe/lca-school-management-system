@@ -9,6 +9,49 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
+/**
+ * After drop-from-next-phase, paid earlier phases keep status (new/re_enrolled) with
+ * removed_at set for history — matrix must still show that status, not dropped/unenrolled.
+ */
+const isHistoricalPaidEnrollmentRow = (status, removedAt) =>
+  removedAt != null &&
+  status != null &&
+  status !== 'dropped' &&
+  status !== 'pending_enrollment' &&
+  ENROLLED_STATUSES_LIST.includes(status);
+
+/** Build phase/month matrix cell mark + label from classstudent row status. */
+const buildMatrixCellFromEnrollmentStatus = (status, removedAt, normalizeLabel) => {
+  if (isHistoricalPaidEnrollmentRow(status, removedAt)) {
+    return {
+      mark: '1',
+      label: normalizeLabel(status),
+      status,
+    };
+  }
+  const isActiveEnrolled =
+    status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
+  if (isActiveEnrolled) {
+    return {
+      mark: '1',
+      label: normalizeLabel(status),
+      status,
+    };
+  }
+  if (status === 'dropped' || removedAt != null) {
+    return {
+      mark: '-',
+      label: 'dropped/unenrolled',
+      status: status === 'dropped' ? 'dropped' : status,
+    };
+  }
+  return {
+    mark: '-',
+    label: normalizeLabel(status) || '',
+    status,
+  };
+};
+
 /** Stable key for one student × class enrollment track (matrix row). */
 export const enrollmentTrackKey = (studentId, classId) =>
   `${parseInt(studentId, 10)}:${parseInt(classId, 10)}`;
@@ -1292,7 +1335,10 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           sr.is_full_payment,
           ROW_NUMBER() OVER (
             PARTITION BY sr.student_id, sr.class_id, sr.phase_number
-            ORDER BY COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST, sr.classstudent_id DESC
+            ORDER BY
+              CASE WHEN sr.removed_at IS NULL THEN 0 ELSE 1 END ASC,
+              COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST,
+              sr.classstudent_id DESC
           ) AS rn
         FROM scoped_rows sr
       ),
@@ -1374,16 +1420,15 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     }
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled =
-      status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
-    const mark = isEnrolled ? '1' : '-';
-    const label = isEnrolled
-      ? normalizeStatusLabel(status)
-      : (status === 'dropped' || removedAt != null ? 'dropped/unenrolled' : normalizeStatusLabel(status));
+    const { mark, label, status: cellStatus } = buildMatrixCellFromEnrollmentStatus(
+      status,
+      removedAt,
+      normalizeStatusLabel
+    );
     studentMap.get(trackKey).phases[phaseNumber] = {
       mark,
       label,
-      status,
+      status: cellStatus,
       is_full_payment: Boolean(row.is_full_payment),
     };
   }
@@ -1688,18 +1733,16 @@ const loadUpsellSiblingTracksForMonthMatrix = async (
 
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
-    const mark = isEnrolled ? '1' : '-';
-    const label = isEnrolled
-      ? normalizeEnrollmentLabel(status)
-      : status === 'dropped' || removedAt != null
-        ? 'dropped/unenrolled'
-        : normalizeEnrollmentLabel(status);
+    const { mark, label, status: cellStatus } = buildMatrixCellFromEnrollmentStatus(
+      status,
+      removedAt,
+      normalizeEnrollmentLabel
+    );
 
     siblingTrackMap.get(trackKey).months[row.month_key] = {
       mark,
       label,
-      status,
+      status: cellStatus,
       is_full_payment: Boolean(row.is_full_payment),
     };
   }
@@ -1909,7 +1952,10 @@ const loadUpsellSiblingTracksForPhaseMatrix = async (
           sr.class_level_tag,
           ROW_NUMBER() OVER (
             PARTITION BY sr.student_id, sr.class_id, sr.phase_number
-            ORDER BY COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST, sr.classstudent_id DESC
+            ORDER BY
+              CASE WHEN sr.removed_at IS NULL THEN 0 ELSE 1 END ASC,
+              COALESCE(sr.removed_at, sr.enrolled_at) DESC NULLS LAST,
+              sr.classstudent_id DESC
           ) AS rn
         FROM scoped_rows sr
       ),
@@ -1996,19 +2042,16 @@ const loadUpsellSiblingTracksForPhaseMatrix = async (
 
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled =
-      status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
-    const mark = isEnrolled ? '1' : '-';
-    const label = isEnrolled
-      ? normalizeStatusLabel(status)
-      : status === 'dropped' || removedAt != null
-        ? 'dropped/unenrolled'
-        : normalizeStatusLabel(status);
+    const { mark, label, status: cellStatus } = buildMatrixCellFromEnrollmentStatus(
+      status,
+      removedAt,
+      normalizeStatusLabel
+    );
 
     siblingTrackMap.get(trackKey).phases[phaseNumber] = {
       mark,
       label,
-      status,
+      status: cellStatus,
       is_full_payment: Boolean(row.is_full_payment),
     };
   }
@@ -2419,18 +2462,16 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
-    const mark = isEnrolled ? '1' : '-';
-    const label = isEnrolled
-      ? normalizeEnrollmentLabel(status)
-      : status === 'dropped' || removedAt != null
-        ? 'dropped/unenrolled'
-        : normalizeEnrollmentLabel(status);
+    const { mark, label, status: cellStatus } = buildMatrixCellFromEnrollmentStatus(
+      status,
+      removedAt,
+      normalizeEnrollmentLabel
+    );
 
     studentMap.get(trackKey).months[monthKey] = {
       mark,
       label,
-      status,
+      status: cellStatus,
       is_full_payment: Boolean(row.is_full_payment),
     };
   }
@@ -2507,6 +2548,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     if (!displayMonthKeys.has(monthKey)) continue;
 
     const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
+    const existing = student.months[monthKey];
+    if (existing?.mark === '1' && existing?.status !== 'dropped') {
+      continue;
+    }
     student.months[monthKey] = {
       mark: '-',
       label: 'dropped/unenrolled',
