@@ -411,15 +411,6 @@ const AdminPaymentLogs = () => {
       return;
     }
 
-    const overlappingRange = getOverlappingDepositRange(depositStartDate, depositEndDate);
-    if (overlappingRange) {
-      showDepositAlert(
-        `These dates were already included in a previous cash deposit summary (${getRangeLabel(overlappingRange)}). Please choose dates outside that deposited period.`
-      );
-      setDepositData(null);
-      return;
-    }
-
     fetchDepositCashSummary(depositStartDate, depositEndDate);
   }, [depositModalOpen, depositStartDate, depositEndDate, depositExistingRanges]);
 
@@ -445,6 +436,16 @@ const AdminPaymentLogs = () => {
   const submitDepositCashSummary = async () => {
     if (!depositData) {
       showDepositAlert('Please select a valid uncovered date range first.');
+      return;
+    }
+
+    const completedCount = Number(depositData.completed_cash_count || 0);
+    if (completedCount < 1) {
+      showDepositAlert(
+        depositAlreadyDepositedRows.length > 0
+          ? 'All completed cash payments in this range are already included in a previous deposit. Choose dates that include undeposited cash, or extend the range to pick up newer payments.'
+          : 'No completed cash payments in this date range. Only Completed cash payments can be deposited.'
+      );
       return;
     }
 

@@ -868,25 +868,26 @@ router.post(
         });
       }
 
-      const overlappingSummary = await findOverlappingCashDepositSummary({
-        branchId: userBranchId,
-        startDate,
-        endDate,
-      });
-
-      if (overlappingSummary) {
-        return res.status(409).json({
-          success: false,
-          message: `Selected dates overlap an existing cash deposit summary (${overlappingSummary.start_date} to ${overlappingSummary.end_date}). Please choose dates outside already deposited periods.`,
-          data: overlappingSummary,
-        });
-      }
-
       const snapshot = await getCashDepositSnapshot({
         branchId: userBranchId,
         startDate,
         endDate,
       });
+
+      if (!snapshot.completed_cash_count || snapshot.completed_cash_count < 1) {
+        const overlappingSummary = await findOverlappingCashDepositSummary({
+          branchId: userBranchId,
+          startDate,
+          endDate,
+        });
+        const overlapHint = overlappingSummary
+          ? ` An existing deposit summary covers part of this period (${overlappingSummary.start_date} to ${overlappingSummary.end_date}); cash rows in that window may already be deposited.`
+          : '';
+        return res.status(409).json({
+          success: false,
+          message: `No completed cash payments are available to deposit for ${startDate} to ${endDate}.${overlapHint} Adjust the date range or confirm payments are Completed and not already in a prior deposit.`,
+        });
+      }
 
       const insertRes = await query(
         `INSERT INTO cash_deposit_summarytbl (
