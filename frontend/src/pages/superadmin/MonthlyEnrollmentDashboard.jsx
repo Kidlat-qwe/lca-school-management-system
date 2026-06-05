@@ -8,8 +8,13 @@ import {
   EnrollmentCombinedStatsCard,
   EnrollmentStatsCard,
 } from '../../components/dashboard/EnrollmentDashboardKpiCards';
-import { ENROLLMENT_DASHBOARD, MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
-import { reEnrollmentRateFromMatrixStats } from '../../utils/enrollmentMatrixRate';
+import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
+import {
+  aggregateMonthMatrixKpiTotals,
+  matrixCohortStats,
+  reEnrollmentRateFromMatrixStats,
+  sumMonthStatsReEnrolledNumerators,
+} from '../../utils/enrollmentMatrixRate';
 
 const CURRENT_YEAR = parseInt(
   new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 4),
@@ -119,8 +124,25 @@ const MonthlyEnrollmentDashboard = () => {
   }, [classes, selectedProgramId]);
   const displayYear = data?.selected_year ?? selectedYear;
 
+  const matrixKpiTotals = useMemo(
+    () => aggregateMonthMatrixKpiTotals(studentMonthMatrix),
+    [studentMonthMatrix]
+  );
+
+  const matrixCohort = useMemo(() => matrixCohortStats(studentMonthMatrix), [studentMonthMatrix]);
+
+  const reEnrollmentFromRateNumerators = useMemo(
+    () => sumMonthStatsReEnrolledNumerators(studentMonthMatrix?.month_stats ?? []),
+    [studentMonthMatrix?.month_stats]
+  );
+
   const totalReEnrollmentRate = useMemo(
-    () => reEnrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats ?? []),
+    () =>
+      reEnrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats ?? [], {
+        total_re_enrolled_count: studentMonthMatrix?.total_re_enrolled_count,
+        total_prior_month_enrolled_count: studentMonthMatrix?.total_prior_month_enrolled_count,
+        total_re_enrollment_rate: studentMonthMatrix?.total_re_enrollment_rate,
+      }),
     [studentMonthMatrix]
   );
 
@@ -146,13 +168,14 @@ const MonthlyEnrollmentDashboard = () => {
     );
   }
 
-  const activeStudents = data?.active_students ?? 0;
-  const inactiveStudents = data?.inactive_students ?? 0;
-  const newEnrolleesCount = Number(data?.new_enrollees_count ?? 0);
-  const reEnrollmentCount = Number(data?.re_enrollment_count ?? 0);
-  const droppedCount = Number(data?.dropped_count ?? 0);
-  const rejoinCount = Number(data?.rejoin_count ?? 0);
-  const reservedStudents = Number(data?.reserved_students_count ?? data?.reserved_only_count ?? 0);
+  const newEnrolleesCount = matrixKpiTotals.new_enrollees_count;
+  /** Sum of rate-header numerators — matches adding each month's re-enrolled fraction numerator. */
+  const reEnrollmentCount = reEnrollmentFromRateNumerators;
+  const droppedCount = matrixKpiTotals.dropped_count;
+  const rejoinCount = matrixKpiTotals.rejoin_count;
+  const upsellCount = matrixKpiTotals.upsell_count;
+  /** Sum of amber "reserved" labeled cells in the matrix table for the year. */
+  const reservedStudents = matrixKpiTotals.reserved_count;
 
   return (
     <div className="space-y-6">
@@ -202,14 +225,14 @@ const MonthlyEnrollmentDashboard = () => {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <EnrollmentCombinedStatsCard
-          title="Active / Inactive Students"
-          iconName="userMinus"
+          title="Matrix Cohort"
+          iconName="users"
           accent="bg-gradient-to-br from-emerald-400 to-slate-500"
           metrics={[
-            { label: 'Active', value: activeStudents },
-            { label: 'Inactive', value: inactiveStudents },
+            { label: 'Retention base', value: totalReEnrollmentRate.priorEnrolledCount },
+            { label: 'Students', value: matrixCohort.uniqueStudentCount },
           ]}
-          tooltip={ENROLLMENT_DASHBOARD.activeInactive}
+          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.matrixCohortYear(displayYear)}
         />
         <EnrollmentCombinedStatsCard
           title="New Enrollees / Re-enrollment"
@@ -219,7 +242,7 @@ const MonthlyEnrollmentDashboard = () => {
             { label: 'New enrollees', value: newEnrolleesCount },
             { label: 'Re-enrollment', value: reEnrollmentCount },
           ]}
-          tooltip={ENROLLMENT_DASHBOARD.newReenroll}
+          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.newReenrollYear(displayYear)}
         />
         <EnrollmentCombinedStatsCard
           title="Dropped / Rejoin"
@@ -229,7 +252,17 @@ const MonthlyEnrollmentDashboard = () => {
             { label: 'Dropped', value: droppedCount },
             { label: 'Rejoin', value: rejoinCount },
           ]}
-          tooltip={ENROLLMENT_DASHBOARD.droppedRejoin}
+          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.droppedRejoinYear(displayYear)}
+        />
+        <EnrollmentCombinedStatsCard
+          title="Reserved / Upsell"
+          iconName="clipboardList"
+          accent="bg-gradient-to-br from-indigo-400 to-violet-500"
+          metrics={[
+            { label: 'Reserved', value: reservedStudents },
+            { label: 'Upsell', value: upsellCount },
+          ]}
+          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reservedUpsellYear(displayYear)}
         />
         <EnrollmentStatsCard
           title="Total Re-enrollment Rate"
@@ -241,13 +274,6 @@ const MonthlyEnrollmentDashboard = () => {
             totalReEnrollmentRate.priorMonthEnrolledCount,
             displayYear
           )}
-        />
-        <EnrollmentStatsCard
-          title="Reserved Students"
-          value={reservedStudents}
-          iconName="clipboardList"
-          accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
-          tooltip={ENROLLMENT_DASHBOARD.reserved}
         />
       </div>
 

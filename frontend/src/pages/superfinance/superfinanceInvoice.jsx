@@ -29,6 +29,11 @@ import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
+import {
+  InvoiceListAmountCell,
+  InvoiceListTotalAmountCell,
+} from '../../components/invoices/InvoiceListAmountCell';
+import { getInvoiceDisplayAmount } from '../../utils/invoiceListAmount';
 import InvoiceStatusMultiFilter from '../../components/invoices/InvoiceStatusMultiFilter';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import {
@@ -44,18 +49,16 @@ import {
   getInitialInvoiceSearchFromParams,
   hasInvoiceCrossLinkParam,
 } from '../../utils/billingListCrossLink';
+import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
+import {
+  canShowInvoicePayAction,
+  getPayableInvoiceTarget,
+  invoicePayActionLabel,
+} from '../../utils/invoicePaymentTarget';
 
 const ITEMS_PER_PAGE = 10;
 
 const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
-
-const getInvoiceDisplayAmount = (invoice) => {
-  if (!invoice) return 0;
-  const remainingAmount = Number(invoice.amount ?? 0);
-  const paidAmount = Number(invoice.paid_amount ?? 0);
-  const billedAmount = remainingAmount + paidAmount;
-  return billedAmount > 0 ? billedAmount : remainingAmount;
-};
 
 /** Header summary total: billed face + all tips on completed payments for this invoice. */
 const getInvoiceSummaryAmountIncludingTips = (invoice) =>
@@ -837,19 +840,13 @@ const SuperfinanceInvoice = () => {
   const handleOpenPaymentModal = async (invoice) => {
     setOpenMenuId(null);
     try {
-      // Fetch the latest invoice data with details
-      const response = await apiRequest(`/invoices/${invoice.invoice_id}`);
+      const { invoice_id: payableInvoiceId } = getPayableInvoiceTarget(invoice);
+      const response = await apiRequest(`/invoices/${payableInvoiceId}`);
       const invoiceData = response.data;
 
-      if (
-        invoiceData.can_record_payment === false ||
-        invoiceData.balance_invoice_id
-      ) {
-        const tip = invoiceData.continued_to_invoice;
-        const label = tip?.display_description || tip?.invoice_description || (tip?.invoice_id ? `INV-${tip.invoice_id}` : 'the balance invoice');
-        appAlert(
-          `This invoice is not payable after a partial payment. Record payments on ${label} instead.`
-        );
+      const paymentBlockAlert = getInstallmentPaymentBlockAlert(invoiceData);
+      if (paymentBlockAlert) {
+        appAlert(paymentBlockAlert);
         return;
       }
 
@@ -2060,49 +2057,16 @@ const SuperfinanceInvoice = () => {
                         </p>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                        {invoice.balance_invoice_id ? (
-                          <div className="text-xs text-gray-900 space-y-0.5">
-                            <div>
-                              <span className="text-gray-500">Remaining (INV-{invoice.continued_to_invoice_id || invoice.balance_invoice_id}):</span>{' '}
-                              <span className="font-medium">
-                                ₱{Number(invoice.balance_invoice_amount ?? invoice.amount ?? 0).toFixed(2)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Paid on this invoice:</span>{' '}
-                              <span className="font-medium">
-                                ₱{Number(invoice.paid_amount ?? 0).toFixed(2)}
-                              </span>
-                            </div>
-                          </div>
-                        ) : rejectedOverlay ? (
-                          <div className="text-sm font-medium text-gray-900">
-                            ₱{rejectedOverlay.amount.toFixed(2)}
-                          </div>
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {invoice.amount !== null && invoice.amount !== undefined
-                              ? `₱${getInvoiceDisplayAmount(invoice).toFixed(2)}`
-                              : '-'}
-                          </div>
-                        )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
-                        {rejectedOverlay
-                          ? `₱${rejectedOverlay.totalAmount.toFixed(2)}`
-                          : `₱${Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}`}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <InvoiceListAmountCell invoice={invoice} rejectedOverlay={rejectedOverlay} />
+                    <InvoiceListTotalAmountCell invoice={invoice} rejectedOverlay={rejectedOverlay} />
+                    <td className="px-6 py-4 align-middle whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.issue_date
                           ? formatDateManila(invoice.issue_date)
                           : '-'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 align-middle whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {rejectedOverlay?.paymentDate
                           ? formatDateManila(rejectedOverlay.paymentDate)
@@ -2111,7 +2075,7 @@ const SuperfinanceInvoice = () => {
                           : '—'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 align-middle whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         {invoice.due_date
                           ? formatDateManila(invoice.due_date)
@@ -2240,31 +2204,19 @@ const SuperfinanceInvoice = () => {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (selectedInvoice.status === 'Paid') return;
-                        if (
-                          selectedInvoice.balance_invoice_id ||
-                          selectedInvoice.can_record_payment === false
-                        ) {
-                          return;
-                        }
+                        if (!canShowInvoicePayAction(selectedInvoice)) return;
                         setOpenMenuId(null);
                         setMenuPosition({ top: undefined, bottom: undefined, right: undefined, left: undefined });
                         handleOpenPaymentModal(selectedInvoice);
                       }}
-                      disabled={
-                        selectedInvoice.status === 'Paid' ||
-                        !!selectedInvoice.balance_invoice_id ||
-                        selectedInvoice.can_record_payment === false
-                      }
+                      disabled={!canShowInvoicePayAction(selectedInvoice)}
                       className={`flex items-center justify-between w-full text-left px-4 py-2 text-sm transition-colors ${
-                        selectedInvoice.status === 'Paid' ||
-                        !!selectedInvoice.balance_invoice_id ||
-                        selectedInvoice.can_record_payment === false
+                        !canShowInvoicePayAction(selectedInvoice)
                           ? 'text-gray-400 cursor-not-allowed opacity-60'
                           : 'text-green-600 hover:bg-green-50'
                       }`}
                     >
-                      <span>Pay</span>
+                      <span>{invoicePayActionLabel(selectedInvoice)}</span>
                       <svg className={`w-4 h-4 ${selectedInvoice.status === 'Paid' ? 'text-gray-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>

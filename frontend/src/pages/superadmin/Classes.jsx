@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
@@ -23,8 +23,10 @@ import {
   isUniformTopBottomType,
   findUniformStockByNameSizeCategory,
 } from '../../utils/uniformMerchandise';
+import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
 
 const Classes = () => {
+  const navigate = useNavigate();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const ITEMS_PER_PAGE = 10;
   const [classes, setClasses] = useState([]);
@@ -1641,14 +1643,59 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const isInstallmentLikePackage = (pkg) => (
-    pkg && (pkg.package_type === 'Installment' || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment'))
-  );
+  const isInstallmentLikePackage = (pkg) =>
+    !!pkg &&
+    (pkg.package_type === 'Installment' ||
+      (pkg.package_type === 'Phase' &&
+        String(pkg.payment_option || '').toLowerCase() === 'installment'));
+
+  const isFullpaymentLikePackage = (pkg) =>
+    !!pkg &&
+    (pkg.package_type === 'Fullpayment' ||
+      (pkg.package_type === 'Phase' &&
+        String(pkg.payment_option || '').toLowerCase() === 'fullpayment'));
 
   const formatMoney = (value) => `₱${Number(value || 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+
+  const formatPackageTypeLabel = (pkg) => {
+    if (!pkg?.package_type) return '';
+    if (pkg.package_type === 'Phase') {
+      const payment =
+        String(pkg.payment_option || 'Fullpayment').trim().toLowerCase() === 'installment'
+          ? 'Installment'
+          : 'Fullpayment';
+      return `Phase (${payment})`;
+    }
+    return pkg.package_type;
+  };
+
+  const formatChangePackageOptionLabel = (pkg) => {
+    const parts = [
+      pkg?.package_name || 'Package',
+      formatPackageTypeLabel(pkg),
+      pkg?.level_tag ? String(pkg.level_tag).trim() : '',
+    ].filter(Boolean);
+    return parts.join(' · ');
+  };
+
+  /** Branch-assigned packages, or shared (null branch) plans matching the class level tag. */
+  const packageMatchesUpdatePlanBranchScope = (pkg, classBranchId, classLevelTag) => {
+    if (classBranchId != null && Number(pkg.branch_id) === Number(classBranchId)) {
+      return true;
+    }
+    if (pkg.branch_id != null && pkg.branch_id !== '') {
+      return false;
+    }
+    const pkgLevel = pkg.level_tag ? String(pkg.level_tag).trim().toLowerCase() : '';
+    const classLevel = classLevelTag ? String(classLevelTag).trim().toLowerCase() : '';
+    if (!classLevel || !pkgLevel) {
+      return false;
+    }
+    return pkgLevel === classLevel;
+  };
 
   const openChangePackageModal = async (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForView;
@@ -1665,12 +1712,31 @@ const initializePackageMerchSelections = useCallback(
     setLoadingChangePackageOptions(true);
 
     try {
-      const response = await apiRequest(`/packages?branch_id=${sourceClass.branch_id}&limit=100`);
-      const options = (response.data || []).filter(
-        (pkg) => pkg.status === 'Active'
-          && isInstallmentLikePackage(pkg)
-          && (!currentPackageId || Number(pkg.package_id) !== currentPackageId)
+      const classBranchId =
+        sourceClass.branch_id != null ? Number(sourceClass.branch_id) : null;
+      if (!classBranchId) {
+        setChangePackageOptions([]);
+        appAlert('This class has no branch assigned. Cannot load packages for plan update.');
+        return;
+      }
+
+      const classLevelTag =
+        sourceClass.level_tag || sourceClass.class_name || '';
+      const response = await apiRequest(
+        `/packages?branch_id=${classBranchId}&limit=100`
       );
+      const options = (response.data || [])
+        .filter(
+          (pkg) =>
+            pkg.status === 'Active' &&
+            packageMatchesUpdatePlanBranchScope(pkg, classBranchId, classLevelTag) &&
+            (isInstallmentLikePackage(pkg) || isFullpaymentLikePackage(pkg))
+        )
+        .sort((a, b) => {
+          const aCurrent = Number(a.package_id) === currentPackageId ? 1 : 0;
+          const bCurrent = Number(b.package_id) === currentPackageId ? 1 : 0;
+          return aCurrent - bCurrent;
+        });
       setChangePackageOptions(options);
     } catch (err) {
       console.error('Error fetching package change options:', err);
@@ -4659,7 +4725,6 @@ const initializePackageMerchSelections = useCallback(
         }
       }
 
-      setGeneratedInvoices(invoices);
       fetchClasses(); // Refresh classes list
       // Refresh enrolled students list
       if (selectedClassForEnrollment) {
@@ -4667,6 +4732,7 @@ const initializePackageMerchSelections = useCallback(
       }
 
       if (errors.length > 0) {
+        setGeneratedInvoices(invoices);
         let errorMessage = '';
         if (invoices.length > 0) {
           errorMessage = `Successfully enrolled ${invoices.length} student(s).\n\n`;
@@ -4682,7 +4748,12 @@ const initializePackageMerchSelections = useCallback(
         console.error('Enrollment Errors:', errors);
         appAlert(errorMessage);
       } else if (invoices.length > 0) {
-        appAlert(`Successfully enrolled ${invoices.length} student(s)!`);
+        closeEnrollModal();
+        await promptNavigateToEnrollmentInvoice({
+          invoices,
+          invoiceRoute: '/superadmin/invoice',
+          navigate,
+        });
       }
     } catch (err) {
       console.error('Error enrolling students:', err);
@@ -5171,18 +5242,19 @@ const initializePackageMerchSelections = useCallback(
       const response = await apiRequest(`/rooms/${roomId}/schedules`);
       if (response.success && response.data) {
         // Filter to only show active classes
-        const activeSchedules = response.data.filter(schedule => {
-          // Only show schedules that have a class_id (assigned to a class)
-          if (!schedule.class_id) return false;
-          
-          // Exclude the current class if editing
-          if (editingClass && schedule.class_id === editingClass.class_id) return false;
-          
-          // Exclude classes involved in the merge (if any)
-          if (excludeClassIds.length > 0 && excludeClassIds.includes(schedule.class_id)) return false;
-          
-          return true;
-        });
+        const activeSchedules = response.data
+          .filter((schedule) => {
+            if (!schedule.class_id) return false;
+            if (excludeClassIds.length > 0 && excludeClassIds.includes(schedule.class_id)) {
+              return false;
+            }
+            return true;
+          })
+          .map((schedule) => ({
+            ...schedule,
+            is_editing_class:
+              Boolean(editingClass) && schedule.class_id === editingClass.class_id,
+          }));
         setRoomSchedules(activeSchedules);
       } else {
         setRoomSchedules([]);
@@ -5612,8 +5684,27 @@ const initializePackageMerchSelections = useCallback(
       errors.start_date = 'Start date is required';
     }
 
-    if (formData.max_students && (isNaN(formData.max_students) || parseInt(formData.max_students) < 1)) {
+    if (!formData.max_students || formData.max_students.trim() === '') {
+      errors.max_students = 'Max students is required';
+    } else if (isNaN(formData.max_students) || parseInt(formData.max_students) < 1) {
       errors.max_students = 'Max students must be a positive integer';
+    }
+
+    const enabledDays = Object.entries(formData.days_of_week || {}).filter(
+      ([, data]) => data && data.enabled === true
+    );
+    if (enabledDays.length === 0) {
+      errors.days_of_week = 'At least one day of week must be selected';
+    } else {
+      for (const [day, data] of enabledDays) {
+        if (!data.start_time?.trim() || !data.end_time?.trim()) {
+          errors[`days_of_week_${day}`] = `${day}: start and end time are required`;
+        }
+      }
+    }
+
+    if (!formData.teacher_ids || formData.teacher_ids.length === 0) {
+      errors.teacher_ids = 'At least one teacher is required';
     }
 
     // Validate end date only if both dates are provided
@@ -5750,13 +5841,16 @@ const initializePackageMerchSelections = useCallback(
           : (formData.end_date && formData.end_date !== '' ? formData.end_date : null),
         skip_holidays: formData.skip_holidays === true,
         is_vip: formData.is_vip === true,
-        days_of_week: formData.days_of_week ? Object.entries(formData.days_of_week)
-          .filter(([_, data]) => data.enabled)
-          .map(([day, data]) => ({
-            day,
-            start_time: data.start_time || null,
-            end_time: data.end_time || null,
-          })) : null,
+        days_of_week: formData.days_of_week
+          ? Object.entries(formData.days_of_week)
+              .filter(([, data]) => data.enabled && data.start_time && data.end_time)
+              .map(([day, data]) => ({
+                day,
+                enabled: true,
+                start_time: data.start_time.trim(),
+                end_time: data.end_time.trim(),
+              }))
+          : null,
       };
 
       // Additional safety check: Ensure start_date is present (should never happen due to validation, but defensive programming)
@@ -10024,11 +10118,23 @@ const initializePackageMerchSelections = useCallback(
                                     : schedule.program_name || `Class ${schedule.class_id}`;
                                 
                                 return (
-                                  <div key={idx} className="bg-white rounded border border-blue-100 p-1.5 hover:bg-blue-50 transition-colors">
+                                  <div
+                                    key={idx}
+                                    className={`rounded border p-1.5 transition-colors ${
+                                      schedule.is_editing_class
+                                        ? 'bg-amber-50 border-amber-300 hover:bg-amber-100'
+                                        : 'bg-white border-blue-100 hover:bg-blue-50'
+                                    }`}
+                                  >
                                     <div className="flex items-center justify-between mb-0.5">
                                       <span className="text-[10px] font-medium text-blue-700">
                                         {startTime} - {endTime}
                                       </span>
+                                      {schedule.is_editing_class && (
+                                        <span className="text-[9px] font-semibold text-amber-800 uppercase">
+                                          This class
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[11px] text-blue-900 truncate font-medium" title={className}>
                                       {className}
@@ -14672,7 +14778,7 @@ const initializePackageMerchSelections = useCallback(
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">Update Plan</h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  Create a one-time invoice for the package difference only.
+                  Switch installment plan or convert to full payment. Prior payments (downpayment, reservation, phases) are credited.
                 </p>
               </div>
               <button
@@ -14693,7 +14799,7 @@ const initializePackageMerchSelections = useCallback(
                   <span className="text-gray-500"> · {changePackageSourceClass.class_name || changePackageSourceClass.level_tag}</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  This does not replace the student&apos;s future billing profile. It only creates the adjustment invoice.
+                  Installment-to-installment updates recurring billing. Full payment conversion enrolls all target phases and stops installment invoices after settlement.
                 </div>
               </div>
 
@@ -14705,7 +14811,7 @@ const initializePackageMerchSelections = useCallback(
                   <div className="py-3 text-sm text-gray-500">Loading package options...</div>
                 ) : changePackageOptions.length === 0 ? (
                   <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">
-                    No installment-style packages are available for this branch.
+                    No installment or full payment packages are available for this branch.
                   </div>
                 ) : (
                   <select
@@ -14715,11 +14821,24 @@ const initializePackageMerchSelections = useCallback(
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
                   >
                     <option value="">— Select package —</option>
-                    {changePackageOptions.map((pkg) => (
-                      <option key={pkg.package_id} value={pkg.package_id}>
-                        {pkg.package_name}
-                      </option>
-                    ))}
+                    {changePackageOptions.map((pkg) => {
+                      const activePackageId = Number(
+                        studentToChangePackage?.current_package_id || 0
+                      );
+                      const isCurrent =
+                        activePackageId > 0 &&
+                        Number(pkg.package_id) === activePackageId;
+                      return (
+                        <option
+                          key={pkg.package_id}
+                          value={pkg.package_id}
+                          disabled={isCurrent}
+                        >
+                          {formatChangePackageOptionLabel(pkg)}
+                          {isCurrent ? ' (current plan)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 )}
               </div>
@@ -14771,14 +14890,31 @@ const initializePackageMerchSelections = useCallback(
                             <span>Package</span>
                             <span className="font-medium text-gray-900 text-right">{changePackagePreview.target_package.package_name}</span>
                           </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Downpayment</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.downpayment_amount)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Recurring amount</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.recurring_amount)}</span>
-                          </div>
+                          {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
+                            <>
+                              <div className="flex items-center justify-between gap-4">
+                                <span>Full payment price</span>
+                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.full_payment_price)}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-4">
+                                <span>Enrollment after conversion</span>
+                                <span className="font-medium text-gray-900 text-right">
+                                  Phases {changePackagePreview.target_phase_start}–{changePackagePreview.target_phase_end}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex items-center justify-between gap-4">
+                                <span>Downpayment</span>
+                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.downpayment_amount)}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-4">
+                                <span>Recurring amount</span>
+                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.recurring_amount)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -14787,20 +14923,59 @@ const initializePackageMerchSelections = useCallback(
                   <div className="rounded-lg border border-gray-200 p-4">
                     <h3 className="text-sm font-semibold text-gray-900 mb-3">Calculation summary</h3>
                     <div className="space-y-2 text-sm text-gray-600">
-                      <div className="flex items-center justify-between gap-4">
-                        <span>Paid recurring phases</span>
-                        <span className="font-medium text-gray-900">{changePackagePreview.recurring_paid_count ?? 0}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-4">
-                        <span>Current package paid total</span>
-                        <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_paid_total)}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-4">
-                        <span>Target package equivalent total</span>
-                        <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_equivalent_total)}</span>
-                      </div>
+                      {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
+                        <>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Current installment scope</span>
+                            <span className="font-medium text-gray-900">
+                              Phases {changePackagePreview.current_phase_start}–{changePackagePreview.current_phase_end}
+                            </span>
+                          </div>
+                          {(changePackagePreview.reservation_fee_credited ?? 0) > 0 && (
+                            <div className="flex items-center justify-between gap-4">
+                              <span>Reservation fee credited</span>
+                              <span className="font-medium text-gray-900">
+                                {formatMoney(changePackagePreview.reservation_fee_credited)}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Downpayment &amp; phase payments credited</span>
+                            <span className="font-medium text-gray-900">
+                              {formatMoney(changePackagePreview.installment_payments_credited ?? changePackagePreview.credit_total)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-2">
+                            <span>Total payments credited</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.credit_total)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Full payment package price</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_full_price)}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Paid recurring phases</span>
+                            <span className="font-medium text-gray-900">{changePackagePreview.recurring_paid_count ?? 0}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Current package paid total</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_paid_total)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span>Target package equivalent total</span>
+                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_equivalent_total)}</span>
+                          </div>
+                        </>
+                      )}
                       <div className="border-t border-gray-200 pt-2 flex items-center justify-between gap-4">
-                        <span className="font-semibold text-gray-900">Additional amount to invoice</span>
+                        <span className="font-semibold text-gray-900">
+                          {changePackagePreview.change_type === 'installment_to_fullpayment' && changePackagePreview.difference === 0
+                            ? 'Balance due'
+                            : 'Additional amount to invoice'}
+                        </span>
                         <span className={`font-semibold ${changePackagePreview.difference > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
                           {formatMoney(changePackagePreview.difference)}
                         </span>
@@ -14825,7 +15000,13 @@ const initializePackageMerchSelections = useCallback(
                 disabled={!changePackagePreview?.allowed || !selectedTargetPackageForChange || changePackageSubmitting}
                 className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {changePackageSubmitting ? 'Creating...' : 'Create Adjustment Invoice'}
+                {changePackageSubmitting
+                  ? 'Processing...'
+                  : changePackagePreview?.change_type === 'installment_to_fullpayment' && changePackagePreview?.difference === 0
+                    ? 'Convert to Full Payment'
+                    : changePackagePreview?.change_type === 'installment_to_fullpayment'
+                      ? 'Create Conversion Invoice'
+                      : 'Create Adjustment Invoice'}
               </button>
             </div>
           </div>

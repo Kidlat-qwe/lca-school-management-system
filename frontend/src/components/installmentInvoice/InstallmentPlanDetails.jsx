@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
+import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import { formatProgramEnrollmentStatus } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 
@@ -114,7 +115,22 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     };
   }, [profileId, fetchPhases]);
 
-  const openPaymentModal = useCallback((payload) => {
+  const openPaymentModal = useCallback(async (payload) => {
+    if (payload?.mode === 'invoice' && payload.invoice_id) {
+      try {
+        const res = await apiRequest(`/invoices/${payload.invoice_id}`);
+        const blockAlert = getInstallmentPaymentBlockAlert(res?.data);
+        if (blockAlert) {
+          appAlert(blockAlert);
+          return;
+        }
+      } catch (err) {
+        console.error('Installment payment eligibility check failed:', err);
+        appAlert(err?.message || 'Could not verify payment eligibility. Please try again.');
+        return;
+      }
+    }
+
     setPaymentModal(payload);
     setApForm({
       payment_method: 'Cash',

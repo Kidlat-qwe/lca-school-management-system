@@ -413,7 +413,9 @@ const CalendarSchedule = () => {
                         ))}
                         {(cell.events || []).map((ev) => (
                           <div key={ev.event_id} onClick={() => handleEventClick(ev)} className="rounded border border-yellow-100 bg-yellow-50/80 px-1.5 py-1 text-[11px] leading-snug text-gray-700 cursor-pointer hover:bg-yellow-100">
-                            <p className="font-semibold text-gray-900 truncate">{ev.class_code || ev.program_code || ev.title || 'N/A'}</p>
+                            <p className="font-semibold text-gray-900 truncate">
+                              {ev.display_name || ev.class_name || ev.level_tag || ev.class_code || ev.program_code || ev.title || 'N/A'}
+                            </p>
                             {ev.room_name && <p className="text-[10px] text-gray-500">{ev.room_name}</p>}
                             {ev.teachers?.length > 0 && <p className="text-[10px] text-gray-600 truncate">{ev.teachers.map((t) => t.teacher_name).join(', ')}</p>}
                           </div>
@@ -461,7 +463,9 @@ const CalendarSchedule = () => {
                         <div key={h} className="h-12 border-b border-gray-50 relative">
                           {hourEvents.slice(0, 2).map((ev) => (
                             <div key={ev.event_id} onClick={() => handleEventClick(ev)} className="absolute inset-x-0.5 top-0.5 bottom-0 rounded bg-amber-100 border border-amber-200 text-[10px] p-1 overflow-hidden cursor-pointer hover:bg-amber-200">
-                              <span className="font-semibold truncate block">{ev.class_code || ev.program_code || ev.title}</span>
+                              <span className="font-semibold truncate block">
+                                {ev.display_name || ev.class_name || ev.level_tag || ev.class_code || ev.program_code || ev.title}
+                              </span>
                               <span className="text-gray-600">{formatTime(ev.start_time)}</span>
                             </div>
                           ))}
@@ -500,7 +504,9 @@ const CalendarSchedule = () => {
                       <div key={h} className="h-12 border-b border-gray-100 relative">
                         {hourEvents.map((ev) => (
                           <div key={ev.event_id} onClick={() => handleEventClick(ev)} className="absolute left-1 right-1 top-1 bottom-1 rounded bg-amber-100 border border-amber-200 p-2 text-xs cursor-pointer hover:bg-amber-200">
-                            <p className="font-semibold text-gray-900">{ev.class_code || ev.program_code || ev.title}</p>
+                            <p className="font-semibold text-gray-900">
+                              {ev.display_name || ev.class_name || ev.level_tag || ev.class_code || ev.program_code || ev.title}
+                            </p>
                             <p className="text-gray-600">{formatTime(ev.start_time)} – {formatTime(ev.end_time)}</p>
                             {ev.room_name && <p className="text-gray-500">{ev.room_name}</p>}
                           </div>

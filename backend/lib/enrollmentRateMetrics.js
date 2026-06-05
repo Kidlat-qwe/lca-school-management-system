@@ -9,14 +9,33 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
+/** Dashboard "reserved" from reservedstudentstbl only after the reservation fee is paid. */
+const RESERVATION_FEE_PAID_SQL = `(
+  r.status = 'Fee Paid'
+  OR r.reservation_fee_paid_at IS NOT NULL
+  OR (
+    r.invoice_id IS NOT NULL
+    AND COALESCE(inv.status, '') IN ('Paid', 'Partially Paid')
+  )
+)`;
+
 /**
  * Phase-matrix cell display.
  * Drop flow keeps paid phases as new/re_enrolled/... with removed_at set (historical);
  * only the drop-marker row uses status "dropped". removed_at alone must not imply dropped.
  */
+const MATRIX_ACTIVE_NON_ENROLLED_STATUSES = new Set(['reserved', 'pending_enrollment']);
+
 const buildPhaseMatrixCell = (status, removedAt, normalizeLabel) => {
   const programStatus = status || null;
   if (programStatus && ENROLLED_STATUSES_LIST.includes(programStatus)) {
+    return {
+      mark: '1',
+      label: normalizeLabel(programStatus),
+      status: programStatus,
+    };
+  }
+  if (programStatus && MATRIX_ACTIVE_NON_ENROLLED_STATUSES.has(programStatus)) {
     return {
       mark: '1',
       label: normalizeLabel(programStatus),
@@ -32,7 +51,7 @@ const buildPhaseMatrixCell = (status, removedAt, normalizeLabel) => {
   }
   const label = programStatus ? normalizeLabel(programStatus) : '';
   return {
-    mark: programStatus === 'pending_enrollment' ? '-' : programStatus ? '1' : '-',
+    mark: programStatus ? '1' : '-',
     label,
     status: programStatus,
   };
@@ -52,6 +71,9 @@ export const buildEnrollmentMatrixTrackRow = ({
   firstEnrolledAt = null,
   firstEnrolledMonthKey = null,
   lastFullPayMonthKey = null,
+  classNumberOfPhase = null,
+  installmentPackageComplete = false,
+  packageCompleteMonthKey = null,
   phases = undefined,
   months = undefined,
 }) => {
@@ -67,6 +89,10 @@ export const buildEnrollmentMatrixTrackRow = ({
     first_enrolled_at: firstEnrolledAt || null,
     first_enrolled_month_key: firstEnrolledMonthKey || null,
     last_full_pay_month_key: lastFullPayMonthKey || null,
+    class_number_of_phase:
+      classNumberOfPhase != null ? parseInt(classNumberOfPhase, 10) || 1 : null,
+    installment_package_complete: Boolean(installmentPackageComplete),
+    package_complete_month_key: packageCompleteMonthKey || null,
   };
   if (phases !== undefined) row.phases = phases;
   if (months !== undefined) row.months = months;
@@ -188,6 +214,18 @@ const findLastCompletedMonthKey = (track) => {
   return null;
 };
 
+/** Last billing month with any enrolled cell (used for level-up when lower track has no "completed"). */
+const findLastEnrolledMonthKey = (track) => {
+  const cells = track?.months || {};
+  const keys = Object.keys(cells)
+    .filter((k) => cells[k]?.mark === '1')
+    .sort();
+  return keys.length ? keys[keys.length - 1] : null;
+};
+
+const trackHasEnrolledMonth = (track, periodKey) =>
+  Object.values(track?.[periodKey] || {}).some((cell) => cell?.mark === '1');
+
 const findLastCompletedPhaseKey = (track) => {
   const cells = track?.phases || {};
   const keys = Object.keys(cells)
@@ -279,27 +317,43 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
   for (const studentTracks of byStudent.values()) {
     if (studentTracks.length < 2) continue;
 
-    const completedTracks = studentTracks.filter((t) =>
-      trackHasCompletedEnrollment(t, 'months')
-    );
-    if (!completedTracks.length) continue;
+    const enrolledTracks = studentTracks.filter((t) => trackHasEnrolledMonth(t, 'months'));
+    if (enrolledTracks.length < 2) continue;
 
-    const anchor = completedTracks.reduce((best, t) => {
-      const idx = levelTagIndex(t.class_level_tag);
-      if (idx < 0) return best;
-      if (!best) return t;
-      const bestIdx = levelTagIndex(best.class_level_tag);
-      return bestIdx < 0 || idx < bestIdx ? t : best;
-    }, null);
+    const higherTracks = enrolledTracks
+      .filter((t) => levelTagIndex(t.class_level_tag) >= 0)
+      .sort(
+        (a, b) =>
+          levelTagIndex(a.class_level_tag) - levelTagIndex(b.class_level_tag)
+      );
+
+    const maxHigherIdx = higherTracks.reduce(
+      (max, t) => Math.max(max, levelTagIndex(t.class_level_tag)),
+      -1
+    );
+    if (maxHigherIdx < 0) continue;
+
+    const anchor = enrolledTracks
+      .filter((t) => {
+        const idx = levelTagIndex(t.class_level_tag);
+        return idx >= 0 && idx < maxHigherIdx;
+      })
+      .reduce((best, t) => {
+        const idx = levelTagIndex(t.class_level_tag);
+        if (!best) return t;
+        const bestIdx = levelTagIndex(best.class_level_tag);
+        return bestIdx < 0 || idx < bestIdx ? t : best;
+      }, null);
     if (!anchor) continue;
 
     const anchorIdx = levelTagIndex(anchor.class_level_tag);
-    const completedMonthKey = findLastCompletedMonthKey(anchor);
-    if (!completedMonthKey) continue;
+    const handoffMonthKey =
+      findLastCompletedMonthKey(anchor) || findLastEnrolledMonthKey(anchor);
+    if (!handoffMonthKey) continue;
 
-    const upsellMonthKey = nextCalendarMonthKey(completedMonthKey);
+    const upsellMonthKey = nextCalendarMonthKey(handoffMonthKey);
 
-    const higherTracks = studentTracks
+    const higherTracksForMerge = enrolledTracks
       .filter((t) => {
         if (t.class_id === anchor.class_id) return false;
         const idx = levelTagIndex(t.class_level_tag);
@@ -310,10 +364,10 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
           levelTagIndex(a.class_level_tag) - levelTagIndex(b.class_level_tag)
       );
 
-    if (!higherTracks.length) continue;
+    if (!higherTracksForMerge.length) continue;
 
-    const hasHigherEnrollment = higherTracks.some((higher) =>
-      Object.values(higher.months || {}).some((cell) => cell?.mark === '1')
+    const hasHigherEnrollment = higherTracksForMerge.some((higher) =>
+      trackHasEnrolledMonth(higher, 'months')
     );
     if (!hasHigherEnrollment) continue;
 
@@ -321,7 +375,7 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     const mergedMonthKeys = new Set();
     let higherPhaseIndex = 0;
 
-    for (const higher of higherTracks) {
+    for (const higher of higherTracksForMerge) {
       const higherCells = higher.months || {};
       const enrolledBillingMonths = Object.keys(higherCells)
         .filter((k) => higherCells[k]?.mark === '1')
@@ -487,12 +541,126 @@ const IS_FULL_PAYMENT_SQL = `
       AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')
   )`;
 
+/** Curriculum phase count for a class (defaults to 1). Scalar subquery avoids join alias clashes. */
+const CLASS_NUMBER_OF_PHASE_SQL = `(
+  SELECT COALESCE(NULLIF(cu.number_of_phase, 0), 1)
+  FROM programstbl cprog
+  INNER JOIN curriculumstbl cu ON cu.curriculum_id = cprog.curriculum_id
+  WHERE cprog.program_id = c.program_id
+)`;
+
+/** All installment phase invoices paid for student + class. */
+const INSTALLMENT_PACKAGE_COMPLETE_SQL = `
+  EXISTS (
+    SELECT 1
+    FROM installmentinvoiceprofilestbl ip
+    WHERE ip.student_id = cs.student_id
+      AND ip.class_id = cs.class_id
+      AND COALESCE(ip.total_phases, 0) > 0
+      AND (
+        SELECT COUNT(DISTINCT CASE
+          WHEN i.status = 'Paid' THEN COALESCE(i.invoice_chain_root_id, i.invoice_id)
+          ELSE NULL
+        END)::integer
+        FROM invoicestbl i
+        WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+          AND (
+            ip.downpayment_invoice_id IS NULL
+            OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id::INTEGER
+          )
+      ) >= COALESCE(ip.total_phases, 0)
+  )`;
+
+/**
+ * Display-only: mark terminal phase as completed for single-phase classes when paid,
+ * or last full-payment phase when the student progressed past the first phase.
+ */
+const applyPhaseMatrixTerminalCompletedLabel = (student, phases, normalizeStatusLabel) => {
+  const firstEnrolledPhase = phases.reduce((min, p) => {
+    const cell = student.phases?.[p.key];
+    if (cell?.mark === '1') return Math.min(min, p.key);
+    return min;
+  }, Number.POSITIVE_INFINITY);
+
+  if (!Number.isFinite(firstEnrolledPhase)) return;
+
+  student.first_enrolled_phase = firstEnrolledPhase;
+
+  const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
+  let maxFullPayEnrolledPhase = 0;
+
+  for (const p of phases) {
+    const cell = student.phases?.[p.key];
+    if (!cell || cell.mark !== '1') continue;
+    if (cell.is_full_payment) {
+      maxFullPayEnrolledPhase = Math.max(maxFullPayEnrolledPhase, p.key);
+    }
+    if (cell.status === 'upsell' && p.key === firstEnrolledPhase) {
+      cell.label = 'upsell';
+    } else if (cell.status === 'reserved') {
+      cell.label = normalizeStatusLabel('reserved');
+    } else if (cell.status === 'pending_enrollment') {
+      cell.label = normalizeStatusLabel('pending_enrollment');
+    } else if (cell.status === 'new' && p.key !== firstEnrolledPhase) {
+      cell.label = normalizeStatusLabel('re_enrolled');
+    } else if (cell.status === 're_enrolled') {
+      cell.label = normalizeStatusLabel('re_enrolled');
+    }
+  }
+
+  if (maxFullPayEnrolledPhase > firstEnrolledPhase) {
+    const lastCell = student.phases[maxFullPayEnrolledPhase];
+    if (lastCell?.mark === '1') {
+      lastCell.label = 'completed';
+      lastCell.status = 'completed';
+    }
+    return;
+  }
+
+  if (classPhases !== 1) return;
+
+  const terminalCell = student.phases[firstEnrolledPhase];
+  if (terminalCell?.mark !== '1') return;
+
+  const packageFinished =
+    terminalCell.status === 'completed' ||
+    Boolean(terminalCell.is_full_payment) ||
+    Boolean(student.installment_package_complete);
+
+  if (packageFinished) {
+    terminalCell.label = 'completed';
+    terminalCell.status = 'completed';
+  }
+};
+
+/** Resolve billing month that should display as completed on the month matrix. */
+const resolveTerminalCompletionMonthKey = (student, firstEnrolledKey) => {
+  if (!firstEnrolledKey) return null;
+
+  const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
+  let terminalKey =
+    student.package_complete_month_key ||
+    student.last_full_pay_month_key ||
+    null;
+
+  if (!terminalKey && classPhases === 1 && student.installment_package_complete) {
+    terminalKey = firstEnrolledKey;
+  }
+
+  if (!terminalKey) return null;
+
+  const allowSameMonth = classPhases === 1;
+  if (allowSameMonth ? terminalKey >= firstEnrolledKey : terminalKey > firstEnrolledKey) {
+    return terminalKey;
+  }
+  return null;
+};
+
 /**
  * Re-enrollment rate per display month (spreadsheet logic):
- * - Numerator: enrolled in prior month AND still enrolled this month.
- * - Denominator: enrolled in prior month.
- * - Students not enrolled in the prior month (first-time or gap return) are never counted.
- * - First-ever enrolled month ("new") is never counted in that month's fraction.
+ * - Numerator: all matrix cells labeled "re-enrolled" for that month (matches KPI / Re-enr column).
+ * - Denominator: students enrolled in the prior month (excluding first-ever enrolled month).
+ * - Upsell, completed, rejoin, and new labels are excluded from the numerator.
  */
 export const computeReEnrollmentMonthStats = (displayMonths, students, options = {}) => {
   const { selectedYear = null } = options;
@@ -522,19 +690,17 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
       };
     }
 
-    let priorMonthEnrolledCount = 0;
-    let reEnrolledCount = 0;
+    const reEnrolledCount = countMonthMatrixStatusLabels(students, key).re_enrollment_count;
 
+    let priorMonthEnrolledCount = 0;
     for (const student of students) {
       const firstEnrolledKey = student.first_enrolled_month_key || null;
       if (firstEnrolledKey && key === firstEnrolledKey) continue;
 
       const wasEnrolledPrev = student.months[prevKey]?.mark === '1';
-      const isEnrolledCurr = student.months[key]?.mark === '1';
       if (!wasEnrolledPrev) continue;
 
       priorMonthEnrolledCount += 1;
-      if (isEnrolledCurr) reEnrolledCount += 1;
     }
 
     totalReEnrolled += reEnrolledCount;
@@ -570,9 +736,10 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
 
 /**
  * Re-enrollment rate per phase (same rules as monthly matrix, by phase):
- * - Numerator: enrolled in prior phase AND still enrolled this phase.
- * - Denominator: enrolled in prior phase.
- * - First phase has no prior (N/A). First-ever enrolled phase ("new") is never counted.
+ * - Numerator: all matrix cells labeled "re-enrolled" for that phase (matches KPI).
+ * - Denominator: students enrolled in the prior phase (excluding first-ever enrolled phase).
+ * - Upsell, completed, rejoin, and new labels are excluded from the numerator.
+ * - First phase has no prior (N/A).
  */
 export const computeReEnrollmentPhaseStats = (displayPhases, students) => {
   let totalReEnrolled = 0;
@@ -591,19 +758,17 @@ export const computeReEnrollmentPhaseStats = (displayPhases, students) => {
     }
 
     const prevKey = displayPhases[index - 1].key;
-    let priorPhaseEnrolledCount = 0;
-    let reEnrolledCount = 0;
+    const reEnrolledCount = countPhaseMatrixStatusLabels(students, key).re_enrollment_count;
 
+    let priorPhaseEnrolledCount = 0;
     for (const student of students) {
       const firstEnrolledPhase = student.first_enrolled_phase ?? null;
       if (firstEnrolledPhase != null && key === firstEnrolledPhase) continue;
 
       const wasEnrolledPrev = student.phases[prevKey]?.mark === '1';
-      const isEnrolledCurr = student.phases[key]?.mark === '1';
       if (!wasEnrolledPrev) continue;
 
       priorPhaseEnrolledCount += 1;
-      if (isEnrolledCurr) reEnrolledCount += 1;
     }
 
     totalReEnrolled += reEnrolledCount;
@@ -780,8 +945,8 @@ export const loadEnrollmentRateByPhase = async (queryFn, options = {}) => {
 };
 
 /**
- * Active reservations from reservedstudentstbl (same rules as class capacity on Classes page).
- * Counts status Reserved / Fee Paid; excludes Expired, Cancelled, Upgraded, and past-due unpaid.
+ * Active reservations with paid reservation fee (for dashboard KPI).
+ * Excludes unpaid Reserved, Expired, Cancelled, and Upgraded.
  * @param {Function} queryFn
  * @param {{ branchId?: number|null, classId?: number|null, curriculumId?: number|null }} options
  */
@@ -790,18 +955,7 @@ export const loadReservedStudentsCount = async (queryFn, options = {}) => {
   const params = [];
   let paramIdx = 1;
   let curriculumJoin = '';
-  const filters = [
-    "r.status IN ('Reserved', 'Fee Paid')",
-    'r.expired_at IS NULL',
-    `NOT (
-      COALESCE(r.due_date, inv.due_date) IS NOT NULL
-      AND COALESCE(r.due_date, inv.due_date)::date < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date
-      AND (
-        r.invoice_id IS NULL
-        OR COALESCE(inv.status, '') NOT IN ('Paid', 'Partially Paid')
-      )
-    )`,
-  ];
+  const filters = [RESERVATION_FEE_PAID_SQL, 'r.expired_at IS NULL'];
 
   if (branchId) {
     filters.push(`(r.branch_id = $${paramIdx} OR c.branch_id = $${paramIdx})`);
@@ -832,6 +986,220 @@ export const loadReservedStudentsCount = async (queryFn, options = {}) => {
   );
 
   return parseInt(result.rows[0]?.reserved_students_count, 10) || 0;
+};
+
+/**
+ * Reservation rows for enrollment matrices — reservation fee must be paid.
+ * @returns {Promise<Array<{ student_id, class_id, phase_number, class_name, class_level_tag, full_name, reserved_at }>>}
+ */
+export const loadActiveReservedMatrixRows = async (queryFn, options = {}) => {
+  const {
+    branchId = null,
+    classId = null,
+    curriculumId = null,
+    programId = null,
+    enrolledFrom = null,
+    enrolledTo = null,
+  } = options;
+
+  const params = [];
+  let paramIdx = 1;
+  let curriculumJoin = '';
+  const filters = [
+    RESERVATION_FEE_PAID_SQL,
+    'r.expired_at IS NULL',
+    `NOT EXISTS (
+      SELECT 1 FROM classstudentstbl cs
+      WHERE cs.student_id = r.student_id
+        AND cs.class_id = r.class_id
+        AND cs.removed_at IS NULL
+        AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed', 'pending_enrollment')
+    )`,
+  ];
+
+  if (branchId) {
+    filters.push(`(r.branch_id = $${paramIdx} OR c.branch_id = $${paramIdx})`);
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  if (classId) {
+    filters.push(`r.class_id = $${paramIdx}`);
+    params.push(classId);
+    paramIdx += 1;
+  }
+  if (programId) {
+    filters.push(`c.program_id = $${paramIdx}`);
+    params.push(programId);
+    paramIdx += 1;
+  }
+  if (curriculumId) {
+    curriculumJoin = `INNER JOIN programstbl p ON c.program_id = p.program_id AND p.curriculum_id = $${paramIdx}`;
+    params.push(curriculumId);
+    paramIdx += 1;
+  }
+  if (enrolledFrom && enrolledTo) {
+    filters.push(
+      `COALESCE(r.reservation_fee_paid_at, r.reserved_at) IS NOT NULL
+       AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date >= $${paramIdx}::date
+       AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date < $${paramIdx + 1}::date`
+    );
+    params.push(enrolledFrom, enrolledTo);
+    paramIdx += 2;
+  }
+
+  const result = await queryFn(
+    `
+      SELECT
+        r.student_id,
+        r.class_id,
+        COALESCE(r.phase_number, 1) AS phase_number,
+        COALESCE(r.reservation_fee_paid_at, r.reserved_at) AS reserved_at,
+        c.class_name,
+        c.level_tag AS class_level_tag,
+        u.full_name
+      FROM reservedstudentstbl r
+      INNER JOIN classestbl c ON r.class_id = c.class_id
+      INNER JOIN userstbl u ON u.user_id = r.student_id AND u.user_type = 'Student'
+      LEFT JOIN invoicestbl inv ON r.invoice_id = inv.invoice_id
+      ${curriculumJoin}
+      WHERE ${filters.join(' AND ')}
+      ORDER BY r.reserved_at ASC, u.full_name ASC
+    `,
+    params
+  );
+
+  return result.rows || [];
+};
+
+/**
+ * Tracks where a paid reservation converted to enrollment (upgrade or active phase-1 row).
+ * Used to show "Previous reserved" on matrix "new" cells.
+ */
+export const loadReservationToEnrollmentTrackKeys = async (queryFn, options = {}) => {
+  const { branchId = null, programId = null, classId = null, studentIds = [] } = options;
+  if (!studentIds.length) return new Set();
+
+  const params = [studentIds];
+  let paramIdx = 2;
+  const filters = [];
+  let programJoin = '';
+
+  if (branchId) {
+    filters.push(`(r.branch_id = $${paramIdx} OR c.branch_id = $${paramIdx})`);
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  if (programId) {
+    programJoin = `INNER JOIN programstbl prog ON c.program_id = prog.program_id`;
+    filters.push(`c.program_id = $${paramIdx}`);
+    params.push(programId);
+    paramIdx += 1;
+  }
+  if (classId) {
+    filters.push(`r.class_id = $${paramIdx}`);
+    params.push(classId);
+    paramIdx += 1;
+  }
+
+  const result = await queryFn(
+    `
+      SELECT DISTINCT r.student_id, r.class_id
+      FROM reservedstudentstbl r
+      INNER JOIN classestbl c ON r.class_id = c.class_id
+      LEFT JOIN invoicestbl inv ON r.invoice_id = inv.invoice_id
+      ${programJoin}
+      WHERE r.student_id = ANY($1::int[])
+        AND ${RESERVATION_FEE_PAID_SQL}
+        AND (
+          r.status = 'Upgraded'
+          OR EXISTS (
+            SELECT 1
+            FROM classstudentstbl cs
+            WHERE cs.student_id = r.student_id
+              AND cs.class_id = r.class_id
+              AND cs.removed_at IS NULL
+              AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+              AND COALESCE(cs.phase_number, 1) = 1
+          )
+        )
+        ${filters.length ? `AND ${filters.join(' AND ')}` : ''}
+    `,
+    params
+  );
+
+  return new Set(
+    (result.rows || []).map((row) =>
+      enrollmentTrackKey(parseInt(row.student_id, 10), parseInt(row.class_id, 10))
+    )
+  );
+};
+
+/** Mark "new" matrix cells that followed a paid reservation on the same class track. */
+const applyFromPreviousReservedCellFlags = (students, periodKey, trackKeys) => {
+  if (!trackKeys?.size) return;
+
+  for (const student of students) {
+    if (!trackKeys.has(student.enrollment_track_key)) continue;
+    const cells = student[periodKey] || {};
+    for (const cell of Object.values(cells)) {
+      if (cell?.label === 'new') {
+        cell.from_previous_reserved = true;
+      }
+    }
+  }
+};
+
+const trackHasActiveEnrollmentCell = (track, periodKey) => {
+  const cells = track?.[periodKey] || {};
+  return Object.values(cells).some((cell) => {
+    const status = String(cell?.status || '').toLowerCase();
+    return (
+      cell?.mark === '1' &&
+      (ENROLLED_STATUSES_LIST.includes(status) ||
+        MATRIX_ACTIVE_NON_ENROLLED_STATUSES.has(status))
+    );
+  });
+};
+
+const mergeReservedRowsIntoPhaseMatrix = (studentMap, reservedRows, phases, normalizeStatusLabel) => {
+  for (const row of reservedRows) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const phaseNumber = parseInt(row.phase_number, 10) || 1;
+    const trackKey = enrollmentTrackKey(studentId, classId);
+    const cell = {
+      mark: '1',
+      label: normalizeStatusLabel('reserved'),
+      status: 'reserved',
+      is_full_payment: false,
+    };
+
+    if (!studentMap.has(trackKey)) {
+      studentMap.set(
+        trackKey,
+        buildEnrollmentMatrixTrackRow({
+          studentId,
+          classId,
+          fullName: row.full_name,
+          className: row.class_name,
+          classLevelTag: row.class_level_tag,
+          firstEnrolledAt: row.reserved_at || null,
+          phases: { [phaseNumber]: cell },
+        })
+      );
+      continue;
+    }
+
+    const track = studentMap.get(trackKey);
+    if (trackHasActiveEnrollmentCell(track, 'phases')) continue;
+    if (!track.phases) track.phases = {};
+    if (!track.phases[phaseNumber] || track.phases[phaseNumber].mark !== '1') {
+      track.phases[phaseNumber] = cell;
+    }
+    if (!track.first_enrolled_at && row.reserved_at) {
+      track.first_enrolled_at = row.reserved_at;
+    }
+  }
 };
 
 /**
@@ -1302,7 +1670,9 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.program_enrollment_status,
           cs.removed_at,
           cs.enrolled_at,
-          ${IS_FULL_PAYMENT_SQL} AS is_full_payment
+          ${IS_FULL_PAYMENT_SQL} AS is_full_payment,
+          ${CLASS_NUMBER_OF_PHASE_SQL} AS class_number_of_phase,
+          ${INSTALLMENT_PACKAGE_COMPLETE_SQL} AS installment_package_complete
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         ${curriculumJoin}
@@ -1321,6 +1691,15 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         FROM scoped_rows
         WHERE enrolled_at IS NOT NULL
         GROUP BY student_id, class_id
+      ),
+      track_meta AS (
+        SELECT DISTINCT ON (student_id, class_id)
+          student_id,
+          class_id,
+          class_number_of_phase,
+          installment_package_complete
+        FROM scoped_rows
+        ORDER BY student_id, class_id, classstudent_id DESC
       ),
       student_phase_latest AS (
         -- Pick the latest row per student × class × phase (handles re-enroll/drop/rejoin history).
@@ -1364,12 +1743,16 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         m.program_enrollment_status,
         m.removed_at,
         m.is_full_payment,
-        tfe.first_enrolled_at
+        tfe.first_enrolled_at,
+        tm.class_number_of_phase,
+        tm.installment_package_complete
       FROM matrix m
       INNER JOIN userstbl u ON u.user_id = m.student_id
       INNER JOIN classestbl c ON c.class_id = m.class_id
       LEFT JOIN track_first_enrolled tfe
         ON tfe.student_id = m.student_id AND tfe.class_id = m.class_id
+      LEFT JOIN track_meta tm
+        ON tm.student_id = m.student_id AND tm.class_id = m.class_id
       ORDER BY tfe.first_enrolled_at ASC NULLS LAST, u.full_name ASC NULLS LAST, m.class_id ASC, m.phase_number ASC
     `,
     params
@@ -1389,6 +1772,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         return 're-enrolled';
       case 'pending_enrollment':
         return 'pending enrollment';
+      case 'reserved':
+        return 'reserved';
       default:
         return raw.replaceAll('_', ' ').toLowerCase();
     }
@@ -1409,6 +1794,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           className: row.class_name,
           classLevelTag: row.class_level_tag,
           firstEnrolledAt: row.first_enrolled_at,
+          classNumberOfPhase: row.class_number_of_phase,
+          installmentPackageComplete: row.installment_package_complete,
           phases: {},
         })
       );
@@ -1421,6 +1808,16 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
       is_full_payment: Boolean(row.is_full_payment),
     };
   }
+
+  const reservedRows = await loadActiveReservedMatrixRows(queryFn, {
+    branchId,
+    curriculumId,
+    programId,
+    classId,
+    enrolledFrom,
+    enrolledTo,
+  });
+  mergeReservedRowsIntoPhaseMatrix(studentMap, reservedRows, phases, normalizeStatusLabel);
 
   const siblingTracksByStudent = await loadUpsellSiblingTracksForPhaseMatrix(
     queryFn,
@@ -1449,40 +1846,10 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
   // Display-only normalization:
   // - Show "new" or "upsell" only on the student's first enrolled phase cell.
   // - If later enrolled phase cells still have status 'new' in DB, display as 're-enrolled'.
-  // - Full-payment: last enrolled phase in scope shows 'completed' (matches installment fully-paid rule).
+  // - Full-payment: last enrolled phase in scope shows 'completed'.
+  // - Single-phase class: mark completed when the only phase is paid (full or installment).
   for (const student of students) {
-    const firstEnrolledPhase = phases.reduce((min, p) => {
-      const cell = student.phases?.[p.key];
-      if (cell?.mark === '1') return Math.min(min, p.key);
-      return min;
-    }, Number.POSITIVE_INFINITY);
-
-    if (!Number.isFinite(firstEnrolledPhase)) continue;
-
-    student.first_enrolled_phase = firstEnrolledPhase;
-
-    let maxFullPayEnrolledPhase = 0;
-    for (const p of phases) {
-      const cell = student.phases?.[p.key];
-      if (!cell || cell.mark !== '1') continue;
-      if (cell.is_full_payment) {
-        maxFullPayEnrolledPhase = Math.max(maxFullPayEnrolledPhase, p.key);
-      }
-      if (cell.status === 'upsell' && p.key === firstEnrolledPhase) {
-        cell.label = 'upsell';
-      } else if (cell.status === 'new' && p.key !== firstEnrolledPhase) {
-        cell.label = normalizeStatusLabel('re_enrolled');
-      } else if (cell.status === 're_enrolled') {
-        cell.label = normalizeStatusLabel('re_enrolled');
-      }
-    }
-
-    if (maxFullPayEnrolledPhase > firstEnrolledPhase) {
-      const lastCell = student.phases[maxFullPayEnrolledPhase];
-      if (lastCell?.mark === '1') {
-        lastCell.label = 'completed';
-      }
-    }
+    applyPhaseMatrixTerminalCompletedLabel(student, phases, normalizeStatusLabel);
   }
 
   applyUpsellMatrixDisplayRules(students, {
@@ -1490,9 +1857,24 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     siblingTracksByStudent,
   });
   applyMatrixTrackDisplayNames(students);
+
+  const reservationTrackKeys = await loadReservationToEnrollmentTrackKeys(queryFn, {
+    branchId,
+    programId,
+    classId,
+    studentIds: [...new Set(students.map((s) => s.student_id))],
+  });
+  applyFromPreviousReservedCellFlags(students, 'phases', reservationTrackKeys);
+
   const visibleStudents = filterHiddenMatrixTracks(students);
   const cohortSize = visibleStudents.length;
+  const kpiTotals = aggregatePhaseMatrixKpiTotals(visibleStudents, phases);
   const reEnrollmentStats = computeReEnrollmentPhaseStats(phases, visibleStudents);
+
+  const rateAlignedKpiTotals = {
+    ...kpiTotals,
+    re_enrollment_count: reEnrollmentStats.total_re_enrolled_count,
+  };
 
   return {
     phases,
@@ -1502,6 +1884,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     total_re_enrolled_count: reEnrollmentStats.total_re_enrolled_count,
     total_prior_phase_enrolled_count: reEnrollmentStats.total_prior_phase_enrolled_count,
     total_re_enrollment_rate: reEnrollmentStats.total_re_enrollment_rate,
+    kpi_totals: rateAlignedKpiTotals,
     scope: enrolledFrom && enrolledTo ? 'month' : 'overall',
   };
 };
@@ -1515,6 +1898,7 @@ const normalizeEnrollmentLabel = (status) => {
   switch (status) {
     case 're_enrolled': return 're-enrolled';
     case 'pending_enrollment': return 'pending enrollment';
+    case 'reserved': return 'reserved';
     default: return status.replaceAll('_', ' ').toLowerCase();
   }
 };
@@ -2113,7 +2497,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   const queryFromMonthStart =
     selectedYear != null ? `${selectedYear - 1}-12-01` : fromMonthStart;
 
-  const buildScopeJoins = (startIdx, targetParams) => {
+  const buildScopeJoins = (startIdx, targetParams, options = {}) => {
+    const { classIdColumn = 'cs.class_id' } = options;
     let idx = startIdx;
     let branchJoinSql = '';
     let programJoinSql = '';
@@ -2129,7 +2514,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       idx += 1;
     }
     if (classId) {
-      classJoinSql = `AND cs.class_id = $${idx}`;
+      classJoinSql = `AND ${classIdColumn} = $${idx}`;
       targetParams.push(classId);
       idx += 1;
     }
@@ -2293,7 +2678,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.removed_at,
           cs.enrolled_at,
           c.start_date                                                           AS class_start_date,
-          ${IS_FULL_PAYMENT_SQL}                                                                      AS is_full_payment
+          ${IS_FULL_PAYMENT_SQL}                                                                      AS is_full_payment,
+          ${CLASS_NUMBER_OF_PHASE_SQL}                                           AS class_number_of_phase,
+          ${INSTALLMENT_PACKAGE_COMPLETE_SQL}                                      AS installment_package_complete
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${scopeBranchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
@@ -2304,6 +2691,15 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           )
           ${scopeProgramJoin}
           ${scopeClassJoin}
+      ),
+      track_meta AS (
+        SELECT DISTINCT ON (student_id, class_id)
+          student_id,
+          class_id,
+          class_number_of_phase,
+          installment_package_complete
+        FROM scoped_rows
+        ORDER BY student_id, class_id, classstudent_id DESC
       ),
       anchor AS (
         SELECT DISTINCT ON (student_id, class_id)
@@ -2361,6 +2757,28 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           AND removed_at IS NULL
         GROUP BY student_id, class_id
       ),
+      package_complete AS (
+        SELECT
+          pb.student_id,
+          pb.class_id,
+          MAX(pb.billing_month) AS terminal_billing_month
+        FROM phase_billing pb
+        INNER JOIN track_meta tm
+          ON tm.student_id = pb.student_id
+         AND tm.class_id = pb.class_id
+        WHERE pb.billing_month IS NOT NULL
+          AND pb.program_enrollment_status IN ${ENROLLED_STATUSES}
+          AND pb.removed_at IS NULL
+          AND (
+            pb.is_full_payment = true
+            OR pb.program_enrollment_status = 'completed'
+            OR (
+              tm.installment_package_complete = true
+              AND pb.phase_number = tm.class_number_of_phase
+            )
+          )
+        GROUP BY pb.student_id, pb.class_id
+      ),
       track_first_enrolled AS (
         SELECT student_id, class_id, MIN(enrolled_at) AS first_enrolled_at
         FROM scoped_rows
@@ -2372,12 +2790,19 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         tfe.class_id,
         tfe.first_enrolled_at,
         TO_CHAR(fe.first_billing_month, 'YYYY-MM') AS first_enrolled_month_key,
-        TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key
+        TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key,
+        TO_CHAR(pc.terminal_billing_month, 'YYYY-MM') AS package_complete_month_key,
+        tm.class_number_of_phase,
+        tm.installment_package_complete
       FROM track_first_enrolled tfe
       LEFT JOIN first_enrolled fe
         ON fe.student_id = tfe.student_id AND fe.class_id = tfe.class_id
       LEFT JOIN last_full_pay lfp
         ON lfp.student_id = tfe.student_id AND lfp.class_id = tfe.class_id
+      LEFT JOIN package_complete pc
+        ON pc.student_id = tfe.student_id AND pc.class_id = tfe.class_id
+      LEFT JOIN track_meta tm
+        ON tm.student_id = tfe.student_id AND tm.class_id = tfe.class_id
     `,
     scopeParams
   );
@@ -2385,6 +2810,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   const firstEnrolledByTrack = new Map();
   const firstEnrolledAtByTrack = new Map();
   const lastFullPayMonthByTrack = new Map();
+  const packageCompleteMonthByTrack = new Map();
+  const classNumberOfPhaseByTrack = new Map();
+  const installmentCompleteByTrack = new Map();
   for (const row of firstEnrollResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
     const classId = parseInt(row.class_id, 10);
@@ -2397,6 +2825,15 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
     if (row.last_full_pay_month_key) {
       lastFullPayMonthByTrack.set(trackKey, row.last_full_pay_month_key);
+    }
+    if (row.package_complete_month_key) {
+      packageCompleteMonthByTrack.set(trackKey, row.package_complete_month_key);
+    }
+    if (row.class_number_of_phase != null) {
+      classNumberOfPhaseByTrack.set(trackKey, parseInt(row.class_number_of_phase, 10) || 1);
+    }
+    if (row.installment_package_complete) {
+      installmentCompleteByTrack.set(trackKey, true);
     }
   }
 
@@ -2436,6 +2873,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           firstEnrolledAt: firstEnrolledAtByTrack.get(trackKey) || null,
           firstEnrolledMonthKey: firstEnrolledByTrack.get(trackKey) || null,
           lastFullPayMonthKey: lastFullPayMonthByTrack.get(trackKey) || null,
+          classNumberOfPhase: classNumberOfPhaseByTrack.get(trackKey) ?? null,
+          installmentPackageComplete: installmentCompleteByTrack.get(trackKey) || false,
+          packageCompleteMonthKey: packageCompleteMonthByTrack.get(trackKey) || null,
           months: {},
         })
       );
@@ -2444,8 +2884,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
     const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
-    const mark = isEnrolled ? '1' : '-';
-    const label = isEnrolled
+    const isReservedOrPending =
+      (status === 'reserved' || status === 'pending_enrollment') && removedAt == null;
+    const mark = isEnrolled || isReservedOrPending ? '1' : '-';
+    const label = isEnrolled || isReservedOrPending
       ? normalizeEnrollmentLabel(status)
       : status === 'dropped' || removedAt != null
         ? 'dropped/unenrolled'
@@ -2694,6 +3136,88 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
+  // Active reservations by reserved_at month (before "new" overlay so paid enrollments win).
+  const reservedCalendarParams = [fromMonthStart, displayEnrolledToExclusive];
+  const {
+    branchJoin: reservedBranchJoin,
+    programJoin: reservedProgramJoin,
+    classJoin: reservedClassJoin,
+  } = buildScopeJoins(3, reservedCalendarParams, {
+    classIdColumn: 'r.class_id',
+  });
+
+  const reservedCalendarResult = await queryFn(
+    `
+      SELECT DISTINCT
+        r.student_id,
+        r.class_id,
+        c.class_name,
+        c.level_tag AS class_level_tag,
+        u.full_name,
+        TO_CHAR(
+          TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at)),
+          'YYYY-MM'
+        ) AS month_key,
+        COALESCE(r.reservation_fee_paid_at, r.reserved_at) AS reserved_at
+      FROM reservedstudentstbl r
+      INNER JOIN classestbl c ON r.class_id = c.class_id ${reservedBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = r.student_id AND u.user_type = 'Student'
+      LEFT JOIN invoicestbl inv ON r.invoice_id = inv.invoice_id
+      WHERE ${RESERVATION_FEE_PAID_SQL}
+        AND r.expired_at IS NULL
+        AND COALESCE(r.reservation_fee_paid_at, r.reserved_at) IS NOT NULL
+        AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date >= $1::date
+        AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date < $2::date
+        AND NOT EXISTS (
+          SELECT 1 FROM classstudentstbl cs
+          WHERE cs.student_id = r.student_id
+            AND cs.class_id = r.class_id
+            AND cs.removed_at IS NULL
+            AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed', 'pending_enrollment')
+        )
+        ${reservedProgramJoin}
+        ${reservedClassJoin}
+    `,
+    reservedCalendarParams
+  );
+
+  for (const row of reservedCalendarResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(
+      studentId,
+      classId,
+      row.full_name,
+      row.class_name,
+      row.class_level_tag
+    );
+    const existing = student.months[monthKey];
+    if (
+      existing?.mark === '1' &&
+      ['new', 're_enrolled', 'upsell', 'rejoin', 'completed', 'pending_enrollment'].includes(
+        String(existing.status || '').toLowerCase()
+      )
+    ) {
+      continue;
+    }
+    student.months[monthKey] = {
+      mark: '1',
+      label: 'reserved',
+      status: 'reserved',
+      calendar_reserved: true,
+      is_full_payment: false,
+    };
+    if (!student.first_enrolled_at && row.reserved_at) {
+      student.first_enrolled_at = row.reserved_at;
+    }
+    if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
+      student.first_enrolled_month_key = monthKey;
+    }
+  }
+
   // New by enrolled_at calendar month — applied last so it wins over billing-month dropped.
   // Phase 1 only: installment phase 2+ rows are often stored as status 'new' when paid but are
   // continuations; those stay on billing-month logic and display as re-enrolled.
@@ -2837,8 +3361,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     displayMonthKeys,
   });
 
-  // Full-payment: final package billing month → "completed" (non-merged tracks only;
+  // Final package billing month → "completed" (non-merged tracks only;
   // merged upsell anchors are handled during applyUpsellMonthMatrixSameRowRules).
+  // Single-phase classes allow the terminal month to equal the first enrolled month.
   for (const student of students) {
     if (student.matrix_merged_upsell_anchor) continue;
 
@@ -2854,13 +3379,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     if (!firstEnrolledKey) continue;
 
-    const lastFullPayMonthKey = student.last_full_pay_month_key || null;
-    if (
-      lastFullPayMonthKey &&
-      lastFullPayMonthKey > firstEnrolledKey &&
-      displayMonthKeys.has(lastFullPayMonthKey)
-    ) {
-      const lastCell = student.months[lastFullPayMonthKey];
+    const terminalMonthKey = resolveTerminalCompletionMonthKey(student, firstEnrolledKey);
+    if (terminalMonthKey && displayMonthKeys.has(terminalMonthKey)) {
+      const lastCell = student.months[terminalMonthKey];
       if (lastCell?.mark === '1') {
         lastCell.label = 'completed';
         lastCell.status = 'completed';
@@ -2868,12 +3389,26 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
+  const reservationTrackKeys = await loadReservationToEnrollmentTrackKeys(queryFn, {
+    branchId,
+    programId,
+    classId,
+    studentIds: [...new Set(students.map((s) => s.student_id))],
+  });
+  applyFromPreviousReservedCellFlags(students, 'months', reservationTrackKeys);
+
   const visibleStudents = filterHiddenMatrixTracks(students);
   const cohortSize = visibleStudents.length;
 
+  const kpiTotals = aggregateMonthMatrixKpiTotals(visibleStudents, months);
   const reEnrollmentStats = computeReEnrollmentMonthStats(months, visibleStudents, {
     selectedYear,
   });
+
+  const rateAlignedKpiTotals = {
+    ...kpiTotals,
+    re_enrollment_count: reEnrollmentStats.total_re_enrolled_count,
+  };
 
   return {
     months,
@@ -2883,6 +3418,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     total_re_enrolled_count: reEnrollmentStats.total_re_enrolled_count,
     total_prior_month_enrolled_count: reEnrollmentStats.total_prior_month_enrolled_count,
     total_re_enrollment_rate: reEnrollmentStats.total_re_enrollment_rate,
+    kpi_totals: rateAlignedKpiTotals,
     from_month: fromYM,
     to_month: toYM,
     selected_year: selectedYear,
@@ -2896,8 +3432,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 export const countMonthMatrixStatusLabels = (students, monthKey) => {
   let newEnrolleesCount = 0;
   let reEnrollmentCount = 0;
+  let upsellCount = 0;
   let droppedUnenrolledCount = 0;
   let rejoinCount = 0;
+  let reservedCount = 0;
 
   for (const student of students) {
     const cell = student.months?.[monthKey];
@@ -2908,8 +3446,13 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
         newEnrolleesCount += 1;
         break;
       case 're-enrolled':
-      case 'upsell':
         reEnrollmentCount += 1;
+        break;
+      case 'upsell':
+        upsellCount += 1;
+        break;
+      case 'reserved':
+        reservedCount += 1;
         break;
       case 'dropped/unenrolled':
         droppedUnenrolledCount += 1;
@@ -2925,9 +3468,109 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
   return {
     new_enrollees_count: newEnrolleesCount,
     re_enrollment_count: reEnrollmentCount,
+    upsell_count: upsellCount,
+    reserved_count: reservedCount,
     dropped_unenrolled_count: droppedUnenrolledCount,
     rejoin_count: rejoinCount,
   };
+};
+
+/**
+ * Count matrix cell labels for one display phase (after display rules).
+ * Matches visible cells on the Phase Re-enrollment matrix table.
+ */
+export const countPhaseMatrixStatusLabels = (students, phaseKey) => {
+  let newEnrolleesCount = 0;
+  let reEnrollmentCount = 0;
+  let upsellCount = 0;
+  let droppedUnenrolledCount = 0;
+  let rejoinCount = 0;
+  let reservedCount = 0;
+
+  for (const student of students) {
+    const cell = student.phases?.[phaseKey];
+    if (!cell?.label) continue;
+
+    switch (cell.label) {
+      case 'new':
+        newEnrolleesCount += 1;
+        break;
+      case 're-enrolled':
+        reEnrollmentCount += 1;
+        break;
+      case 'upsell':
+        upsellCount += 1;
+        break;
+      case 'reserved':
+        reservedCount += 1;
+        break;
+      case 'dropped/unenrolled':
+        droppedUnenrolledCount += 1;
+        break;
+      case 'rejoin':
+        rejoinCount += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    new_enrollees_count: newEnrolleesCount,
+    re_enrollment_count: reEnrollmentCount,
+    upsell_count: upsellCount,
+    reserved_count: reservedCount,
+    dropped_unenrolled_count: droppedUnenrolledCount,
+    rejoin_count: rejoinCount,
+  };
+};
+
+/** Sum status labels across all months in a month matrix (selected year scope). */
+export const aggregateMonthMatrixKpiTotals = (students, months = []) => {
+  const totals = {
+    new_enrollees_count: 0,
+    re_enrollment_count: 0,
+    upsell_count: 0,
+    reserved_count: 0,
+    dropped_count: 0,
+    rejoin_count: 0,
+  };
+
+  for (const month of months) {
+    const counts = countMonthMatrixStatusLabels(students, month.key);
+    totals.new_enrollees_count += counts.new_enrollees_count;
+    totals.re_enrollment_count += counts.re_enrollment_count;
+    totals.upsell_count += counts.upsell_count;
+    totals.reserved_count += counts.reserved_count;
+    totals.dropped_count += counts.dropped_unenrolled_count;
+    totals.rejoin_count += counts.rejoin_count;
+  }
+
+  return totals;
+};
+
+/** Sum status labels across all phases in a phase matrix (year scope when matrix is year-filtered). */
+export const aggregatePhaseMatrixKpiTotals = (students, phases = []) => {
+  const totals = {
+    new_enrollees_count: 0,
+    re_enrollment_count: 0,
+    upsell_count: 0,
+    reserved_count: 0,
+    dropped_count: 0,
+    rejoin_count: 0,
+  };
+
+  for (const phase of phases) {
+    const counts = countPhaseMatrixStatusLabels(students, phase.key);
+    totals.new_enrollees_count += counts.new_enrollees_count;
+    totals.re_enrollment_count += counts.re_enrollment_count;
+    totals.upsell_count += counts.upsell_count;
+    totals.reserved_count += counts.reserved_count;
+    totals.dropped_count += counts.dropped_unenrolled_count;
+    totals.rejoin_count += counts.rejoin_count;
+  }
+
+  return totals;
 };
 
 /**

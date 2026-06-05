@@ -16,6 +16,7 @@ import {
   isPhaseInstallmentProfile,
 } from '../utils/phaseInstallmentUtils.js';
 import { paymentLogApprovalFromArVerification } from '../lib/paymentLogArApproval.js';
+import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
@@ -41,10 +42,20 @@ import {
   removeUnusedBalanceInvoice,
 } from '../utils/balanceInvoice.js';
 import {
+  PAYMENT_LOG_INVOICE_CONTEXT_JOIN,
+  PAYMENT_LOG_INVOICE_CONTEXT_SELECT,
+  PAYMENT_LOG_INVOICE_STATUS_SELECT,
+} from '../utils/paymentLogInvoiceContextSql.js';
+import {
   deriveInvoiceStatusForInvoice,
   invoiceHasRejectedPayment,
 } from '../utils/invoicePaymentStatus.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
+import { enrollStudentForFullPaymentPhases } from '../utils/fullPaymentPhaseEnrollment.js';
+import {
+  applyInstallmentToFullPaymentConversion,
+  parseFullPaymentChangeRemarks,
+} from '../lib/packageChangeConversion.js';
 
 const router = express.Router();
 
@@ -66,82 +77,6 @@ const getFullPaymentPhaseEnrollmentStatus = async ({ client, studentId, classId,
     phaseNumber,
     defaultStatus,
   });
-};
-
-const enrollStudentForFullPaymentPhases = async ({
-  client,
-  studentId,
-  classId,
-  phaseStart,
-  phaseEnd,
-  sourceLabel,
-}) => {
-  let insertedOrReactivated = 0;
-  for (let phase = phaseStart; phase <= phaseEnd; phase++) {
-    const activePhase = await client.query(
-      `SELECT classstudent_id
-       FROM classstudentstbl
-       WHERE student_id = $1
-         AND class_id = $2
-         AND phase_number = $3
-         AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-         AND removed_at IS NULL
-       LIMIT 1`,
-      [studentId, classId, phase]
-    );
-    if (activePhase.rows.length > 0) continue;
-
-    const defaultStatus =
-      phase === phaseEnd && phaseEnd > phaseStart
-        ? PROGRAM_ENROLLMENT_STATUS.COMPLETED
-        : Number(phase) === Number(phaseStart)
-          ? PROGRAM_ENROLLMENT_STATUS.NEW
-          : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
-
-    const fullPayStatus = await determineRejoinAwarePhaseStatus({
-      db: client,
-      studentId,
-      classId,
-      phaseNumber: phase,
-      defaultStatus,
-    });
-
-    const droppedPhase = await client.query(
-      `SELECT classstudent_id
-       FROM classstudentstbl
-       WHERE student_id = $1
-         AND class_id = $2
-         AND phase_number = $3
-         AND program_enrollment_status = 'dropped'
-       ORDER BY removed_at DESC NULLS LAST, classstudent_id DESC
-       LIMIT 1`,
-      [studentId, classId, phase]
-    );
-
-    if (droppedPhase.rows.length > 0) {
-      await client.query(
-        `UPDATE classstudentstbl
-         SET program_enrollment_status = $1,
-             removed_at = NULL,
-             removed_reason = NULL,
-             removed_by = NULL,
-             enrolled_by = $2,
-             enrolled_at = CURRENT_TIMESTAMP
-         WHERE classstudent_id = $3`,
-        [fullPayStatus, sourceLabel, droppedPhase.rows[0].classstudent_id]
-      );
-    } else {
-      await client.query(
-        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [studentId, classId, sourceLabel, phase, fullPayStatus]
-      );
-    }
-
-    insertedOrReactivated += 1;
-  }
-
-  return insertedOrReactivated;
 };
 
 /** After a rejoin class invoice is paid, sync installment billing to the rejoin phase (skip dropped gaps). */
@@ -1025,7 +960,7 @@ router.get(
                         rejecter.full_name as rejected_by_name,
                         u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                         i.invoice_description, i.amount as invoice_amount,
-                        i.status AS invoice_status,
+                        i.status AS invoice_status,${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                         COALESCE(i.amount, 0) + COALESCE((
                           SELECT SUM(COALESCE(px.tip_amount, 0))
                           FROM paymenttbl px
@@ -1042,7 +977,7 @@ router.get(
                         ar.prospect_student_name as ar_prospect_student_name
                  FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
-                 LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                 LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
                  LEFT JOIN userstbl payment_creator ON p.created_by = payment_creator.user_id
                  LEFT JOIN userstbl invoice_issuer ON i.created_by = invoice_issuer.user_id
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
@@ -1661,6 +1596,7 @@ router.get(
                            rejecter.full_name as rejected_by_name,
                            u.full_name as student_name, u.email as student_email, u.level_tag as student_level_tag,
                            i.invoice_description, i.amount as invoice_amount,
+                           ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                            COALESCE(i.amount, 0) + COALESCE((
                              SELECT SUM(COALESCE(px.tip_amount, 0))
                              FROM paymenttbl px
@@ -1677,7 +1613,7 @@ router.get(
                            ar.prospect_student_name as ar_prospect_student_name
                     FROM paymenttbl p
                     LEFT JOIN userstbl u ON p.student_id = u.user_id
-                    LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                    LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
                     LEFT JOIN userstbl payment_creator ON p.created_by = payment_creator.user_id
                     LEFT JOIN userstbl invoice_issuer ON i.created_by = invoice_issuer.user_id
                     LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
@@ -2068,6 +2004,7 @@ router.get(
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         u.full_name as student_name, u.email as student_email,
                         i.invoice_description, i.amount as invoice_amount,
+                        ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                         COALESCE(i.amount, 0) + COALESCE((
                           SELECT SUM(COALESCE(px.tip_amount, 0))
                           FROM paymenttbl px
@@ -2081,7 +2018,7 @@ router.get(
 
       const joins = `FROM paymenttbl p
                  LEFT JOIN userstbl u ON p.student_id = u.user_id
-                 LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+                 LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
                  LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
                  LEFT JOIN userstbl approver ON p.approved_by = approver.user_id
                  LEFT JOIN acknowledgement_receiptstbl ar ON ar.payment_id = p.payment_id`;
@@ -2235,6 +2172,7 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                 COALESCE(i.amount, 0) + COALESCE((
                   SELECT SUM(COALESCE(px.tip_amount, 0))
                   FROM paymenttbl px
@@ -2245,7 +2183,7 @@ router.get(
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
-         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
          LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
          WHERE p.payment_id = $1`,
         [id]
@@ -2394,6 +2332,18 @@ router.post(
           success: false,
           message: `This invoice is closed for new payments. Record payments on ${lab} (balance invoice).`,
         });
+      }
+
+      if (invoice.installmentinvoiceprofiles_id) {
+        const priorBlock = await getPriorPartialBalanceBlockers(client, invoice_id);
+        if (priorBlock.blocked) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: priorBlock.message,
+            prior_partial_balance_block: priorBlock,
+          });
+        }
       }
 
       // Verify student exists
@@ -2849,13 +2799,58 @@ router.post(
         }
       }
       
+      // Installment → full payment conversion invoice settled
+      if (newInvoiceStatus === 'Paid' && invoice.remarks) {
+        const fullPaymentChange = parseFullPaymentChangeRemarks(invoice.remarks);
+        if (
+          fullPaymentChange?.classId &&
+          fullPaymentChange?.studentId &&
+          fullPaymentChange?.profileId &&
+          fullPaymentChange?.phaseStart &&
+          fullPaymentChange?.phaseEnd
+        ) {
+          try {
+            const { changedRows } = await applyInstallmentToFullPaymentConversion(client, {
+              classId: fullPaymentChange.classId,
+              studentId: fullPaymentChange.studentId,
+              profileId: fullPaymentChange.profileId,
+              phaseStart: fullPaymentChange.phaseStart,
+              phaseEnd: fullPaymentChange.phaseEnd,
+              conversionInvoiceId: invoice_id,
+              sourceLabel:
+                'System (Installment plan converted to full payment after settlement)',
+            });
+            if (changedRows > 0) {
+              console.log(
+                `✅ Full payment conversion: enrolled ${changedRows} phase row(s) for student ${fullPaymentChange.studentId} in phases ${fullPaymentChange.phaseStart}-${fullPaymentChange.phaseEnd}`
+              );
+            }
+            const conversionMerch = await tryIssuePackageMerchandiseOnFirstPayment(client, {
+              invoice,
+              studentId: fullPaymentChange.studentId,
+              paymentId: newPayment.payment_id,
+              paymentIssueDate: issue_date,
+              createdBy: req.user.userId || req.user.user_id || null,
+            });
+            if (conversionMerch.issued) {
+              console.log(
+                `✅ Package merchandise issued on full payment conversion (payment ${newPayment.payment_id})`
+              );
+            }
+          } catch (conversionError) {
+            console.error('Error completing installment to full payment conversion:', conversionError);
+          }
+        }
+      }
+
       // Check if this is a full payment invoice (not installment, not reservation fee)
       // If yes, and invoice is now fully paid, enroll student in all phases
       // For Phase packages, only enroll in the specified phase range (PHASE_START/PHASE_END in remarks)
       if (newInvoiceStatus === 'Paid' && 
           !invoice.installmentinvoiceprofiles_id && 
           invoice.invoice_description && 
-          !invoice.invoice_description.includes('Reservation Fee')) {
+          !invoice.invoice_description.includes('Reservation Fee') &&
+          !String(invoice.remarks || '').includes('PACKAGE_CHANGE_TO_FULLPAYMENT')) {
         try {
           // Get class_id from invoice remarks field (stored as CLASS_ID:class_id)
           let classId = null;
@@ -2980,6 +2975,7 @@ router.post(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                 COALESCE(i.amount, 0) + COALESCE((
                   SELECT SUM(COALESCE(px.tip_amount, 0))
                   FROM paymenttbl px
@@ -2990,7 +2986,7 @@ router.post(
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
-         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
          LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
          WHERE p.payment_id = $1`,
         [newPayment.payment_id]
@@ -3560,6 +3556,7 @@ router.put(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                 COALESCE(i.amount, 0) + COALESCE((
                   SELECT SUM(COALESCE(px.tip_amount, 0))
                   FROM paymenttbl px
@@ -3570,7 +3567,7 @@ router.put(
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
-         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
          LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
          WHERE p.payment_id = $1`,
         [id]
@@ -3913,6 +3910,7 @@ router.get(
                 TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
                 u.full_name as student_name, u.email as student_email,
                 i.invoice_description, i.amount as invoice_amount,
+                ${PAYMENT_LOG_INVOICE_STATUS_SELECT}${PAYMENT_LOG_INVOICE_CONTEXT_SELECT},
                 COALESCE(i.amount, 0) + COALESCE((
                   SELECT SUM(COALESCE(px.tip_amount, 0))
                   FROM paymenttbl px
@@ -3923,7 +3921,7 @@ router.get(
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON p.student_id = u.user_id
-         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+         LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id${PAYMENT_LOG_INVOICE_CONTEXT_JOIN}
          LEFT JOIN branchestbl b ON p.branch_id = b.branch_id
          WHERE p.student_id = $1
          ORDER BY p.payment_id DESC`,

@@ -36,13 +36,17 @@ export default function AcknowledgementReceiptStylePreview({
   const sumFromRows = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const total = totalAmount != null && !Number.isNaN(Number(totalAmount)) ? Number(totalAmount) : sumFromRows;
   const padCount =
-    rows.length > 0 ? Math.max(0, (emptyRowCount || MIN_DATA_ROWS) - rows.length) : 0;
+    rows.length > 0 && rows.length < (emptyRowCount || MIN_DATA_ROWS)
+      ? Math.max(0, (emptyRowCount || MIN_DATA_ROWS) - rows.length)
+      : 0;
 
   const addrLine = (branchAddress || '').trim() || (branchFallbackLine || '').trim() || '—';
   const phoneLine = (branchPhone || '').trim() || '—';
   const emailLine = (branchEmail || '').trim() || '—';
 
-  const cellBorder = 'border border-gray-900 px-2 py-1.5 align-top text-[11px] sm:text-xs';
+  const cellBorder =
+    'border border-gray-900 px-2 py-2 align-top text-[11px] leading-snug sm:text-xs sm:leading-normal';
+  const descCellClass = `${cellBorder} break-words whitespace-normal`;
 
   return (
     <div
@@ -115,7 +119,7 @@ export default function AcknowledgementReceiptStylePreview({
             ) : (
               rows.map((row, idx) => (
                 <tr key={idx}>
-                  <td className={`${cellBorder} break-words`}>{row.description || '—'}</td>
+                  <td className={descCellClass}>{row.description || '—'}</td>
                   <td className={`${cellBorder} whitespace-nowrap text-right`}>
                     {formatPhpReceiptLine(row.rate)}
                   </td>

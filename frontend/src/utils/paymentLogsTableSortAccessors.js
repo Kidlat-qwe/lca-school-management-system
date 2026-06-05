@@ -2,6 +2,7 @@ import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
 } from './paymentLogTableAmounts';
+import { getPaymentLogPackageItemDisplayText } from './paymentLogPackageItem';
 
 /**
  * String key aligned with Invoice column ordering: real invoices first (by numeric id), then AR/other.
@@ -39,7 +40,7 @@ export function buildPaymentLogsTableSortAccessors({ branchAccessor, issuedByAcc
     issue_date: { accessor: 'issue_date', type: 'date' },
     payment_date: { accessor: 'payment_date', type: 'date' },
     student_name: { accessor: (p) => String(p?.student_name ?? '').trim(), type: 'string' },
-    package_item: { accessor: (p) => String(p?.invoice_description ?? '').trim(), type: 'string' },
+    package_item: { accessor: (p) => getPaymentLogPackageItemDisplayText(p), type: 'string' },
     level_tag: { accessor: (p) => String(p?.student_level_tag ?? '').trim(), type: 'string' },
     payment_method: { accessor: (p) => String(p?.payment_method ?? '').trim(), type: 'string' },
     amount: { accessor: (p) => getPaymentLogTableAmountColumn(p), type: 'number' },
@@ -56,7 +57,7 @@ export function buildPaymentLogsTableSortAccessors({ branchAccessor, issuedByAcc
 export function buildStudentPaymentLogsTableSortAccessors() {
   return {
     invoice: { accessor: paymentLogsInvoiceSortKey, type: 'string' },
-    description: { accessor: (p) => String(p?.invoice_description ?? '').trim(), type: 'string' },
+    description: { accessor: (p) => getPaymentLogPackageItemDisplayText(p), type: 'string' },
     payment_method: { accessor: (p) => String(p?.payment_method ?? '').trim(), type: 'string' },
     payment_type: { accessor: (p) => String(p?.payment_type ?? '').trim(), type: 'string' },
     amount: { accessor: (p) => parseFloat(p?.payable_amount) || 0, type: 'number' },

@@ -10,6 +10,10 @@ import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExpor
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { buildStudentPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
+import {
+  getPaymentLogPackageItemContext,
+  getPaymentLogPackageItemDisplayText,
+} from '../../utils/paymentLogPackageItem';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -234,7 +238,7 @@ const StudentPaymentLogs = () => {
 
       const excelData = exportModalPayments.map((payment) => ({
         'Invoice ID': payment.invoice_id ? `INV-${payment.invoice_id}` : '-',
-        'Invoice Description': payment.invoice_description || '-',
+        'Invoice Description': getPaymentLogPackageItemDisplayText(payment),
         'Payment Method': payment.payment_method || '-',
         'Payment Type': payment.payment_type || '-',
         'Amount (₱)': payment.payable_amount ? parseFloat(payment.payable_amount).toFixed(2) : '0.00',
@@ -564,11 +568,21 @@ const StudentPaymentLogs = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900" style={{ maxWidth: '200px' }}>
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-medium truncate" title={payment.invoice_description || `INV-${payment.invoice_id}`}>{payment.invoice_description || `INV-${payment.invoice_id}`}</span>
-                        <span className="text-xs text-gray-500">Invoice: {formatCurrency(payment.invoice_amount)}</span>
-                      </div>
+                    <td className="px-6 py-4 text-sm text-gray-900 align-top" style={{ maxWidth: '220px' }}>
+                      {(() => {
+                        const { main, context } = getPaymentLogPackageItemContext(payment);
+                        return (
+                          <div className="flex flex-col min-w-0 leading-snug space-y-0.5">
+                            <span className="font-medium break-words" title={getPaymentLogPackageItemDisplayText(payment)}>
+                              {main}
+                            </span>
+                            {context ? (
+                              <span className="text-xs text-sky-700 break-words">{context}</span>
+                            ) : null}
+                            <span className="text-xs text-gray-500">Invoice: {formatCurrency(payment.invoice_amount)}</span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       {getPaymentMethodBadge(payment.payment_method)}

@@ -17,6 +17,15 @@ const DAY_NAME_TO_INDEX = {
   Saturday: 6,
 };
 
+/** User-facing label for calendar cells (current class name, not stale session code). */
+const getCalendarEventDisplayName = (row, classCode = null) => {
+  const name = String(row.class_name || '').trim();
+  if (name) return name;
+  if (row.level_tag) return row.level_tag;
+  if (classCode) return classCode;
+  return row.program_name || row.program_code || `Class ${row.class_id}`;
+};
+
 const formatDate = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -277,6 +286,7 @@ router.get(
             event_id: `${row.class_id}-${dateStr}-${row.start_time}-${row.day_of_week}`,
             class_id: row.class_id,
             title: row.program_code || row.program_name || `Class ${row.class_id}`,
+            display_name: getCalendarEventDisplayName(row),
             program_name: row.program_name,
             program_code: row.program_code,
             class_name: row.class_name,
@@ -833,6 +843,7 @@ router.get(
             event_id: `${row.class_id}-${dateStr}-${row.start_time}-${row.day_of_week}`,
             class_id: row.class_id,
             title: row.program_code || row.program_name || `Class ${row.class_id}`,
+            display_name: getCalendarEventDisplayName(row, classCode),
             program_name: row.program_name,
             program_code: row.program_code,
             class_name: row.class_name,

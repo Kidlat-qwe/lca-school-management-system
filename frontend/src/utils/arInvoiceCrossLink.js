@@ -33,26 +33,45 @@ export function buildInvoiceListLink(userType, invoiceId) {
   return `${getInvoiceListPath(userType)}?invoice_id=${id}`;
 }
 
-/** Link to AR list — prefer invoice_id (from Invoice page), then ack_receipt_id, then AR# search. */
+/** Link to AR list — prefer ack_receipt_id, then invoice_id (from Invoice page), then AR# search. */
+/** True when this invoice row originated from or was linked to the Acknowledgement Receipts flow. */
+export function isInvoiceLinkedToAcknowledgementReceipt(invoice) {
+  const onInvoice = Number(invoice?.ack_receipt_id);
+  if (Number.isFinite(onInvoice) && onInvoice > 0) return true;
+  const linked = Number(invoice?.linked_ack_receipt_id);
+  return Number.isFinite(linked) && linked > 0;
+}
+
+export function resolveInvoiceAckReceiptIdForCrossLink(invoice) {
+  const onInvoice = Number(invoice?.ack_receipt_id);
+  if (Number.isFinite(onInvoice) && onInvoice > 0) return onInvoice;
+  const linked = Number(invoice?.linked_ack_receipt_id);
+  if (Number.isFinite(linked) && linked > 0) return linked;
+  return null;
+}
+
 export function buildAcknowledgementReceiptsListLink(userType, { ackReceiptId, arNumber, invoiceId } = {}) {
   const base = getAcknowledgementReceiptsListPath(userType);
-  const invId = Number(invoiceId);
-  if (Number.isFinite(invId) && invId > 0) {
-    const num = String(arNumber || '').trim();
-    if (num) {
-      return `${base}?invoice_id=${invId}&ar_focus=1&search=${encodeURIComponent(num)}`;
-    }
-    return `${base}?invoice_id=${invId}&ar_focus=1`;
-  }
-  const arId = Number(ackReceiptId);
-  if (Number.isFinite(arId) && arId > 0) {
-    return `${base}?ack_receipt_id=${arId}`;
-  }
   const arNum = String(arNumber || '').trim();
-  if (arNum) {
-    return `${base}?search=${encodeURIComponent(arNum)}&ar_focus=1`;
+  const ackId = Number(ackReceiptId);
+  const invId = Number(invoiceId);
+  const hasAck = Number.isFinite(ackId) && ackId > 0;
+  const hasInv = Number.isFinite(invId) && invId > 0;
+  const hasArNum = Boolean(arNum);
+
+  if (!hasAck && !hasInv && !hasArNum) return null;
+
+  const params = new URLSearchParams();
+  if (hasAck) params.set('ack_receipt_id', String(ackId));
+  if (hasInv) params.set('invoice_id', String(invId));
+  if (hasArNum) {
+    params.set('search', arNum);
+    params.set('ar_focus', '1');
+  } else if (hasAck || hasInv) {
+    params.set('ar_focus', '1');
   }
-  return null;
+
+  return `${base}?${params.toString()}`;
 }
 
 export function isInvoiceListFocused(invoice, focus) {
@@ -150,7 +169,7 @@ export function useAckReceiptFocusFromQuery({
     if (!hasAckId && !searchCrossLink && !invoiceCrossLink) return;
 
     const handleKey = hasAckId
-      ? `ack:${ackId}`
+      ? `ack:${ackId}:${searchRaw || ''}`
       : invoiceCrossLink
         ? `inv:${invoiceCrossLinkId}`
         : `search:${searchRaw}`;
@@ -172,8 +191,12 @@ export function useAckReceiptFocusFromQuery({
       try {
         if (hasAckId) {
           setFocusAckReceiptId(ackId);
-          setSearchTerm(String(ackId));
-          await refetchRef.current?.(String(ackId), { invoiceId: null });
+          const invoiceIdForFetch = Number.isFinite(invoiceCrossLinkId) && invoiceCrossLinkId > 0
+            ? invoiceCrossLinkId
+            : null;
+          const searchForList = searchRaw || String(ackId);
+          setSearchTerm(searchForList);
+          await refetchRef.current?.(searchForList, { invoiceId: invoiceIdForFetch });
           if (cancelled) return;
 
           const response = await apiRequest(`/acknowledgement-receipts/${ackId}`);
@@ -182,12 +205,14 @@ export function useAckReceiptFocusFromQuery({
           if (ar?.ack_receipt_id) {
             setCrossLinkLoadedReceipt(ar);
           }
-          const arNum =
-            ar?.display_ar_number || ar?.receipt_ar_number || ar?.invoice_ar_number || '';
-          const search = arNum ? String(arNum) : String(ackId);
-          if (search !== String(ackId)) {
-            setSearchTerm(search);
-            await refetchRef.current?.(search, { invoiceId: null });
+          if (!searchRaw) {
+            const arNum =
+              ar?.display_ar_number || ar?.receipt_ar_number || ar?.invoice_ar_number || '';
+            const search = arNum ? String(arNum) : String(ackId);
+            if (search !== String(ackId)) {
+              setSearchTerm(search);
+              await refetchRef.current?.(search, { invoiceId: invoiceIdForFetch });
+            }
           }
           return;
         }

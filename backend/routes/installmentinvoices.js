@@ -23,6 +23,7 @@ import {
   mapPhaseChainsToLocalSlots,
   normalizeAdjacentPhaseDisplayDates,
 } from '../utils/installmentPhaseRowMapping.js';
+import { getAdvancePayPriorPartialBlockers } from '../lib/installmentPaymentEligibility.js';
 
 const router = express.Router();
 
@@ -1947,6 +1948,16 @@ router.post(
         return res.status(400).json({
           success: false,
           message: `Phase ${phaseIdx} exceeds the total phase count (${totalPhases}).`,
+        });
+      }
+
+      const advancePriorBlock = await getAdvancePayPriorPartialBlockers(client, id, phaseIdx);
+      if (advancePriorBlock.blocked) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: advancePriorBlock.message,
+          prior_partial_balance_block: advancePriorBlock,
         });
       }
 

@@ -23,6 +23,10 @@ import {
   loadMerchandiseReleasedDetails,
   merchandiseReleaseDashboardCteDaily,
 } from '../lib/merchandiseReleaseLog.js';
+import {
+  applyPaymentEnrollmentToBranchBreakdown,
+  loadDailyOperationalEnrollmentFromPayments,
+} from '../lib/dailyOperationalEnrollmentFromPayments.js';
 
 const router = express.Router();
 
@@ -816,7 +820,7 @@ router.get(
         branch_name: row.branch_name,
       }));
 
-      const branchBreakdown = branchMetricsResult.rows.map((row) => ({
+      const branchBreakdownBase = branchMetricsResult.rows.map((row) => ({
         branch_id: row.branch_id,
         branch_name: row.branch_name,
         new_enrollees: parseInt(row.new_enrollees, 10) || 0,
@@ -837,6 +841,15 @@ router.get(
         ar_unverified_count: parseInt(row.ar_unverified_count, 10) || 0,
         ar_unverified_amount: parseFloat(row.ar_unverified_amount) || 0,
       }));
+
+      const paymentEnrollment = await loadDailyOperationalEnrollmentFromPayments(query, {
+        branchId: branchFilter,
+        summaryDate,
+      });
+      const branchBreakdown = applyPaymentEnrollmentToBranchBreakdown(
+        branchBreakdownBase,
+        paymentEnrollment
+      );
 
       const totals = branchBreakdown.reduce(
         (acc, row) => ({
@@ -902,10 +915,16 @@ router.get(
         total_amount: salesTrendMap[day.key] || 0,
       }));
 
-      const enrollmentDashboard = await loadEnrollmentDashboardMetrics(query, {
+      const enrollmentDashboardBase = await loadEnrollmentDashboardMetrics(query, {
         branchId: branchFilter,
         enrolledOnDate: summaryDate,
       });
+      const enrollmentDashboard = {
+        ...enrollmentDashboardBase,
+        re_enrollment_rate: paymentEnrollment.re_enrollment_rate,
+        re_enrollment_rate_retained_count: paymentEnrollment.re_enrollment_rate_retained_count,
+        re_enrollment_rate_prior_count: paymentEnrollment.re_enrollment_rate_prior_count,
+      };
 
       res.json({
         success: true,
@@ -913,6 +932,7 @@ router.get(
           summary_date: summaryDate,
           /** Same calendar day as `summary_date` (YYYY-MM-DD): verification cards use issue_date = this day (aligned with date picker). */
           verification_as_of: summaryDate,
+          enrollment_kpi_source: paymentEnrollment.source,
           totals,
           enrollment_dashboard: enrollmentDashboard,
           branch_breakdown: branchBreakdown,
@@ -1532,6 +1552,21 @@ router.get(
         matrixYear || currentCalendarYear
       );
 
+      // KPI cards on Month and Phase re-enrollment dashboards both use the month billing matrix
+      // when a year is selected (phase dashboard table still uses student_phase_enrollment_matrix).
+      const monthMatrixKpi = student_month_enrollment_matrix?.kpi_totals ?? null;
+      const phaseMatrixKpi = student_phase_enrollment_matrix?.kpi_totals ?? null;
+      const matrixKpiSource = monthMatrixKpi || phaseMatrixKpi;
+      const dashboardNewEnrollees = monthMatrixKpi?.new_enrollees_count ?? newEnrolleesCount;
+      const dashboardReEnrollment =
+        student_month_enrollment_matrix?.total_re_enrolled_count ??
+        monthMatrixKpi?.re_enrollment_count ??
+        reEnrollmentCount;
+      const dashboardDropped = monthMatrixKpi?.dropped_count ?? droppedCount;
+      const dashboardRejoin = monthMatrixKpi?.rejoin_count ?? rejoinCount;
+      const dashboardReserved = monthMatrixKpi?.reserved_count ?? reservedStudentsCount;
+      const dashboardUpsell = monthMatrixKpi?.upsell_count ?? 0;
+
       res.json({
         success: true,
         data: {
@@ -1548,12 +1583,15 @@ router.get(
             status: row.status,
           })),
           selected_curriculum_id: curriculumFilter,
-          new_enrollees_count: newEnrolleesCount,
-          re_enrollment_count: reEnrollmentCount,
-          dropped_count: droppedCount,
-          rejoin_count: rejoinCount,
-          reserved_students_count: reservedStudentsCount,
-          reserved_only_count: reservedStudentsCount,
+          new_enrollees_count: dashboardNewEnrollees,
+          re_enrollment_count: dashboardReEnrollment,
+          dropped_count: dashboardDropped,
+          rejoin_count: dashboardRejoin,
+          reserved_students_count: dashboardReserved,
+          reserved_only_count: dashboardReserved,
+          upsell_count: dashboardUpsell,
+          kpi_card_source: matrixYear ? 'month_matrix' : null,
+          matrix_kpi_totals: matrixKpiSource,
           monthly_enrollments,
           monthly_enrollment_rate,
           student_phase_enrollment_matrix,

@@ -13,6 +13,8 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 import { drawArCutGuideLines } from '../lib/ackReceiptPdfLayout.js';
+import { buildArReceiptLineRows, roundCurrency } from '../utils/invoiceReceiptLineItems.js';
+import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 
 const router = express.Router();
 
@@ -128,6 +130,28 @@ function buildInvoiceListWhereClause({
       unpaidDateFallbackClauses.push(`i.issue_date <= $${paramCount}::date`);
       params.push(paymentDateTo);
     }
+    // Balance continuation invoices (no payments yet) use issue_date, not payment date.
+    const openBalanceContinuationClauses = [
+      `i.parent_invoice_id IS NOT NULL`,
+      `(${INVOICE_COMPUTED_STATUS_SQL}) = 'Partially Paid'`,
+      `NOT EXISTS (
+        SELECT 1
+        FROM paymenttbl pbal
+        WHERE pbal.invoice_id = i.invoice_id
+          AND pbal.status = 'Completed'
+          AND COALESCE(pbal.approval_status, 'Pending') <> 'Rejected'
+      )`,
+    ];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      openBalanceContinuationClauses.push(`i.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      openBalanceContinuationClauses.push(`i.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
     const rejectedPaymentDateClauses = [
       `pr.invoice_id = i.invoice_id`,
       `pr.status = 'Completed'`,
@@ -155,6 +179,7 @@ function buildInvoiceListWhereClause({
         WHERE ${rejectedPaymentDateClauses.join(' AND ')}
       )
       OR (${unpaidDateFallbackClauses.join(' AND ')})
+      OR (${openBalanceContinuationClauses.join(' AND ')})
     )`;
   }
 
@@ -588,6 +613,7 @@ router.get(
                         i.installmentinvoiceprofiles_id,
                         i.parent_invoice_id, i.balance_invoice_id, i.invoice_chain_root_id,
                         i.ack_receipt_id,
+                        ar.ack_receipt_id AS linked_ack_receipt_id,
                         i.invoice_ar_number,
                         ar.prospect_student_name as ar_prospect_student_name,
                         ${INVOICE_COMPUTED_STATUS_SQL} as computed_status
@@ -756,6 +782,11 @@ router.get(
               total_received_amount: chainPaidForDisplay + totalTip,
               balance_invoice_amount: chainRemainingForDisplay,
               continued_to_invoice_id: isSupersededParent ? invoice.balance_invoice_id : null,
+              payable_invoice_id: isSupersededParent
+                ? invoice.balance_invoice_id
+                : invoice.invoice_id,
+              has_open_balance_continuation:
+                isSupersededParent && Number(chainRemainingForDisplay ?? 0) > 0.009,
               items,
               students: studentsWithDisplayName,
               can_record_payment: canRecordPayment,
@@ -820,7 +851,20 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const result = await query('SELECT * FROM invoicestbl WHERE invoice_id = $1', [id]);
+      const result = await query(
+        `SELECT i.*,
+                ar_link.ack_receipt_id AS linked_ack_receipt_id
+         FROM invoicestbl i
+         LEFT JOIN LATERAL (
+           SELECT ack_receipt_id
+           FROM acknowledgement_receiptstbl
+           WHERE invoice_id = i.invoice_id
+           ORDER BY ack_receipt_id DESC
+           LIMIT 1
+         ) ar_link ON TRUE
+         WHERE i.invoice_id = $1`,
+        [id]
+      );
 
       if (result.rows.length === 0) {
         return res.status(404).json({
@@ -961,10 +1005,20 @@ router.get(
           : null;
       }
 
+      let priorPartialBalanceBlock = { blocked: false, message: null, prior_balances: [] };
+      if (invoiceRow.installmentinvoiceprofiles_id) {
+        try {
+          priorPartialBalanceBlock = await getPriorPartialBalanceBlockers(pool, id);
+        } catch (priorBlockErr) {
+          console.error('getPriorPartialBalanceBlockers:', priorBlockErr);
+        }
+      }
+
       const canRecordPayment =
         !invoiceRow.balance_invoice_id &&
         invoiceRow.status !== 'Paid' &&
-        invoiceRow.status !== 'Cancelled';
+        invoiceRow.status !== 'Cancelled' &&
+        !priorPartialBalanceBlock.blocked;
 
       const lastPaymentDateYmd = (
         await query(
@@ -1038,6 +1092,7 @@ router.get(
           chain_summary: chainSummary,
           continued_to_invoice: continuedToInvoice,
           can_record_payment: canRecordPayment,
+          prior_partial_balance_block: priorPartialBalanceBlock,
           reservation: reservation ? {
             reserved_id: reservation.reserved_id,
             status: reservation.reservation_status,
@@ -1358,64 +1413,81 @@ router.get(
         doc.text(`CLASS: ${classLabel}`, left, y, { width: 320 });
         y += 24;
 
-        // Table
+        // Table — one row per invoice line (credits use discount_amount; net = amount − discount)
         const tLeft = left;
         const tWidth = contentWidth;
-        const rowH = 24;
         const headerH = 24;
-        const detailRows = 4;
-        const footerRows = 1;
-        const totalRows = detailRows + footerRows;
-        // Layout (post-MONTH-removal): DESCRIPTION 50% | RATE 25% | AMOUNT 25%
-        const descW = tWidth * 0.50;
+        const minRowH = 22;
+        const descW = tWidth * 0.5;
         const rateW = tWidth * 0.25;
         const amountW = tWidth - descW - rateW;
         const xDesc = tLeft + 8;
         const xRate = tLeft + descW + 8;
         const xAmount = tLeft + descW + rateW + 8;
+        const descTextW = descW - 16;
+
+        const invoiceDescription = (invoice.invoice_description || '').trim();
+        const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
+        const arLineRows = buildArReceiptLineRows(items, {
+          fallbackDescription:
+            (!looksLikeInvoiceCodeOnly ? invoiceDescription : '') ||
+            `Invoice INV-${invoice.invoice_id}`,
+          fallbackAmount: amountPaid,
+        });
+
+        const lineHeights = arLineRows.map((row) => {
+          doc.font('Helvetica').fontSize(9);
+          const textH = doc.heightOfString(row.description, { width: descTextW });
+          return Math.max(minRowH, textH + 14);
+        });
+        const detailBodyH = lineHeights.reduce((s, h) => s + h, 0);
+        const footerH = minRowH;
+        const tableBodyH = detailBodyH + footerH;
 
         doc.save();
         doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
         doc.restore();
-        doc.rect(tLeft, y, tWidth, headerH + rowH * totalRows).lineWidth(1).strokeColor('#111827').stroke();
-        doc.moveTo(tLeft + descW, y).lineTo(tLeft + descW, y + headerH + rowH * totalRows).stroke();
-        doc.moveTo(tLeft + descW + rateW, y).lineTo(tLeft + descW + rateW, y + headerH + rowH * totalRows).stroke();
-
-        for (let i = 1; i <= totalRows; i += 1) {
-          const yLine = y + headerH + rowH * i;
-          doc.moveTo(tLeft, yLine).lineTo(tLeft + tWidth, yLine).stroke();
-        }
+        doc.rect(tLeft, y, tWidth, headerH + tableBodyH).lineWidth(1).strokeColor('#111827').stroke();
+        doc.moveTo(tLeft + descW, y).lineTo(tLeft + descW, y + headerH + tableBodyH).stroke();
+        doc.moveTo(tLeft + descW + rateW, y).lineTo(tLeft + descW + rateW, y + headerH + tableBodyH).stroke();
 
         doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
-        doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
+        doc.text('DESCRIPTION', xDesc, y + 8, { width: descTextW, align: 'center' });
         doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
         doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
 
-        const itemDescriptions = items
-          .map((item) => (item?.description || '').trim())
-          .filter(Boolean);
-        const mergedItemDescription = itemDescriptions.length > 0
-          ? itemDescriptions.join(' | ')
-          : '';
-        const invoiceDescription = (invoice.invoice_description || '').trim();
-        const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
-        const firstLineDescription = mergedItemDescription
-          || (!looksLikeInvoiceCodeOnly ? invoiceDescription : '')
-          || `Invoice INV-${invoice.invoice_id}`;
+        let rowTop = y + headerH;
         doc.font('Helvetica').fontSize(9).fillColor('#111827');
-        doc.text(firstLineDescription, xDesc, y + headerH + 8, { width: descW - 16 });
-        doc.text(formatCurrency(amountPaid), xRate, y + headerH + 8, { width: rateW - 16, align: 'right' });
-        doc.text(formatCurrency(amountPaid), xAmount, y + headerH + 8, { width: amountW - 16, align: 'right' });
+        arLineRows.forEach((row, idx) => {
+          const rowH = lineHeights[idx];
+          doc.text(row.description, xDesc, rowTop + 6, { width: descTextW, lineGap: 2 });
+          doc.text(formatCurrency(row.netAmount), xRate, rowTop + 6, {
+            width: rateW - 16,
+            align: 'right',
+          });
+          doc.text(formatCurrency(row.netAmount), xAmount, rowTop + 6, {
+            width: amountW - 16,
+            align: 'right',
+          });
+          rowTop += rowH;
+          doc.moveTo(tLeft, rowTop).lineTo(tLeft + tWidth, rowTop).stroke();
+        });
 
-        // Footer rows inside the main table container
-        const footerRowY = y + headerH + rowH * detailRows + 8;
+        const arDisplayTotal =
+          arLineRows.length > 0
+            ? roundCurrency(arLineRows.reduce((s, r) => s + r.netAmount, 0))
+            : roundCurrency(amountPaid);
 
+        const footerRowY = rowTop + 6;
         doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827')
-          .text(`TOTAL  ${formatCurrency(amountPaid)}`, xRate, footerRowY, { width: rateW + amountW - 16, align: 'right' });
+          .text(`TOTAL  ${formatCurrency(arDisplayTotal)}`, xRate, footerRowY, {
+            width: rateW + amountW - 16,
+            align: 'right',
+          });
         doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
-          .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, { width: descW - 16, align: 'center' });
+          .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, { width: descTextW, align: 'center' });
 
-        y += headerH + rowH * totalRows + 24;
+        y += headerH + tableBodyH + 24;
         let preparedByName = '-';
         let receivedByName = '-';
         try {

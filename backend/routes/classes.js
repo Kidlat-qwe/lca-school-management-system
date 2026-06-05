@@ -31,6 +31,19 @@ import {
   linesFromMerchandiseToDeduct,
   PACKAGE_UNIFORM_TYPE_NAMES,
 } from '../lib/merchandiseReleaseLog.js';
+import {
+  PACKAGE_CHANGE_TO_FULLPAYMENT,
+  buildFullPaymentConversionInvoiceLineItems,
+  buildFullPaymentRemarks,
+  getStudentClassPaymentCreditTotal,
+  getStudentClassPaymentCreditBreakdown,
+  isFullpaymentLikePackage,
+  isInstallmentLikePackage,
+  resolveCurrentInstallmentPhaseRange,
+  resolveTargetFullPaymentPhaseRange,
+  roundCurrency as roundPackageCurrency,
+  applyInstallmentToFullPaymentConversion,
+} from '../lib/packageChangeConversion.js';
 
 const router = express.Router();
 
@@ -44,14 +57,7 @@ const getHolidayRangeFromStartDate = (startDate) => {
   };
 };
 
-const roundCurrency = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-
-const isInstallmentLikePackage = (pkg) => (
-  pkg && (
-    pkg.package_type === 'Installment'
-    || (pkg.package_type === 'Phase' && pkg.payment_option === 'Installment')
-  )
-);
+const roundCurrency = (value) => roundPackageCurrency(value);
 
 const getPackageChangeBlockedResult = (code, message, extra = {}) => ({
   success: true,
@@ -67,9 +73,10 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
   const [classResult, studentResult, currentProfileResult, targetPackageResult] = await Promise.all([
     client.query(
       `SELECT c.class_id, c.branch_id, c.program_id, c.class_name, c.level_tag,
-              p.program_name
+              p.program_name, cu.number_of_phase
        FROM classestbl c
        LEFT JOIN programstbl p ON c.program_id = p.program_id
+       LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
        WHERE c.class_id = $1`,
       [classId]
     ),
@@ -213,16 +220,23 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
     );
   }
 
-  if (!isInstallmentLikePackage(currentProfile) || !isInstallmentLikePackage(targetPackage)) {
+  const currentIsInstallment = isInstallmentLikePackage(currentProfile);
+  const targetIsInstallment = isInstallmentLikePackage(targetPackage);
+  const targetIsFullpayment = isFullpaymentLikePackage(targetPackage);
+
+  if (!currentIsInstallment) {
+    return getPackageChangeBlockedResult(
+      'unsupported_current_package',
+      'Package change requires an active installment plan on the student.',
+      { class: classRow, student: studentRow, target_package: targetPackage }
+    );
+  }
+
+  if (!targetIsInstallment && !targetIsFullpayment) {
     return getPackageChangeBlockedResult(
       'unsupported_package_type',
-      'Automatic package change currently supports installment-style packages only.',
-      {
-        class: classRow,
-        student: studentRow,
-        current_package: currentProfile,
-        target_package: targetPackage,
-      }
+      'Target package must be installment-style or full payment.',
+      { class: classRow, student: studentRow, current_package: currentProfile, target_package: targetPackage }
     );
   }
 
@@ -246,7 +260,125 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
     );
   }
 
-  const [paidRecurringResult, totalPaidResult, partialRecurringResult] = await Promise.all([
+  const partialRecurringResult = await client.query(
+    `SELECT COUNT(DISTINCT i.invoice_id) AS partial_count
+     FROM invoicestbl i
+     INNER JOIN paymenttbl p ON p.invoice_id = i.invoice_id
+     WHERE i.installmentinvoiceprofiles_id = $1
+       AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
+       AND p.status = 'Completed'
+       AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+       AND COALESCE(i.status, '') <> 'Paid'`,
+    [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
+  );
+
+  if (parseInt(partialRecurringResult.rows[0]?.partial_count || 0, 10) > 0) {
+    return getPackageChangeBlockedResult(
+      'partial_recurring_payment_detected',
+      'This student has a partial or in-progress recurring payment. Automatic package change is blocked for now.',
+      {
+        class: classRow,
+        student: studentRow,
+        current_package: currentProfile,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  if (targetIsFullpayment) {
+    const classMaxPhase = classRow.number_of_phase ? parseInt(classRow.number_of_phase, 10) : null;
+    const creditBreakdown = await getStudentClassPaymentCreditBreakdown(client, {
+      studentId,
+      classId,
+      profileId: currentProfile.installmentinvoiceprofiles_id,
+      downpaymentInvoiceId: currentProfile.downpayment_invoice_id,
+    });
+    const creditTotal = creditBreakdown.credit_total;
+    const targetFullPrice = roundCurrency(targetPackage.package_price || 0);
+    if (targetFullPrice <= 0) {
+      return getPackageChangeBlockedResult(
+        'invalid_target_amount',
+        'The full payment package does not have a valid package price.',
+        { class: classRow, student: studentRow, target_package: targetPackage }
+      );
+    }
+
+    const { phaseStart: currentPhaseStart, phaseEnd: currentPhaseEnd } =
+      resolveCurrentInstallmentPhaseRange(currentProfile);
+    const { phaseStart: targetPhaseStart, phaseEnd: targetPhaseEnd } =
+      resolveTargetFullPaymentPhaseRange(targetPackage, classMaxPhase);
+    const difference = roundCurrency(targetFullPrice - creditTotal);
+
+    let allowed = true;
+    let code = 'fullpayment_conversion';
+    let message =
+      'A conversion invoice can be created. After payment, the student will be enrolled for all target phases.';
+
+    if (difference < 0) {
+      allowed = false;
+      code = 'negative_difference_blocked';
+      message =
+        'Payments already exceed the full payment package price. Automatic conversion is blocked.';
+    } else if (difference === 0) {
+      code = 'fullpayment_conversion_no_balance';
+      message =
+        'No additional payment is required. Confirm to convert to full payment and enroll all target phases.';
+    }
+
+    return {
+      success: true,
+      data: {
+        allowed,
+        code,
+        message,
+        change_type: 'installment_to_fullpayment',
+        class: classRow,
+        student: studentRow,
+        current_package: {
+          package_id: currentProfile.package_id,
+          package_name: currentProfile.package_name,
+          package_type: currentProfile.package_type,
+          payment_option: currentProfile.payment_option,
+          downpayment_amount: roundCurrency(currentProfile.downpayment_amount || 0),
+          recurring_amount: roundCurrency(currentProfile.package_price || currentProfile.amount || 0),
+        },
+        target_package: {
+          package_id: targetPackage.package_id,
+          package_name: targetPackage.package_name,
+          package_type: targetPackage.package_type,
+          payment_option: targetPackage.payment_option,
+          full_payment_price: targetFullPrice,
+          phase_start: targetPackage.phase_start,
+          phase_end: targetPackage.phase_end,
+        },
+        current_profile_id: currentProfile.installmentinvoiceprofiles_id,
+        current_phase_start: currentPhaseStart,
+        current_phase_end: currentPhaseEnd,
+        target_phase_start: targetPhaseStart,
+        target_phase_end: targetPhaseEnd,
+        credit_total: creditTotal,
+        reservation_fee_credited: creditBreakdown.reservation_fee_paid,
+        installment_payments_credited: creditBreakdown.installment_payments_paid,
+        target_full_price: targetFullPrice,
+        difference,
+      },
+    };
+  }
+
+  if (!targetIsInstallment) {
+    return getPackageChangeBlockedResult(
+      'unsupported_package_type',
+      'Automatic package change currently supports installment-style target packages only.',
+      {
+        class: classRow,
+        student: studentRow,
+        current_package: currentProfile,
+        target_package: targetPackage,
+      }
+    );
+  }
+
+  const [paidRecurringResult, totalPaidResult] = await Promise.all([
     client.query(
       `SELECT COUNT(*) AS paid_count
        FROM invoicestbl i
@@ -264,31 +396,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
          AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
       [currentProfile.installmentinvoiceprofiles_id]
     ),
-    client.query(
-      `SELECT COUNT(DISTINCT i.invoice_id) AS partial_count
-       FROM invoicestbl i
-       INNER JOIN paymenttbl p ON p.invoice_id = i.invoice_id
-       WHERE i.installmentinvoiceprofiles_id = $1
-         AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
-         AND p.status = 'Completed'
-         AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
-         AND COALESCE(i.status, '') <> 'Paid'`,
-      [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
-    ),
   ]);
-
-  if (parseInt(partialRecurringResult.rows[0]?.partial_count || 0, 10) > 0) {
-    return getPackageChangeBlockedResult(
-      'partial_recurring_payment_detected',
-      'This student has a partial or in-progress recurring payment. Automatic package change is blocked for now.',
-      {
-        class: classRow,
-        student: studentRow,
-        current_package: currentProfile,
-        target_package: targetPackage,
-      }
-    );
-  }
 
   const recurringPaidCount = parseInt(paidRecurringResult.rows[0]?.paid_count || 0, 10);
   const currentPaidTotal = roundCurrency(totalPaidResult.rows[0]?.total_paid || 0);
@@ -333,6 +441,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
       allowed,
       code,
       message,
+      change_type: 'installment_to_installment',
       class: classRow,
       student: studentRow,
       current_package: {
@@ -1302,6 +1411,12 @@ router.post(
       }
 
       const details = preview.data;
+      const isFullPaymentConversion = details.change_type === 'installment_to_fullpayment';
+
+      const duplicateRemarkPattern = isFullPaymentConversion
+        ? `%${PACKAGE_CHANGE_TO_FULLPAYMENT};CLASS_ID:${classId};STUDENT_ID:${studentId};PROFILE_ID:${details.current_profile_id};TO_PACKAGE_ID:${details.target_package.package_id};%`
+        : `%PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};TO_PACKAGE_ID:${details.target_package.package_id};%`;
+
       const duplicateResult = await client.query(
         `SELECT invoice_id
          FROM invoicestbl
@@ -1309,16 +1424,14 @@ router.post(
            AND status NOT IN ('Paid', 'Cancelled')
          ORDER BY invoice_id DESC
          LIMIT 1`,
-        [
-          `%PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};TO_PACKAGE_ID:${details.target_package.package_id};%`,
-        ]
+        [duplicateRemarkPattern]
       );
 
       if (duplicateResult.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(409).json({
           success: false,
-          message: `An active package change adjustment invoice already exists (INV-${duplicateResult.rows[0].invoice_id}).`,
+          message: `An active package change invoice already exists (INV-${duplicateResult.rows[0].invoice_id}).`,
           data: {
             allowed: false,
             code: 'existing_adjustment_invoice',
@@ -1327,11 +1440,65 @@ router.post(
         });
       }
 
+      if (isFullPaymentConversion && details.difference === 0) {
+        const { changedRows } = await applyInstallmentToFullPaymentConversion(client, {
+          classId,
+          studentId,
+          profileId: details.current_profile_id,
+          phaseStart: details.target_phase_start,
+          phaseEnd: details.target_phase_end,
+          conversionInvoiceId: null,
+          sourceLabel:
+            req.user.fullName ||
+            req.user.email ||
+            'System (Installment converted to full payment — no balance due)',
+        });
+
+        await client.query('COMMIT');
+
+        return res.status(200).json({
+          success: true,
+          message: `Converted to full payment with no additional balance. Student enrolled for phases ${details.target_phase_start}–${details.target_phase_end} (${changedRows} phase row(s) updated).`,
+          data: {
+            preview: details,
+            invoice: null,
+            phases_enrolled: changedRows,
+          },
+        });
+      }
+
       const issueDate = formatYmdLocal(new Date());
       const dueDate = issueDate;
-      const invoiceDescription = `Package change adjustment - ${details.target_package.package_name}`;
-      const remarks =
-        `PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};FROM_PACKAGE_ID:${details.current_package.package_id};TO_PACKAGE_ID:${details.target_package.package_id};CURRENT_PAID:${details.current_paid_total.toFixed(2)};TARGET_EQUIVALENT:${details.target_equivalent_total.toFixed(2)};RECURRING_PAID_COUNT:${details.recurring_paid_count}`;
+      let invoiceDescription;
+      let remarks;
+      let invoiceAmount = details.difference;
+      let lineItems = [];
+
+      if (isFullPaymentConversion) {
+        invoiceDescription = `Full payment conversion - ${details.target_package.package_name}`;
+        remarks = buildFullPaymentRemarks({
+          classId,
+          studentId,
+          profileId: details.current_profile_id,
+          fromPackageId: details.current_package.package_id,
+          toPackageId: details.target_package.package_id,
+          phaseStart: details.target_phase_start,
+          phaseEnd: details.target_phase_end,
+          creditApplied: details.credit_total,
+          targetFullPrice: details.target_full_price,
+        });
+        lineItems = buildFullPaymentConversionInvoiceLineItems(details);
+      } else {
+        invoiceDescription = `Package change adjustment - ${details.target_package.package_name}`;
+        remarks =
+          `PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};FROM_PACKAGE_ID:${details.current_package.package_id};TO_PACKAGE_ID:${details.target_package.package_id};CURRENT_PAID:${details.current_paid_total.toFixed(2)};TARGET_EQUIVALENT:${details.target_equivalent_total.toFixed(2)};RECURRING_PAID_COUNT:${details.recurring_paid_count}`;
+        lineItems = [
+          {
+            description: `Package change from ${details.current_package.package_name} to ${details.target_package.package_name}`,
+            amount: details.difference,
+          },
+        ];
+      }
 
       const newInvoice = await insertInvoiceWithArNumber(
         client,
@@ -1341,7 +1508,7 @@ router.post(
         [
           invoiceDescription,
           details.class.branch_id || null,
-          details.difference,
+          invoiceAmount,
           'Unpaid',
           remarks,
           issueDate,
@@ -1351,15 +1518,21 @@ router.post(
         ]
       );
 
-      await client.query(
-        `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
-         VALUES ($1, $2, $3)`,
-        [
-          newInvoice.invoice_id,
-          `Package change from ${details.current_package.package_name} to ${details.target_package.package_name}`,
-          details.difference,
-        ]
-      );
+      for (const item of lineItems) {
+        if (item.amount < 0) {
+          await client.query(
+            `INSERT INTO invoiceitemstbl (invoice_id, description, amount, discount_amount)
+             VALUES ($1, $2, 0, $3)`,
+            [newInvoice.invoice_id, item.description, Math.abs(item.amount)]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+             VALUES ($1, $2, $3)`,
+            [newInvoice.invoice_id, item.description, item.amount]
+          );
+        }
+      }
 
       await client.query(
         `INSERT INTO invoicestudentstbl (invoice_id, student_id)
@@ -1367,31 +1540,31 @@ router.post(
         [newInvoice.invoice_id, studentId]
       );
 
-      // Keep the active installment profile in sync so Installment Invoice logs
-      // and future generated invoices use the updated plan amount/package.
-      await client.query(
-        `UPDATE installmentinvoiceprofilestbl
-         SET package_id = $1,
-             amount = $2
-         WHERE installmentinvoiceprofiles_id = $3`,
-        [
-          details.target_package.package_id,
-          details.target_package.recurring_amount,
-          details.current_profile_id,
-        ]
-      );
+      if (!isFullPaymentConversion) {
+        await client.query(
+          `UPDATE installmentinvoiceprofilestbl
+           SET package_id = $1,
+               amount = $2
+           WHERE installmentinvoiceprofiles_id = $3`,
+          [
+            details.target_package.package_id,
+            details.target_package.recurring_amount,
+            details.current_profile_id,
+          ]
+        );
 
-      await client.query(
-        `UPDATE installmentinvoicestbl
-         SET total_amount_including_tax = $1,
-             total_amount_excluding_tax = $2
-         WHERE installmentinvoiceprofiles_id = $3`,
-        [
-          details.target_package.recurring_amount,
-          details.target_package.recurring_amount,
-          details.current_profile_id,
-        ]
-      );
+        await client.query(
+          `UPDATE installmentinvoicestbl
+           SET total_amount_including_tax = $1,
+               total_amount_excluding_tax = $2
+           WHERE installmentinvoiceprofiles_id = $3`,
+          [
+            details.target_package.recurring_amount,
+            details.target_package.recurring_amount,
+            details.current_profile_id,
+          ]
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -1408,7 +1581,9 @@ router.post(
 
       res.status(201).json({
         success: true,
-        message: `Adjustment invoice created and installment plan updated successfully (INV-${newInvoice.invoice_id}).`,
+        message: isFullPaymentConversion
+          ? `Full payment conversion invoice created (INV-${newInvoice.invoice_id}). After payment, the student will be enrolled for phases ${details.target_phase_start}–${details.target_phase_end} and future installment billing will stop.`
+          : `Adjustment invoice created and installment plan updated successfully (INV-${newInvoice.invoice_id}).`,
         data: {
           preview: details,
           invoice: {
@@ -2232,11 +2407,19 @@ router.put(
         const result = await client.query(sql, params);
       }
 
-      // Update schedules if provided
-      if (days_of_week && Array.isArray(days_of_week) && finalRoomId) {
+      // Update schedules if provided (non-empty array only — avoid wiping roomsched on [])
+      if (days_of_week && Array.isArray(days_of_week) && days_of_week.length > 0 && finalRoomId) {
+        const isActiveWeeklySchedule = (daySchedule) =>
+          Boolean(
+            daySchedule?.day &&
+              daySchedule?.start_time &&
+              daySchedule?.end_time &&
+              daySchedule.enabled !== false
+          );
+
         // Check for schedule conflicts BEFORE deleting existing schedules
         for (const daySchedule of days_of_week) {
-          if (daySchedule.day && daySchedule.enabled && daySchedule.start_time && daySchedule.end_time) {
+          if (isActiveWeeklySchedule(daySchedule)) {
             const conflict = await checkScheduleConflict(
               finalRoomId,
               daySchedule.day,
@@ -2265,9 +2448,9 @@ router.put(
         // Delete existing schedules for this class only (not other classes)
         await client.query('DELETE FROM roomschedtbl WHERE class_id = $1', [id]);
 
-        // Create new schedules
+        // Create new schedules (match POST create: day + times; enabled defaults true)
         for (const daySchedule of days_of_week) {
-          if (daySchedule.day && daySchedule.enabled && daySchedule.start_time && daySchedule.end_time) {
+          if (isActiveWeeklySchedule(daySchedule)) {
             await client.query(
               `INSERT INTO roomschedtbl (class_id, room_id, day_of_week, start_time, end_time)
                VALUES ($1, $2, $3, $4, $5)`,
@@ -2334,7 +2517,8 @@ router.put(
           // Get updated class data with program and curriculum info
           const updatedClassResult = await client.query(
             `SELECT c.*, 
-                    p.curriculum_id, 
+                    p.curriculum_id,
+                    p.program_code,
                     p.session_duration_hours,
                     cu.number_of_phase, 
                     cu.number_of_session_per_phase
@@ -2434,13 +2618,28 @@ router.put(
                       ]
                     );
 
+                    let sessionClassCode = null;
+                    if (
+                      classData.program_code &&
+                      session.scheduled_date &&
+                      session.scheduled_start_time &&
+                      classData.class_name
+                    ) {
+                      sessionClassCode = generateClassCode(
+                        classData.program_code,
+                        session.scheduled_date,
+                        session.scheduled_start_time,
+                        classData.class_name
+                      );
+                    }
+
                     // Use UPSERT: Update if exists (matching phase/session/date), insert if new
                     await client.query(
                       `INSERT INTO classsessionstbl (
                         class_id, phasesessiondetail_id, phase_number, phase_session_number,
                         scheduled_date, scheduled_start_time, scheduled_end_time,
-                        original_teacher_id, assigned_teacher_id, status, created_by
-                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        original_teacher_id, assigned_teacher_id, status, created_by, class_code
+                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                       ON CONFLICT (class_id, phase_number, phase_session_number, scheduled_date) 
                       DO UPDATE SET
                         phasesessiondetail_id = EXCLUDED.phasesessiondetail_id,
@@ -2448,6 +2647,7 @@ router.put(
                         scheduled_end_time = EXCLUDED.scheduled_end_time,
                         original_teacher_id = EXCLUDED.original_teacher_id,
                         assigned_teacher_id = COALESCE(classsessionstbl.assigned_teacher_id, EXCLUDED.assigned_teacher_id),
+                        class_code = COALESCE(EXCLUDED.class_code, classsessionstbl.class_code),
                         updated_at = CURRENT_TIMESTAMP`,
                       [
                         session.class_id,
@@ -2460,7 +2660,8 @@ router.put(
                         session.original_teacher_id,
                         session.assigned_teacher_id,
                         session.status,
-                        session.created_by
+                        session.created_by,
+                        sessionClassCode,
                       ]
                     );
 
@@ -2526,6 +2727,46 @@ router.put(
         } catch (sessionGenError) {
           // Log error but don't fail the update
           console.error('❌ Error regenerating sessions:', sessionGenError);
+        }
+      }
+
+      // When only the display name changes, refresh session class_code values for calendar/reporting
+      if (class_name !== undefined && !shouldRegenerateSessions) {
+        try {
+          const classForCodes = await client.query(
+            `SELECT c.class_name, p.program_code
+             FROM classestbl c
+             LEFT JOIN programstbl p ON c.program_id = p.program_id
+             WHERE c.class_id = $1`,
+            [id]
+          );
+          const row = classForCodes.rows[0];
+          const effectiveName = row?.class_name?.trim();
+          const programCode = row?.program_code?.trim();
+          if (effectiveName && programCode) {
+            const sessionsForCodes = await client.query(
+              `SELECT classsession_id,
+                      TO_CHAR(scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+                      scheduled_start_time::text AS scheduled_start_time
+               FROM classsessionstbl
+               WHERE class_id = $1`,
+              [id]
+            );
+            for (const session of sessionsForCodes.rows) {
+              const newCode = generateClassCode(
+                programCode,
+                session.scheduled_date,
+                session.scheduled_start_time,
+                effectiveName
+              );
+              await client.query(
+                `UPDATE classsessionstbl SET class_code = $1, updated_at = CURRENT_TIMESTAMP WHERE classsession_id = $2`,
+                [newCode, session.classsession_id]
+              );
+            }
+          }
+        } catch (codeSyncError) {
+          console.error('⚠️ Could not sync session class codes after rename:', codeSyncError);
         }
       }
 

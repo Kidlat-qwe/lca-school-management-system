@@ -128,6 +128,12 @@ export const ENROLLMENT_MATRIX_STATUS_ITEMS = [
     description: 'Enrollment started but not yet finalized.',
   },
   {
+    key: 'reserved',
+    label: 'Reserved',
+    tone: 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300',
+    description: 'Paid reservation fee for this month/phase; enrollment not finalized yet.',
+  },
+  {
     key: 'dropped',
     label: 'Dropped / unenrolled',
     tone: 'bg-rose-100 text-rose-800',
@@ -159,6 +165,7 @@ const MATRIX_LABEL_TO_KEY = {
   rejoin: 'rejoin',
   upsell: 'upsell',
   'pending enrollment': 'pending_enrollment',
+  reserved: 'reserved',
   'dropped/unenrolled': 'dropped',
   dropped: 'dropped',
   'not enrolled': 'dropped',
@@ -189,6 +196,9 @@ export function enrollmentMatrixCellTone(cell) {
 }
 
 export function enrollmentMatrixCellTitle(cell) {
+  if (cell?.from_previous_reserved && cell?.label === 'new') {
+    return 'Previous reserved';
+  }
   const label = cell?.label?.trim();
   if (label) return label;
   return cell?.mark === '1' ? 'Enrolled' : 'Not enrolled';

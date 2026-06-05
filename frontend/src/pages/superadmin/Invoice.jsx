@@ -28,6 +28,11 @@ import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
+import {
+  InvoiceListAmountCell,
+  InvoiceListTotalAmountCell,
+} from '../../components/invoices/InvoiceListAmountCell';
+import { getInvoiceDisplayAmount } from '../../utils/invoiceListAmount';
 import InvoiceStatusMultiFilter from '../../components/invoices/InvoiceStatusMultiFilter';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import {
@@ -43,18 +48,16 @@ import {
   getInitialInvoiceSearchFromParams,
   hasInvoiceCrossLinkParam,
 } from '../../utils/billingListCrossLink';
+import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
+import {
+  canShowInvoicePayAction,
+  getPayableInvoiceTarget,
+  invoicePayActionLabel,
+} from '../../utils/invoicePaymentTarget';
 
 const ITEMS_PER_PAGE = 10;
 
 const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
-
-const getInvoiceDisplayAmount = (invoice) => {
-  if (!invoice) return 0;
-  const remainingAmount = Number(invoice.amount ?? 0);
-  const paidAmount = Number(invoice.paid_amount ?? 0);
-  const billedAmount = remainingAmount + paidAmount;
-  return billedAmount > 0 ? billedAmount : remainingAmount;
-};
 
 /** Header summary total: billed face + all tips on completed payments for this invoice. */
 const getInvoiceSummaryAmountIncludingTips = (invoice) =>
@@ -835,19 +838,13 @@ const Invoice = () => {
   const handleOpenPaymentModal = async (invoice) => {
     setOpenMenuId(null);
     try {
-      // Fetch the latest invoice data with details
-      const response = await apiRequest(`/invoices/${invoice.invoice_id}`);
+      const { invoice_id: payableInvoiceId } = getPayableInvoiceTarget(invoice);
+      const response = await apiRequest(`/invoices/${payableInvoiceId}`);
       const invoiceData = response.data;
 
-      if (
-        invoiceData.can_record_payment === false ||
-        invoiceData.balance_invoice_id
-      ) {
-        const tip = invoiceData.continued_to_invoice;
-        const label = tip?.display_description || tip?.invoice_description || (tip?.invoice_id ? `INV-${tip.invoice_id}` : 'the balance invoice');
-        appAlert(
-          `This invoice is not payable after a partial payment. Record payments on ${label} instead.`
-        );
+      const paymentBlockAlert = getInstallmentPaymentBlockAlert(invoiceData);
+      if (paymentBlockAlert) {
+        appAlert(paymentBlockAlert);
         return;
       }
 
@@ -2096,47 +2093,24 @@ const Invoice = () => {
                         </p>
                       )}
                     </td>
-                    <td className="px-4 py-4 align-top overflow-hidden" style={{ width: '150px', minWidth: '150px', maxWidth: '150px' }}>
-                      {invoice.balance_invoice_id ? (
-                        <div className="text-xs text-gray-900 space-y-1 min-w-0">
-                          <div className="leading-snug break-words">
-                            <span className="text-gray-500 block">Remaining (INV-{invoice.continued_to_invoice_id || invoice.balance_invoice_id}):</span>
-                            <span className="font-medium tabular-nums">
-                              ₱{Number(invoice.balance_invoice_amount ?? invoice.amount ?? 0).toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="leading-snug break-words">
-                            <span className="text-gray-500 block">Paid on this invoice:</span>
-                            <span className="font-medium tabular-nums">
-                              ₱{Number(invoice.paid_amount ?? 0).toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-                      ) : rejectedOverlay ? (
-                        <div className="text-sm font-medium text-gray-900 whitespace-nowrap tabular-nums">
-                          ₱{rejectedOverlay.amount.toFixed(2)}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
-                          {invoice.amount !== null && invoice.amount !== undefined
-                            ? `₱${getInvoiceDisplayAmount(invoice).toFixed(2)}`
-                            : '-'}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-4 overflow-hidden" style={{ width: '120px', minWidth: '120px', maxWidth: '120px' }}>
-                      <div className="text-sm font-medium text-gray-900 whitespace-nowrap tabular-nums">
-                        {rejectedOverlay
-                          ? `₱${rejectedOverlay.totalAmount.toFixed(2)}`
-                          : `₱${Number(invoice.total_received_amount || ((invoice.paid_amount || 0) + (invoice.total_tip_amount || 0))).toFixed(2)}`}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                    <InvoiceListAmountCell
+                      invoice={invoice}
+                      rejectedOverlay={rejectedOverlay}
+                      className="px-4 py-4 overflow-hidden"
+                      style={{ width: '150px', minWidth: '150px', maxWidth: '150px' }}
+                    />
+                    <InvoiceListTotalAmountCell
+                      invoice={invoice}
+                      rejectedOverlay={rejectedOverlay}
+                      className="px-4 py-4 overflow-hidden"
+                      style={{ width: '120px', minWidth: '120px', maxWidth: '120px' }}
+                    />
+                    <td className="px-4 py-4 align-middle overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
                       <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {invoice.issue_date ? formatDateManila(invoice.issue_date) : '-'}
                       </div>
                     </td>
-                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                    <td className="px-4 py-4 align-middle overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
                       <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {rejectedOverlay?.paymentDate
                           ? formatDateManila(rejectedOverlay.paymentDate)
@@ -2145,14 +2119,14 @@ const Invoice = () => {
                           : '—'}
                       </div>
                     </td>
-                    <td className="px-4 py-4 overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
+                    <td className="px-4 py-4 align-middle overflow-hidden" style={{ width: '112px', minWidth: '112px', maxWidth: '112px' }}>
                       <div className="text-sm text-gray-900 whitespace-nowrap tabular-nums">
                         {invoice.due_date
                           ? formatDateManila(invoice.due_date)
                           : '-'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <td className="px-6 py-4 align-middle whitespace-nowrap text-right text-sm font-medium">
                       <div className="relative action-menu-container">
                         <button
                           onClick={(e) => handleMenuClick(invoice.invoice_id, e)}
@@ -2274,31 +2248,19 @@ const Invoice = () => {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (selectedInvoice.status === 'Paid') return;
-                        if (
-                          selectedInvoice.balance_invoice_id ||
-                          selectedInvoice.can_record_payment === false
-                        ) {
-                          return;
-                        }
+                        if (!canShowInvoicePayAction(selectedInvoice)) return;
                         setOpenMenuId(null);
                         setMenuPosition({ top: 0, right: 0 });
                         handleOpenPaymentModal(selectedInvoice);
                       }}
-                      disabled={
-                        selectedInvoice.status === 'Paid' ||
-                        !!selectedInvoice.balance_invoice_id ||
-                        selectedInvoice.can_record_payment === false
-                      }
+                      disabled={!canShowInvoicePayAction(selectedInvoice)}
                       className={`flex items-center justify-between w-full text-left px-4 py-2 text-sm transition-colors ${
-                        selectedInvoice.status === 'Paid' ||
-                        !!selectedInvoice.balance_invoice_id ||
-                        selectedInvoice.can_record_payment === false
+                        !canShowInvoicePayAction(selectedInvoice)
                           ? 'text-gray-400 cursor-not-allowed opacity-60'
                           : 'text-green-600 hover:bg-green-50'
                       }`}
                     >
-                      <span>Pay</span>
+                      <span>{invoicePayActionLabel(selectedInvoice)}</span>
                       <svg className={`w-4 h-4 ${selectedInvoice.status === 'Paid' ? 'text-gray-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>

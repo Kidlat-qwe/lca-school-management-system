@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom';
 import {
   buildAcknowledgementReceiptsListLink,
   buildInvoiceListLink,
+  isInvoiceLinkedToAcknowledgementReceipt,
+  resolveInvoiceAckReceiptIdForCrossLink,
 } from '../../utils/arInvoiceCrossLink';
 import { formatArLinkedInvoiceArNumber, formatArLinkedInvoiceLabel } from '../../utils/acknowledgementReceiptDisplay';
 
@@ -41,6 +43,7 @@ export function ArNumberLink({ userType, receipt, className = '' }) {
   const to = buildAcknowledgementReceiptsListLink(userType, {
     ackReceiptId: receipt?.ack_receipt_id,
     arNumber,
+    invoiceId: receipt?.linked_invoice_id,
   });
   if (!to) {
     return <span title={arNumber}>{arNumber}</span>;
@@ -61,18 +64,27 @@ export function InvoiceArNumberLink({ userType, invoice, className = '' }) {
   if (!arNumber) {
     return <span className="text-gray-300">—</span>;
   }
+  if (!isInvoiceLinkedToAcknowledgementReceipt(invoice)) {
+    return (
+      <span className={className} title={arNumber}>
+        {arNumber}
+      </span>
+    );
+  }
   const to = buildAcknowledgementReceiptsListLink(userType, {
+    ackReceiptId: resolveInvoiceAckReceiptIdForCrossLink(invoice),
     invoiceId: invoice?.invoice_id,
     arNumber,
   });
   if (!to) {
     return <span title={arNumber}>{arNumber}</span>;
   }
+  const invLabel = invoice?.invoice_id ? `INV-${invoice.invoice_id}` : 'invoice';
   return (
     <Link
       to={to}
       className={`${linkClassName} ${className}`.trim()}
-      title={`View acknowledgement receipt ${arNumber}`}
+      title={`View acknowledgement receipt ${arNumber} for ${invLabel} on Acknowledgement Receipts`}
     >
       {arNumber}
     </Link>

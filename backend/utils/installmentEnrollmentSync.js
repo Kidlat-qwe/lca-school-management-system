@@ -178,7 +178,7 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
          enrolled_by = $2,
          enrolled_at = CURRENT_TIMESTAMP
      WHERE student_id = $3 AND class_id = $4 AND phase_number = $5
-       AND program_enrollment_status = 'pending_enrollment'
+       AND program_enrollment_status IN ('pending_enrollment', 'reserved')
        AND removed_at IS NULL
      RETURNING classstudent_id`,
     [installmentEnrollStatus, sourceLabel, studentId, profile.class_id, targetPhase]

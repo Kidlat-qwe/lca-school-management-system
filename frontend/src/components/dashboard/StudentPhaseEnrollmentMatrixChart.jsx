@@ -69,6 +69,10 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
                           {Number(row.re_enrollment_rate ?? 0).toFixed(0)}%
                         </div>
                       </>
+                    ) : row.has_prior_phase && Number(row.re_enrolled_count) > 0 ? (
+                      <div className="text-[11px] font-semibold tabular-nums text-gray-900">
+                        {row.re_enrolled_count}/—
+                      </div>
                     ) : (
                       <div className="text-[11px] tabular-nums text-gray-500">—</div>
                     )}

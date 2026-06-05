@@ -4,6 +4,18 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `checkSystemTimezone.js`
+
+Audits **Node.js** and **PostgreSQL** timezone settings against the business standard **Asia/Manila (UTC+8)**. Reports whether `CURRENT_DATE`, local Node dates, and `node-pg` DATE reads match Manila calendar dates (relevant to installment penalty / grace logic).
+
+```bash
+node scripts/checkSystemTimezone.js
+node scripts/checkSystemTimezone.js --sample-due=2026-06-05
+node scripts/checkSystemTimezone.js --json
+```
+
+Exit code `0` = all checks passed; `1` = at least one mismatch (see recommendations in output).
+
 ### `revokeAdminPaymentLogApprovals.js`
 
 Revokes **Admin approvals on paymenttbl** only (global — **no year/month filter**):
@@ -299,6 +311,20 @@ node scripts/repairInstallmentQueueExplicitNextDates.js \
 If Finance **Installment Invoice Logs** missed students because only the first 100 API rows loaded, deploy the frontend/backend changes that paginate until all rows are fetched and return `pagination.total`.
 
 To backfill **`installmentinvoicestbl.status`** where it was `NULL`, apply migration **`105_backfill_installmentinvoicestbl_status.sql`** on production.
+
+### `countMonthReEnrollmentMatrixLabels.js`
+
+Counts **labeled cells** on the **Month Re-enrollment** dashboard matrix for a calendar year (same rules as the UI table). Reports **new**, **re-enrolled**, and **new + re-enrolled** totals per month and for the full year, and compares them to **rate header numerators** (month-to-month retention).
+
+```bash
+node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026
+node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026 --branch-id=1
+node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026 --program-id=2 --class-id=34
+node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026 --verbose
+node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026 --json
+```
+
+**Options:** `--year=YYYY`, `--branch-id=N`, `--program-id=N`, `--class-id=N`, `--verbose` (list each new/re-enrolled cell), `--json`, `--help`
 
 ## Adding New Scripts
 

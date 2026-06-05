@@ -251,6 +251,29 @@ export async function ensurePendingEnrollmentAfterDownpaymentPaid(client, profil
   );
   if (pendingRow.rows.length > 0) return;
 
+  const reservedRow = await client.query(
+    `SELECT classstudent_id FROM classstudentstbl
+     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3
+       AND program_enrollment_status = 'reserved'
+       AND removed_at IS NULL`,
+    [sid, classId, phaseNum]
+  );
+  if (reservedRow.rows.length > 0) {
+    await client.query(
+      `UPDATE classstudentstbl
+       SET program_enrollment_status = $1,
+           enrolled_by = $2,
+           enrolled_at = COALESCE(enrolled_at, CURRENT_TIMESTAMP)
+       WHERE classstudent_id = $3`,
+      [
+        PROGRAM_ENROLLMENT_STATUS.PENDING_ENROLLMENT,
+        'System (Downpayment paid — awaiting Phase 1 payment)',
+        reservedRow.rows[0].classstudent_id,
+      ]
+    );
+    return;
+  }
+
   await client.query(
     `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
      VALUES ($1, $2, $3, $4, $5)`,
@@ -261,6 +284,55 @@ export async function ensurePendingEnrollmentAfterDownpaymentPaid(client, profil
       phaseNum,
       PROGRAM_ENROLLMENT_STATUS.PENDING_ENROLLMENT,
     ]
+  );
+}
+
+/**
+ * After a reservation is upgraded to a real package (invoice created, not yet paid),
+ * keep the student visible on enrollment dashboards as "reserved" until downpayment /
+ * Phase 1 payment promotes the row.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {{ student_id: number, class_id: number, phase_number?: number|null }} reservation
+ * @param {string} [upgradedBy]
+ */
+export async function ensureReservedEnrollmentOnReservationUpgrade(
+  client,
+  reservation,
+  upgradedBy = 'System (Reservation upgraded — awaiting package payment)'
+) {
+  const sid = Number(reservation?.student_id);
+  const classId = Number(reservation?.class_id);
+  if (!sid || Number.isNaN(sid) || !classId || Number.isNaN(classId)) return;
+
+  const phaseNum =
+    reservation.phase_number != null && reservation.phase_number !== ''
+      ? parseInt(String(reservation.phase_number), 10)
+      : 1;
+  const phaseNumber = Number.isFinite(phaseNum) && phaseNum > 0 ? phaseNum : 1;
+
+  const activeRow = await client.query(
+    `SELECT classstudent_id FROM classstudentstbl
+     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3
+       AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'pending_enrollment')
+       AND removed_at IS NULL`,
+    [sid, classId, phaseNumber]
+  );
+  if (activeRow.rows.length > 0) return;
+
+  const reservedRow = await client.query(
+    `SELECT classstudent_id FROM classstudentstbl
+     WHERE student_id = $1 AND class_id = $2 AND phase_number = $3
+       AND program_enrollment_status = 'reserved'
+       AND removed_at IS NULL`,
+    [sid, classId, phaseNumber]
+  );
+  if (reservedRow.rows.length > 0) return;
+
+  await client.query(
+    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [sid, classId, upgradedBy, phaseNumber, PROGRAM_ENROLLMENT_STATUS.RESERVED]
   );
 }
 
@@ -380,7 +452,7 @@ export async function promotePendingEnrollmentIfPhaseInvoicePaid(
     studentId: sid,
     classId,
     phaseNumber: targetPhase,
-    defaultStatus: PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED,
+    defaultStatus: PROGRAM_ENROLLMENT_STATUS.NEW,
   });
 
   const promoted = await client.query(
@@ -389,7 +461,7 @@ export async function promotePendingEnrollmentIfPhaseInvoicePaid(
          enrolled_by = $2,
          enrolled_at = COALESCE(enrolled_at, CURRENT_TIMESTAMP)
      WHERE student_id = $3 AND class_id = $4 AND phase_number = $5
-       AND program_enrollment_status = 'pending_enrollment'
+       AND program_enrollment_status IN ('pending_enrollment', 'reserved')
        AND removed_at IS NULL
      RETURNING classstudent_id`,
     [enrollStatus, sourceLabel, sid, classId, targetPhase]

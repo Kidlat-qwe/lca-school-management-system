@@ -25,6 +25,8 @@ import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import { PaymentLogPackageItemCell } from '../../components/paymentLogs/PaymentLogPackageItemCell';
+import { getPaymentLogPackageItemDisplayText } from '../../utils/paymentLogPackageItem';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -1417,7 +1419,7 @@ const AdminPaymentLogs = () => {
           'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
           'Payment Date': payment.payment_date ? formatDate(payment.payment_date) : '-',
           'Student Name': payment.student_name || 'N/A',
-          'PACKAGE/ITEM': payment.invoice_description || '-',
+          'PACKAGE/ITEM': getPaymentLogPackageItemDisplayText(payment),
           'LEVEL TAG': payment.student_level_tag || '-',
           'PAYMENT METHOD': payment.payment_method || '-',
           AMOUNT: Math.round(getPaymentLogTableAmountColumn(payment) * 100) / 100,
@@ -2663,11 +2665,7 @@ const AdminPaymentLogs = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-900 min-w-0">
-                      <span className="truncate block" title={payment.invoice_description || '-'}>
-                        {payment.invoice_description || '-'}
-                      </span>
-                    </td>
+                    <PaymentLogPackageItemCell payment={payment} />
                     <td className="px-3 py-2.5 text-sm text-gray-700 min-w-0">
                       <span className="truncate block" title={payment.student_level_tag || '-'}>
                         {payment.student_level_tag || '-'}
@@ -3386,7 +3384,7 @@ const AdminPaymentLogs = () => {
               <div><span className="font-medium text-gray-700">Rejected by:</span> {selectedRejectedPayment.rejected_by_name || '-'}</div>
               <div><span className="font-medium text-gray-700">Rejected at:</span> {selectedRejectedPayment.rejected_at ? formatDateTimeManila(selectedRejectedPayment.rejected_at) : '-'}</div>
               <div className="sm:col-span-2">
-                <span className="font-medium text-gray-700">Package/Item:</span> {selectedRejectedPayment.invoice_description || '-'}
+                <span className="font-medium text-gray-700">Package/Item:</span> {getPaymentLogPackageItemDisplayText(selectedRejectedPayment)}
               </div>
               <div className="sm:col-span-2">
                 <span className="font-medium text-gray-700">Reason:</span>

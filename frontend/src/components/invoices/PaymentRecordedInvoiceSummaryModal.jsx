@@ -1,5 +1,9 @@
 import { createPortal } from 'react-dom';
 import { formatDateManila } from '../../utils/dateUtils';
+import {
+  buildReceiptTableRowsFromInvoiceItems,
+  sumReceiptTableRows,
+} from '../../utils/invoiceReceiptLineItems';
 import AcknowledgementReceiptStylePreview from '../receipts/AcknowledgementReceiptStylePreview';
 
 /**
@@ -48,15 +52,7 @@ export default function PaymentRecordedInvoiceSummaryModal({
   const preparedByText = invoice?.prepared_by_name || '';
   const receivedByText = invoice?.received_by_guardian_name || '';
 
-  const tableRows = [];
-  for (const row of items) {
-    const amt = Number(row.amount) || 0;
-    tableRows.push({
-      description: row.description || '—',
-      rate: amt,
-      amount: amt,
-    });
-  }
+  const tableRows = buildReceiptTableRowsFromInvoiceItems(items);
   if (tableRows.length === 0 && snap) {
     const p = Number(snap.payable_amount) || 0;
     if (p > 0) {
@@ -83,7 +79,14 @@ export default function PaymentRecordedInvoiceSummaryModal({
       amount: t,
     });
   }
-  const totalAmount = tableRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const totalFromLines = sumReceiptTableRows(tableRows);
+  const invoiceAmount = Number(invoice.amount);
+  const totalAmount =
+    totalFromLines !== 0
+      ? totalFromLines
+      : Number.isFinite(invoiceAmount)
+        ? invoiceAmount
+        : 0;
 
   const addr = (branchInfo?.address || '').trim();
   const phone = (branchInfo?.phone || '').trim();

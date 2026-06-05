@@ -2,6 +2,7 @@ import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { getClient, query } from '../config/database.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
+import { ensureReservedEnrollmentOnReservationUpgrade } from '../utils/enrollmentStatus.js';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 
@@ -681,6 +682,16 @@ router.put(
       let installmentPhaseEnd = null;
       let installmentIncludeDownpayment = true;
       let isInstallmentEnrollment = false;
+      /** True when upgrade creates a downpayment invoice (not monthly package_price). */
+      let billDownpaymentOnUpgrade = false;
+
+      const isInstallmentPackageType = (pkg) =>
+        pkg &&
+        (pkg.package_type === 'Installment' ||
+          (pkg.package_type === 'Phase' &&
+            String(pkg.payment_option || '')
+              .trim()
+              .toLowerCase() === 'installment'));
       // Promo tracking variables (scope outside package processing)
       let promoDiscount = 0;
       let promoApplied = null;
@@ -959,10 +970,67 @@ router.put(
           pkgDetail.pricing_name.toLowerCase().includes('new enrollee installment')
         );
 
-        const isInstallmentPackageForUpgrade =
-          packageData.package_type === 'Installment' ||
-          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment');
+        const isInstallmentPackageForUpgrade = isInstallmentPackageType(packageData);
         skipMonthlyPackageInvoice = enrollment_type === 'Installment' && isInstallmentPackageForUpgrade;
+
+        // Resolve installment phase scope + downpayment billing flag (before invoice line items)
+        if (enrollment_type === 'Installment' && isInstallmentPackageForUpgrade) {
+          isInstallmentEnrollment = true;
+          const classMaxPhase = classData.number_of_phase ? parseInt(classData.number_of_phase, 10) : null;
+          const pkgMinPhase =
+            packageData.package_type === 'Phase' &&
+            String(packageData.payment_option || '')
+              .trim()
+              .toLowerCase() === 'installment'
+              ? parseInt(packageData.phase_start, 10) || 1
+              : 1;
+          const pkgMaxPhase =
+            packageData.package_type === 'Phase' &&
+            String(packageData.payment_option || '')
+              .trim()
+              .toLowerCase() === 'installment'
+              ? parseInt(packageData.phase_end, 10) || pkgMinPhase
+              : classMaxPhase || pkgMinPhase;
+
+          const requestedStart =
+            installment_scope?.phase_start != null ? parseInt(installment_scope.phase_start, 10) : pkgMinPhase;
+          const requestedEnd =
+            installment_scope?.phase_end != null ? parseInt(installment_scope.phase_end, 10) : pkgMaxPhase;
+
+          if (!Number.isInteger(requestedStart) || !Number.isInteger(requestedEnd) || requestedEnd < requestedStart) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Invalid installment phase scope. Ensure phase_end is greater than or equal to phase_start.',
+            });
+          }
+
+          if (requestedStart < pkgMinPhase || requestedEnd > pkgMaxPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Installment phase scope must be within allowed package range: Phase ${pkgMinPhase} to Phase ${pkgMaxPhase}.`,
+            });
+          }
+
+          if (classMaxPhase && requestedEnd > classMaxPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Installment phase scope exceeds class phase limit (max phase ${classMaxPhase}).`,
+            });
+          }
+
+          installmentPhaseStart = requestedStart;
+          installmentPhaseEnd = requestedEnd;
+          phaseStartForRemarks = requestedStart;
+          phaseEndForRemarks = requestedEnd;
+
+          const hasConfiguredDownpayment = parseFloat(packageData.downpayment_amount || 0) > 0;
+          installmentIncludeDownpayment = hasConfiguredDownpayment
+            ? installment_scope?.include_downpayment !== false
+            : false;
+        }
 
         // Add package price to invoice (skip for Installment packages — package_price is monthly amount; downpayment is invoiced separately)
         if (!skipMonthlyPackageInvoice && packageData.package_price && !isNaN(parseFloat(packageData.package_price))) {
@@ -1179,64 +1247,6 @@ router.put(
         }
       }
 
-      // Installment phase scope + whether to bill downpayment separately (align with POST /classes/:id/enroll)
-      if (
-        enrollment_type === 'Installment' &&
-        packageData &&
-        (packageData.package_type === 'Installment' ||
-          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
-      ) {
-        isInstallmentEnrollment = true;
-        const classMaxPhase = classData.number_of_phase ? parseInt(classData.number_of_phase, 10) : null;
-        const pkgMinPhase =
-          packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
-            ? parseInt(packageData.phase_start, 10) || 1
-            : 1;
-        const pkgMaxPhase =
-          packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'
-            ? parseInt(packageData.phase_end, 10) || pkgMinPhase
-            : classMaxPhase || pkgMinPhase;
-
-        const requestedStart =
-          installment_scope?.phase_start != null ? parseInt(installment_scope.phase_start, 10) : pkgMinPhase;
-        const requestedEnd =
-          installment_scope?.phase_end != null ? parseInt(installment_scope.phase_end, 10) : pkgMaxPhase;
-
-        if (!Number.isInteger(requestedStart) || !Number.isInteger(requestedEnd) || requestedEnd < requestedStart) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid installment phase scope. Ensure phase_end is greater than or equal to phase_start.',
-          });
-        }
-
-        if (requestedStart < pkgMinPhase || requestedEnd > pkgMaxPhase) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Installment phase scope must be within allowed package range: Phase ${pkgMinPhase} to Phase ${pkgMaxPhase}.`,
-          });
-        }
-
-        if (classMaxPhase && requestedEnd > classMaxPhase) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Installment phase scope exceeds class phase limit (max phase ${classMaxPhase}).`,
-          });
-        }
-
-        installmentPhaseStart = requestedStart;
-        installmentPhaseEnd = requestedEnd;
-        phaseStartForRemarks = requestedStart;
-        phaseEndForRemarks = requestedEnd;
-
-        const hasConfiguredDownpayment = parseFloat(packageData.downpayment_amount || 0) > 0;
-        installmentIncludeDownpayment = hasConfiguredDownpayment
-          ? installment_scope?.include_downpayment !== false
-          : false;
-      }
-
       // Process merchandise - validate inventory and deduct
       // For packages, merchandise is included (no separate charge), but we still need to deduct from inventory
       // For per-phase enrollment, merchandise can be added separately and charged
@@ -1354,16 +1364,12 @@ router.put(
         }
       }
 
-      // Installment reservation upgrade: first invoice must be downpayment (− reservation fee), not monthly × − fee.
+      // Installment reservation upgrade: first invoice must be downpayment (not monthly package_price).
       // Mirrors POST /classes/:id/enroll — package_price is recurring; downpayment_amount is the billable lump sum.
-      if (
-        enrollment_type === 'Installment' &&
-        packageData &&
-        (packageData.package_type === 'Installment' ||
-          (packageData.package_type === 'Phase' && packageData.payment_option === 'Installment'))
-      ) {
+      if (enrollment_type === 'Installment' && packageData && isInstallmentPackageType(packageData)) {
         const downpaymentConfigured = parseFloat(packageData.downpayment_amount || 0) || 0;
         if (downpaymentConfigured > 0 && installmentIncludeDownpayment) {
+          billDownpaymentOnUpgrade = true;
           const promoResult = await applyReservationUpgradePromoForAmount(downpaymentConfigured);
           if (promoResult.promo) {
             promoApplied = promoResult.promo;
@@ -1372,7 +1378,10 @@ router.put(
 
           totalAmount = Math.max(0, promoResult.amountAfterPromo - reservationFeePaid);
           invoiceItems = [
-            { description: `Downpayment - ${packageName || 'Enrollment'}`, amount: downpaymentConfigured },
+            {
+              description: `Downpayment for ${packageName || 'Enrollment'}`,
+              amount: downpaymentConfigured,
+            },
           ];
           if (promoResult.discount > 0 && promoResult.promo) {
             let discountDescription = `Promo Discount (${promoResult.promo.promo_name}): `;
@@ -1403,7 +1412,25 @@ router.put(
           console.log(
             `✅ Installment upgrade invoice: downpayment ${downpaymentConfigured} − promo ${promoResult.discount} − reservation ${reservationFeePaid} = ${totalAmount}`
           );
+        } else if (downpaymentConfigured > 0 && !installmentIncludeDownpayment) {
+          // Downpayment excluded: amortized into installment profile; no lump-sum invoice.
+          totalAmount = 0;
+          invoiceItems = [];
         }
+      }
+
+      if (
+        skipMonthlyPackageInvoice &&
+        enrollment_type === 'Installment' &&
+        installmentIncludeDownpayment &&
+        parseFloat(packageData?.downpayment_amount || 0) > 0 &&
+        !billDownpaymentOnUpgrade
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to build downpayment invoice for installment upgrade. Please retry.',
+        });
       }
 
       // Create invoice
@@ -1414,13 +1441,19 @@ router.put(
       let dueDateStr = null;
       if (hasFullpaymentPricing) {
         dueDateStr = null; // Full payment - no due date
+      } else if (billDownpaymentOnUpgrade) {
+        const dueDate = new Date(`${issueDateStr}T12:00:00`);
+        dueDate.setDate(dueDate.getDate() + 7);
+        dueDateStr = dueDate.toISOString().split('T')[0];
       } else if (installment_settings && installment_settings.invoice_due_date) {
         dueDateStr = installment_settings.invoice_due_date;
       }
 
       // Build invoice description based on enrollment type
       let invoiceDescription = null;
-      if (enrollment_type === 'Per-Phase') {
+      if (billDownpaymentOnUpgrade) {
+        invoiceDescription = `Downpayment - ${packageName || classData.program_name || 'Enrollment'}`;
+      } else if (enrollment_type === 'Per-Phase') {
         invoiceDescription = `Per-Phase - ${classData.program_name || 'Enrollment'}`;
       } else if (packageName) {
         invoiceDescription = packageName;
@@ -1715,6 +1748,12 @@ router.put(
       let allEnrollmentRecords = [];
       
       console.log(`📝 Invoice created. Student will be enrolled after payment is made.`);
+
+      await ensureReservedEnrollmentOnReservationUpgrade(
+        client,
+        reservation,
+        req.user.fullName || req.user.email || 'System (Reservation upgraded)'
+      );
 
       // Update reservation status
       await client.query(

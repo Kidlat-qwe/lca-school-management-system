@@ -441,7 +441,9 @@ const AdminCalendar = () => {
                           onClick={() => handleEventClick(event)}
                           className="rounded-lg border border-yellow-100 bg-yellow-50/60 p-1.5 text-[11px] leading-snug text-gray-700 cursor-pointer hover:bg-yellow-100 hover:border-yellow-200 transition-colors"
                         >
-                          <p className="font-semibold text-gray-900 break-words">{event.class_code || 'N/A'}</p>
+                          <p className="font-semibold text-gray-900 break-words">
+                            {event.display_name || event.class_name || event.level_tag || event.class_code || 'N/A'}
+                          </p>
                           {event.room_name && (
                             <p className="text-[10px] text-gray-500">{event.room_name}</p>
                           )}

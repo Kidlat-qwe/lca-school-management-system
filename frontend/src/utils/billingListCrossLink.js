@@ -10,15 +10,17 @@ export function getInitialInvoiceSearchFromParams(searchParams) {
   return '';
 }
 
-/** Initial AR list search when landing from Invoice cross-link. */
+/** Initial AR list search when landing from Invoice cross-link (prefer AR# in ?search=). */
 export function getInitialArSearchFromParams(searchParams) {
-  const ackRaw = searchParams.get('ack_receipt_id');
-  const ackId = Number(ackRaw);
-  if (Number.isFinite(ackId) && ackId > 0) return String(ackId);
-  if (hasArCrossLinkParam(searchParams)) {
-    return String(searchParams.get('search') || '').trim();
+  const searchTrim = String(searchParams.get('search') || '').trim();
+  if (searchTrim && hasArCrossLinkParam(searchParams)) {
+    return searchTrim;
   }
-  return String(searchParams.get('search') || '').trim();
+  const ackId = Number(searchParams.get('ack_receipt_id'));
+  if (Number.isFinite(ackId) && ackId > 0 && hasArCrossLinkParam(searchParams)) {
+    return String(ackId);
+  }
+  return searchTrim;
 }
 
 export function hasInvoiceCrossLinkParam(searchParams) {
