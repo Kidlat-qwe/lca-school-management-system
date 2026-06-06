@@ -21,12 +21,14 @@ import {
 } from '../lib/ackReceiptPairedColumn.js';
 import {
   loadMerchandiseReleasedDetails,
+  loadRecentMerchandiseReleasesForOperationalDashboard,
   merchandiseReleaseDashboardCteDaily,
 } from '../lib/merchandiseReleaseLog.js';
 import {
   applyPaymentEnrollmentToBranchBreakdown,
   loadDailyOperationalEnrollmentFromPayments,
 } from '../lib/dailyOperationalEnrollmentFromPayments.js';
+import { loadRecentInvoicePaymentsForOperationalDashboard } from '../lib/operationalDashboardRecentPayments.js';
 
 const router = express.Router();
 
@@ -643,16 +645,6 @@ router.get(
               FROM branchestbl b
               ${branchWhereClause}
             ),
-            new_enrollees AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS new_enrollees
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'new'
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
-              GROUP BY c.branch_id
-            ),
             daily_sales AS (
               SELECT
                 p.branch_id,
@@ -675,45 +667,6 @@ router.get(
               GROUP BY ar.branch_id
             ),
             ${merchandiseReleaseDashboardCteDaily(branchParams.length + 1)},
-            re_enrollment AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS re_enrollment_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status IN ('re_enrolled', 'upsell')
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
-              GROUP BY c.branch_id
-            ),
-            rejoin_enrollment AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS rejoin_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'rejoin'
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date = $${branchParams.length + 1}::date
-              GROUP BY c.branch_id
-            ),
-            dropped_unenrolled AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id) AS dropped_unenrolled_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'dropped'
-                AND cs.removed_at IS NOT NULL
-                AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
-                AND (
-                  (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)
-                  OR (
-                    cs.enrolled_at IS NULL
-                    AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
-                  )
-                )
-                AND TIMEZONE('Asia/Manila', cs.removed_at)::date = $${branchParams.length + 1}::date
-              GROUP BY c.branch_id
-            ),
             pay_verified AS (
               SELECT
                 p.branch_id,
@@ -761,15 +714,15 @@ router.get(
             SELECT
               bs.branch_id,
               bs.branch_name,
-              COALESCE(ne.new_enrollees, 0)::bigint AS new_enrollees,
+              0::bigint AS new_enrollees,
               COALESCE(ds.daily_sales_amount, 0) AS daily_sales_amount,
               COALESCE(ars.ar_sales_count, 0)::bigint AS ar_sales_count,
               COALESCE(ars.ar_sales_amount, 0) AS ar_sales_amount,
               COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
               COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
-              COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
-              COALESCE(rj.rejoin_count, 0)::bigint AS rejoin_count,
-              COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count,
+              0::bigint AS re_enrollment_count,
+              0::bigint AS rejoin_count,
+              0::bigint AS dropped_unenrolled_count,
               COALESCE(pv.pay_verified_count, 0)::bigint AS pay_verified_count,
               COALESCE(pv.pay_verified_amount, 0) AS pay_verified_amount,
               COALESCE(puv.pay_unverified_count, 0)::bigint AS pay_unverified_count,
@@ -779,20 +732,15 @@ router.get(
               COALESCE(aruv.ar_unverified_count, 0)::bigint AS ar_unverified_count,
               COALESCE(aruv.ar_unverified_amount, 0) AS ar_unverified_amount
             FROM branch_scope bs
-            LEFT JOIN new_enrollees ne ON ne.branch_id = bs.branch_id
             LEFT JOIN daily_sales ds ON ds.branch_id = bs.branch_id
             LEFT JOIN ar_sales ars ON ars.branch_id = bs.branch_id
             LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
-            LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
-            LEFT JOIN rejoin_enrollment rj ON rj.branch_id = bs.branch_id
-            LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
             LEFT JOIN pay_verified pv ON pv.branch_id = bs.branch_id
             LEFT JOIN pay_unverified puv ON puv.branch_id = bs.branch_id
             LEFT JOIN ar_verified arv ON arv.branch_id = bs.branch_id
             LEFT JOIN ar_unverified aruv ON aruv.branch_id = bs.branch_id
             ORDER BY
               COALESCE(ds.daily_sales_amount, 0) DESC,
-              COALESCE(ne.new_enrollees, 0) DESC,
               bs.branch_name ASC
           `,
           [...branchParams, summaryDate]
@@ -860,6 +808,9 @@ router.get(
           merchandise_released_count: acc.merchandise_released_count + row.merchandise_released_count,
           merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
           re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
+          upsell_count: acc.upsell_count + (row.upsell_count || 0),
+          reserved_count: acc.reserved_count + (row.reserved_count || 0),
+          completed_count: acc.completed_count + (row.completed_count || 0),
           rejoin_count: acc.rejoin_count + row.rejoin_count,
           dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
           pay_verified_count: acc.pay_verified_count + row.pay_verified_count,
@@ -877,6 +828,9 @@ router.get(
             row.ar_sales_amount > 0 ||
             row.merchandise_released_count > 0 ||
             row.re_enrollment_count > 0 ||
+            (row.upsell_count || 0) > 0 ||
+            (row.reserved_count || 0) > 0 ||
+            (row.completed_count || 0) > 0 ||
             row.rejoin_count > 0 ||
             row.dropped_unenrolled_count > 0
               ? 1
@@ -890,6 +844,9 @@ router.get(
           merchandise_released_count: 0,
           merchandise_released_quantity: 0,
           re_enrollment_count: 0,
+          upsell_count: 0,
+          reserved_count: 0,
+          completed_count: 0,
           rejoin_count: 0,
           dropped_unenrolled_count: 0,
           pay_verified_count: 0,
@@ -924,7 +881,22 @@ router.get(
         re_enrollment_rate: paymentEnrollment.re_enrollment_rate,
         re_enrollment_rate_retained_count: paymentEnrollment.re_enrollment_rate_retained_count,
         re_enrollment_rate_prior_count: paymentEnrollment.re_enrollment_rate_prior_count,
+        retention_base_count: paymentEnrollment.retention_base_count ?? 0,
+        retention_re_enrollment_count: paymentEnrollment.retention_re_enrollment_count ?? 0,
+        prior_period_label: paymentEnrollment.prior_period_label ?? null,
+        prior_period_type: paymentEnrollment.prior_period_type ?? null,
+        retention_rate_mode: paymentEnrollment.retention_rate_mode ?? null,
       };
+
+      const recentInvoicePayments = await loadRecentInvoicePaymentsForOperationalDashboard(query, {
+        branchId: branchFilter,
+        summaryDate,
+      });
+
+      const recentMerchandiseReleases = await loadRecentMerchandiseReleasesForOperationalDashboard(query, {
+        branchId: branchFilter,
+        summaryDate,
+      });
 
       res.json({
         success: true,
@@ -935,6 +907,8 @@ router.get(
           enrollment_kpi_source: paymentEnrollment.source,
           totals,
           enrollment_dashboard: enrollmentDashboard,
+          recent_invoice_payments: recentInvoicePayments,
+          recent_merchandise_releases: recentMerchandiseReleases,
           branch_breakdown: branchBreakdown,
           charts: {
             branch_metrics: branchBreakdown.map((row) => ({
@@ -947,6 +921,9 @@ router.get(
               merchandise_released_count: row.merchandise_released_count,
               merchandise_released_quantity: row.merchandise_released_quantity,
               re_enrollment_count: row.re_enrollment_count,
+              upsell_count: row.upsell_count || 0,
+              reserved_count: row.reserved_count || 0,
+              completed_count: row.completed_count || 0,
               rejoin_count: row.rejoin_count,
               dropped_unenrolled_count: row.dropped_unenrolled_count,
               pay_verified_count: row.pay_verified_count,
@@ -963,6 +940,9 @@ router.get(
               { name: 'Acknowledgement Receipt Sales', value: totals.ar_sales_count },
               { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
               { name: 'Re-enrollment', value: totals.re_enrollment_count },
+              { name: 'Upsell', value: totals.upsell_count || 0 },
+              { name: 'Reserved', value: totals.reserved_count || 0 },
+              { name: 'Completed', value: totals.completed_count || 0 },
               { name: 'Rejoin', value: totals.rejoin_count },
               { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
             ],

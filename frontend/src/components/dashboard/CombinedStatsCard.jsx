@@ -1,6 +1,11 @@
 import { DashboardStatIcon } from './DashboardStatIcons';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 
+const resolveBottomAccent = (accent = '') => {
+  const match = String(accent).match(/from-([a-z]+-\d+)/);
+  return match ? `bg-${match[1]}` : 'bg-gray-300';
+};
+
 /**
  * Single card showing multiple metrics (e.g. New + Re-enrollment, or Invoice + AR sales).
  * @param {'inline'|'stacked'} metricsLayout - inline: label left, value right; stacked: label then amount on separate lines
@@ -26,7 +31,7 @@ const CombinedStatsCard = ({
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       aria-label={ariaLabel || (onClick ? title : undefined)}
-      className={`group relative h-full w-full overflow-visible rounded-2xl bg-white text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${
+      className={`group relative h-full w-full overflow-hidden rounded-2xl bg-white text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${
         isFinancial ? 'p-6' : 'p-5'
       } ${onClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2' : ''}`}
     >
@@ -71,9 +76,7 @@ const CombinedStatsCard = ({
           )}
         </div>
       </div>
-      <div
-        className={`absolute inset-x-0 bottom-0 h-1 ${accent.replace('bg-', 'bg-gradient-to-r from-').replace('/80', ' to-transparent')}`}
-      />
+      <div className={`absolute inset-x-0 bottom-0 h-1 ${resolveBottomAccent(accent)}`} />
     </Wrapper>
   );
 };

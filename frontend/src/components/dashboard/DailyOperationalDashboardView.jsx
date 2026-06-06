@@ -20,6 +20,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from './DashboardStatIcons';
 import CombinedStatsCard from './CombinedStatsCard';
+import RecentInvoicePaymentsLog from './RecentInvoicePaymentsLog';
+import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
@@ -142,6 +144,9 @@ const DailyOperationalDashboardView = ({
           row.merchandise_released_quantity > 0 ||
           row.re_enrollment_count > 0 ||
           (row.rejoin_count || 0) > 0 ||
+          (row.reserved_count || 0) > 0 ||
+          (row.upsell_count || 0) > 0 ||
+          (row.completed_count || 0) > 0 ||
           (row.dropped_unenrolled_count || 0) > 0
       ),
     [branchMetrics]
@@ -161,6 +166,9 @@ const DailyOperationalDashboardView = ({
     merchandise_released_quantity: 0,
     re_enrollment_count: 0,
     rejoin_count: 0,
+    reserved_count: 0,
+    upsell_count: 0,
+    completed_count: 0,
     dropped_unenrolled_count: 0,
     pay_verified_count: 0,
     pay_verified_amount: 0,
@@ -200,6 +208,14 @@ const DailyOperationalDashboardView = ({
     },
     [basePath, navigate, verificationDayYmd]
   );
+
+  const goPaymentLogsForPeriod = useCallback(() => {
+    const p = new URLSearchParams();
+    p.set('notificationTab', 'main');
+    p.set('issue_date_from', verificationDayYmd);
+    p.set('issue_date_to', verificationDayYmd);
+    navigate(`${basePath}/payment-logs?${p.toString()}`);
+  }, [basePath, navigate, verificationDayYmd]);
 
   const goArByVerify = useCallback(
     (kind) => {
@@ -241,11 +257,10 @@ const DailyOperationalDashboardView = ({
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
-      <div className="mx-auto max-w-7xl space-y-8 p-6 lg:p-8">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-1">
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
+    <div className="w-full min-w-0 space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
               Daily Operational Dashboard
             </h1>
             <p className="text-sm text-gray-500">{DAILY_OPERATIONAL.pageIntro}</p>
@@ -287,7 +302,7 @@ const DailyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <CombinedStatsCard
             title="New Enrollees & Re-enrollment"
             iconName="users"
@@ -309,31 +324,31 @@ const DailyOperationalDashboardView = ({
             tooltip={DAILY_OPERATIONAL.droppedRejoin}
           />
           <CombinedStatsCard
-            title="Invoice & Acknowledgement Receipt Sales"
-            iconName="currency"
-            accent="bg-gradient-to-br from-indigo-500 to-violet-600"
-            metricsLayout="stacked"
+            title="Reserved & Upsell"
+            iconName="clock"
+            accent="bg-gradient-to-br from-sky-500 to-blue-600"
             metrics={[
-              { label: 'Invoice Sales:', value: formatCurrency(totals.daily_sales_amount) },
-              { label: 'Acknowledgement Receipt:', value: formatCurrency(totals.ar_sales_amount) },
+              { label: 'Reserved', value: formatNumber(totals.reserved_count || 0) },
+              { label: 'Upsell', value: formatNumber(totals.upsell_count || 0) },
             ]}
-            tooltip={`${DAILY_OPERATIONAL.combinedSales}\n\n${DAILY_OPERATIONAL.arSales(formatNumber(totals.ar_sales_count))}`}
+            tooltip={DAILY_OPERATIONAL.reservedUpsell}
           />
-          <StatsCard
-            title="Total Payments"
-            value={formatCurrency(totalPaymentsAmount)}
-            iconName="creditCard"
-            accent="bg-gradient-to-br from-violet-600 to-purple-700"
-            tooltip={DAILY_OPERATIONAL.totalPayments}
-          />
-          <StatsCard
-            title="Merchandise Released"
-            value={formatNumber(totals.merchandise_released_quantity)}
-            iconName="sparkles"
-            accent="bg-gradient-to-br from-amber-400 to-orange-500"
-            tooltip={`${DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}\n\nClick to view release details.`}
-            onClick={() => setMerchReleasedModalOpen(true)}
-            ariaLabel={`View merchandise released details for ${selectedDate}`}
+          <CombinedStatsCard
+            title="Completed & Retention Base"
+            iconName="checkCircle"
+            accent="bg-gradient-to-br from-violet-500 to-purple-600"
+            metrics={[
+              { label: 'Completed', value: formatNumber(totals.completed_count || 0) },
+              {
+                label: 'Retention base',
+                value: formatNumber(
+                  enrollmentDashboard.retention_base_count ??
+                    totals.retention_base_count ??
+                    0
+                ),
+              },
+            ]}
+            tooltip={DAILY_OPERATIONAL.completedRetentionCombined}
           />
           <StatsCard
             title="Re-enrollment Rate"
@@ -345,6 +360,59 @@ const DailyOperationalDashboardView = ({
               formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
             )}
           />
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-gray-700">{DAILY_OPERATIONAL.financialSection}</p>
+          <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
+            <div className="min-w-0 lg:col-span-1">
+              <CombinedStatsCard
+                title="Sales & Payments"
+                iconName="currency"
+                accent="bg-gradient-to-br from-indigo-500 to-violet-600"
+                metricsLayout="inline"
+                metrics={[
+                  { label: 'Invoice sales', value: formatCurrency(totals.daily_sales_amount) },
+                  { label: 'AR sales', value: formatCurrency(totals.ar_sales_amount) },
+                  { label: 'Total payments', value: formatCurrency(totalPaymentsAmount) },
+                ]}
+                tooltip={DAILY_OPERATIONAL.salesPaymentsCard}
+              />
+            </div>
+            <div className="min-w-0 lg:col-span-2">
+              <RecentInvoicePaymentsLog
+                payments={data?.recent_invoice_payments}
+                tooltip={DAILY_OPERATIONAL.recentInvoicePayments}
+                emptyMessage="No invoice payments on this date."
+                onViewAll={goPaymentLogsForPeriod}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-gray-700">{DAILY_OPERATIONAL.merchandiseSection}</p>
+          <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
+            <CombinedStatsCard
+              title="Merchandise Released"
+              iconName="sparkles"
+              accent="bg-gradient-to-br from-amber-400 to-orange-500"
+              metricsLayout="inline"
+              metrics={[
+                { label: 'Units released', value: formatNumber(totals.merchandise_released_quantity) },
+                { label: 'Release events', value: formatNumber(totals.merchandise_released_count) },
+              ]}
+              tooltip={`${DAILY_OPERATIONAL.merchandise(formatNumber(totals.merchandise_released_count))}\n\nClick to view release details.`}
+              onClick={() => setMerchReleasedModalOpen(true)}
+              ariaLabel={`View merchandise released details for ${selectedDate}`}
+            />
+            <RecentMerchandiseReleasesLog
+              releases={data?.recent_merchandise_releases}
+              tooltip={DAILY_OPERATIONAL.recentMerchandiseReleases}
+              emptyMessage="No merchandise releases on this date."
+              onViewAll={() => setMerchReleasedModalOpen(true)}
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -414,12 +482,14 @@ const DailyOperationalDashboardView = ({
               WebkitOverflowScrolling: 'touch',
             }}
           >
-            <table style={{ width: '100%', minWidth: '1600px' }} className="border-collapse text-sm">
+            <table style={{ width: '100%', minWidth: '1780px' }} className="border-collapse text-sm">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Branch</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">New · Re-enroll</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Dropped · Rejoin</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Reserved · Upsell</th>
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Completed</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Invoice Sales</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Acknowledgement Receipt (float)</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold leading-tight text-gray-600">
@@ -452,7 +522,14 @@ const DailyOperationalDashboardView = ({
                     </td>
                     <td className="px-3 py-3 text-right text-gray-700">
                       <span className="block">{formatNumber(row.dropped_unenrolled_count || 0)}</span>
-                      <span className="block text-xs text-rose-700">{formatNumber(row.rejoin_count || 0)}</span>
+                      <span className="block text-xs text-orange-700">{formatNumber(row.rejoin_count || 0)}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      <span className="block">{formatNumber(row.reserved_count || 0)}</span>
+                      <span className="block text-xs text-teal-700">{formatNumber(row.upsell_count || 0)}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      {formatNumber(row.completed_count || 0)}
                     </td>
                     <td className="px-3 py-3 text-right font-medium text-gray-900">{formatCurrency(row.daily_sales_amount)}</td>
                     <td className="px-3 py-3 text-right font-medium text-violet-700">
@@ -496,6 +573,9 @@ const DailyOperationalDashboardView = ({
                   <Bar dataKey="new_enrollees" name="New enrollees" fill="#22C55E" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="re_enrollment_count" name="Re-enrollment" fill="#14B8A6" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="dropped_unenrolled_count" name="Dropped / unenrolled" fill="#DC2626" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="reserved_count" name="Reserved" fill="#0EA5E9" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="upsell_count" name="Upsell" fill="#2DD4BF" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="completed_count" name="Completed" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="rejoin_count" name="Rejoin" fill="#F97316" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="merchandise_released_quantity" name="Merchandise released" fill="#F7C844" radius={[6, 6, 0, 0]} />
                 </BarChart>
@@ -583,7 +663,6 @@ const DailyOperationalDashboardView = ({
             )}
           </ChartCard>
         </div>
-      </div>
 
       <MerchandiseReleasedDetailModal
         open={merchReleasedModalOpen}

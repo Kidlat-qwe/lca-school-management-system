@@ -14,7 +14,7 @@ import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
   // Target by email (leave empty to use STUDENT_NAMES)
-  //'kret_26@yahoo.com',
+  'yumangabbysantos@gmail.com',
 ];
 
 const STUDENT_NAMES = [
@@ -23,7 +23,7 @@ const STUDENT_NAMES = [
 
 // Set true to remove penalties for ALL students.
 // When true, STUDENT_EMAILS / STUDENT_NAMES are ignored.
-const REMOVE_FOR_ALL_STUDENTS = true;
+const REMOVE_FOR_ALL_STUDENTS = false;
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 

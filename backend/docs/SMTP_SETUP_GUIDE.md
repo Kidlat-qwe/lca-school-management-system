@@ -1,5 +1,7 @@
 # SMTP Email Configuration Guide
 
+> **Full guide (SMTP + SendGrid, production & local):** see [`docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md`](../../docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md) — use that document for step-by-step setup your team can follow end-to-end.
+
 This guide will help you set up SMTP email service for sending invoice emails to students when they make payments.
 
 ## Step-by-Step Setup for Gmail

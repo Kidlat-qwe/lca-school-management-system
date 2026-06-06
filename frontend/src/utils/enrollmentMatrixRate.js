@@ -175,8 +175,8 @@ export function enrollmentRateFromMatrixStats(statsRows = []) {
 
 /**
  * Monthly matrix re-enrollment (matches backend computeReEnrollmentMonthStats):
- * per month, all "re-enrolled" labeled cells ÷ students enrolled in prior month.
- * Combined rate = sum(re-enrolled cells) / sum(prior-month enrolled), not an average of monthly %.
+ * per month, Re-enrollment KPI cells for the prior-month cohort only ÷ students enrolled in prior month.
+ * Combined rate = sum(cohort-aligned numerators) / sum(prior-month enrolled), not an average of monthly %.
  */
 const priorEnrolledCountFromRow = (row) =>
   Number(row.prior_month_enrolled_count ?? row.prior_phase_enrolled_count ?? 0);

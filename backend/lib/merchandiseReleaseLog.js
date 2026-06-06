@@ -636,6 +636,96 @@ export async function loadMerchandiseReleasedDetails(db, opts) {
   };
 }
 
+const RECENT_MERCH_RELEASE_LIMIT = 50;
+
+const mapRecentMerchReleaseRow = (row) => {
+  const name = row.merchandise_name || `Item #${row.merchandise_id || '—'}`;
+  const size = row.size ? ` (${row.size})` : '';
+  return {
+    release_log_id: parseInt(row.release_log_id, 10),
+    release_batch_id: row.release_batch_id,
+    source: row.source,
+    item_label: `${name}${size}`,
+    student_name: row.student_name || null,
+    quantity: parseInt(row.quantity, 10) || 0,
+    released_date: row.released_date_manila || null,
+    reference_label: row.payment_id
+      ? `PAY-${row.payment_id}`
+      : row.ack_receipt_id
+        ? `AR-${row.ack_receipt_id}`
+        : null,
+  };
+};
+
+/**
+ * Recent merchandise release lines for operational dashboard mini-log (UI shows 3 rows + scroll).
+ * @param {import('pg').Pool|import('pg').PoolClient|Function} db
+ * @param {{ branchId?: number|null, summaryDate?: string, monthStart?: string, monthEndExclusive?: string, limit?: number }} options
+ */
+export async function loadRecentMerchandiseReleasesForOperationalDashboard(db, options = {}) {
+  const { branchId = null, summaryDate, monthStart, monthEndExclusive, limit = RECENT_MERCH_RELEASE_LIMIT } =
+    options;
+
+  if (!(await merchandiseReleaseLogTableExists(db))) {
+    return [];
+  }
+
+  const params = [];
+  let dateFilterSql = '';
+
+  if (summaryDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(summaryDate))) {
+      throw new Error('summaryDate must be YYYY-MM-DD');
+    }
+    params.push(summaryDate);
+    dateFilterSql = `TIMEZONE('Asia/Manila', mrl.released_at)::date = $${params.length}::date`;
+  } else if (monthStart && monthEndExclusive) {
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(monthStart)) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(monthEndExclusive))
+    ) {
+      throw new Error('monthStart and monthEndExclusive must be YYYY-MM-DD');
+    }
+    params.push(monthStart, monthEndExclusive);
+    dateFilterSql = `TIMEZONE('Asia/Manila', mrl.released_at)::date >= $1::date AND TIMEZONE('Asia/Manila', mrl.released_at)::date < $2::date`;
+  } else {
+    throw new Error('Provide summaryDate or monthStart + monthEndExclusive');
+  }
+
+  let branchSql = '';
+  if (branchId) {
+    params.push(branchId);
+    branchSql = ` AND mrl.branch_id = $${params.length}`;
+  }
+
+  params.push(limit);
+
+  const result = await runQuery(
+    db,
+    `SELECT
+       mrl.release_log_id,
+       mrl.release_batch_id,
+       mrl.source,
+       mrl.merchandise_id,
+       mrl.merchandise_name,
+       mrl.size,
+       mrl.quantity,
+       mrl.payment_id,
+       mrl.ack_receipt_id,
+       TO_CHAR(TIMEZONE('Asia/Manila', mrl.released_at), 'YYYY-MM-DD') AS released_date_manila,
+       u.full_name AS student_name
+     FROM merchandise_release_logtbl mrl
+     LEFT JOIN userstbl u ON mrl.student_id = u.user_id
+     WHERE ${dateFilterSql}
+       ${branchSql}
+     ORDER BY mrl.released_at DESC, mrl.release_log_id DESC
+     LIMIT $${params.length}`,
+    params
+  );
+
+  return (result.rows || []).map(mapRecentMerchReleaseRow);
+}
+
 export function merchandiseReleaseDashboardCteMonthly(startParamIndex, endParamIndex) {
   return `
             merchandise_release AS (

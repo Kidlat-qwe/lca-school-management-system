@@ -178,11 +178,10 @@ const AdminFinancialDashboard = () => {
   }, [adminBranchId, loading, totalPaymentsAmount]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
-      <div className="mx-auto max-w-7xl space-y-8 p-6 lg:p-8">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Financial Dashboard</h1>
+    <div className="w-full min-w-0 space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Financial Dashboard</h1>
             <p className="text-sm text-gray-500">{FINANCIAL_DASHBOARD.pageIntroAdmin(branchName)}</p>
           </div>
           <div className="flex flex-wrap items-end gap-4">
@@ -475,7 +474,6 @@ const AdminFinancialDashboard = () => {
             </div>
           )}
         </div>
-      </div>
     </div>
   );
 };

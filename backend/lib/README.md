@@ -23,28 +23,49 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 - Multi-phase classes: terminal billing phase/month shows **completed** when the student progresses past the first phase (unchanged).
 - **Single-phase** classes (`curriculum.number_of_phase = 1`): the only phase/month shows **completed** when the student has paid (full payment, DB `completed` status, or all installment phases paid).
 - Each matrix response includes `kpi_totals` (new / re-enrolled / reserved / upsell / dropped / rejoin) summed from visible labeled cells for the selected year scope. **Reserved** and **Upsell** KPI cards use `reserved_count` and `upsell_count` from the matrix (not a live DB snapshot).
-- Dashboard **Re-enrollment** KPI and **Total Re-enrollment Rate %** both use re-enrolled cell counts; rate numerators match `kpi_totals.re_enrollment_count`.
+- Dashboard **Re-enrollment** KPI and **Total Re-enrollment Rate %** use Re-enrollment KPI cell counts (`re-enrolled`, `upsell`, and multi-phase `completed`; single-phase `completed` excluded). On upsell-merged anchor rows, `completed` uses the **higher program** phase count (not the lower anchor class). Rate numerators match `kpi_totals.re_enrollment_count`.
 - **Phase Re-enrollment** dashboard KPI cards use the same **month** matrix totals as Month Re-enrollment when a year is selected (`kpi_card_source: month_matrix`); the phase matrix table remains for phase-by-phase drill-down.
 - **New** cells that follow a paid reservation on the same class track include `from_previous_reserved: true`; the UI tooltip shows **Previous reserved**.
-- **Upsell** (e.g. Pre-K → KG): month matrix merges the higher program onto the lower-program row. First month after the lower program’s last enrolled (or completed) month shows **upsell**; the higher-class row is hidden. Requires a higher `level_tag` on the sibling class track.
+- **Upsell** (e.g. Pre-K → KG): month matrix merges the higher program onto the lower-program **same row**. First month after the lower program’s last enrolled (or completed) month shows **upsell**; each later higher-program billing phase maps to the following month columns (re-enrolled, then completed on the terminal phase). The higher-class row is hidden. Phase indexing uses full billing metadata so **later calendar years** show continuation on that same row (e.g. Jan–Mar 2027). Requires a higher `level_tag` on the sibling class track.
+
+## `operationalDashboardRecentPayments.js`
+
+Returns up to 50 completed **invoice** payments for daily / monthly operational dashboards (`recent_invoice_payments` on the API). Each row includes payment-log invoice context (`invoice_description`, installment profile, partial-payment parent, etc.) so the UI can show the same **package/item** label as Payment Logs. The UI shows three rows with vertical scroll when there are more. Filter: `paymenttbl.issue_date` in scope, `status = Completed`, approval not Returned/Rejected, `invoice_id` required. Ordered newest first.
 
 ## `dailyOperationalEnrollmentFromPayments.js`
 
-Daily Operational Dashboard enrollment KPIs: **payment issue date** filter + **`program_enrollment_status`** on the linked `classstudentstbl` row (class / phase from invoice remarks or installment profile).
+Daily and **Monthly** Operational Dashboard enrollment KPIs: **payment issue date** filter + **`program_enrollment_status`** on the linked `classstudentstbl` row (class / phase from invoice remarks or installment profile). Monthly uses `loadMonthlyOperationalEnrollmentFromPayments` over `[month_start, month_end_exclusive)`.
 
 | Card metric | Rule |
 |-------------|------|
-| New enrollees | `program_enrollment_status = 'new'` |
-| Re-enrollment | `program_enrollment_status IN ('re_enrolled', 'upsell')` |
-| Rejoin | `program_enrollment_status = 'rejoin'` |
-| Dropped | `program_enrollment_status = 'dropped'` |
-| Re-enrollment rate | `re_enrollment_count ÷ (new + re_enrollment + rejoin)` distinct students with class payments on that date |
+| New enrollees | Class payment phase-event on the date linked to a `new` phase row, after reclassification: not upsell, not single-phase finished package (→ completed), not middle phase of a multi-phase full payment (→ re_enrolled), and no **earlier** enrollment (same class earlier phase or other class with `enrolled_at` before this phase row — same-day upsell on a higher class later does not flip lower-program phase 1 to re_enrolled) |
+| Re-enrollment | Each class payment phase-event on the date counted for the Re-enrollment KPI: `re_enrolled`, `upsell`, and `completed` on **multi-phase** classes (terminal phase on full pay). **Single-phase** completed packages count only under Completed, not here |
+| Upsell | Each class payment on the date with status `upsell` |
+| Reserved | Each class payment on the date with status `reserved` (e.g. reservation fee) |
+| Completed | Payment phase-event linked to a `completed` phase row, the **terminal phase** of a multi-phase full payment (e.g. phase 5 on full pay 1–5), or a **single-phase** class (`number_of_phase = 1`) whose package is finished on that payment — even if the row is still `new` |
+| Rejoin | Each class payment on the date with `program_enrollment_status = 'rejoin'` |
+| Dropped / unenrolled | Distinct students with `program_enrollment_status = 'dropped'` and `removed_at` on the summary date (Asia/Manila) |
+| Re-enrollment rate | **Re-enrollment KPI card** count for the window ÷ **retention base** (student+class tracks with enrolled class payments in the **prior calendar day or prior calendar month**) × 100 — same rule daily and monthly (e.g. 11 ÷ 4 for a day, 126 ÷ 211 for June) |
+| Retention base | Distinct student+class tracks with new, re_enrolled, upsell, rejoin, or completed class payments on payment issue date in the period before the selected day/month. Shown on the Completed card |
 
-Only class-related completed payments count (same scope as invoice sales for enrollment billing). Status `completed`, `pending_enrollment`, and `reserved` are excluded from the four buckets.
+Only class-related completed payments count (same scope as invoice sales for enrollment billing). Status `pending_enrollment` is excluded. `completed` counts in its own KPI when the linked phase row is completed. `reserved` counts in the reserved KPI. (fullpayment description or installment→full conversion; multi-phase `PHASE_START`/`PHASE_END` only when **not** linked to an installment profile). Installment phase invoices use one `classstudentstbl` row per payment (`TARGET_PHASE` / paid phase). **Installment phase-events** require a **Paid** invoice (partial payments on `Partially Paid` invoices are excluded until settled). Multiple completed payments on the same chain and phase still **dedupe to one** event. Full-payment invoices use one phase-event per row in a tight `enrolled_at` window (matrix-aligned: first phase new, middle re_enrolled, last completed) so same-day phase 1 + phase 2 installments do not bleed into each other.
+
+## `operationalEnrollmentAudit.js`
+
+Read-only SQL audits for enrollment KPI anomalies (full payment history; optional `--from` / `--to`). Used by `scripts/auditEnrollmentDataQuality.js`.
+
+| Audit | Purpose |
+|-------|---------|
+| `auditDedupeImpactSummary` | Raw vs deduped re-enrollment KPI event counts |
+| `auditPartialPaymentDoubleCount` | Installment groups with multiple payments per chain + phase + status |
+| `auditBronnyLikePatterns` | Legacy cross-class flip, same-day upsell misclassification, same-day lower→higher pairs |
+| `auditUpsellMergeCandidates` | Lower program `completed` + higher program active (matrix merge review) |
 
 ## `merchandiseReleaseLog.js`
 
 Records each physical merchandise stock deduction in `merchandise_release_logtbl` for operational dashboards.
+
+`loadRecentMerchandiseReleasesForOperationalDashboard` returns up to 50 release log lines for the daily/monthly dashboard mini-log (`recent_merchandise_releases` on the API). UI shows three rows with vertical scroll.
 
 | Source | When logged | `release_batch_id` |
 |--------|-------------|-------------------|

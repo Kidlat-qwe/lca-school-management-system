@@ -326,7 +326,54 @@ node scripts/countMonthReEnrollmentMatrixLabels.js --year=2026 --json
 
 **Options:** `--year=YYYY`, `--branch-id=N`, `--program-id=N`, `--class-id=N`, `--verbose` (list each new/re-enrolled cell), `--json`, `--help`
 
+### `auditEnrollmentKpiEdgeCases.js`
+
+Scans the database for **enrollment KPI edge cases** similar to the Bronny James investigation:
+
+1. **Partial payment dual-count** — multiple completed payments on the same student + class + phase + invoice chain (would inflate re-enrollment without dedupe; e.g. Vitrum Worldwide INV-567 phase 2).
+2. **Bronny-like same-day upsell** — lower-program phase 1 payment on the same `issue_date` as a higher-program upsell / full pay.
+3. **Misclassified phase 1** — lower phase 1 still `re_enrolled` on that same day (operational KPI risk).
+4. **Multi-level tracks** — students with active rows in 2+ program levels (matrix single-row merge candidates).
+5. **Matrix upsell merge** — duplicate matrix rows, unmerged upsell siblings, or merged-anchor completed phase mismatches for the month’s calendar year.
+
+```bash
+node scripts/auditEnrollmentKpiEdgeCases.js --month=2026-06
+node scripts/auditEnrollmentKpiEdgeCases.js --month=2026-06 --section=partial
+node scripts/auditEnrollmentKpiEdgeCases.js --month=2026-06 --section=bronny
+node scripts/auditEnrollmentKpiEdgeCases.js --month=2026-06 --section=matrix --verbose
+node scripts/auditEnrollmentKpiEdgeCases.js --month=2026-06 --json
+```
+
+**Options:** `--month=YYYY-MM`, `--branch-id=N`, `--program-id=N`, `--class-id=N`, `--section=all|partial|bronny|misclassified|tracks|matrix`, `--verbose`, `--json`, `--help`
+
 ## Adding New Scripts
+
+### `auditEnrollmentDataQuality.js`
+
+Read-only scan of **all** completed class payments (not June-only) for enrollment KPI anomalies:
+
+- Partial-payment groups that would double-count without invoice-chain + phase dedupe
+- Bronny-like same-day cross-class / upsell patterns (legacy flip vs current classification)
+- Lower-completed + higher-program upsell merge candidates
+
+```bash
+node scripts/auditEnrollmentDataQuality.js
+node scripts/auditEnrollmentDataQuality.js --pattern=partial
+node scripts/auditEnrollmentDataQuality.js --from=2020-01-01 --branch-id=1 --limit=50
+node scripts/auditEnrollmentDataQuality.js --student-id=123 --json
+```
+
+**Options:** `--pattern=all|partial|bronny|upsell|dedupe`, `--from`, `--to`, `--branch-id`, `--student-id`, `--limit`, `--json`, `--help`
+
+### `repairEnrollmentAuditFindings.js`
+
+Sets higher-program phase 1 rows to `upsell` when a lower program is already `completed` (pairs flagged by the audit).
+
+```bash
+node scripts/repairEnrollmentAuditFindings.js --dry-run
+node scripts/repairEnrollmentAuditFindings.js --apply
+node scripts/repairEnrollmentAuditFindings.js --apply --student-id=336
+```
 
 When adding new scripts to this directory:
 

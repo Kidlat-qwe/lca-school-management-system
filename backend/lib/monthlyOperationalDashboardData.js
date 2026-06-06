@@ -11,20 +11,26 @@
  *
  * Merchandise Released uses merchandise_release_logtbl (stock deductions: Merchandise AR + package enroll).
  *
- * New enrollees / dropped / rejoin counts come from classstudentstbl.program_enrollment_status
- * and enrolled_at / removed_at (Asia/Manila calendar day), not paymenttbl.
- * Re-enrollment / dropped / rejoin counts match the Month Re-enrollment matrix for the
- * selected month (including calendar-date overlays for new, dropped, and rejoin).
+ * New enrollees / re-enrollment / rejoin: same as daily operational — each completed
+ * class-related payment in the month (payment issue_date), bucketed by
+ * program_enrollment_status on classstudentstbl. Dropped uses removed_at in month.
  */
 
 import { query } from '../config/database.js';
-import { loadMonthMatrixOperationalStatsForMonth } from './enrollmentRateMetrics.js';
+import {
+  applyPaymentEnrollmentToBranchBreakdown,
+  loadMonthlyOperationalEnrollmentFromPayments,
+} from './dailyOperationalEnrollmentFromPayments.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
   AR_LIST_LINE_AMOUNT_SUM_SQL,
 } from './ackReceiptPairedColumn.js';
-import { merchandiseReleaseDashboardCteMonthly } from './merchandiseReleaseLog.js';
+import {
+  loadRecentMerchandiseReleasesForOperationalDashboard,
+  merchandiseReleaseDashboardCteMonthly,
+} from './merchandiseReleaseLog.js';
+import { loadRecentInvoicePaymentsForOperationalDashboard } from './operationalDashboardRecentPayments.js';
 
 const buildMonthSequence = (monthsBack = 6, anchorDateInput = new Date()) => {
   const today = anchorDateInput instanceof Date ? anchorDateInput : new Date(anchorDateInput);
@@ -73,17 +79,6 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
               FROM branchestbl b
               ${branchWhereClause}
             ),
-            new_enrollees AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS new_enrollees
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'new'
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${startIdx}::date
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${endIdx}::date
-              GROUP BY c.branch_id
-            ),
             daily_sales AS (
               SELECT
                 p.branch_id,
@@ -108,48 +103,6 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
               GROUP BY ar.branch_id
             ),
             ${merchandiseReleaseDashboardCteMonthly(startIdx, endIdx)},
-            re_enrollment AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS re_enrollment_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status IN ('re_enrolled', 'upsell')
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${startIdx}::date
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${endIdx}::date
-              GROUP BY c.branch_id
-            ),
-            rejoin_enrollment AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id)::bigint AS rejoin_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'rejoin'
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $${startIdx}::date
-                AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $${endIdx}::date
-              GROUP BY c.branch_id
-            ),
-            dropped_unenrolled AS (
-              SELECT
-                c.branch_id,
-                COUNT(DISTINCT cs.student_id) AS dropped_unenrolled_count
-              FROM classstudentstbl cs
-              INNER JOIN classestbl c ON cs.class_id = c.class_id
-              WHERE cs.program_enrollment_status = 'dropped'
-                AND cs.removed_at IS NOT NULL
-                AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
-                AND (
-                  (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)
-                  OR (
-                    cs.enrolled_at IS NULL
-                    AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'
-                  )
-                )
-                AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $${startIdx}::date
-                AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $${endIdx}::date
-              GROUP BY c.branch_id
-            ),
             pay_verified AS (
               SELECT
                 p.branch_id,
@@ -201,15 +154,15 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
             SELECT
               bs.branch_id,
               bs.branch_name,
-              COALESCE(ne.new_enrollees, 0)::bigint AS new_enrollees,
+              0::bigint AS new_enrollees,
               COALESCE(ds.daily_sales_amount, 0) AS daily_sales_amount,
               COALESCE(ars.ar_sales_count, 0)::bigint AS ar_sales_count,
               COALESCE(ars.ar_sales_amount, 0) AS ar_sales_amount,
               COALESCE(mr.merchandise_released_count, 0)::bigint AS merchandise_released_count,
               COALESCE(mr.merchandise_released_quantity, 0) AS merchandise_released_quantity,
-              COALESCE(re.re_enrollment_count, 0)::bigint AS re_enrollment_count,
-              COALESCE(rj.rejoin_count, 0)::bigint AS rejoin_count,
-              COALESCE(du.dropped_unenrolled_count, 0)::bigint AS dropped_unenrolled_count,
+              0::bigint AS re_enrollment_count,
+              0::bigint AS rejoin_count,
+              0::bigint AS dropped_unenrolled_count,
               COALESCE(pv.pay_verified_count, 0)::bigint AS pay_verified_count,
               COALESCE(pv.pay_verified_amount, 0) AS pay_verified_amount,
               COALESCE(puv.pay_unverified_count, 0)::bigint AS pay_unverified_count,
@@ -219,20 +172,15 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
               COALESCE(aruv.ar_unverified_count, 0)::bigint AS ar_unverified_count,
               COALESCE(aruv.ar_unverified_amount, 0) AS ar_unverified_amount
             FROM branch_scope bs
-            LEFT JOIN new_enrollees ne ON ne.branch_id = bs.branch_id
             LEFT JOIN daily_sales ds ON ds.branch_id = bs.branch_id
             LEFT JOIN ar_sales ars ON ars.branch_id = bs.branch_id
             LEFT JOIN merchandise_release mr ON mr.branch_id = bs.branch_id
-            LEFT JOIN re_enrollment re ON re.branch_id = bs.branch_id
-            LEFT JOIN rejoin_enrollment rj ON rj.branch_id = bs.branch_id
-            LEFT JOIN dropped_unenrolled du ON du.branch_id = bs.branch_id
             LEFT JOIN pay_verified pv ON pv.branch_id = bs.branch_id
             LEFT JOIN pay_unverified puv ON puv.branch_id = bs.branch_id
             LEFT JOIN ar_verified arv ON arv.branch_id = bs.branch_id
             LEFT JOIN ar_unverified aruv ON aruv.branch_id = bs.branch_id
             ORDER BY
               COALESCE(ds.daily_sales_amount, 0) DESC,
-              COALESCE(ne.new_enrollees, 0) DESC,
               bs.branch_name ASC
           `;
 
@@ -301,7 +249,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     branch_name: row.branch_name,
   }));
 
-  const branchBreakdown = branchMetricsResult.rows.map((row) => ({
+  const branchBreakdownBase = branchMetricsResult.rows.map((row) => ({
     branch_id: row.branch_id,
     branch_name: row.branch_name,
     new_enrollees: parseInt(row.new_enrollees, 10) || 0,
@@ -323,6 +271,18 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     ar_unverified_amount: parseFloat(row.ar_unverified_amount) || 0,
   }));
 
+  const paymentEnrollment = await loadMonthlyOperationalEnrollmentFromPayments(runQuery, {
+    branchId: branchFilter,
+    monthStart,
+    monthEndExclusive,
+    summaryMonth: monthRange.key,
+  });
+
+  const branchBreakdown = applyPaymentEnrollmentToBranchBreakdown(
+    branchBreakdownBase,
+    paymentEnrollment
+  );
+
   const totals = branchBreakdown.reduce(
     (acc, row) => ({
       new_enrollees: acc.new_enrollees + row.new_enrollees,
@@ -332,6 +292,10 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
       merchandise_released_count: acc.merchandise_released_count + row.merchandise_released_count,
       merchandise_released_quantity: acc.merchandise_released_quantity + row.merchandise_released_quantity,
       re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
+      upsell_count: acc.upsell_count + (row.upsell_count || 0),
+      reserved_count: acc.reserved_count + (row.reserved_count || 0),
+      completed_count: acc.completed_count + (row.completed_count || 0),
+      retention_base_count: acc.retention_base_count + (row.retention_base_count || 0),
       rejoin_count: acc.rejoin_count + row.rejoin_count,
       dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
       pay_verified_count: acc.pay_verified_count + row.pay_verified_count,
@@ -349,6 +313,9 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         row.ar_sales_amount > 0 ||
         row.merchandise_released_count > 0 ||
         row.re_enrollment_count > 0 ||
+        (row.upsell_count || 0) > 0 ||
+        (row.reserved_count || 0) > 0 ||
+        (row.completed_count || 0) > 0 ||
         row.rejoin_count > 0 ||
         row.dropped_unenrolled_count > 0
           ? 1
@@ -362,6 +329,10 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
       merchandise_released_count: 0,
       merchandise_released_quantity: 0,
       re_enrollment_count: 0,
+      upsell_count: 0,
+      reserved_count: 0,
+      completed_count: 0,
+      retention_base_count: 0,
       rejoin_count: 0,
       dropped_unenrolled_count: 0,
       pay_verified_count: 0,
@@ -389,36 +360,28 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
 
   const monthEndInclusive = getMonthEndInclusiveYmd(monthRange);
 
-  const monthMatrixStats = await loadMonthMatrixOperationalStatsForMonth(runQuery, {
+  const enrollmentDashboard = {
+    re_enrollment_rate: paymentEnrollment.re_enrollment_rate,
+    re_enrollment_rate_retained_count: paymentEnrollment.re_enrollment_rate_retained_count,
+    re_enrollment_rate_prior_count: paymentEnrollment.re_enrollment_rate_prior_count,
+    retention_base_count: paymentEnrollment.retention_base_count ?? 0,
+    retention_re_enrollment_count: paymentEnrollment.retention_re_enrollment_count ?? 0,
+    prior_period_label: paymentEnrollment.prior_period_label ?? null,
+    prior_period_type: paymentEnrollment.prior_period_type ?? null,
+    retention_rate_mode: paymentEnrollment.retention_rate_mode ?? null,
+  };
+
+  const recentInvoicePayments = await loadRecentInvoicePaymentsForOperationalDashboard(runQuery, {
     branchId: branchFilter,
-    monthKey: monthRange.key,
+    monthStart,
+    monthEndExclusive,
   });
 
-  const enrollmentDashboard = {
-    re_enrollment_rate: Number(monthMatrixStats.re_enrollment_rate ?? 0) || 0,
-    re_enrollment_rate_retained_count: monthMatrixStats.re_enrollment_rate_retained_count,
-    re_enrollment_rate_prior_count: monthMatrixStats.re_enrollment_rate_prior_count,
-  };
-
-  const branchBreakdownWithMatrixStats = branchBreakdown.map((row) =>
-    branchFilter
-      ? {
-          ...row,
-          new_enrollees: monthMatrixStats.new_enrollees_count,
-          re_enrollment_count: monthMatrixStats.re_enrollment_count,
-          dropped_unenrolled_count: monthMatrixStats.dropped_unenrolled_count,
-          rejoin_count: monthMatrixStats.rejoin_count,
-        }
-      : row
-  );
-
-  const totalsWithMatrixStats = {
-    ...totals,
-    new_enrollees: monthMatrixStats.new_enrollees_count,
-    re_enrollment_count: monthMatrixStats.re_enrollment_count,
-    dropped_unenrolled_count: monthMatrixStats.dropped_unenrolled_count,
-    rejoin_count: monthMatrixStats.rejoin_count,
-  };
+  const recentMerchandiseReleases = await loadRecentMerchandiseReleasesForOperationalDashboard(runQuery, {
+    branchId: branchFilter,
+    monthStart,
+    monthEndExclusive,
+  });
 
   return {
     summary_month: monthRange.key,
@@ -426,11 +389,14 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     month_end_exclusive: monthEndExclusive,
     month_end_inclusive: monthEndInclusive,
     verification_as_of: `${monthStart}–${monthEndInclusive}`,
-    totals: totalsWithMatrixStats,
+    enrollment_kpi_source: paymentEnrollment.source,
+    totals,
     enrollment_dashboard: enrollmentDashboard,
-    branch_breakdown: branchBreakdownWithMatrixStats,
+    recent_invoice_payments: recentInvoicePayments,
+    recent_merchandise_releases: recentMerchandiseReleases,
+    branch_breakdown: branchBreakdown,
     charts: {
-      branch_metrics: branchBreakdownWithMatrixStats.map((row) => ({
+      branch_metrics: branchBreakdown.map((row) => ({
         branch_id: row.branch_id,
         branch_name: row.branch_name,
         new_enrollees: row.new_enrollees,
@@ -440,6 +406,9 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         merchandise_released_count: row.merchandise_released_count,
         merchandise_released_quantity: row.merchandise_released_quantity,
         re_enrollment_count: row.re_enrollment_count,
+        upsell_count: row.upsell_count || 0,
+        reserved_count: row.reserved_count || 0,
+        completed_count: row.completed_count || 0,
         rejoin_count: row.rejoin_count,
         dropped_unenrolled_count: row.dropped_unenrolled_count,
         pay_verified_count: row.pay_verified_count,
@@ -452,12 +421,15 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
         ar_unverified_amount: row.ar_unverified_amount,
       })),
       activity_mix: [
-        { name: 'New Enrollees', value: totalsWithMatrixStats.new_enrollees },
+        { name: 'New Enrollees', value: totals.new_enrollees },
         { name: 'Acknowledgement Receipt Sales', value: totals.ar_sales_count },
         { name: 'Merchandise Released', value: totals.merchandise_released_quantity },
-        { name: 'Re-enrollment', value: totalsWithMatrixStats.re_enrollment_count },
-        { name: 'Rejoin', value: totalsWithMatrixStats.rejoin_count },
-        { name: 'Dropped / Unenrolled', value: totalsWithMatrixStats.dropped_unenrolled_count },
+        { name: 'Re-enrollment', value: totals.re_enrollment_count },
+        { name: 'Upsell', value: totals.upsell_count || 0 },
+        { name: 'Reserved', value: totals.reserved_count || 0 },
+        { name: 'Completed', value: totals.completed_count || 0 },
+        { name: 'Rejoin', value: totals.rejoin_count },
+        { name: 'Dropped / Unenrolled', value: totals.dropped_unenrolled_count },
       ],
       sales_last_6_months: salesLast6Months,
     },

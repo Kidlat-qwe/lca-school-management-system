@@ -11,9 +11,19 @@ export const DAILY_OPERATIONAL = {
   branchHintSuperadmin: 'Pick a branch from the menu at the top to see one location only.',
   branchHintAdmin: 'Numbers are limited to your assigned branch.',
   newEnrolleesReenroll:
-    'Unique students with a class-related completed invoice payment on this date (payment issue date), counted by program enrollment status on the linked class row (new or re-enrolled / upsell).',
+    'Each completed class-related invoice payment on this date (payment issue date). Full-payment invoices count once per enrolled phase (same rules as the month matrix): e.g. full pay phases 1–5 → 1 new, 3 re-enrolled, 1 completed. Installment phase-events count only when the invoice is Paid (partial payments on Partially Paid invoices are excluded until settled). New enrollees = first phase only when truly first-time. Re-enrollment KPI includes re_enrolled, upsell, and multi-phase completed (single-phase completed counts only under Completed).',
   droppedRejoin:
-    'Same payment-date filter: dropped = program status dropped; rejoin = program status rejoin on the class row tied to that payment.',
+    'Rejoin = completed class payments on this date with program_enrollment_status rejoin. Dropped / unenrolled = students removed on this date (removed_at), status dropped on classstudentstbl.',
+  reservedUpsell:
+    'Reserved = reservation-fee payments on this date with program_enrollment_status reserved. Upsell = class payments with status upsell (level-up / package change).',
+  completedEnrollment:
+    'Completed = terminal phase on a multi-phase full payment (e.g. phase 5 on full pay 1–5), a completed phase row, or a single-phase class (1 phase only) whose package is fully paid on this date. Retention base = student+class tracks with enrolled class payments on the previous calendar day (payment issue date).',
+  completedRetentionCombined:
+    'Completed counts terminal/single-phase-finished payments on this date. Retention base is the prior-day cohort (tracks with new, re_enrolled, upsell, rejoin, or completed payments yesterday) — same idea as the month matrix rate denominator.',
+  merchandiseSection: 'Merchandise releases for the selected date',
+  recentMerchandiseReleases:
+    'Stock release log lines for this date (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
+  financialSection: 'Sales summary for the selected date',
   invoiceSales:
     'Total from completed invoice payments on this date (amount due + tips). Returned and rejected payments are excluded.',
   arSales: (receiptCount) =>
@@ -27,7 +37,11 @@ export const DAILY_OPERATIONAL = {
   enrollmentRate: (enrolled, total) =>
     `${enrolled} active phase enrollments across phases ÷ ${total} cohort student(s) on this date × 100. Rate is by program phase (not the same as “new enrollees” above).`,
   reEnrollmentRate: (retained, prior, scopeLabel = 'this date') =>
-    `Re-enrollment rate for ${scopeLabel}: ${retained} student(s) with re-enrolled / upsell status ÷ ${prior} student(s) with new, re-enrolled, or rejoin status — all from class payments on this payment issue date.`,
+    `Re-enrollment rate for ${scopeLabel}: ${retained} Re-enrollment KPI count (same as the card) ÷ ${prior} retention base (student+class tracks with enrolled payments yesterday) × 100.`,
+  salesPaymentsCard:
+    'Invoice sales (completed payments, payment issue date), acknowledgement receipt sales for this date, and total payments (invoice + AR).',
+  recentInvoicePayments:
+    'Completed invoice payments for this date (newest first), with package/item resolved the same way as Payment Logs. Shows three rows at a time; scroll for more. Same scope as invoice sales — excludes returned and rejected.',
   payVerified: (amount, date) =>
     `${amount} — completed payments finance has verified · ${date}`,
   payNotVerifiedYet: (amount, date) =>
@@ -51,9 +65,19 @@ export const MONTHLY_OPERATIONAL = {
   pageIntro:
     'Same metrics as the daily dashboard, added up for the month you select.',
   newEnrolleesReenroll:
-    'New enrollees and re-enrollment counts match the Month Re-enrollment matrix table for this month (green “new” and purple “re-enrolled” cells).',
+    'Sum of daily operational rules for this month. Full-payment invoices count once per enrolled phase (matrix-aligned). Installment phase-events count only when the invoice is Paid (partial payments on Partially Paid invoices are excluded until settled). New enrollees = first phase when truly first-time. Re-enrollment KPI includes re_enrolled, upsell, and multi-phase completed (single-phase completed counts only under Completed).',
   droppedRejoin:
-    'Dropped / unenrolled and rejoin counts match the Month Re-enrollment matrix table for this month (pink “dropped/unenrolled” and orange “rejoin” cells).',
+    'Rejoin: class payments in the month with status rejoin. Dropped / unenrolled: students removed in the month (removed_at, Asia/Manila).',
+  reservedUpsell:
+    'Reserved = reservation-fee payments in the month with program_enrollment_status reserved. Upsell = class payments with status upsell.',
+  completedEnrollment:
+    'Completed = terminal phase on multi-phase full payment, completed phase row, or single-phase class (1 phase only) fully paid in the month. Retention base = student+class tracks with enrolled class payments in the previous calendar month.',
+  completedRetentionCombined:
+    'Completed counts terminal/single-phase-finished payments in this month. Retention base is the prior-month cohort (tracks with enrolled class payments last month) — aligns with the Month Re-enrollment matrix retention base.',
+  merchandiseSection: 'Merchandise releases for the selected month',
+  recentMerchandiseReleases:
+    'Stock release log lines for this month (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
+  financialSection: 'Sales summary for the selected month',
   invoiceSales:
     'Completed invoice payments in this month (amount due + tips). Returned and rejected are excluded.',
   arSales: (receiptCount) =>
@@ -67,7 +91,11 @@ export const MONTHLY_OPERATIONAL = {
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase re-enrollment rate (see Re-enrollment Dashboard for details).',
   reEnrollmentSnapshot: (retained, prior) =>
-    `Re-enrollment rate for this month: ${retained} retained student(s) ÷ ${prior} enrolled in the prior month × 100. Matches the Month Re-enrollment matrix.`,
+    `Re-enrollment rate for this month: ${retained} Re-enrollment KPI count (same as the card) ÷ ${prior} retention base (student+class tracks with enrolled payments in the previous calendar month) × 100.`,
+  salesPaymentsCard:
+    'Invoice sales (completed payments in month), acknowledgement receipt sales for the month, and total payments (matches Payment Logs: verified + not verified yet).',
+  recentInvoicePayments:
+    'Completed invoice payments in this month (newest first), with package/item resolved the same way as Payment Logs. Shows three rows at a time; scroll for more. Same scope as invoice sales — excludes returned and rejected.',
   payVerified: (amount) => `${amount} — verified completed payments in this month`,
   payNotVerifiedYet: (amount) => `${amount} — completed, not verified yet, in this month`,
   arVerified: (amount) => `${amount} — verified or applied package ARs in this month`,
@@ -172,7 +200,7 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
     `Track student re-enrollment by program phase and retention for ${year}. Year KPI cards align with Month Re-enrollment.`,
   newReenrollYear: (year) =>
-    `For ${year}: New enrollees = every green "new" cell in the phase matrix. Re-enrollment = sum of the numerators in the rate header row (same as adding each phase's re-enrolled count above the %).`,
+    `For ${year}: New enrollees = every green "new" cell in the phase matrix. Re-enrollment KPI = sum of rate-header numerators (re-enrolled, upsell, and multi-phase completed cells; single-phase completed excluded).`,
   reservedUpsellYear: (year) =>
     `For ${year}: Reserved = amber "reserved" cells; Upsell = teal "upsell" cells — each counted once per matrix cell in the table.`,
   droppedRejoinYear: (year) =>
@@ -182,7 +210,7 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
   matrixLegend:
     '1 = enrolled for that phase. Labels: new (first phase only), re-enrolled, reserved, or completed. Dash = not enrolled. Hover "new" for Previous reserved when applicable.',
   matrixRateTooltip:
-    'Re-enrollment rate row: re-enrolled cells in this phase ÷ students enrolled in the previous phase (upsell / level-up excluded from numerator). Phase 1 has no prior phase (—). Hover "new" for Previous reserved when enrollment followed a paid reservation.',
+    'Re-enrollment rate row: Re-enrollment KPI cells in this phase (re-enrolled, upsell, multi-phase completed) for students enrolled in the previous phase ÷ students enrolled in the previous phase. Phase 1 has no prior phase (—). Hover "new" for Previous reserved when enrollment followed a paid reservation.',
 };
 
 export const MONTHLY_ENROLLMENT_DASHBOARD = {
@@ -191,7 +219,7 @@ export const MONTHLY_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
     `Track each student's re-enrollment across Jan – Dec ${year} and monthly retention.`,
   newReenrollYear: (year) =>
-    `For ${year}: New enrollees = every green "new" cell in the matrix. Re-enrollment = sum of the numerators in the rate header row (same as adding each month's re-enrolled count above the %).`,
+    `For ${year}: New enrollees = every green "new" cell in the matrix. Re-enrollment KPI = sum of rate-header numerators (re-enrolled, upsell, and multi-phase completed cells; single-phase completed excluded).`,
   reservedUpsellYear: (year) =>
     `For ${year}: Reserved = amber "reserved" cells; Upsell = teal "upsell" cells — each counted once per matrix cell in the table. Hover "new" for Previous reserved when enrollment followed a paid reservation.`,
   droppedRejoinYear: (year) =>
@@ -200,7 +228,7 @@ export const MONTHLY_ENROLLMENT_DASHBOARD = {
     `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} ÷ ${priorMonthSum.toLocaleString()} × 100. The numerator matches the Re-enrollment KPI card (sum of rate-header numerators). Denominator = sum of prior-month enrolled counts where a fraction is shown.`,
   matrixTitleTooltip: (year) =>
     `Columns are Jan through Dec ${year}. Each cell is the billing month the phase covers — not the payment date.\n\n` +
-    'Re-enrollment rate row: re-enrolled cells this month ÷ students enrolled in the previous month (upsell / level-up excluded from numerator). ' +
+    'Re-enrollment rate row: Re-enrollment KPI cells this month (re-enrolled, upsell, multi-phase completed) for students who were enrolled last month ÷ students enrolled in the previous month. ' +
     `January compares to December ${Number(year) - 1} when viewing a calendar year. ` +
     'Reserved cells show paid reservation fee before enrollment. Hover a "new" cell for Previous reserved when enrollment followed a reservation.\n\n' +
     'Installment: invoice generated on the 25th of each month; due on the 5th of the following month. ' +
