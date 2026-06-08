@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { appAlert } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const TeacherClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -844,29 +845,7 @@ const TeacherClasses = () => {
       return `${hour12}:${minutesFormatted} ${ampm}`;
     };
 
-    const formatDate = (dateValue) => {
-      if (!dateValue) return '-';
-      try {
-        let date;
-        if (typeof dateValue === 'string') {
-          const [year, month, day] = dateValue.split('-').map(Number);
-          date = new Date(year, month - 1, day);
-        } else if (dateValue instanceof Date) {
-          date = dateValue;
-        } else {
-          return '-';
-        }
-        
-        if (isNaN(date.getTime())) {
-          return '-';
-        }
-        
-        const options = { year: 'numeric', month: 'long', day: 'numeric' };
-        return date.toLocaleDateString('en-US', options);
-      } catch {
-        return '-';
-      }
-    };
+    const formatDate = (dateValue) => formatDateManila(dateValue);
 
     const daysOfWeek = selectedClassForDetails.days_of_week || [];
     const sessionsPerPhase = selectedClassForDetails.number_of_session_per_phase;
@@ -2090,49 +2069,20 @@ const TeacherClasses = () => {
                     </td>
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900">
-                        {(() => {
-                          const formatDate = (dateValue) => {
-                            if (!dateValue) return '-';
-                            try {
-                              let date;
-                              // Handle both string (YYYY-MM-DD) and Date object
-                              if (typeof dateValue === 'string') {
-                                // Parse date string as local date (YYYY-MM-DD format from database)
-                                const [year, month, day] = dateValue.split('-').map(Number);
-                                // Create date in local timezone (treat as Asia/Manila UTC+8)
-                                date = new Date(year, month - 1, day);
-                              } else if (dateValue instanceof Date) {
-                                date = dateValue;
-                              } else {
-                                return '-';
-                              }
-                              
-                              // Validate date
-                              if (isNaN(date.getTime())) {
-                                return '-';
-                              }
-                              
-                              // Format as "Month Day, Year" (e.g., "November 20, 2025")
-                              const options = { year: 'numeric', month: 'long', day: 'numeric' };
-                              return date.toLocaleDateString('en-US', options);
-                            } catch {
-                              return '-';
-                            }
-                          };
-
-                          return classItem.start_date || classItem.end_date ? (
+                        {(() => (
+                          classItem.start_date || classItem.end_date ? (
                             <div className="space-y-1">
                               {classItem.start_date && (
-                                <div>Start: {formatDate(classItem.start_date)}</div>
+                                <div>Start: {formatDateManila(classItem.start_date)}</div>
                               )}
                               {classItem.end_date && (
-                                <div>End: {formatDate(classItem.end_date)}</div>
+                                <div>End: {formatDateManila(classItem.end_date)}</div>
                               )}
                             </div>
                           ) : (
                             '-'
-                          );
-                        })()}
+                          )
+                        ))()}
                       </div>
                     </td>
                     <td className="px-3 py-4 text-right text-sm font-medium">
@@ -2444,11 +2394,7 @@ const TeacherClasses = () => {
                                   <td className="px-4 py-4">
                                     <div className="text-sm text-gray-500">
                                       {student.earliestEnrollment || student.enrolled_at
-                                        ? new Date(student.earliestEnrollment || student.enrolled_at).toLocaleDateString('en-GB', {
-                                            day: '2-digit',
-                                            month: '2-digit',
-                                            year: 'numeric',
-                                          })
+                                        ? formatDateManila(student.earliestEnrollment || student.enrolled_at)
                                         : '-'}
                                     </div>
                                   </td>

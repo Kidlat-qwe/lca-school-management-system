@@ -21,7 +21,7 @@ const addDaysYmd = (ymd, days) => {
   return formatYmdLocal(base);
 };
 
-const getGraceDays = async (client, branchId) => {
+export const resolveInstallmentGraceDays = async (client, branchId) => {
   try {
     const settings = await getEffectiveSettings(
       client,
@@ -110,6 +110,30 @@ const computeStatus = ({ invoiceStatus, dueDateYmd, graceUntilYmd, todayYmd }) =
   return PROGRAM_PAYMENT_STATUS.DUE_DATE;
 };
 
+/**
+ * Human-readable phase/invoice status for installment plan UIs.
+ * Aligns with program_payment_statustbl grace rules (due + grace_days inclusive).
+ */
+export function computeInstallmentPhaseDisplayStatus({
+  invoiceStatus,
+  dueDateYmd,
+  graceDays = 0,
+  todayYmd,
+}) {
+  const raw = String(invoiceStatus || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized === 'paid') return 'Paid';
+  if (normalized === 'cancelled' || normalized === 'canceled') return 'Cancelled';
+
+  const today = todayYmd || formatYmdLocal(new Date());
+  if (!dueDateYmd || today <= dueDateYmd) return raw || 'Pending';
+
+  const graceUntilYmd = addDaysYmd(dueDateYmd, graceDays);
+  if (graceUntilYmd && today <= graceUntilYmd) return 'Under grace period';
+
+  return 'Overdue';
+}
+
 export const syncProgramPaymentStatusForInvoice = async (client, invoiceId) => {
   if (!invoiceId) return { synced: 0, skipped: true };
 
@@ -144,7 +168,7 @@ export const syncProgramPaymentStatusForInvoice = async (client, invoiceId) => {
   if (studentIds.length === 0) return { synced: 0, skipped: true };
 
   const branchId = invoice.branch_id != null ? Number(invoice.branch_id) : null;
-  const graceDays = await getGraceDays(client, branchId);
+  const graceDays = await resolveInstallmentGraceDays(client, branchId);
   const dueDateYmd = invoice.due_date || null;
   const graceUntilYmd = dueDateYmd ? addDaysYmd(dueDateYmd, graceDays) : null;
   const todayYmd = formatYmdLocal(new Date());

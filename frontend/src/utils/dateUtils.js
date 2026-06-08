@@ -1,33 +1,74 @@
 /**
  * Date utilities for Asia/Manila (Philippines) timezone UTC+8.
- * Display format across the system: DD/MM/YYYY.
+ * Display format across the system: "June 06, 2026" (long month, zero-padded day).
  */
 
 const MANILA_TZ = 'Asia/Manila';
 
-/**
- * Format an ISO date string or Date for display (date only) in DD/MM/YYYY, Asia/Manila.
- * @param {string|Date} dateInput - ISO date string or Date
- * @returns {string} e.g. "10/02/2026" or "-" if invalid
- */
-export const formatDateManila = (dateInput) => {
-  if (!dateInput) return '-';
-  const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('en-GB', { timeZone: MANILA_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
+/** Shared Intl options for date-only display. */
+export const DISPLAY_DATE_OPTIONS = {
+  timeZone: MANILA_TZ,
+  month: 'long',
+  day: '2-digit',
+  year: 'numeric',
 };
 
 /**
- * Format an ISO date string or Date for display (date and time) in DD/MM/YYYY, HH:MM, Asia/Manila.
- * @param {string|Date} dateInput - ISO date string or Date
- * @returns {string} e.g. "10/02/2026, 12:00" or "-" if invalid
+ * Parse API / user date input for display (avoids timezone shifts on YYYY-MM-DD).
+ * @param {string|Date|null|undefined} dateInput
+ * @returns {Date|null}
  */
-export const formatDateTimeManila = (dateInput) => {
-  if (!dateInput) return '-';
-  const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-  if (Number.isNaN(d.getTime())) return '-';
-  const datePart = d.toLocaleDateString('en-GB', { timeZone: MANILA_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
-  const timePart = d.toLocaleTimeString('en-GB', { timeZone: MANILA_TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+export const parseDateForDisplay = (dateInput) => {
+  if (dateInput == null || dateInput === '') return null;
+  if (dateInput instanceof Date) {
+    return Number.isNaN(dateInput.getTime()) ? null : dateInput;
+  }
+
+  const str = String(dateInput).trim();
+  const ymd = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) {
+    const y = parseInt(ymd[1], 10);
+    const m = parseInt(ymd[2], 10);
+    const d = parseInt(ymd[3], 10);
+    if (!y || m < 1 || m > 12 || d < 1 || d > 31) return null;
+    return new Date(y, m - 1, d, 12, 0, 0, 0);
+  }
+
+  const isoWithTz = str.includes(' ') && !str.includes('T')
+    ? str.replace(' ', 'T') + '+08:00'
+    : str;
+  const parsed = new Date(isoWithTz);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+/**
+ * Format an ISO date string or Date for display (date only) in Asia/Manila.
+ * @param {string|Date} dateInput - ISO date string or Date
+ * @returns {string} e.g. "June 06, 2026" or "-" if invalid
+ */
+export const formatDateManila = (dateInput) => {
+  const d = parseDateForDisplay(dateInput);
+  if (!d) return '-';
+  return d.toLocaleDateString('en-US', DISPLAY_DATE_OPTIONS);
+};
+
+/**
+ * Format an ISO date string or Date for display (date and time) in Asia/Manila.
+ * @param {string|Date} dateInput
+ * @param {{ hour12?: boolean }} [options]
+ * @returns {string} e.g. "June 06, 2026, 14:30" or "-" if invalid
+ */
+export const formatDateTimeManila = (dateInput, options = {}) => {
+  const { hour12 = false } = options;
+  const d = parseDateForDisplay(dateInput);
+  if (!d) return '-';
+  const datePart = d.toLocaleDateString('en-US', DISPLAY_DATE_OPTIONS);
+  const timePart = d.toLocaleTimeString('en-US', {
+    timeZone: MANILA_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12,
+  });
   return `${datePart}, ${timePart}`;
 };
 

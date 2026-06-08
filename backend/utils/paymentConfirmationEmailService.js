@@ -7,6 +7,7 @@ import { collectPhilippineMobiles } from './sms/semaphoreSmsService.js';
 import { sendPairedTemplateSms } from './sms/templateSmsService.js';
 import {
   DEFAULT_SCHOOL_NAME,
+  formatDateDisplay,
   formatDateYmd,
   formatPhp,
   logTemplateRenderWarning,
@@ -41,8 +42,8 @@ const buildInvoicePaidHtmlFallback = ({
     <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin:0 0 14px 0">
       <div><strong>Invoice:</strong> INV-${escapeHtml(invoiceId)}</div>
       ${invoiceDescription ? `<div><strong>Description:</strong> ${escapeHtml(invoiceDescription)}</div>` : ''}
-      <div><strong>Issue Date:</strong> ${escapeHtml(formatDateYmd(issueDate))}</div>
-      <div><strong>Due Date:</strong> ${escapeHtml(formatDateYmd(dueDate))}</div>
+      <div><strong>Issue Date:</strong> ${escapeHtml(formatDateDisplay(issueDate))}</div>
+      <div><strong>Due Date:</strong> ${escapeHtml(formatDateDisplay(dueDate))}</div>
       <div><strong>Paid Amount:</strong> ${escapeHtml(formatPhp(amountPaid))}</div>
       ${branchName ? `<div><strong>Branch:</strong> ${escapeHtml(branchName)}</div>` : ''}
     </div>
@@ -85,7 +86,7 @@ const buildArPaidHtml = ({
     </p>
     <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin:0 0 14px 0">
       <div><strong>AR Number:</strong> ${escapeHtml(ackReceiptNumber || `AR-${ackReceiptId}`)}</div>
-      <div><strong>Issue Date:</strong> ${escapeHtml(formatDateYmd(issueDate))}</div>
+      <div><strong>Issue Date:</strong> ${escapeHtml(formatDateDisplay(issueDate))}</div>
       <div><strong>Paid Amount:</strong> ${escapeHtml(formatPhp(amountPaid))}</div>
       ${referenceNumber ? `<div><strong>Reference Number:</strong> ${escapeHtml(referenceNumber)}</div>` : ''}
     </div>
@@ -176,7 +177,7 @@ export const sendInvoicePaymentConfirmationByInvoiceId = async (client, invoiceI
       studentName,
       invoiceNumber,
       amountPaid: formatPhp(amountPaid),
-      paymentDate: formatDateYmd(paymentDate),
+      paymentDate: formatDateDisplay(paymentDate),
       schoolName: invoice.branch_name || DEFAULT_SCHOOL_NAME,
       branchName: invoice.branch_name || '',
     };

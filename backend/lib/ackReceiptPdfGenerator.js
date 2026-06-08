@@ -5,6 +5,7 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 import { query } from '../config/database.js';
+import { formatLongDateDisplay } from '../utils/dateUtils.js';
 import {
   ACK_RECEIPT_PAGE_MARGIN,
   ACK_RECEIPT_PDF_OPTIONS,
@@ -127,12 +128,7 @@ export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
   const classLabel = (ar.level_tag || '-').trim();
 
   const rawDateStr = ar.issue_date_fmt || '';
-  const formatDate = (ymd) => {
-    if (!ymd) return '-';
-    const [year, month, day] = String(ymd).slice(0, 10).split('-');
-    if (!year || !month || !day) return ymd;
-    return `${day}/${month}/${year}`;
-  };
+  const formatDate = (ymd) => formatLongDateDisplay(ymd, { fallback: '-' });
   const arDate = formatDate(rawDateStr);
 
   const formatCurrency = (value) =>

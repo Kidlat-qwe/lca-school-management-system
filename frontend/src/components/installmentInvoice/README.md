@@ -111,9 +111,12 @@
     across the chain's `status = 'Completed'` payments (`null` when
     the phase has never been paid).
   - `status` per phase is derived from the latest invoice in the chain:
-    `Paid` / `Cancelled` from the invoice's own status, otherwise
-    `Overdue` if `due_date < today` (server time), otherwise the raw
-    invoice status (typically `Pending`).
+    `Paid` / `Cancelled` from the invoice's own status; if `due_date` has
+    passed (Asia/Manila today), `Under grace period` until
+    `due_date + installment_penalty_grace_days` (global/branch billing
+    settings), then `Overdue`; otherwise the raw invoice status (typically
+    `Pending`). Late penalties still apply only after grace (see
+    `installmentDelinquencyService.js`).
 
   ### Totals semantics
 

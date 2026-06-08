@@ -5,6 +5,7 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { generateClassCode } from '../utils/classCodeGenerator.js';
 import { sendSuspensionEmail } from '../utils/emailService.js';
+import { formatLongDateDisplay } from '../utils/dateUtils.js';
 
 const router = express.Router();
 
@@ -531,10 +532,8 @@ router.post(
             ? (classNames.length === 1 ? classNames[0] : `${classNames.length} classes`)
             : 'your class';
 
-          // Format dates for display (DD/MM/YYYY)
-          const pad = (n) => String(n).padStart(2, '0');
-          const startDateFormatted = `${pad(startDate.getDate())}/${pad(startDate.getMonth() + 1)}/${startDate.getFullYear()}`;
-          const endDateFormatted = `${pad(endDate.getDate())}/${pad(endDate.getMonth() + 1)}/${endDate.getFullYear()}`;
+          const startDateFormatted = formatLongDateDisplay(startDate);
+          const endDateFormatted = formatLongDateDisplay(endDate);
 
           // Build announcement body
           let announcementBody = `Your class ${classNamesText} has ${selected_session_ids.length} session(s) suspended due to: ${suspension_name}`;

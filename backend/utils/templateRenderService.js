@@ -3,6 +3,7 @@
  * outgoing emails and in-app notifications.
  */
 import { getClient, query as poolQuery } from '../config/database.js';
+import { formatLongDateDisplay } from './dateUtils.js';
 import { getEffectiveSettings, getSettingDefinition } from './settingsService.js';
 
 export const DEFAULT_SCHOOL_NAME = 'Little Champions Academy, Inc.';
@@ -38,13 +39,8 @@ export function formatPhp(amount) {
 
 export function formatDateDisplay(value) {
   if (!value) return 'N/A';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return [
-    String(d.getUTCDate()).padStart(2, '0'),
-    String(d.getUTCMonth() + 1).padStart(2, '0'),
-    d.getUTCFullYear(),
-  ].join('/');
+  const formatted = formatLongDateDisplay(value, { fallback: '' });
+  return formatted || String(value);
 }
 
 export function formatDateYmd(value) {

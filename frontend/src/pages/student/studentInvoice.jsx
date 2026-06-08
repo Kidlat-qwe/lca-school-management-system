@@ -7,6 +7,7 @@ import { appAlert } from '../../utils/appAlert';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const ITEMS_PER_PAGE = 10;
 const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
@@ -252,11 +253,7 @@ const StudentInvoice = () => {
     }
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString) => formatDateManila(dateString);
 
   const formatCurrency = (amount) => {
     if (!amount) return '₱0.00';

@@ -274,6 +274,136 @@ export function buildFullPaymentConversionInvoiceLineItems(details) {
   return lineItems;
 }
 
+export const FULL_PAYMENT_UPGRADE_NOTE = 'Upgraded to Full Payment';
+
+/**
+ * Detect whether an installment profile was settled via installment → full payment conversion.
+ * Matches paid conversion invoices; falls back to inactive profile + cancelled slots + enrollment.
+ */
+export async function resolveInstallmentProfileFullPaymentConversion(
+  db,
+  { profileId, studentId, classId, isActive }
+) {
+  if (!profileId || !studentId) return null;
+
+  const paidConversion = await db.query(
+    `SELECT i.invoice_id,
+            i.remarks,
+            (
+              SELECT TO_CHAR(MAX(p.issue_date), 'YYYY-MM-DD')
+              FROM paymenttbl p
+              WHERE p.invoice_id = i.invoice_id
+                AND p.status = 'Completed'
+                AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+            ) AS conversion_payment_date
+     FROM invoicestbl i
+     INNER JOIN invoicestudentstbl ins
+       ON ins.invoice_id = i.invoice_id
+      AND ins.student_id = $1
+     WHERE i.status = 'Paid'
+       AND i.remarks ILIKE '%PACKAGE_CHANGE_TO_FULLPAYMENT%'
+       AND i.remarks ILIKE $2
+     ORDER BY i.invoice_id DESC
+     LIMIT 1`,
+    [studentId, `%PROFILE_ID:${profileId}%`]
+  );
+
+  if (paidConversion.rows.length > 0) {
+    const row = paidConversion.rows[0];
+    const parsed = parseFullPaymentChangeRemarks(row.remarks);
+    return {
+      upgraded: true,
+      note: FULL_PAYMENT_UPGRADE_NOTE,
+      conversion_invoice_id:
+        row.invoice_id != null ? Number(row.invoice_id) : null,
+      conversion_payment_date: row.conversion_payment_date || null,
+      phase_start: parsed?.phaseStart ?? null,
+      phase_end: parsed?.phaseEnd ?? null,
+    };
+  }
+
+  if (isActive !== false) return null;
+
+  const cancelledOnProfile = await db.query(
+    `SELECT 1
+     FROM invoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+       AND status = 'Cancelled'
+     LIMIT 1`,
+    [profileId]
+  );
+  if (cancelledOnProfile.rows.length === 0) return null;
+
+  if (classId) {
+    const enrolled = await db.query(
+      `SELECT 1
+       FROM classstudentstbl
+       WHERE student_id = $1
+         AND class_id = $2
+         AND removed_at IS NULL
+         AND program_enrollment_status IN (
+           'new', 're_enrolled', 'upsell', 'rejoin', 'completed'
+         )
+       LIMIT 1`,
+      [studentId, classId]
+    );
+    if (enrolled.rows.length === 0) return null;
+  }
+
+  return {
+    upgraded: true,
+    note: FULL_PAYMENT_UPGRADE_NOTE,
+    conversion_invoice_id: null,
+    conversion_payment_date: null,
+    phase_start: null,
+    phase_end: null,
+  };
+}
+
+/**
+ * Display overlay for phases API: unpaid/cancelled/not-generated slots show as Paid with upgrade note.
+ */
+export function applyFullPaymentUpgradePhaseDisplay(phases, profile, conversion) {
+  if (!conversion?.upgraded || !Array.isArray(phases)) return phases;
+
+  const profilePhaseAmount =
+    profile?.amount != null ? Number(profile.amount) : null;
+  const phaseStartRaw =
+    profile?.phase_start != null ? parseInt(profile.phase_start, 10) : 1;
+  const phaseStartOffset = Math.max(0, (Number.isFinite(phaseStartRaw) ? phaseStartRaw : 1) - 1);
+
+  return phases.map((phase) => {
+    const isTrulyPaid = String(phase.status || '').toLowerCase() === 'paid';
+    if (isTrulyPaid) {
+      return { ...phase, plan_slot_addressed: true };
+    }
+
+    const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
+    if (
+      conversion.phase_start != null &&
+      conversion.phase_end != null &&
+      (absolutePhase < conversion.phase_start || absolutePhase > conversion.phase_end)
+    ) {
+      return phase;
+    }
+
+    const amount =
+      phase.amount != null
+        ? Number(phase.amount)
+        : profilePhaseAmount;
+
+    return {
+      ...phase,
+      status: 'Paid All',
+      paid_amount: amount != null ? amount : Number(phase.paid_amount || 0),
+      phase_note: conversion.note,
+      upgraded_to_full_payment: true,
+      plan_slot_addressed: true,
+      payment_date: phase.payment_date || conversion.conversion_payment_date || null,
+    };
+  });
+}
+
 export function parseFullPaymentChangeRemarks(remarks) {
   const text = String(remarks || '');
   if (!text.includes(PACKAGE_CHANGE_TO_FULLPAYMENT)) return null;

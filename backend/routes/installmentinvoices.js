@@ -15,15 +15,23 @@ import {
 } from '../utils/phaseInstallmentUtils.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 import {
+  computeInstallmentPhaseDisplayStatus,
+  resolveInstallmentGraceDays,
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from '../utils/programPaymentStatusService.js';
+import { todayManilaYmd } from '../utils/templateRenderService.js';
+import pool from '../config/database.js';
 import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
 import {
   mapPhaseChainsToLocalSlots,
   normalizeAdjacentPhaseDisplayDates,
 } from '../utils/installmentPhaseRowMapping.js';
 import { getAdvancePayPriorPartialBlockers } from '../lib/installmentPaymentEligibility.js';
+import {
+  applyFullPaymentUpgradePhaseDisplay,
+  resolveInstallmentProfileFullPaymentConversion,
+} from '../lib/packageChangeConversion.js';
 
 const router = express.Router();
 
@@ -454,21 +462,19 @@ router.get(
       // repair adjacent slots when issue dates run backwards.
       const chainByLocalPhase = mapPhaseChainsToLocalSlots(phaseChains, profile);
 
-      const todayYmd = (() => {
-        const now = new Date();
-        const y = now.getFullYear();
-        const m = String(now.getMonth() + 1).padStart(2, '0');
-        const d = String(now.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-      })();
+      const graceDays = await resolveInstallmentGraceDays(
+        pool,
+        profile.branch_id != null ? Number(profile.branch_id) : null
+      );
+      const todayYmd = todayManilaYmd();
 
-      const computeStatus = (invoiceStatus, dueDate) => {
-        const raw = String(invoiceStatus || '').trim();
-        if (raw.toLowerCase() === 'paid') return 'Paid';
-        if (raw.toLowerCase() === 'cancelled' || raw.toLowerCase() === 'canceled') return 'Cancelled';
-        if (dueDate && dueDate < todayYmd) return 'Overdue';
-        return raw || 'Pending';
-      };
+      const computeStatus = (invoiceStatus, dueDate) =>
+        computeInstallmentPhaseDisplayStatus({
+          invoiceStatus,
+          dueDateYmd: dueDate,
+          graceDays,
+          todayYmd,
+        });
 
       const buildPhaseRow = (phaseNumber, chain) => {
         if (!chain) {
@@ -511,7 +517,22 @@ router.get(
         phases.push(buildPhaseRow(localPhase, chainByLocalPhase.get(localPhase) || null));
       }
 
-      const normalizedPhases = normalizeAdjacentPhaseDisplayDates(phases, computeStatus);
+      let normalizedPhases = normalizeAdjacentPhaseDisplayDates(phases, computeStatus);
+
+      const fullPaymentConversion = await resolveInstallmentProfileFullPaymentConversion(pool, {
+        profileId: Number(profile.installmentinvoiceprofiles_id),
+        studentId: profile.student_id != null ? Number(profile.student_id) : null,
+        classId: profile.class_id != null ? Number(profile.class_id) : null,
+        isActive: profile.is_active === true,
+      });
+
+      if (fullPaymentConversion?.upgraded) {
+        normalizedPhases = applyFullPaymentUpgradePhaseDisplay(
+          normalizedPhases,
+          profile,
+          fullPaymentConversion
+        );
+      }
 
       const downpaymentRep = downpaymentChain?.representative || null;
       const downpayment = downpaymentRep
@@ -530,9 +551,9 @@ router.get(
           }
         : null;
 
-      const totalPaidPhases = normalizedPhases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
+      let totalPaidPhases = normalizedPhases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
       const totalPaidDownpayment = downpayment ? Number(downpayment.paid_amount || 0) : 0;
-      const totalPaid = totalPaidPhases + totalPaidDownpayment;
+      let totalPaid = totalPaidPhases + totalPaidDownpayment;
 
       // Total Billed = lifetime expected amount across the whole plan.
       // For generated phases use the actual invoice amount; for phases
@@ -563,8 +584,23 @@ router.get(
         downpayment && downpayment.amount != null
           ? Math.max(0, Number(downpayment.amount) - Number(downpayment.paid_amount || 0))
           : 0;
-      const totalOutstanding =
+      let totalOutstanding =
         outstandingGenerated + outstandingNotGenerated + outstandingDownpayment;
+
+      if (fullPaymentConversion?.upgraded) {
+        totalPaidPhases = normalizedPhases.reduce(
+          (sum, p) => sum + Number(p.paid_amount || 0),
+          0
+        );
+        totalPaid = totalPaidPhases + totalPaidDownpayment;
+        totalOutstanding = 0;
+      }
+
+      const planSlotsTotal =
+        profile.total_phases != null ? Math.max(0, Number(profile.total_phases)) : normalizedPhases.length;
+      const planSlotsAddressed = fullPaymentConversion?.upgraded
+        ? planSlotsTotal
+        : normalizedPhases.filter((p) => p.plan_slot_addressed === true).length;
 
       res.json({
         success: true,
@@ -592,6 +628,9 @@ router.get(
             is_active: profile.is_active === true,
             downpayment_invoice_id: downpaymentInvoiceId,
             downpayment_paid: profile.downpayment_paid === true,
+            upgraded_to_full_payment: fullPaymentConversion?.upgraded === true,
+            upgrade_note: fullPaymentConversion?.note || null,
+            conversion_invoice_id: fullPaymentConversion?.conversion_invoice_id ?? null,
           },
           downpayment,
           phases: normalizedPhases,
@@ -601,6 +640,9 @@ router.get(
             total_paid_downpayment: totalPaidDownpayment,
             total_billed: totalBilled,
             total_outstanding: totalOutstanding,
+            plan_slots_total: planSlotsTotal,
+            plan_slots_addressed: planSlotsAddressed,
+            plan_complete: fullPaymentConversion?.upgraded === true,
           },
         },
       });

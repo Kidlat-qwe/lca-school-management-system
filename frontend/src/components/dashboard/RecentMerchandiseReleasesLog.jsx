@@ -1,4 +1,5 @@
 import MatrixInfoTooltip from './MatrixInfoTooltip';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const VISIBLE_ROW_COUNT = 3;
 const ROW_HEIGHT_REM = 2.5;
@@ -7,11 +8,8 @@ const SCROLL_MAX_HEIGHT = `${(VISIBLE_ROW_COUNT + 1) * ROW_HEIGHT_REM}rem`;
 const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
 
 const formatDate = (value) => {
-  if (!value) return '—';
-  const text = String(value).slice(0, 10);
-  const [year, month, day] = text.split('-');
-  if (!year || !month || !day) return text;
-  return `${month}/${day}/${year}`;
+  const formatted = formatDateManila(value);
+  return formatted === '-' ? '—' : formatted;
 };
 
 const RecentMerchandiseReleasesLog = ({

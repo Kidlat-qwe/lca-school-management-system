@@ -1,5 +1,6 @@
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { PaymentLogPackageItemCell } from '../paymentLogs/PaymentLogPackageItemCell';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const VISIBLE_ROW_COUNT = 3;
 const ROW_HEIGHT_REM = 2.5;
@@ -13,11 +14,8 @@ const formatCurrency = (amount) =>
   })}`;
 
 const formatDate = (value) => {
-  if (!value) return '—';
-  const text = String(value).slice(0, 10);
-  const [year, month, day] = text.split('-');
-  if (!year || !month || !day) return text;
-  return `${month}/${day}/${year}`;
+  const formatted = formatDateManila(value);
+  return formatted === '-' ? '—' : formatted;
 };
 
 const RecentInvoicePaymentsLog = ({

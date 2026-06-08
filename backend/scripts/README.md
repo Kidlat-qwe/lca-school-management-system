@@ -4,6 +4,19 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `findStudentsWithDueDateAndPenalty.js`
+
+Lists **students** whose invoice **due_date** falls on a target calendar day/month and who already have a **late penalty** (`late_penalty_applied_for_due_date` and/or `invoiceitemstbl.penalty_amount > 0`).
+
+Default filter: **June 5, 2026** (common installment due day). Open invoices only (`Unpaid` / `Overdue` / etc. — excludes `Paid` and `Cancelled` unless `--include-settled`).
+
+```bash
+node scripts/findStudentsWithDueDateAndPenalty.js
+node scripts/findStudentsWithDueDateAndPenalty.js --year=2026 --month=6 --day=5
+node scripts/findStudentsWithDueDateAndPenalty.js --year=2026 --month=6 --day=
+node scripts/findStudentsWithDueDateAndPenalty.js --include-settled
+```
+
 ### `checkSystemTimezone.js`
 
 Audits **Node.js** and **PostgreSQL** timezone settings against the business standard **Asia/Manila (UTC+8)**. Reports whether `CURRENT_DATE`, local Node dates, and `node-pg` DATE reads match Manila calendar dates (relevant to installment penalty / grace logic).

@@ -212,11 +212,7 @@ const SuperfinanceFinancialDashboard = () => {
     return `₱${parseFloat(amount).toFixed(2)}`;
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString) => formatDateManila(dateString);
 
   const formatBranchName = (branchName) => {
     if (!branchName) return null;

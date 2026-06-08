@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getNotificationDestination } from '../utils/notificationNavigation';
+import { formatDateTimeManila } from '../utils/dateUtils';
 
 const HighPriorityAnnouncementModal = () => {
   const { userInfo } = useAuth();
@@ -74,22 +75,9 @@ const HighPriorityAnnouncementModal = () => {
     }
   };
 
-  // Format date
   const formatDate = (dateString) => {
-    if (!dateString) return '';
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-    } catch {
-      return dateString;
-    }
+    const formatted = formatDateTimeManila(dateString, { hour12: true });
+    return formatted === '-' ? '' : formatted;
   };
 
   if (!isVisible || !highPriorityAnnouncement) {

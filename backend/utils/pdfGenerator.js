@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { query } from '../config/database.js';
+import { formatLongDateDisplay } from './dateUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -73,19 +74,7 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
 
   // Calculate totals - MATCH INVOICE ROUTE EXACTLY
   const formatCurrency = (value) => `PHP ${(Number(value) || 0).toFixed(2)}`;
-  const formatDate = (dateString) => {
-    if (!dateString) return '';
-    try {
-      const date = new Date(dateString);
-      if (Number.isNaN(date.getTime())) return '';
-      const day = String(date.getUTCDate()).padStart(2, '0');
-      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-      const year = date.getUTCFullYear();
-      return `${day}/${month}/${year}`;
-    } catch {
-      return dateString;
-    }
-  };
+  const formatDate = (dateString) => formatLongDateDisplay(dateString);
 
   const items = itemsResult.rows || [];
   const totals = items.reduce(

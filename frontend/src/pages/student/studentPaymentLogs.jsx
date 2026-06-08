@@ -14,6 +14,7 @@ import {
   getPaymentLogPackageItemContext,
   getPaymentLogPackageItemDisplayText,
 } from '../../utils/paymentLogPackageItem';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const StudentPaymentLogs = () => {
   const { userInfo } = useAuth();
@@ -74,11 +75,7 @@ const StudentPaymentLogs = () => {
     }
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString) => formatDateManila(dateString);
 
   const formatCurrency = (amount) => {
     if (!amount) return '₱0.00';

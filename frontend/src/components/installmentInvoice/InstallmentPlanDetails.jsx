@@ -42,9 +42,12 @@ const formatCurrency = (value) => {
 const statusBadgeClass = (status) => {
   switch (String(status || '').toLowerCase()) {
     case 'paid':
+    case 'paid all':
       return 'bg-green-100 text-green-800 border border-green-200';
     case 'overdue':
       return 'bg-red-100 text-red-800 border border-red-200';
+    case 'under grace period':
+      return 'bg-amber-100 text-amber-800 border border-amber-200';
     case 'pending':
       return 'bg-yellow-100 text-yellow-800 border border-yellow-200';
     case 'cancelled':
@@ -395,9 +398,10 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
   const phaseProgress = useMemo(() => {
     const total = profile?.total_phases != null ? Number(profile.total_phases) : null;
     const generated = phases.filter((p) => p.is_generated).length;
-    const paid = phases.filter(
-      (p) => String(p.status || '').toLowerCase() === 'paid'
-    ).length;
+    const paid = phases.filter((p) => {
+      const st = String(p.status || '').toLowerCase();
+      return st === 'paid' || st === 'paid all';
+    }).length;
     const reference = total != null && total > 0 ? total : Math.max(generated, paid, 1);
     // Display phase progress in absolute terms (e.g. "6 / 10" for a plan
     // covering phases 6..10) instead of profile-local numbers ("1 / 5").
@@ -441,6 +445,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
 
   /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
   const firstPayAction = useMemo(() => {
+    if (profile?.upgraded_to_full_payment) return null;
+
     const priorPlanSlotsOk = (upToIndex) =>
       phases.slice(0, upToIndex).every((prev) => {
         if (prev.plan_slot_addressed === true) return true;
@@ -468,7 +474,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
       }
     }
     return null;
-  }, [phases]);
+  }, [phases, profile?.upgraded_to_full_payment]);
 
   return (
     <div className={`space-y-4 sm:space-y-6 ${className}`}>
@@ -486,6 +492,20 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
 
       {!loading && !error && profile && (
         <>
+          {profile.upgraded_to_full_payment && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              <span className="font-semibold">{profile.upgrade_note || 'Upgraded to Full Payment'}</span>
+              {profile.conversion_invoice_id != null && (
+                <span className="block text-xs text-emerald-700 mt-0.5">
+                  Conversion invoice #{profile.conversion_invoice_id}
+                </span>
+              )}
+              <span className="block text-xs text-emerald-700 mt-0.5">
+                Remaining installment slots are shown as paid via full payment conversion.
+              </span>
+            </div>
+          )}
+
           <section className="rounded-lg border border-gray-200 bg-gray-50 p-4 sm:p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               {showStudentName && (
@@ -592,7 +612,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                   Status
                 </p>
                 <p className="text-sm font-medium text-gray-800">
-                  {profile.is_active ? 'Active' : 'Inactive'}
+                  {profile.is_active
+                    ? 'Active'
+                    : profile.upgraded_to_full_payment
+                      ? `Inactive · ${profile.upgrade_note || 'Upgraded to Full Payment'}`
+                      : 'Inactive'}
                 </p>
               </div>
             </div>
@@ -670,7 +694,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                 WebkitOverflowScrolling: 'touch',
               }}
             >
-              <table style={{ width: '100%', minWidth: '1000px' }} className="divide-y divide-gray-200">
+              <table style={{ width: '100%', minWidth: '1120px' }} className="divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Phase</th>
@@ -684,13 +708,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                     <th className="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Amount</th>
                     <th className="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Paid</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Status</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Note</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {phases.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="px-3 py-8 text-center text-sm text-gray-500">
+                      <td colSpan={13} className="px-3 py-8 text-center text-sm text-gray-500">
                         No phase records found.
                       </td>
                     </tr>
@@ -761,6 +786,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass(phase.status)}`}>
                               {phase.status}
                             </span>
+                          </td>
+                          <td className="px-2 py-2.5 text-xs text-gray-600 max-w-[160px]">
+                            {phase.phase_note ? (
+                              <span className="text-emerald-700 font-medium">{phase.phase_note}</span>
+                            ) : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
                             {isPayRow ? (

@@ -9,6 +9,7 @@ import {
   programEnrollmentStatusBadgeClass,
 } from '../../utils/programEnrollmentStatus';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
+import { formatDateTimeManila } from '../../utils/dateUtils';
 
 const TAB_STUDENT_STATUS = 'student_status';
 const TAB_PROGRAM_PAYMENT_STATUS = 'program_payment_status';
@@ -54,20 +55,7 @@ const TAB_CONFIG = {
   },
 };
 
-const formatDateTime = (value) => {
-  if (!value) return '-';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'Asia/Manila',
-  });
-};
+const formatDateTime = (value) => formatDateTimeManila(value, { hour12: true });
 
 const statusBadgeClass = (value) => {
   const v = String(value || '').toLowerCase();

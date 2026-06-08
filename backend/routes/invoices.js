@@ -15,6 +15,7 @@ import path from 'path';
 import { drawArCutGuideLines } from '../lib/ackReceiptPdfLayout.js';
 import { buildArReceiptLineRows, roundCurrency } from '../utils/invoiceReceiptLineItems.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
+import { formatLongDateDisplay } from '../utils/dateUtils.js';
 
 const router = express.Router();
 
@@ -1241,19 +1242,7 @@ router.get(
 
       // Calculate totals
       const formatCurrency = (value) => `PHP ${(Number(value) || 0).toFixed(2)}`;
-      const formatDate = (dateString) => {
-        if (!dateString) return '';
-        try {
-          const date = new Date(dateString);
-          if (Number.isNaN(date.getTime())) return '';
-          const day = String(date.getUTCDate()).padStart(2, '0');
-          const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-          const year = date.getUTCFullYear();
-          return `${day}/${month}/${year}`;
-        } catch {
-          return dateString;
-        }
-      };
+      const formatDate = (dateString) => formatLongDateDisplay(dateString);
 
       const items = itemsResult.rows || [];
       const totals = items.reduce(

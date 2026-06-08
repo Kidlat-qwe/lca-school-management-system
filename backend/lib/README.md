@@ -106,4 +106,6 @@ Supports **Update Plan** on a class student (`POST .../package-change-preview` a
 
 Zero-balance full payment conversion runs immediately without an invoice.
 
+`GET /installment-invoices/profiles/:id/phases` uses `resolveInstallmentProfileFullPaymentConversion()` and `applyFullPaymentUpgradePhaseDisplay()` so Student History shows unpaid/cancelled/not-generated slots as **Paid** with note **Upgraded to Full Payment** and `total_outstanding` = 0 after conversion.
+
 Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLineItems()` (full price, then separate credit lines for reservation fee and downpayment/phase payments). Credits are stored as `discount_amount` on `invoiceitemstbl`; acknowledgement receipt PDF/preview uses net line amounts (`backend/utils/invoiceReceiptLineItems.js`).

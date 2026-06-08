@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
+import { formatDateManila } from '../../utils/dateUtils';
 
 const StudentClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -421,29 +422,7 @@ const StudentClasses = () => {
       return `${hour12}:${minutesFormatted} ${ampm}`;
     };
 
-    const formatDate = (dateValue) => {
-      if (!dateValue) return '-';
-      try {
-        let date;
-        if (typeof dateValue === 'string') {
-          const [year, month, day] = dateValue.split('-').map(Number);
-          date = new Date(year, month - 1, day);
-        } else if (dateValue instanceof Date) {
-          date = dateValue;
-        } else {
-          return '-';
-        }
-        
-        if (isNaN(date.getTime())) {
-          return '-';
-        }
-        
-        const options = { year: 'numeric', month: 'long', day: 'numeric' };
-        return date.toLocaleDateString('en-US', options);
-      } catch {
-        return '-';
-      }
-    };
+    const formatDate = (dateValue) => formatDateManila(dateValue);
 
     const daysOfWeek = selectedClassForDetails.days_of_week || [];
     const sessionsPerPhase = selectedClassForDetails.number_of_session_per_phase;
@@ -891,44 +870,20 @@ const StudentClasses = () => {
                     </td>
                     <td className="px-3 py-4">
                       <div className="text-sm text-gray-900">
-                        {(() => {
-                          const formatDate = (dateValue) => {
-                            if (!dateValue) return '-';
-                            try {
-                              let date;
-                              if (typeof dateValue === 'string') {
-                                const [year, month, day] = dateValue.split('-').map(Number);
-                                date = new Date(year, month - 1, day);
-                              } else if (dateValue instanceof Date) {
-                                date = dateValue;
-                              } else {
-                                return '-';
-                              }
-                              
-                              if (isNaN(date.getTime())) {
-                                return '-';
-                              }
-                              
-                              const options = { year: 'numeric', month: 'long', day: 'numeric' };
-                              return date.toLocaleDateString('en-US', options);
-                            } catch {
-                              return '-';
-                            }
-                          };
-
-                          return classItem.start_date || classItem.end_date ? (
+                        {(() => (
+                          classItem.start_date || classItem.end_date ? (
                             <div className="space-y-1">
                               {classItem.start_date && (
-                                <div>Start: {formatDate(classItem.start_date)}</div>
+                                <div>Start: {formatDateManila(classItem.start_date)}</div>
                               )}
                               {classItem.end_date && (
-                                <div>End: {formatDate(classItem.end_date)}</div>
+                                <div>End: {formatDateManila(classItem.end_date)}</div>
                               )}
                             </div>
                           ) : (
                             '-'
-                          );
-                        })()}
+                          )
+                        ))()}
                       </div>
                     </td>
                     <td className="px-3 py-4 text-right text-sm font-medium">
