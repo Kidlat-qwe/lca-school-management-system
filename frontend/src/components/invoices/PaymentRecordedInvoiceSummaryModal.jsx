@@ -66,7 +66,7 @@ export default function PaymentRecordedInvoiceSummaryModal({
   if (snap && Number(snap.discount_amount) > 0) {
     const d = Number(snap.discount_amount) || 0;
     tableRows.push({
-      description: 'Discount (this payment)',
+      description: 'Discount/Payment Adjustment',
       rate: -d,
       amount: -d,
     });
@@ -74,7 +74,7 @@ export default function PaymentRecordedInvoiceSummaryModal({
   if (snap && Number(snap.tip_amount) > 0) {
     const t = Number(snap.tip_amount) || 0;
     tableRows.push({
-      description: 'Tip',
+      description: 'Tip/Payment Adjustment',
       rate: t,
       amount: t,
     });

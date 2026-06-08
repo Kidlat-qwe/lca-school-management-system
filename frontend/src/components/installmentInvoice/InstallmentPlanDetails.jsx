@@ -6,6 +6,11 @@ import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import { formatProgramEnrollmentStatus } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
+import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
+import {
+  PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
+  PAYMENT_TIP_ADJUSTMENT_LABEL,
+} from '../../constants/paymentFormLabels';
 
 /**
  * Presentation of a single installment plan (`installmentinvoiceprofiles_id`).
@@ -79,6 +84,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
   const [apForm, setApForm] = useState({
     payment_method: 'Cash',
     tip_amount: '',
+    discount_amount: '',
     issue_date: '',
     reference_number: '',
     remarks: '',
@@ -138,6 +144,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     setApForm({
       payment_method: 'Cash',
       tip_amount: '',
+      discount_amount: '',
       issue_date: todayManilaYMD(),
       reference_number: '',
       remarks: '',
@@ -273,18 +280,36 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     if (!apForm.attachment_url) errors.attachment_url = 'Attachment is required.';
     if (apForm.tip_amount && Number.isNaN(parseFloat(apForm.tip_amount)))
       errors.tip_amount = 'Must be a valid number.';
+
+    const grossPayable =
+      paymentModal.mode === 'invoice'
+        ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+        : Number(paymentModal.amount ?? 0);
+    const discountAmountParsed = apForm.discount_amount === ''
+      ? 0
+      : parseFloat(apForm.discount_amount);
+    if (apForm.discount_amount !== '' && (Number.isNaN(discountAmountParsed) || discountAmountParsed < 0)) {
+      errors.discount_amount = 'Discount amount must be 0 or greater';
+    } else if (apForm.discount_amount !== '' && discountAmountParsed >= grossPayable) {
+      errors.discount_amount = 'Discount amount must be less than payable amount';
+    }
+
     if (Object.keys(errors).length) { setApFormErrors(errors); return; }
 
     const modalSnap = { ...paymentModal };
     const branchId = data?.profile?.branch_id;
     const tipValParsed = apForm.tip_amount ? parseFloat(apForm.tip_amount) : 0;
     const tipVal = Number.isFinite(tipValParsed) && tipValParsed > 0 ? tipValParsed : 0;
+    const discountApplied =
+      apForm.discount_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(apForm.discount_amount) || 0);
+    const netPayable = Math.max(0, grossPayable - discountApplied);
 
     setApSubmitting(true);
     try {
       if (modalSnap.mode === 'invoice') {
-        const base = Number(modalSnap.outstanding ?? modalSnap.amount ?? 0);
-        if (!Number.isFinite(base) || base < 0.01) {
+        if (!Number.isFinite(grossPayable) || grossPayable < 0.01) {
           setApFormErrors({ _general: 'Invalid amount to pay for this phase.' });
           setApSubmitting(false);
           return;
@@ -292,8 +317,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
         const paidInvoiceId = modalSnap.invoice_id;
         const paymentSnapshot = {
           student_id: Number(studentId),
-          payable_amount: base,
-          discount_amount: 0,
+          payable_amount: netPayable,
+          discount_amount: discountApplied,
           tip_amount: tipVal,
           issue_date: apForm.issue_date,
           reference_number: (apForm.reference_number || '').trim(),
@@ -306,8 +331,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             student_id: Number(studentId),
             payment_method: apForm.payment_method,
             payment_type: 'Full',
-            payable_amount: base,
-            discount_amount: 0,
+            payable_amount: netPayable,
+            discount_amount: discountApplied,
             tip_amount: tipVal,
             issue_date: apForm.issue_date || undefined,
             reference_number: apForm.reference_number.trim() || undefined,
@@ -335,14 +360,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             remarks: apForm.remarks.trim() || undefined,
             attachment_url: apForm.attachment_url || undefined,
             tip_amount: apForm.tip_amount ? parseFloat(apForm.tip_amount) : undefined,
+            discount_amount: discountApplied > 0 ? discountApplied : undefined,
           }),
         });
         const newInvoiceId = advRes?.data?.invoice_id;
-        const phasePayable = Number(modalSnap.amount) || 0;
         const paymentSnapshot = {
           student_id: Number(studentId),
-          payable_amount: phasePayable,
-          discount_amount: 0,
+          payable_amount: netPayable,
+          discount_amount: discountApplied,
           tip_amount: tipVal,
           issue_date: apForm.issue_date,
           reference_number: (apForm.reference_number || '').trim(),
@@ -966,24 +991,25 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                         : 'Full phase amount — fixed.'}
                     </p>
                   </div>
-                  <div>
-                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      name="tip_amount"
-                      value={apForm.tip_amount}
-                      onChange={handleApInput}
-                      disabled={apSubmitting}
-                      className={`input-field text-sm ${apFormErrors.tip_amount ? 'border-red-500' : ''}`}
-                      placeholder="0.00"
-                    />
-                    {apFormErrors.tip_amount && (
-                      <p className="text-xs text-red-500 mt-1">{apFormErrors.tip_amount}</p>
-                    )}
-                  </div>
+                  <PaymentTipField
+                    value={apForm.tip_amount}
+                    onChange={handleApInput}
+                    error={apFormErrors.tip_amount}
+                    disabled={apSubmitting}
+                  />
                 </div>
+
+                <PaymentDiscountField
+                  value={apForm.discount_amount}
+                  onChange={handleApInput}
+                  error={apFormErrors.discount_amount}
+                  disabled={apSubmitting}
+                  payableAmount={
+                    paymentModal.mode === 'invoice'
+                      ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                      : Number(paymentModal.amount ?? 0)
+                  }
+                />
 
                 {/* Payment Date — full width */}
                 <div>
@@ -1126,9 +1152,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                         )}
                       </span>
                     </div>
+                    {apForm.discount_amount && parseFloat(apForm.discount_amount) > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">{PAYMENT_DISCOUNT_ADJUSTMENT_LABEL}</span>
+                        <span className="text-gray-900">
+                          -{formatCurrency(parseFloat(apForm.discount_amount))}
+                        </span>
+                      </div>
+                    )}
                     {apForm.tip_amount && parseFloat(apForm.tip_amount) > 0 && (
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Tip / Excess</span>
+                        <span className="text-gray-600">{PAYMENT_TIP_ADJUSTMENT_LABEL}</span>
                         <span className="text-gray-900">{formatCurrency(parseFloat(apForm.tip_amount))}</span>
                       </div>
                     )}
@@ -1136,10 +1170,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                       <span className="text-gray-800">Total Collected</span>
                       <span className="text-emerald-700">
                         {formatCurrency(
-                          (paymentModal.mode === 'invoice'
-                            ? (parseFloat(paymentModal.outstanding) || 0)
-                            : (parseFloat(paymentModal.amount) || 0)) +
-                          (parseFloat(apForm.tip_amount) || 0),
+                          Math.max(
+                            0,
+                            (paymentModal.mode === 'invoice'
+                              ? (parseFloat(paymentModal.outstanding) || 0)
+                              : (parseFloat(paymentModal.amount) || 0)) -
+                              (parseFloat(apForm.discount_amount) || 0),
+                          ) + (parseFloat(apForm.tip_amount) || 0),
                         )}
                       </span>
                     </div>

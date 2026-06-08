@@ -3358,7 +3358,7 @@ const FinanceInvoice = () => {
                   </div>
 
                   <div>
-                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
                     <input
                       type="number"
                       step="0.01"
@@ -3375,7 +3375,7 @@ const FinanceInvoice = () => {
                   </div>
 
                   <div className="col-span-full">
-                    <label className="label-field text-xs">Discount Amount (Optional)</label>
+                    <label className="label-field text-xs">Discount/Payment Adjustment</label>
                     <input
                       type="number"
                       step="0.01"
@@ -3395,7 +3395,7 @@ const FinanceInvoice = () => {
                       <p className="text-xs text-red-500 mt-1">{paymentFormErrors.discount_amount}</p>
                     ) : (
                       <p className="text-xs text-gray-500 mt-1">
-                        Optional. When provided, this is deducted from what the student needs to pay (e.g. promo,
+                        When provided, this is deducted from what the student needs to pay (e.g. promo,
                         early-bird, scholarship). The discount closes the invoice balance but is not counted as revenue.
                       </p>
                     )}

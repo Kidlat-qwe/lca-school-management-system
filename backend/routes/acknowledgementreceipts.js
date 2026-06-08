@@ -882,6 +882,10 @@ router.post(
     body('prospect_student_notes').optional().isString().withMessage('Notes must be a string'),
     body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
     body('payment_amount').optional({ nullable: true }).isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
+    body('discount_amount')
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage('discount_amount must be a non-negative number'),
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('payment_method')
@@ -938,6 +942,7 @@ router.post(
         issue_date,
         payment_method,
         tip_amount,
+        discount_amount,
         reference_number,
         payment_attachment_url,
         level_tag,
@@ -946,6 +951,8 @@ router.post(
         merchandise_items = [],
         student_id: linkedStudentId,
       } = req.body;
+
+      const discountValue = Math.max(0, parseFloat(discount_amount || 0) || 0);
 
       let branchId = bodyBranchId || req.user.branchId || null;
 
@@ -1130,6 +1137,14 @@ router.post(
         }
       }
 
+      if (discountValue > 0 && discountValue >= totalPaymentAmount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Discount amount must be less than the payment amount.',
+        });
+      }
+
       // Verify branch exists
       const branchCheck = await client.query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [branchId]);
       if (branchCheck.rows.length === 0) {
@@ -1296,12 +1311,14 @@ router.post(
         const dpDesc = `Downpayment for ${splitPackageDisplayName || 'Installment'}`;
         const phDesc = `(Phase 1) Installment plan for ${stud} - ${lvl}`;
         const tipVal = parseFloat(tip_amount || 0) || 0;
+        const dpDiscount = Math.min(discountValue, splitDownpaymentAmt);
+        const phase1Discount = Math.max(0, discountValue - dpDiscount);
 
         ackReceipt = await insertAcknowledgementRow({
           ackNum: n1,
           statusVal: initialPackageStatus,
           arTypeVal: 'Package',
-          payAmt: splitDownpaymentAmt,
+          payAmt: Math.max(0, splitDownpaymentAmt - dpDiscount),
           tipAmt: tipVal,
           pkgSnapName: dpDesc,
           pkgSnapAmt: splitDownpaymentAmt,
@@ -1312,7 +1329,7 @@ router.post(
           ackNum: n2,
           statusVal: initialPackageStatus,
           arTypeVal: 'Package',
-          payAmt: splitMonthlyAmt,
+          payAmt: Math.max(0, splitMonthlyAmt - phase1Discount),
           tipAmt: 0,
           pkgSnapName: phDesc,
           pkgSnapAmt: splitMonthlyAmt,
@@ -1329,7 +1346,7 @@ router.post(
           ackNum: ackNumber,
           statusVal: isMerchandise ? 'Pending' : initialPackageStatus,
           arTypeVal: isMerchandise ? 'Merchandise' : 'Package',
-          payAmt: totalPaymentAmount,
+          payAmt: Math.max(0, totalPaymentAmount - discountValue),
           tipAmt: tip_amount || 0,
           pkgSnapName: packageNameSnapshot,
           pkgSnapAmt: packageAmountSnapshot,
@@ -2715,6 +2732,69 @@ router.put(
         const tip = raw.tip_amount === '' || raw.tip_amount == null ? 0 : parseFloat(raw.tip_amount);
         pushUpdate('tip_amount', Number.isFinite(tip) && tip >= 0 ? tip : 0);
       }
+      if (
+        Object.prototype.hasOwnProperty.call(raw, 'discount_amount') &&
+        !Object.prototype.hasOwnProperty.call(raw, 'package_id')
+      ) {
+        if (ack.ar_type !== 'Package') {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount/Payment Adjustment applies only to Package acknowledgement receipts',
+          });
+        }
+        const discount = raw.discount_amount === '' || raw.discount_amount == null
+          ? 0
+          : parseFloat(raw.discount_amount);
+        if (!Number.isFinite(discount) || discount < 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount amount must be 0 or greater',
+          });
+        }
+        const pkgIdForDiscount = Object.prototype.hasOwnProperty.call(raw, 'package_id')
+          ? parseInt(raw.package_id, 10)
+          : ack.package_id;
+        if (!Number.isInteger(pkgIdForDiscount) || pkgIdForDiscount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Package is required to apply a discount',
+          });
+        }
+        const pkgDiscountResult = await query(
+          `SELECT package_price, package_type, downpayment_amount, payment_option
+           FROM packagestbl WHERE package_id = $1`,
+          [pkgIdForDiscount]
+        );
+        if (pkgDiscountResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Package not found',
+          });
+        }
+        const pkgDisc = pkgDiscountResult.rows[0];
+        const packagePrice = parseFloat(pkgDisc.package_price ?? 0) || 0;
+        const downpayment = parseFloat(pkgDisc.downpayment_amount ?? 0) || 0;
+        const packageType = String(pkgDisc.package_type || '').toLowerCase();
+        const paymentOption = String(pkgDisc.payment_option || '').toLowerCase();
+        const isInstallmentLike =
+          packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+        const installmentOpt = String(
+          Object.prototype.hasOwnProperty.call(raw, 'installment_option')
+            ? raw.installment_option
+            : ack.installment_option || ''
+        ).toLowerCase();
+        const grossPayable =
+          isInstallmentLike && installmentOpt === 'downpayment_only' && downpayment > 0
+            ? downpayment
+            : packagePrice;
+        if (discount >= grossPayable) {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount amount must be less than the payment amount',
+          });
+        }
+        pushUpdate('payment_amount', Math.max(0, grossPayable - discount));
+      }
       if (Object.prototype.hasOwnProperty.call(raw, 'package_id')) {
         const nextPackageId = raw.package_id == null || raw.package_id === '' ? null : parseInt(raw.package_id, 10);
         if (!Number.isInteger(nextPackageId) || nextPackageId <= 0) {
@@ -2761,8 +2841,24 @@ router.put(
         pushUpdate('package_id', pkg.package_id);
         pushUpdate('package_name_snapshot', pkg.package_name || null);
         pushUpdate('package_amount_snapshot', packagePrice);
-        // Payable is always system-derived from package selection for consistency with create flow.
-        pushUpdate('payment_amount', computedPayable);
+        // Payable is system-derived from package; optional discount reduces collected amount.
+        let netPayable = computedPayable;
+        if (Object.prototype.hasOwnProperty.call(raw, 'discount_amount')) {
+          const pkgDiscount =
+            raw.discount_amount === '' || raw.discount_amount == null
+              ? 0
+              : parseFloat(raw.discount_amount);
+          if (Number.isFinite(pkgDiscount) && pkgDiscount > 0) {
+            if (pkgDiscount >= computedPayable) {
+              return res.status(400).json({
+                success: false,
+                message: 'Discount amount must be less than the payment amount',
+              });
+            }
+            netPayable = Math.max(0, computedPayable - pkgDiscount);
+          }
+        }
+        pushUpdate('payment_amount', netPayable);
       }
 
       if (updates.length === 0) {

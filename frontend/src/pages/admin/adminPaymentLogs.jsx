@@ -2999,7 +2999,7 @@ const AdminPaymentLogs = () => {
                     )}
                   </div>
                   <div>
-                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
                     <input
                       type="number"
                       name="tip_amount"
@@ -3013,7 +3013,7 @@ const AdminPaymentLogs = () => {
                     />
                   </div>
                   <div>
-                    <label className="label-field text-xs">Discount Amount (Optional)</label>
+                    <label className="label-field text-xs">Discount/Payment Adjustment</label>
                     <input
                       type="number"
                       name="discount_amount"
@@ -3031,7 +3031,7 @@ const AdminPaymentLogs = () => {
                       placeholder="0.00"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Optional. Deducted from what the student pays toward the invoice (same as Record Payment on
+                      Deducted from what the student pays toward the invoice (same as Record Payment on
                       Invoice). Must be less than payable amount.
                     </p>
                   </div>

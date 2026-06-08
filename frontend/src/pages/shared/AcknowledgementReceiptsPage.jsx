@@ -33,6 +33,7 @@ import {
 } from '../../utils/billingListCrossLink';
 import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
 import AcknowledgementReceiptStatusLegend from '../../components/receipts/AcknowledgementReceiptStatusLegend';
+import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
 import {
   getArStatusBadgeClass,
   getArStatusLegend,
@@ -208,6 +209,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     payment_method: 'Cash',
     issue_date: todayManilaYMD(),
     tip_amount: '',
+    discount_amount: '',
   });
   const [viewPayableAmount, setViewPayableAmount] = useState(0);
   const [viewModalAttachmentUrl, setViewModalAttachmentUrl] = useState('');
@@ -230,6 +232,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     package_id: '',
     payment_amount: '',
     tip_amount: '',
+    discount_amount: '',
     payment_method: 'Cash',
     level_tag: '',
     reference_number: '',
@@ -644,6 +647,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       package_id: '',
       payment_amount: '',
       tip_amount: '',
+      discount_amount: '',
       payment_method: 'Cash',
       level_tag: '',
       reference_number: '',
@@ -1401,6 +1405,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       viewFormData.tip_amount == null || viewFormData.tip_amount === ''
         ? 0
         : Math.max(0, parseFloat(String(viewFormData.tip_amount)));
+    const discountNum =
+      viewFormData.discount_amount == null || viewFormData.discount_amount === ''
+        ? 0
+        : parseFloat(String(viewFormData.discount_amount));
+    if (viewFormData.discount_amount !== '' && (Number.isNaN(discountNum) || discountNum < 0)) {
+      appAlert('Discount amount must be 0 or greater.');
+      return;
+    }
+    const grossResubmit = Number(viewPayableAmount) || 0;
+    if (viewFormData.discount_amount !== '' && grossResubmit > 0 && discountNum >= grossResubmit) {
+      appAlert('Discount amount must be less than the payment amount.');
+      return;
+    }
     let pkgId = viewFormData.package_id ? parseInt(viewFormData.package_id, 10) : NaN;
     if (!Number.isFinite(pkgId)) {
       appAlert('Package is missing on this receipt. Please choose a package, then resubmit.');
@@ -1419,6 +1436,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         reference_number: (viewFormData.reference_number || '').trim() || null,
         payment_method: viewFormData.payment_method || 'Cash',
         tip_amount: tipNum,
+        discount_amount: discountNum > 0 ? discountNum : 0,
         payment_attachment_url: attach,
         package_id: pkgId,
       };
@@ -1505,6 +1523,18 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (createFormData.tip_amount !== '' && Number(createFormData.tip_amount) < 0) {
       errors.tip_amount = 'Tip amount cannot be negative';
     }
+    const grossPayable = isMerch
+      ? merchandiseTotalAmount()
+      : parseFloat(createFormData.payment_amount || '0') || 0;
+    const discountParsed =
+      createFormData.discount_amount === ''
+        ? 0
+        : parseFloat(createFormData.discount_amount);
+    if (createFormData.discount_amount !== '' && (Number.isNaN(discountParsed) || discountParsed < 0)) {
+      errors.discount_amount = 'Discount amount must be 0 or greater';
+    } else if (createFormData.discount_amount !== '' && grossPayable > 0 && discountParsed >= grossPayable) {
+      errors.discount_amount = 'Discount amount must be less than payable amount';
+    }
     if (!AR_PAYMENT_METHOD_OPTIONS.includes(createFormData.payment_method || '')) {
       errors.payment_method = 'Payment method is required';
     }
@@ -1549,12 +1579,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           payment_attachment_url: createFormData.payment_attachment_url || undefined,
           tip_amount:
             createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          discount_amount:
+            createFormData.discount_amount === ''
+              ? undefined
+              : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
           payment_method: createFormData.payment_method || 'Cash',
           issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           branch_id: branchId,
         };
         if (!payload.reference_number) delete payload.reference_number;
         if (!payload.level_tag) delete payload.level_tag;
+        if (payload.discount_amount === 0) delete payload.discount_amount;
       } else {
         const isInstallmentPkg =
           !!selectedPackage &&
@@ -1572,6 +1607,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           payment_amount: parseFloat(createFormData.payment_amount),
           tip_amount:
             createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          discount_amount:
+            createFormData.discount_amount === ''
+              ? undefined
+              : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
           payment_method: createFormData.payment_method || 'Cash',
           issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
@@ -1583,6 +1622,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
         if (!payload.level_tag) delete payload.level_tag;
         if (!payload.reference_number) delete payload.reference_number;
+        if (payload.discount_amount === 0) delete payload.discount_amount;
       }
 
       const result = await apiRequest('/acknowledgement-receipts', {
@@ -1799,8 +1839,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         receipt.tip_amount == null || Number(receipt.tip_amount) === 0
           ? ''
           : String(Number(receipt.tip_amount)),
+      discount_amount: '',
     });
-    setViewPayableAmount(Number(receipt.payment_amount || 0) || 0);
+    const pkgForGross = packages.find((p) => String(p.package_id) === String(receipt.package_id || ''));
+    let grossPayable = Number(receipt.payment_amount || 0) || 0;
+    if (pkgForGross) {
+      const packagePrice = Number(pkgForGross.package_price || 0);
+      const downpayment = Number(pkgForGross.downpayment_amount || 0);
+      const packageType = String(pkgForGross.package_type || '').toLowerCase();
+      const paymentOption = String(pkgForGross.payment_option || '').toLowerCase();
+      const isInstallmentLike =
+        packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(receipt.installment_option || '').toLowerCase() === 'downpayment_only';
+      grossPayable =
+        isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+    } else if (Number(receipt.package_amount_snapshot || 0) > 0) {
+      grossPayable = Number(receipt.package_amount_snapshot);
+    }
+    setViewPayableAmount(grossPayable);
     setViewReceipt(receipt);
   };
 
@@ -1818,6 +1874,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       payment_method: 'Cash',
       issue_date: todayManilaYMD(),
       tip_amount: '',
+      discount_amount: '',
     });
     setViewPayableAmount(0);
     setViewModalAttachmentUrl('');
@@ -3219,7 +3276,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       />
                     </div>
                     <div>
-                      <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                      <label className="label-field text-xs">Tip/Payment Adjustment</label>
                       <input
                         type="number"
                         min="0"
@@ -3234,6 +3291,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
                       )}
                     </div>
+                    <PaymentDiscountField
+                      className="col-span-full"
+                      hintVariant="ar"
+                      value={createFormData.discount_amount}
+                      onChange={handleCreateInputChange}
+                      error={createFormErrors.discount_amount}
+                      payableAmount={merchandiseTotalAmount()}
+                      disabled={creating}
+                    />
                     <div>
                       <label className="label-field text-xs">
                         Payment Method <span className="text-red-500">*</span>
@@ -3464,7 +3530,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     )}
                   </div>
                   <div>
-                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
                     <input
                       type="number"
                       min="0"
@@ -3480,6 +3546,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     )}
                   </div>
                 </div>
+
+                <PaymentDiscountField
+                  className="col-span-full"
+                  hintVariant="ar"
+                  value={createFormData.discount_amount}
+                  onChange={handleCreateInputChange}
+                  error={createFormErrors.discount_amount}
+                  payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
+                  disabled={creating}
+                />
 
                 {selectedPackage &&
                   ((selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')) && (() => {
@@ -4583,7 +4659,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     ) : null}
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
-                        <label className="label-field text-xs">Tip / Excess Amount</label>
+                        <label className="label-field text-xs">Tip/Payment Adjustment</label>
                         <input
                           type="number"
                           min="0"
@@ -4615,6 +4691,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         </p>
                       </div>
                     </div>
+                    {canResubmitViewReceipt ? (
+                      <PaymentDiscountField
+                        hintVariant="ar"
+                        value={viewFormData.discount_amount}
+                        onChange={handleViewInputChange}
+                        payableAmount={viewPayableAmount}
+                        disabled={viewResubmitSaving}
+                      />
+                    ) : null}
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
                         <label className="label-field text-xs">Payment Method</label>

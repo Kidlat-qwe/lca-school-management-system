@@ -1926,6 +1926,10 @@ router.post(
     body('remarks').optional({ nullable: true }).isString(),
     body('attachment_url').optional({ nullable: true }).isString(),
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('tip_amount must be a non-negative number'),
+    body('discount_amount')
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage('discount_amount must be a non-negative number'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
@@ -1935,7 +1939,16 @@ router.post(
       await client.query('BEGIN');
 
       const { id } = req.params;
-      const { phase_index, payment_method, reference_number, payment_date, remarks, attachment_url, tip_amount } = req.body;
+      const {
+        phase_index,
+        payment_method,
+        reference_number,
+        payment_date,
+        remarks,
+        attachment_url,
+        tip_amount,
+        discount_amount,
+      } = req.body;
 
       // Fetch profile + the linked installment schedule row (for next_generation_date).
       const profileRes = await client.query(
@@ -2035,6 +2048,15 @@ router.post(
       const dueDateYmd = formatYmdLocal(dueDate);
 
       const invoiceAmount = Number(profile.amount || 0);
+      const discountValue = Math.max(0, parseFloat(discount_amount || 0) || 0);
+      if (discountValue >= invoiceAmount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Discount amount must be less than the phase payable amount.',
+        });
+      }
+      const netPayable = Math.max(0, invoiceAmount - discountValue);
       const phaseStart = parseInt(profile.phase_start || 1, 10);
       const absolutePhaseNumber = phaseStart + (phaseIdx - 1);
       const creatorUserId = req.user.userId || req.user.user_id || null;
@@ -2092,16 +2114,17 @@ router.post(
       await client.query(
         `INSERT INTO paymenttbl
            (invoice_id, student_id, branch_id, payment_method, payment_type,
-            payable_amount, tip_amount, issue_date, status, approval_status,
+            payable_amount, discount_amount, tip_amount, issue_date, status, approval_status,
             reference_number, remarks, payment_attachment_url, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           newInvoice.invoice_id,
           profile.student_id,
           profile.branch_id || null,
           payment_method,
           'Full',
-          invoiceAmount,
+          netPayable,
+          discountValue,
           tipValue || 0,
           issueDateYmd,
           'Completed',

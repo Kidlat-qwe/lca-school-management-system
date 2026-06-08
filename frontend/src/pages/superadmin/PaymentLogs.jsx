@@ -1918,7 +1918,7 @@ const PaymentLogs = () => {
                     )}
                   </div>
                   <div>
-                    <label className="label-field text-xs">Tip / Excess Amount (Optional)</label>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
                     <input
                       type="number"
                       name="tip_amount"
@@ -1932,7 +1932,7 @@ const PaymentLogs = () => {
                     />
                   </div>
                   <div>
-                    <label className="label-field text-xs">Discount Amount (Optional)</label>
+                    <label className="label-field text-xs">Discount/Payment Adjustment</label>
                     <input
                       type="number"
                       name="discount_amount"
