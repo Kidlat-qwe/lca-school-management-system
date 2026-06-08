@@ -5,6 +5,13 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { query } from '../config/database.js';
 import { formatLongDateDisplay } from './dateUtils.js';
+import { roundCurrency } from './invoiceReceiptLineItems.js';
+import {
+  ACK_RECEIPT_DISCOUNT_LINE_LABEL,
+  ACK_RECEIPT_TIP_LINE_LABEL,
+  computeInvoicePdfDisplayTotal,
+  sumInvoicePaymentAdjustments,
+} from './ackReceiptTableLineItems.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -60,10 +67,13 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
 
   // Fetch payments for this invoice - MATCH INVOICE ROUTE EXACTLY
   const paymentsResult = await query(
-    `SELECT p.payment_method, p.payment_type, p.payable_amount, p.reference_number,
+    `SELECT p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount,
+            COALESCE(p.tip_amount, 0) AS tip_amount, p.reference_number,
             TO_CHAR(p.issue_date, 'YYYY-MM-DD') as payment_date_raw
      FROM paymenttbl p
-     WHERE p.invoice_id = $1 AND p.status = 'Completed'
+     WHERE p.invoice_id = $1
+       AND p.status = 'Completed'
+       AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
      ORDER BY p.issue_date DESC`,
     [invoiceId]
   );
@@ -96,7 +106,10 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
   const grandTotal = totals.subtotal - totals.discount + totals.penalty + totals.tax;
 
   // Calculate total payments
-  const totalPayments = paymentsResult.rows.reduce((sum, p) => sum + (Number(p.payable_amount) || 0), 0);
+  const totalPayments = paymentsResult.rows.reduce(
+    (sum, p) => sum + (Number(p.payable_amount) || 0) + (Number(p.discount_amount) || 0),
+    0,
+  );
   const amountDue = grandTotal - totalPayments;
 
   // Generate PDF buffer
@@ -212,13 +225,12 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
     currentY = tableStartY + 25;
     doc.fontSize(9).fillColor('#333333').font('Helvetica');
 
+    let lineIndex = 0;
     if (items.length === 0) {
       doc.text('No items.', colDesc, currentY);
       currentY += 15;
     } else {
-      items.forEach((item, idx) => {
-        // Show the effective line amount so penalties are visible on the invoice.
-        // (amount - discount + penalty + tax)
+      items.forEach((item) => {
         const amt = Number(item.amount) || 0;
         const discount = Number(item.discount_amount) || 0;
         const penalty = Number(item.penalty_amount) || 0;
@@ -227,8 +239,9 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
         const tax = taxableBase * (taxPct / 100);
         const netAmount = taxableBase + tax;
         const packageName = extractPackage(item.description);
-        
-        doc.text((idx + 1).toString(), colNum, currentY);
+
+        lineIndex += 1;
+        doc.text(lineIndex.toString(), colNum, currentY);
         doc.text(item.description || '-', colDesc, currentY, { width: 250 });
         doc.text(packageName || '-', colPackage, currentY, { width: 60 });
         doc.text('1', colQty, currentY, { width: 30, align: 'center' });
@@ -237,12 +250,44 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
       });
     }
 
+    const { discount: paymentDiscountTotal, tip: paymentTipTotal } =
+      sumInvoicePaymentAdjustments(paymentsResult.rows);
+    if (paymentDiscountTotal > 0) {
+      lineIndex += 1;
+      doc.text(lineIndex.toString(), colNum, currentY);
+      doc.text(ACK_RECEIPT_DISCOUNT_LINE_LABEL, colDesc, currentY, { width: 250 });
+      doc.text('-', colPackage, currentY, { width: 60 });
+      doc.text('-', colQty, currentY, { width: 30, align: 'center' });
+      doc.text(formatCurrency(-paymentDiscountTotal), colNetAmount, currentY, {
+        width: 70,
+        align: 'right',
+      });
+      currentY += 15;
+    }
+    if (paymentTipTotal > 0) {
+      lineIndex += 1;
+      doc.text(lineIndex.toString(), colNum, currentY);
+      doc.text(ACK_RECEIPT_TIP_LINE_LABEL, colDesc, currentY, { width: 250 });
+      doc.text('-', colPackage, currentY, { width: 60 });
+      doc.text('-', colQty, currentY, { width: 30, align: 'center' });
+      doc.text(formatCurrency(paymentTipTotal), colNetAmount, currentY, {
+        width: 70,
+        align: 'right',
+      });
+      currentY += 15;
+    }
+
     currentY += 15;
+
+    const invoiceDisplayTotal = computeInvoicePdfDisplayTotal(grandTotal, paymentsResult.rows);
 
     // Financial Summary
     doc.fontSize(10).fillColor('#000000').font('Helvetica-Bold');
     doc.text('Total', colNetAmount, currentY, { width: 70, align: 'right' });
-    doc.text(formatCurrency(grandTotal), colNetAmount, currentY + 12, { width: 70, align: 'right' });
+    doc.text(formatCurrency(invoiceDisplayTotal), colNetAmount, currentY + 12, {
+      width: 70,
+      align: 'right',
+    });
     currentY += 25;
 
     // Draw horizontal line after Total
@@ -256,20 +301,35 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
         const refNum = payment.reference_number || '';
         const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '';
         const paymentAmount = Number(payment.payable_amount) || 0;
-        
-        // "Fully Settled Via" label on the left
+        const paymentTip = Number(payment.tip_amount) || 0;
+        const paymentDiscount = Number(payment.discount_amount) || 0;
+        const paymentCollected = roundCurrency(paymentAmount + paymentTip);
+
         doc.fontSize(9).fillColor('#333333').font('Helvetica');
         const paymentMethodText = `Fully Settled Via ${paymentMethod}${refNum ? ` ${refNum}` : ''}`;
         doc.text(paymentMethodText, 50, currentY, { width: 300 });
-        
-        // Payment amount on the right (same line)
-        doc.text(formatCurrency(paymentAmount), colNetAmount, currentY, { width: 70, align: 'right' });
+        doc.text(formatCurrency(paymentCollected), colNetAmount, currentY, {
+          width: 70,
+          align: 'right',
+        });
         currentY += 15;
-        
-        // Payment date below, indented
+
+        if (paymentDiscount > 0 || paymentTip > 0) {
+          doc.fontSize(8).fillColor('#666666').font('Helvetica');
+          const parts = [];
+          if (paymentDiscount > 0) {
+            parts.push(`${ACK_RECEIPT_DISCOUNT_LINE_LABEL}: ${formatCurrency(-paymentDiscount)}`);
+          }
+          if (paymentTip > 0) {
+            parts.push(`${ACK_RECEIPT_TIP_LINE_LABEL}: ${formatCurrency(paymentTip)}`);
+          }
+          doc.text(parts.join(' · '), 60, currentY, { width: 420 });
+          currentY += 12;
+        }
+
         if (paymentDate) {
           doc.fontSize(8).fillColor('#666666').font('Helvetica');
-          doc.text(`(${paymentDate})`, 60, currentY, { width: 300 }); // Indented by 10px
+          doc.text(`(${paymentDate})`, 60, currentY, { width: 300 });
           currentY += 15;
         }
       });

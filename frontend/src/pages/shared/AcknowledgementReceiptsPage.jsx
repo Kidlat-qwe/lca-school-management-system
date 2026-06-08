@@ -34,6 +34,7 @@ import {
 import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
 import AcknowledgementReceiptStatusLegend from '../../components/receipts/AcknowledgementReceiptStatusLegend';
 import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
+import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
 import {
   getArStatusBadgeClass,
   getArStatusLegend,
@@ -3808,7 +3809,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               <div className="p-3 sm:p-4">
                 {(() => {
                   const r = merchandiseArCreatedSummary.receipt;
-                  const items = parseMerchandiseItemsSnapshotForDisplay(r.merchandise_items_snapshot);
                   const b =
                     branches.find((br) => Number(br.branch_id) === Number(r.branch_id)) || null;
                   const branchLabel =
@@ -3817,7 +3817,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     r.issue_date != null && String(r.issue_date).trim() !== ''
                       ? String(r.issue_date).slice(0, 10)
                       : '';
-                  const totalWithTip = (Number(r.payment_amount) || 0) + (Number(r.tip_amount) || 0);
                   const receiptNo =
                     merchandiseArCreatedSummary.invoiceArNumber ||
                     (merchandiseArCreatedSummary.invoiceId
@@ -3833,17 +3832,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   const preparedByText = preparedByName;
                   const receivedByText = r.prospect_student_contact || '';
 
-                  const merchRows = items.map((row) => {
-                    const qty = Number(row.quantity) || 1;
-                    const unit = Number(row.price) || 0;
-                    const line = unit * qty;
-                    const desc = `Merchandise: ${row.merchandise_name || 'Item'}${row.size ? ` (${row.size})` : ''}`;
-                    return { description: desc, rate: unit, amount: line };
-                  });
-                  if (Number(r.tip_amount) > 0) {
-                    const t = Number(r.tip_amount) || 0;
-                    merchRows.push({ description: 'Tip', rate: t, amount: t });
-                  }
+                  const { rows: merchRows, total: merchTotal } = buildAckReceiptTableRows(r);
 
                   return (
                     <>
@@ -3859,7 +3848,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         preparedByText={preparedByText}
                         receivedByText={receivedByText}
                         tableRows={merchRows}
-                        totalAmount={totalWithTip}
+                        totalAmount={merchTotal}
                       />
                       {r.prospect_student_notes ? (
                         <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">
@@ -3958,8 +3947,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       r.issue_date != null && String(r.issue_date).trim() !== ''
                         ? String(r.issue_date).slice(0, 10)
                         : '';
-                    const totalWithTip =
-                      (Number(r.payment_amount) || 0) + (Number(r.tip_amount) || 0);
                     const receiptNo = r.ack_receipt_number || '—';
 
                     const preparedByName =
@@ -3971,17 +3958,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     const preparedByText = preparedByName;
                     const receivedByText = r.prospect_student_contact || '';
 
-                    const packageRows = [
-                      {
-                        description: r.package_name_snapshot || 'Package',
-                        rate: Number(r.payment_amount) || 0,
-                        amount: Number(r.payment_amount) || 0,
-                      },
-                    ];
-                    if (Number(r.tip_amount) > 0) {
-                      const t = Number(r.tip_amount) || 0;
-                      packageRows.push({ description: 'Tip', rate: t, amount: t });
-                    }
+                    const matchedPkg =
+                      packages.find((pkg) => String(pkg.package_id) === String(r.package_id || '')) ||
+                      null;
+                    const { rows: packageRows, total: packageTotal } = buildAckReceiptTableRows(r, {
+                      selectedPackage: matchedPkg,
+                    });
 
                     return (
                       <div
@@ -4009,7 +3991,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           preparedByText={preparedByText}
                           receivedByText={receivedByText}
                           tableRows={packageRows}
-                          totalAmount={totalWithTip}
+                          totalAmount={packageTotal}
                         />
                         {r.prospect_student_notes ? (
                           <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">

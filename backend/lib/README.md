@@ -108,4 +108,10 @@ Zero-balance full payment conversion runs immediately without an invoice.
 
 `GET /installment-invoices/profiles/:id/phases` uses `resolveInstallmentProfileFullPaymentConversion()` and `applyFullPaymentUpgradePhaseDisplay()` so Student History shows unpaid/cancelled/not-generated slots as **Paid** with note **Upgraded to Full Payment** and `total_outstanding` = 0 after conversion.
 
-Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLineItems()` (full price, then separate credit lines for reservation fee and downpayment/phase payments). Credits are stored as `discount_amount` on `invoiceitemstbl`; acknowledgement receipt PDF/preview uses net line amounts (`backend/utils/invoiceReceiptLineItems.js`).
+Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLineItems()` (full price, then separate credit lines for reservation fee and downpayment/phase payments). Credits are stored as `discount_amount` on `invoiceitemstbl`; invoice-linked AR PDF uses net line amounts (`backend/utils/invoiceReceiptLineItems.js`).
+
+Standalone acknowledgement receipt PDFs (`ackReceiptPdfGenerator.js`) build table rows via `backend/utils/ackReceiptTableLineItems.js`: package/merchandise lines at gross, then **Discount/Payment Adjustment** (inferred from gross − `payment_amount`) and **Tip/Payment Adjustment** when present.
+
+Invoice **Download Acknowledgement Receipt** (`GET /invoices/:id/pdf?doc_type=ar` in `routes/invoices.js`) uses `buildInvoiceLinkedArTableRows()`: invoice line items plus payment-level tip/discount from `paymenttbl` (matches invoice list **Total amount** = payable + tip).
+
+**Download Invoice** (`GET /invoices/:id/pdf` and `utils/pdfGenerator.js`) appends **Discount/Payment Adjustment** and **Tip/Payment Adjustment** rows from `paymenttbl`, updates the **Total** to `grandTotal − discount + tip`, and shows collected amount (`payable + tip`) in the payment section.

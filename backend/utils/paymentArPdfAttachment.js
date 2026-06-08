@@ -119,6 +119,8 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
 
   const payRes = await client.query(
     `SELECT COALESCE(SUM(payable_amount), 0)::numeric AS total_paid,
+            COALESCE(SUM(discount_amount), 0)::numeric AS total_discount,
+            COALESCE(SUM(tip_amount), 0)::numeric AS total_tip,
             TO_CHAR(MAX(issue_date), 'YYYY-MM-DD') AS last_payment_ymd
      FROM paymenttbl
      WHERE invoice_id = $1 AND status = 'Completed'
@@ -126,7 +128,10 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
     [invId]
   );
   const amountPaid = Number(payRes.rows[0]?.total_paid || 0);
+  const paymentDiscount = Number(payRes.rows[0]?.total_discount || 0);
+  const paymentTip = Number(payRes.rows[0]?.total_tip || 0);
   const issueDateFmt = String(payRes.rows[0]?.last_payment_ymd || invoice.issue_date || '').slice(0, 10);
+  const invoiceGross = Number(invoice.amount || 0) || amountPaid + paymentDiscount;
 
   const preparedByRes = await client.query(
     `SELECT
@@ -181,7 +186,8 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
     prepared_by_name: preparedByName,
     prepared_by_date_ymd: preparedByDateYmd,
     payment_amount: amountPaid,
-    tip_amount: 0,
+    tip_amount: paymentTip,
+    package_amount_snapshot: invoiceGross,
     package_name_snapshot: packageDesc,
     branch_address: invoice.branch_address,
     branch_phone_number: invoice.branch_phone_number,

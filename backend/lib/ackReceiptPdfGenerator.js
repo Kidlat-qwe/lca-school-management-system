@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '../config/database.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
+import { buildAckReceiptTableRows } from '../utils/ackReceiptTableLineItems.js';
 import {
   ACK_RECEIPT_PAGE_MARGIN,
   ACK_RECEIPT_PDF_OPTIONS,
@@ -88,35 +89,7 @@ export function buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt)
 }
 
 export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
-  const isMerchandise = (ar.ar_type || '').toLowerCase() === 'merchandise';
-  const paymentAmount = parseFloat(ar.payment_amount || 0) || 0;
-  const tipAmount = parseFloat(ar.tip_amount || 0) || 0;
-  const totalAmount = paymentAmount + tipAmount;
-
-  let itemDescriptions = [];
-  if (isMerchandise && ar.merchandise_items_snapshot) {
-    try {
-      const snapItems =
-        typeof ar.merchandise_items_snapshot === 'string'
-          ? JSON.parse(ar.merchandise_items_snapshot)
-          : ar.merchandise_items_snapshot;
-      if (Array.isArray(snapItems) && snapItems.length > 0) {
-        for (const item of snapItems) {
-          const name = item.merchandise_name || 'Item';
-          const size = item.size ? ` (${item.size})` : '';
-          itemDescriptions.push(`${name}${size}`);
-        }
-      }
-    } catch {
-      /* ignore malformed snapshot */
-    }
-  }
-
-  const packageDesc = ar.package_name_snapshot;
-  const mergedDesc =
-    itemDescriptions.length > 0
-      ? itemDescriptions.join(' | ')
-      : packageDesc || 'Acknowledgement Receipt';
+  const { rows: tableRows, total: totalAmount } = buildAckReceiptTableRows(ar);
 
   const arNumber =
     ar.ack_receipt_number != null && String(ar.ack_receipt_number).trim() !== ''
@@ -196,57 +169,76 @@ export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
 
   const tLeft = left;
   const tWidth = contentWidth;
-  const rowH = 24;
   const headerH = 24;
-  const detailRows = 4;
-  const footerRows = 1;
-  const totalRows = detailRows + footerRows;
+  const minRowH = 22;
+  const minDetailRows = 4;
   const descW = tWidth * 0.5;
   const rateW = tWidth * 0.25;
   const amountW = tWidth - descW - rateW;
   const xDesc = tLeft + 8;
   const xRate = tLeft + descW + 8;
   const xAmount = tLeft + descW + rateW + 8;
+  const descTextW = descW - 16;
+
+  const lineRows =
+    tableRows.length > 0
+      ? tableRows
+      : [{ description: 'Acknowledgement Receipt', rate: totalAmount, amount: totalAmount }];
+  const padCount = Math.max(0, minDetailRows - lineRows.length);
+  const lineHeights = lineRows.map((row) => {
+    doc.font('Helvetica').fontSize(9);
+    const textH = doc.heightOfString(row.description || '—', { width: descTextW });
+    return Math.max(minRowH, textH + 14);
+  });
+  const padHeights = Array.from({ length: padCount }, () => minRowH);
+  const detailBodyH = [...lineHeights, ...padHeights].reduce((s, h) => s + h, 0);
+  const footerH = minRowH;
+  const tableBodyH = detailBodyH + footerH;
 
   doc.save();
   doc.rect(tLeft, y, tWidth, headerH).fill('#f3f4f6');
   doc.restore();
   doc
-    .rect(tLeft, y, tWidth, headerH + rowH * totalRows)
+    .rect(tLeft, y, tWidth, headerH + tableBodyH)
     .lineWidth(1)
     .strokeColor('#111827')
     .stroke();
   doc
     .moveTo(tLeft + descW, y)
-    .lineTo(tLeft + descW, y + headerH + rowH * totalRows)
+    .lineTo(tLeft + descW, y + headerH + tableBodyH)
     .stroke();
   doc
     .moveTo(tLeft + descW + rateW, y)
-    .lineTo(tLeft + descW + rateW, y + headerH + rowH * totalRows)
+    .lineTo(tLeft + descW + rateW, y + headerH + tableBodyH)
     .stroke();
 
-  for (let i = 1; i <= totalRows; i += 1) {
-    const yLine = y + headerH + rowH * i;
-    doc.moveTo(tLeft, yLine).lineTo(tLeft + tWidth, yLine).stroke();
-  }
-
   doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
-  doc.text('DESCRIPTION', xDesc, y + 8, { width: descW - 16, align: 'center' });
+  doc.text('DESCRIPTION', xDesc, y + 8, { width: descTextW, align: 'center' });
   doc.text('RATE', xRate, y + 8, { width: rateW - 16, align: 'center' });
   doc.text('AMOUNT', xAmount, y + 8, { width: amountW - 16, align: 'center' });
 
+  let rowTop = y + headerH;
   doc.font('Helvetica').fontSize(9).fillColor('#111827');
-  doc.text(mergedDesc, xDesc, y + headerH + 8, { width: descW - 16 });
-  doc.text(formatCurrency(paymentAmount), xRate, y + headerH + 8, {
-    width: rateW - 16,
-    align: 'right',
+  lineRows.forEach((row, idx) => {
+    const rowH = lineHeights[idx];
+    doc.text(row.description || '—', xDesc, rowTop + 6, { width: descTextW, lineGap: 2 });
+    doc.text(formatCurrency(row.rate), xRate, rowTop + 6, {
+      width: rateW - 16,
+      align: 'right',
+    });
+    doc.text(formatCurrency(row.amount), xAmount, rowTop + 6, {
+      width: amountW - 16,
+      align: 'right',
+    });
+    rowTop += rowH;
+    doc.moveTo(tLeft, rowTop).lineTo(tLeft + tWidth, rowTop).stroke();
   });
-  doc.text(formatCurrency(totalAmount), xAmount, y + headerH + 8, {
-    width: amountW - 16,
-    align: 'right',
-  });
+  for (let i = 0; i < padCount; i += 1) {
+    rowTop += padHeights[i];
+    doc.moveTo(tLeft, rowTop).lineTo(tLeft + tWidth, rowTop).stroke();
+  }
 
-  const footerRowY = y + headerH + rowH * detailRows + 8;
+  const footerRowY = rowTop + 6;
   doc
     .font('Helvetica-Bold')
     .fontSize(10)
@@ -260,11 +252,11 @@ export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
     .fontSize(11)
     .fillColor('#111827')
     .text('T  H  A  N  K    Y  O  U  !', xDesc, footerRowY, {
-      width: descW - 16,
+      width: descTextW,
       align: 'center',
     });
 
-  y += headerH + rowH * totalRows + 20;
+  y += headerH + tableBodyH + 20;
   doc.font('Helvetica').fontSize(9).fillColor('#111827');
 
   const preparedByName = String(ar.prepared_by_name || '').trim();

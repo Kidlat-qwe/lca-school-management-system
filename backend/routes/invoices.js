@@ -13,7 +13,14 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 import { drawArCutGuideLines } from '../lib/ackReceiptPdfLayout.js';
-import { buildArReceiptLineRows, roundCurrency } from '../utils/invoiceReceiptLineItems.js';
+import { roundCurrency } from '../utils/invoiceReceiptLineItems.js';
+import {
+  ACK_RECEIPT_DISCOUNT_LINE_LABEL,
+  ACK_RECEIPT_TIP_LINE_LABEL,
+  buildInvoiceLinkedArTableRows,
+  computeInvoicePdfDisplayTotal,
+  sumInvoicePaymentAdjustments,
+} from '../utils/ackReceiptTableLineItems.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
 
@@ -1217,7 +1224,8 @@ router.get(
 
       // Fetch payments for this invoice (and compute the actual recorded payment date)
       const paymentsResult = await query(
-        `SELECT p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, p.reference_number,
+        `SELECT p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount,
+                COALESCE(p.tip_amount, 0) AS tip_amount, p.reference_number,
                 TO_CHAR(p.issue_date, 'YYYY-MM-DD') as payment_date_raw
          FROM paymenttbl p
          WHERE p.invoice_id = $1
@@ -1417,12 +1425,16 @@ router.get(
 
         const invoiceDescription = (invoice.invoice_description || '').trim();
         const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
-        const arLineRows = buildArReceiptLineRows(items, {
-          fallbackDescription:
-            (!looksLikeInvoiceCodeOnly ? invoiceDescription : '') ||
-            `Invoice INV-${invoice.invoice_id}`,
-          fallbackAmount: amountPaid,
-        });
+        const { rows: arLineRows, total: arDisplayTotal } = buildInvoiceLinkedArTableRows(
+          items,
+          paymentsResult.rows,
+          {
+            fallbackDescription:
+              (!looksLikeInvoiceCodeOnly ? invoiceDescription : '') ||
+              `Invoice INV-${invoice.invoice_id}`,
+            fallbackAmount: amountPaid,
+          },
+        );
 
         const lineHeights = arLineRows.map((row) => {
           doc.font('Helvetica').fontSize(9);
@@ -1450,22 +1462,17 @@ router.get(
         arLineRows.forEach((row, idx) => {
           const rowH = lineHeights[idx];
           doc.text(row.description, xDesc, rowTop + 6, { width: descTextW, lineGap: 2 });
-          doc.text(formatCurrency(row.netAmount), xRate, rowTop + 6, {
+          doc.text(formatCurrency(row.rate), xRate, rowTop + 6, {
             width: rateW - 16,
             align: 'right',
           });
-          doc.text(formatCurrency(row.netAmount), xAmount, rowTop + 6, {
+          doc.text(formatCurrency(row.amount), xAmount, rowTop + 6, {
             width: amountW - 16,
             align: 'right',
           });
           rowTop += rowH;
           doc.moveTo(tLeft, rowTop).lineTo(tLeft + tWidth, rowTop).stroke();
         });
-
-        const arDisplayTotal =
-          arLineRows.length > 0
-            ? roundCurrency(arLineRows.reduce((s, r) => s + r.netAmount, 0))
-            : roundCurrency(amountPaid);
 
         const footerRowY = rowTop + 6;
         doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827')
@@ -2167,11 +2174,12 @@ router.get(
       currentY = tableStartY + 25;
       doc.fontSize(9).fillColor('#333333').font('Helvetica');
 
+      let lineIndex = 0;
       if (items.length === 0) {
         doc.text('No items.', colDesc, currentY);
         currentY += 15;
       } else {
-        items.forEach((item, idx) => {
+        items.forEach((item) => {
           // Show the effective line amount so penalties are visible on the invoice.
           // (amount - discount + penalty + tax)
           const amt = Number(item.amount) || 0;
@@ -2182,8 +2190,9 @@ router.get(
           const tax = taxableBase * (taxPct / 100);
           const netAmount = taxableBase + tax;
           const packageName = extractPackage(item.description);
-          
-          doc.text((idx + 1).toString(), colNum, currentY);
+
+          lineIndex += 1;
+          doc.text(lineIndex.toString(), colNum, currentY);
           doc.text(item.description || '-', colDesc, currentY, { width: 250 });
           doc.text(packageName || '-', colPackage, currentY, { width: 60 });
           doc.text('1', colQty, currentY, { width: 30, align: 'center' });
@@ -2192,12 +2201,44 @@ router.get(
         });
       }
 
+      const { discount: paymentDiscountTotal, tip: paymentTipTotal } =
+        sumInvoicePaymentAdjustments(paymentsResult.rows);
+      if (paymentDiscountTotal > 0) {
+        lineIndex += 1;
+        doc.text(lineIndex.toString(), colNum, currentY);
+        doc.text(ACK_RECEIPT_DISCOUNT_LINE_LABEL, colDesc, currentY, { width: 250 });
+        doc.text('-', colPackage, currentY, { width: 60 });
+        doc.text('-', colQty, currentY, { width: 30, align: 'center' });
+        doc.text(formatCurrency(-paymentDiscountTotal), colNetAmount, currentY, {
+          width: 70,
+          align: 'right',
+        });
+        currentY += 15;
+      }
+      if (paymentTipTotal > 0) {
+        lineIndex += 1;
+        doc.text(lineIndex.toString(), colNum, currentY);
+        doc.text(ACK_RECEIPT_TIP_LINE_LABEL, colDesc, currentY, { width: 250 });
+        doc.text('-', colPackage, currentY, { width: 60 });
+        doc.text('-', colQty, currentY, { width: 30, align: 'center' });
+        doc.text(formatCurrency(paymentTipTotal), colNetAmount, currentY, {
+          width: 70,
+          align: 'right',
+        });
+        currentY += 15;
+      }
+
       currentY += 15;
+
+      const invoiceDisplayTotal = computeInvoicePdfDisplayTotal(grandTotal, paymentsResult.rows);
 
       // Financial Summary
       doc.fontSize(10).fillColor('#000000').font('Helvetica-Bold');
       doc.text('Total', colNetAmount, currentY, { width: 70, align: 'right' });
-      doc.text(formatCurrency(grandTotal), colNetAmount, currentY + 12, { width: 70, align: 'right' });
+      doc.text(formatCurrency(invoiceDisplayTotal), colNetAmount, currentY + 12, {
+        width: 70,
+        align: 'right',
+      });
       currentY += 25;
 
       // Draw horizontal line after Total
@@ -2212,15 +2253,34 @@ router.get(
           const refNum = payment.reference_number || '';
           const paymentDate = payment.payment_date_raw ? formatDate(payment.payment_date_raw) : '';
           const paymentAmount = Number(payment.payable_amount) || 0;
-          
+          const paymentTip = Number(payment.tip_amount) || 0;
+          const paymentDiscount = Number(payment.discount_amount) || 0;
+          const paymentCollected = roundCurrency(paymentAmount + paymentTip);
+
           // Payment summary label on the left
           doc.fontSize(9).fillColor('#333333').font('Helvetica');
           const paymentMethodText = `${paymentType} via ${paymentMethod}${refNum ? ` ${refNum}` : ''}`;
           doc.text(paymentMethodText, 50, currentY, { width: 300 });
-          
-          // Payment amount on the right (same line)
-          doc.text(formatCurrency(paymentAmount), colNetAmount, currentY, { width: 70, align: 'right' });
+
+          // Collected amount (payable + tip) on the right
+          doc.text(formatCurrency(paymentCollected), colNetAmount, currentY, {
+            width: 70,
+            align: 'right',
+          });
           currentY += 15;
+
+          if (paymentDiscount > 0 || paymentTip > 0) {
+            doc.fontSize(8).fillColor('#666666').font('Helvetica');
+            const parts = [];
+            if (paymentDiscount > 0) {
+              parts.push(`${ACK_RECEIPT_DISCOUNT_LINE_LABEL}: ${formatCurrency(-paymentDiscount)}`);
+            }
+            if (paymentTip > 0) {
+              parts.push(`${ACK_RECEIPT_TIP_LINE_LABEL}: ${formatCurrency(paymentTip)}`);
+            }
+            doc.text(parts.join(' · '), 60, currentY, { width: 420 });
+            currentY += 12;
+          }
           
           // Payment date below, indented
           if (paymentDate) {
