@@ -8,6 +8,7 @@ import {
   DEFAULT_SCHOOL_NAME,
   renderMessagingTemplate,
 } from '../utils/templateRenderService.js';
+import { syncArVerifiedFromPaymentApproval } from '../lib/arPaymentVerificationSync.js';
 
 const router = express.Router();
 
@@ -990,6 +991,7 @@ router.put(
       const isApproved = approve === true || approve === 'true';
       const verifierUserId = req.user.userId || req.user.user_id || null;
       let paymentsApprovedCount = 0;
+      let arsVerifiedCount = 0;
 
       const client = await getClient();
       try {
@@ -1013,6 +1015,11 @@ router.put(
             verifierUserId,
             depositReferenceNumber: record.reference_number,
           });
+          const arSync = await syncArVerifiedFromPaymentApproval(client, {
+            paymentIds,
+            verifierUserId,
+          });
+          arsVerifiedCount = arSync.verifiedCount;
         } else {
           await client.query(
             `UPDATE cash_deposit_summarytbl
@@ -1053,12 +1060,13 @@ router.put(
       res.json({
         success: true,
         message: isApproved
-          ? paymentsApprovedCount > 0
-            ? `Cash deposit summary verified. ${paymentsApprovedCount} payment log row(s) approved.`
+          ? paymentsApprovedCount > 0 || arsVerifiedCount > 0
+            ? `Cash deposit summary verified.${paymentsApprovedCount > 0 ? ` ${paymentsApprovedCount} payment log row(s) approved.` : ''}${arsVerifiedCount > 0 ? ` ${arsVerifiedCount} acknowledgement receipt(s) verified.` : ''}`
             : 'Cash deposit summary verified'
           : 'Cash deposit summary returned for correction',
         data: updated.rows[0],
         payments_approved_count: isApproved ? paymentsApprovedCount : 0,
+        ars_verified_count: isApproved ? arsVerifiedCount : 0,
       });
     } catch (error) {
       next(error);

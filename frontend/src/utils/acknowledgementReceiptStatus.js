@@ -16,14 +16,14 @@ export const AR_STATUS_LEGEND_ITEMS = [
     label: 'Submitted',
     tone: 'bg-yellow-100 text-yellow-800',
     description:
-      'Non-cash receipt awaiting Finance/Superfinance verification before it can be applied to enrollment.',
+      'Package receipt (cash or non-cash) awaiting Finance/Superfinance verification before it can be applied to enrollment.',
   },
   {
     key: 'Verified',
     label: 'Verified',
     tone: 'bg-green-100 text-green-800',
     description:
-      'Approved by Finance/Superfinance (or auto-verified for cash). Ready to be applied to an invoice/enrollment.',
+      'Approved by Finance/Superfinance. Ready to be applied to an invoice/enrollment, or cash merchandise sale confirmed.',
   },
   {
     key: 'Applied',
@@ -37,7 +37,7 @@ export const AR_STATUS_LEGEND_ITEMS = [
     label: 'Paid',
     tone: 'bg-yellow-100 text-yellow-800',
     description:
-      'Fully paid receipt — typically a merchandise sale that completes the payment in one step.',
+      'Merchandise sale paid at the branch; awaiting Finance confirmation in Payment Logs or Cash Deposit (then becomes Verified).',
   },
   {
     key: 'Enrolled',

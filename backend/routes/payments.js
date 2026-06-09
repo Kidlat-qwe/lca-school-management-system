@@ -16,6 +16,10 @@ import {
   isPhaseInstallmentProfile,
 } from '../utils/phaseInstallmentUtils.js';
 import { paymentLogApprovalFromArVerification } from '../lib/paymentLogArApproval.js';
+import {
+  syncArUnverifiedFromPaymentRevoke,
+  syncArVerifiedFromPaymentApproval,
+} from '../lib/arPaymentVerificationSync.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
@@ -4107,10 +4111,24 @@ router.put(
 
       const result = await query(updateSql, updateParams);
 
+      let arSync = { verifiedCount: 0, revertedCount: 0 };
+      if (approve) {
+        arSync = await syncArVerifiedFromPaymentApproval(query, {
+          paymentIds: [Number(id)],
+          verifierUserId: userId,
+        });
+      } else {
+        arSync = await syncArUnverifiedFromPaymentRevoke(query, {
+          paymentIds: [Number(id)],
+        });
+      }
+
       res.json({
         success: true,
         message: approve ? 'Payment approved successfully' : 'Payment approval revoked',
         data: result.rows[0],
+        ars_verified_count: approve ? arSync.verifiedCount || 0 : 0,
+        ars_reverted_count: approve ? 0 : arSync.revertedCount || 0,
       });
     } catch (error) {
       next(error);

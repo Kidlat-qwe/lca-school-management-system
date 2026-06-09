@@ -1157,23 +1157,16 @@ router.post(
 
       const createdBy = req.user.userId || null;
       // Business rule (Package AR):
-      //   * Cash payment method  -> auto-verified at creation time. No
-      //     separate Finance/Superfinance verification step is needed,
-      //     regardless of who creates the AR (Admin, Superadmin, Finance,
-      //     or Superfinance).
-      //   * Any other method (Online Banking, Credit Card, E-wallets) ->
-      //     status = 'Submitted'. Finance/Superfinance must verify via
-      //     PUT /:id/verify before the AR can be applied to an invoice.
-      // Merchandise ARs follow a separate auto-paid flow below and are
-      // unaffected by this rule.
-      const autoVerifyCashAr =
-        !isMerchandise && normalizedPaymentMethod === 'Cash';
-      const initialPackageStatus = autoVerifyCashAr ? 'Verified' : 'Submitted';
+      //   All payment methods (including Cash) start as Submitted. Finance/Superfinance
+      //   verify via PUT /:id/verify (AR page or unapplied Payment Logs row) before
+      //   the receipt can be applied to enrollment.
+      // Merchandise AR: auto-paid flow below (status Paid + linked payment); Verified when
+      // Finance approves the payment in Payment Logs or via Cash Deposit verify.
+      const initialPackageStatus = 'Submitted';
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
 
-      const arVerifiedByOnCreate =
-        !isMerchandise && initialPackageStatus === 'Verified' ? createdBy : null;
-      const arVerifiedAtOnCreate = arVerifiedByOnCreate ? new Date() : null;
+      const arVerifiedByOnCreate = null;
+      const arVerifiedAtOnCreate = null;
 
       let ackReceipt;
       let pairedAckReceipt = null;
@@ -1813,22 +1806,16 @@ router.post(
         });
       }
 
-      const ackPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
-      const isCashAck = ackPaymentMethod === 'cash';
       const isRejectedOrCancelled = ['Rejected', 'Cancelled', 'Returned'].includes(ackStatus);
-      // "Applied" = already used (handled above). Here: finance-verified, or cash (no separate verify).
       const isVerifiedForAttach = ackStatusUpper === 'VERIFIED';
-      const canAttachAck = !isRejectedOrCancelled && (isVerifiedForAttach || isCashAck);
+      const canAttachAck = !isRejectedOrCancelled && isVerifiedForAttach;
 
-      // Business rule:
-      // - Non-cash AR requires Finance/Superfinance verification before use.
-      // - Cash AR can be used directly (backward-compatible for legacy cash AR rows
-      //   that were created before auto-verification logic was introduced).
       if (!canAttachAck) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached (cash acknowledgement receipt is allowed)',
+          message:
+            'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached',
         });
       }
 
@@ -3008,13 +2995,6 @@ router.put(
           return res.status(400).json({
             success: false,
             message: 'Return and reject are not supported for Merchandise acknowledgement receipts',
-          });
-        }
-        const merchPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
-        if (merchPaymentMethod === 'cash') {
-          return res.status(400).json({
-            success: false,
-            message: 'Cash merchandise acknowledgement receipts do not require finance verification',
           });
         }
         if (String(ack.status || '').trim() !== 'Paid') {

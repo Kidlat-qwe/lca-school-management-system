@@ -43,13 +43,9 @@ import {
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
-const isNonCashArPaymentMethod = (method) =>
-  String(method || '').trim().toLowerCase() !== 'cash';
-
-/** Non-cash merchandise AR: branch records payment (Paid); Finance/Superfinance must verify. */
+/** Merchandise AR (cash or non-cash): branch records payment (Paid); Finance/Superfinance must verify. */
 const financeCanVerifyMerchandiseAr = (receipt) =>
   receipt?.ar_type === 'Merchandise' &&
-  isNonCashArPaymentMethod(receipt.payment_method) &&
   String(receipt?.status || '').trim() === 'Paid' &&
   (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
 

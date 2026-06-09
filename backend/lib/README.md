@@ -114,4 +114,21 @@ Standalone acknowledgement receipt PDFs (`ackReceiptPdfGenerator.js`) build tabl
 
 Invoice **Download Acknowledgement Receipt** (`GET /invoices/:id/pdf?doc_type=ar` in `routes/invoices.js`) uses `buildInvoiceLinkedArTableRows()`: invoice line items plus payment-level tip/discount from `paymenttbl` (matches invoice list **Total amount** = payable + tip).
 
+## `arPaymentVerificationSync.js`
+
+Keeps cash acknowledgement receipts aligned with Payment Logs and Cash Deposit approval.
+
+| AR type | Created as | Becomes Verified when |
+|---------|------------|------------------------|
+| **Merchandise** (cash) | `Paid` + linked `payment_id` | Finance approves payment in Payment Logs, or Superfinance verifies Cash Deposit |
+| **Package** (cash) | `Submitted` (no payment yet) | Finance verifies on AR page or unapplied Payment Logs row (existing flow) |
+
+| Entry point | Behavior |
+|-------------|----------|
+| `PUT /payments/:id/approve` (approve) | `syncArVerifiedFromPaymentApproval` — Paid cash AR → Verified |
+| `PUT /payments/:id/approve` (revoke) | `syncArUnverifiedFromPaymentRevoke` — Verified → Paid (merchandise) |
+| `PUT /cash-deposit-summaries/:id/approve` | After bulk payment approve, same AR sync for snapshot payment IDs |
+
+Reverse direction (AR verify → payment approved) remains in `routes/acknowledgementreceipts.js`.
+
 **Download Invoice** (`GET /invoices/:id/pdf` and `utils/pdfGenerator.js`) appends **Discount/Payment Adjustment** and **Tip/Payment Adjustment** rows from `paymenttbl`, updates the **Total** to `grandTotal − discount + tip`, and shows collected amount (`payable + tip`) in the payment section.
