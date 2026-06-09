@@ -26,6 +26,7 @@ import {
 } from '../lib/merchandiseReleaseLog.js';
 import {
   applyPaymentEnrollmentToBranchBreakdown,
+  buildOperationalReEnrollmentRateBreakdown,
   loadDailyOperationalEnrollmentFromPayments,
 } from '../lib/dailyOperationalEnrollmentFromPayments.js';
 import { loadRecentInvoicePaymentsForOperationalDashboard } from '../lib/operationalDashboardRecentPayments.js';
@@ -898,6 +899,15 @@ router.get(
         summaryDate,
       });
 
+      const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
+        branchRows: branchBreakdown,
+        enrollmentDashboard,
+        totals,
+        priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
+        priorPeriodType: paymentEnrollment.prior_period_type ?? null,
+        retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,
+      });
+
       res.json({
         success: true,
         data: {
@@ -907,6 +917,7 @@ router.get(
           enrollment_kpi_source: paymentEnrollment.source,
           totals,
           enrollment_dashboard: enrollmentDashboard,
+          re_enrollment_rate_breakdown: reEnrollmentRateBreakdown,
           recent_invoice_payments: recentInvoicePayments,
           recent_merchandise_releases: recentMerchandiseReleases,
           branch_breakdown: branchBreakdown,

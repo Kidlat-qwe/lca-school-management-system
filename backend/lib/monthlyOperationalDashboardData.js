@@ -19,6 +19,7 @@
 import { query } from '../config/database.js';
 import {
   applyPaymentEnrollmentToBranchBreakdown,
+  buildOperationalReEnrollmentRateBreakdown,
   loadMonthlyOperationalEnrollmentFromPayments,
 } from './dailyOperationalEnrollmentFromPayments.js';
 import {
@@ -383,6 +384,15 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     monthEndExclusive,
   });
 
+  const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
+    branchRows: branchBreakdown,
+    enrollmentDashboard,
+    totals,
+    priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
+    priorPeriodType: paymentEnrollment.prior_period_type ?? null,
+    retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,
+  });
+
   return {
     summary_month: monthRange.key,
     month_start: monthStart,
@@ -392,6 +402,7 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     enrollment_kpi_source: paymentEnrollment.source,
     totals,
     enrollment_dashboard: enrollmentDashboard,
+    re_enrollment_rate_breakdown: reEnrollmentRateBreakdown,
     recent_invoice_payments: recentInvoicePayments,
     recent_merchandise_releases: recentMerchandiseReleases,
     branch_breakdown: branchBreakdown,

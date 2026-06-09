@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '../config/database.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
+import { DEFAULT_PDF_CONTACT_EMAIL } from '../utils/pdfBranding.js';
 import { buildAckReceiptTableRows } from '../utils/ackReceiptTableLineItems.js';
 import {
   ACK_RECEIPT_PAGE_MARGIN,
@@ -148,7 +149,7 @@ export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
     .font('Helvetica')
     .fontSize(9)
     .fillColor('#374151')
-    .text(`Email: ${ar.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
+    .text(`Email: ${DEFAULT_PDF_CONTACT_EMAIL}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
 
   doc
     .font('Helvetica-Bold')

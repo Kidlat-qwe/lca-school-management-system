@@ -25,6 +25,7 @@ import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
+import OperationalReEnrollmentRateTable from './OperationalReEnrollmentRateTable';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -556,6 +557,12 @@ const DailyOperationalDashboardView = ({
             </table>
           </div>
         </div>
+
+        <OperationalReEnrollmentRateTable
+          breakdown={data?.re_enrollment_rate_breakdown}
+          tooltip={DAILY_OPERATIONAL.reEnrollmentRateBreakdown}
+          emptyMessage="No re-enrollment rate breakdown for this date."
+        />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <ChartCard

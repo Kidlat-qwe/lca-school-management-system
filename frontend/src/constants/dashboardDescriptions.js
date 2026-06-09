@@ -19,7 +19,7 @@ export const DAILY_OPERATIONAL = {
   completedEnrollment:
     'Completed = terminal phase on a multi-phase full payment (e.g. phase 5 on full pay 1–5), a completed phase row, or a single-phase class (1 phase only) whose package is fully paid on this date. Retention base = student+class tracks with enrolled class payments on the previous calendar day (payment issue date).',
   completedRetentionCombined:
-    'Completed counts terminal/single-phase-finished payments on this date. Retention base is the prior-day cohort (tracks with new, re_enrolled, upsell, rejoin, or completed payments yesterday) — same idea as the month matrix rate denominator.',
+    'Completed counts terminal/single-phase-finished payments on this date. Retention base is the prior-day cohort (tracks with new, re_enrolled, upsell, rejoin, or completed payments yesterday).',
   merchandiseSection: 'Merchandise releases for the selected date',
   recentMerchandiseReleases:
     'Stock release log lines for this date (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
@@ -52,6 +52,8 @@ export const DAILY_OPERATIONAL = {
     `${amount} — package acknowledgement receipts not verified yet · ${date}`,
   verificationSection: 'Finance checks for the selected date',
   branchTable: 'Each column uses the same calendar day you selected above.',
+  reEnrollmentRateBreakdown:
+    'How the Re-enrollment Rate % card is computed. Retention base = distinct student+class tracks with enrolled payments on the prior calendar day. Rate = re-enrollment KPI count today ÷ retention base × 100.',
   salesGuide:
     'Invoice Sales uses payment issue date. Acknowledgement Receipt Sales matches the AR page total for that day. Verification cards count package ARs by issue date and verification status.',
   chartBranchActivity: 'Compare branches: enrollments, drops, rejoins, and merchandise for this date.',
@@ -73,7 +75,7 @@ export const MONTHLY_OPERATIONAL = {
   completedEnrollment:
     'Completed = terminal phase on multi-phase full payment, completed phase row, or single-phase class (1 phase only) fully paid in the month. Retention base = student+class tracks with enrolled class payments in the previous calendar month.',
   completedRetentionCombined:
-    'Completed counts terminal/single-phase-finished payments in this month. Retention base is the prior-month cohort (tracks with enrolled class payments last month) — aligns with the Month Re-enrollment matrix retention base.',
+    'Completed counts terminal/single-phase-finished payments in this month. Retention base is the prior-month cohort (tracks with enrolled class payments last month).',
   merchandiseSection: 'Merchandise releases for the selected month',
   recentMerchandiseReleases:
     'Stock release log lines for this month (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
@@ -102,6 +104,8 @@ export const MONTHLY_OPERATIONAL = {
   arUnverified: (amount) => `${amount} — package ARs awaiting verification in this month`,
   verificationSection: 'Finance checks for the selected month',
   branchTable: 'All columns use the selected calendar month.',
+  reEnrollmentRateBreakdown:
+    'How the Re-enrollment Rate % card is computed. Retention base = distinct student+class tracks with enrolled payments in the prior calendar month. Rate = re-enrollment KPI count this month ÷ retention base × 100.',
   salesGuide:
     'Invoice Sales uses payment issue date in the month. AR Sales matches the AR page for that month. Verification cards use package AR and payment verification status in the same range.',
   chartBranchActivity: 'Monthly totals by branch: enrollments, drops, rejoins, and merchandise.',

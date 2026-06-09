@@ -1002,3 +1002,51 @@ export function applyPaymentEnrollmentToBranchBreakdown(branchBreakdown, payment
     };
   });
 }
+
+/**
+ * Audit table payload for operational dashboards (re-enrollment rate transparency).
+ * Uses the same KPI ÷ retention-base formula as production operational dashboards.
+ */
+export function buildOperationalReEnrollmentRateBreakdown({
+  branchRows = [],
+  enrollmentDashboard = {},
+  totals = {},
+  priorPeriodLabel = null,
+  priorPeriodType = null,
+  retentionRateMode = null,
+}) {
+  const formula = 're_enrollment KPI ÷ retention_base × 100';
+
+  const mapRow = (row, branchNameOverride) => {
+    const branchRate = computeOperationalRetentionRate({
+      retention_base_count: row.retention_base_count,
+      re_enrollment_count: row.re_enrollment_count,
+      retention_rate_mode: retentionRateMode || 'kpi_card',
+    });
+    return {
+      branch_id: row.branch_id ?? null,
+      branch_name: branchNameOverride ?? row.branch_name ?? '—',
+      re_enrollment_kpi_count: Number(row.re_enrollment_count) || 0,
+      retention_base_count: Number(row.retention_base_count) || 0,
+      re_enrollment_rate: Number(row.re_enrollment_rate ?? branchRate.re_enrollment_rate) || 0,
+    };
+  };
+
+  return {
+    prior_period_label: priorPeriodLabel,
+    prior_period_type: priorPeriodType,
+    retention_rate_mode: retentionRateMode,
+    formula,
+    rows: (branchRows || []).map((row) => mapRow(row)),
+    totals: mapRow(
+      {
+        branch_id: null,
+        re_enrollment_count: totals.re_enrollment_count,
+        retention_base_count:
+          enrollmentDashboard.retention_base_count ?? totals.retention_base_count,
+        re_enrollment_rate: enrollmentDashboard.re_enrollment_rate,
+      },
+      'All branches (total)'
+    ),
+  };
+}

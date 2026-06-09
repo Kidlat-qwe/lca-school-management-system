@@ -23,6 +23,7 @@ import {
 } from '../utils/ackReceiptTableLineItems.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
+import { DEFAULT_PDF_CONTACT_EMAIL } from '../utils/pdfBranding.js';
 
 const router = express.Router();
 
@@ -1395,7 +1396,7 @@ router.get(
         doc.font('Helvetica').fontSize(9).fillColor('#374151')
           .text(`Contact: ${branchInfo?.branch_phone_number || '-'}`, hasLogo ? left + 52 : left, y + 34, { width: 360 });
         doc.font('Helvetica').fontSize(9).fillColor('#374151')
-          .text(`Email: ${branchInfo?.branch_email || '-'}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
+          .text(`Email: ${DEFAULT_PDF_CONTACT_EMAIL}`, hasLogo ? left + 52 : left, y + 46, { width: 360 });
 
         doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
           .text(`No. ${arNumber}`, right - 180, y + 28, { width: 180, align: 'right' });
@@ -1845,6 +1846,9 @@ router.get(
         y += 12;
         doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
           .text('www.little-champions.com', left, y, { width: contentWidth - 90 });
+        y += 12;
+        doc.font('Helvetica').fontSize(9).fillColor(colorTextMuted)
+          .text(DEFAULT_PDF_CONTACT_EMAIL, left, y, { width: contentWidth - 90 });
         y += 28;
 
         // ===== Billed To strip ========================================
@@ -2096,19 +2100,22 @@ router.get(
       doc.fontSize(16).fillColor('#000000').font('Helvetica-Bold');
       doc.text('LITTLE CHAMPIONS ACADEMY INC.', schoolNameX, headerY);
       
-      // Branch address
+      // Branch address and academy contact email
       const branchAddress = branchInfo?.branch_address || (branchInfo?.branch_name || '');
+      let schoolInfoY = headerY + 20;
+      doc.fontSize(10).fillColor('#333333').font('Helvetica');
       if (branchAddress) {
-        doc.fontSize(10).fillColor('#333333').font('Helvetica');
-        doc.text(branchAddress, schoolNameX, headerY + 20);
+        doc.text(branchAddress, schoolNameX, schoolInfoY);
+        schoolInfoY += 12;
       }
+      doc.text(`Email: ${DEFAULT_PDF_CONTACT_EMAIL}`, schoolNameX, schoolInfoY);
 
       // Document title on the right
       doc.fontSize(32).fillColor('#000000').font('Helvetica-Bold');
       doc.text(isSoa ? 'SOA' : 'INVOICE', 400, headerY, { align: 'right', width: 150 });
 
       // Invoice Details Section
-      let currentY = headerY + 70;
+      let currentY = headerY + 82;
       doc.fontSize(10).fillColor('#333333').font('Helvetica');
       doc.text(`${isSoa ? 'SOA' : 'Invoice'} Number: INV-${invoice.invoice_id}`, 50, currentY);
       currentY += 12;

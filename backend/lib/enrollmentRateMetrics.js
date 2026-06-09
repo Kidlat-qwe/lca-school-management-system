@@ -1698,6 +1698,76 @@ export const loadEnrollmentRatePhaseStudentsExport = async (queryFn, options = {
   }));
 };
 
+/**
+ * Re-enrollment rate for operational dashboards — same billing-month logic as
+ * Month Re-enrollment dashboard ({@link computeReEnrollmentMonthStats}) for
+ * one calendar month. KPI counts on operational dashboards stay payment issue_date;
+ * only the rate % and its numerator/denominator come from the month matrix.
+ *
+ * @param {Function} queryFn
+ * @param {{ branchId?: number|null, programId?: number|null, classId?: number|null, summaryMonth?: string }} options summaryMonth = YYYY-MM
+ */
+export async function loadOperationalReEnrollmentRateFromMonthMatrix(queryFn, options = {}) {
+  const { branchId = null, programId = null, classId = null, summaryMonth = null } = options;
+  const monthKey = String(summaryMonth || '').trim().slice(0, 7);
+
+  const empty = {
+    re_enrollment_rate: 0,
+    re_enrollment_rate_retained_count: 0,
+    re_enrollment_rate_prior_count: 0,
+    retention_base_count: 0,
+    retention_re_enrollment_count: 0,
+    prior_period_label: null,
+    prior_period_type: null,
+    retention_rate_mode: 'month_matrix_billing_month',
+    re_enrollment_rate_source: 'month_re_enrollment_matrix',
+    has_prior_month: false,
+    matrix_month_label: null,
+  };
+
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    return empty;
+  }
+
+  const year = parseInt(monthKey.slice(0, 4), 10);
+  const matrix = await loadStudentMonthEnrollmentMatrix(queryFn, {
+    branchId,
+    programId,
+    classId,
+    year,
+  });
+
+  const monthStat = (matrix.month_stats || []).find((row) => row.month_key === monthKey);
+  const monthMeta = (matrix.months || []).find((row) => row.key === monthKey);
+  const monthIndex = (matrix.months || []).findIndex((row) => row.key === monthKey);
+
+  let priorPeriodLabel = null;
+  if (monthIndex > 0) {
+    priorPeriodLabel = matrix.months[monthIndex - 1]?.label ?? null;
+  } else if (monthIndex === 0) {
+    priorPeriodLabel = `Dec ${year - 1}`;
+  }
+
+  const retained = parseInt(monthStat?.re_enrolled_count, 10) || 0;
+  const prior = parseInt(monthStat?.prior_month_enrolled_count, 10) || 0;
+  const rawRate = monthStat?.re_enrollment_rate;
+  const rate = rawRate == null ? 0 : Number(rawRate);
+
+  return {
+    re_enrollment_rate: rate,
+    re_enrollment_rate_retained_count: retained,
+    re_enrollment_rate_prior_count: prior,
+    retention_base_count: prior,
+    retention_re_enrollment_count: retained,
+    prior_period_label: priorPeriodLabel,
+    prior_period_type: 'prior_billing_month',
+    retention_rate_mode: 'month_matrix_billing_month',
+    re_enrollment_rate_source: 'month_re_enrollment_matrix',
+    has_prior_month: Boolean(monthStat?.has_prior_month),
+    matrix_month_label: monthMeta?.label ?? monthKey,
+  };
+}
+
 export const loadEnrollmentDashboardMetrics = async (queryFn, options = {}) => {
   const { branchId = null, enrolledOnDate = null, enrolledFrom = null, enrolledTo = null } = options;
   const toNextYmd = (ymd) => {

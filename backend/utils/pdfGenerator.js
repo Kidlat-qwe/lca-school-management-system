@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { query } from '../config/database.js';
 import { formatLongDateDisplay } from './dateUtils.js';
+import { DEFAULT_PDF_CONTACT_EMAIL } from './pdfBranding.js';
 import { roundCurrency } from './invoiceReceiptLineItems.js';
 import {
   ACK_RECEIPT_DISCOUNT_LINE_LABEL,
@@ -147,19 +148,22 @@ export const generateInvoicePDFBuffer = async (invoiceId) => {
     doc.fontSize(16).fillColor('#000000').font('Helvetica-Bold');
     doc.text('LITTLE CHAMPIONS ACADEMY INC.', schoolNameX, headerY);
     
-    // Branch address
+    // Branch address and academy contact email
     const branchAddress = branchInfo?.branch_address || (branchInfo?.branch_name || '');
+    let schoolInfoY = headerY + 20;
+    doc.fontSize(10).fillColor('#333333').font('Helvetica');
     if (branchAddress) {
-      doc.fontSize(10).fillColor('#333333').font('Helvetica');
-      doc.text(branchAddress, schoolNameX, headerY + 20);
+      doc.text(branchAddress, schoolNameX, schoolInfoY);
+      schoolInfoY += 12;
     }
+    doc.text(`Email: ${DEFAULT_PDF_CONTACT_EMAIL}`, schoolNameX, schoolInfoY);
 
     // INVOICE text on the right
     doc.fontSize(32).fillColor('#000000').font('Helvetica-Bold');
     doc.text('INVOICE', 400, headerY, { align: 'right', width: 150 });
 
     // Invoice Details Section
-    let currentY = headerY + 70;
+    let currentY = headerY + 82;
     doc.fontSize(10).fillColor('#333333').font('Helvetica');
     doc.text(`Invoice Number: INV-${invoice.invoice_id}`, 50, currentY);
     currentY += 12;
