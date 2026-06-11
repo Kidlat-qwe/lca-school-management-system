@@ -92,6 +92,12 @@ const DailySummarySalesApprovalPage = () => {
   const openedNotificationDetailRef = useRef(null);
 
   const isCashDepositTab = activeTab === TAB_CASH_DEPOSIT;
+  const declineActionLabel = isCashDepositTab ? 'Return' : 'Reject';
+  const declineActionProgressLabel = isCashDepositTab ? 'Returning...' : 'Rejecting...';
+  const declineModalTitle = isCashDepositTab ? 'Return submission' : 'Reject submission';
+  const declineModalDescription = isCashDepositTab
+    ? 'Optional: Add a reason so the branch admin understands why this cash deposit was returned.'
+    : 'Optional: Add a reason so the branch admin understands why this submission was rejected.';
   const dateModeLabels = getDailySummaryDateModeLabels(isCashDepositTab);
   const currentUserType = userInfo?.user_type || userInfo?.userType || '';
   const canVerifyEndOfShift = ['Superadmin', 'Finance', 'Superfinance'].includes(currentUserType);
@@ -421,7 +427,11 @@ const DailySummarySalesApprovalPage = () => {
       closeDetailModal();
       await fetchRecords(pagination.page);
     } catch (err) {
-      appAlert(err.response?.data?.message || err.message || 'Failed to reject');
+      appAlert(
+        err.response?.data?.message ||
+          err.message ||
+          (isCashDepositTab ? 'Failed to return submission' : 'Failed to reject')
+      );
     } finally {
       setApprovingId(null);
     }
@@ -652,7 +662,7 @@ const DailySummarySalesApprovalPage = () => {
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
         <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
           Branch admin cash deposits appear as Pending until Superfinance verifies. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
-          Cash deposit: Superfinance only can verify or reject.
+          Cash deposit: Superfinance only can verify or return.
         </p>
       </div>
 
@@ -1008,7 +1018,7 @@ const DailySummarySalesApprovalPage = () => {
                     }}
                     className="block w-full px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 text-left"
                   >
-                    Reject
+                    {declineActionLabel}
                   </button>
                 </>
               ) : null}
@@ -1028,10 +1038,8 @@ const DailySummarySalesApprovalPage = () => {
               className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-md w-full max-h-[min(92dvh,90vh)] overflow-y-auto p-4 sm:p-6 my-auto sm:my-0"
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-lg font-semibold text-gray-900">Reject submission</h3>
-              <p className="mt-2 text-sm text-gray-600">
-                Optional: Add a reason so the branch admin understands why this submission was rejected.
-              </p>
+              <h3 className="text-lg font-semibold text-gray-900">{declineModalTitle}</h3>
+              <p className="mt-2 text-sm text-gray-600">{declineModalDescription}</p>
               <textarea
                 value={rejectModal.remarks}
                 onChange={(e) => setRejectModal((prev) => ({ ...prev, remarks: e.target.value }))}
@@ -1051,7 +1059,7 @@ const DailySummarySalesApprovalPage = () => {
                   disabled={!!approvingId}
                   className="w-full px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50 sm:w-auto"
                 >
-                  {approvingId === rejectModal.id ? 'Rejecting...' : 'Reject'}
+                  {approvingId === rejectModal.id ? declineActionProgressLabel : declineActionLabel}
                 </button>
               </div>
             </div>
@@ -1887,7 +1895,7 @@ const DailySummarySalesApprovalPage = () => {
                     disabled={!!approvingId}
                     className="w-full px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
-                    Reject
+                    {declineActionLabel}
                   </button>
                   <button
                     type="button"

@@ -9,6 +9,7 @@ import {
   renderMessagingTemplate,
 } from '../utils/templateRenderService.js';
 import { syncArVerifiedFromPaymentApproval } from '../lib/arPaymentVerificationSync.js';
+import { getCashDepositRecoveryGaps } from '../lib/cashDepositRecovery.js';
 
 const router = express.Router();
 
@@ -436,6 +437,62 @@ router.get(
           /* noop */
         }
       }
+    }
+  }
+);
+
+router.get(
+  '/recovery-gaps',
+  requireRole('Admin'),
+  [
+    queryValidator('current_payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('current_payment_date_from must be YYYY-MM-DD'),
+    queryValidator('current_payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('current_payment_date_to must be YYYY-MM-DD'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can review cash deposit recovery gaps.',
+        });
+      }
+
+      const sliceYmd = (v) => (v != null ? String(v).trim().slice(0, 10) : '');
+      const currentStart = sliceYmd(req.query.current_payment_date_from);
+      const currentEnd = sliceYmd(req.query.current_payment_date_to);
+      const ymdOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+      if (!ymdOk(currentStart) || !ymdOk(currentEnd)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Provide current_payment_date_from and current_payment_date_to (YYYY-MM-DD each).',
+        });
+      }
+
+      if (currentStart > currentEnd) {
+        return res.status(400).json({
+          success: false,
+          message: 'current_payment_date_from must be on or before current_payment_date_to.',
+        });
+      }
+
+      const data = await getCashDepositRecoveryGaps({
+        branchId: userBranchId,
+        currentStartDate: currentStart,
+        currentEndDate: currentEnd,
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
     }
   }
 );

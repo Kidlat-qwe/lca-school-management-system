@@ -74,6 +74,8 @@ const getInvoiceBreakdownForReturnFix = (invoice) => {
 };
 
 const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
+/** Temporary lock for Previous deposited periods / recovery UI until feature is re-enabled. */
+const DEPOSIT_RECOVERY_PERIODS_LOCKED = true;
 
 const AdminPaymentLogs = () => {
   const location = useLocation();
@@ -169,6 +171,10 @@ const AdminPaymentLogs = () => {
   const [depositSubmitLoading, setDepositSubmitLoading] = useState(false);
   const [depositExistingRanges, setDepositExistingRanges] = useState([]);
   const [depositRangesLoading, setDepositRangesLoading] = useState(false);
+  const [depositRecoveryMode, setDepositRecoveryMode] = useState(false);
+  const [depositRecoveryRangeLabel, setDepositRecoveryRangeLabel] = useState('');
+  const [depositRecoveryGaps, setDepositRecoveryGaps] = useState(null);
+  const [depositRecoveryGapsLoading, setDepositRecoveryGapsLoading] = useState(false);
   const [depositReferenceNumber, setDepositReferenceNumber] = useState('');
   const [depositAttachmentUrl, setDepositAttachmentUrl] = useState('');
   const [depositAttachmentUploading, setDepositAttachmentUploading] = useState(false);
@@ -344,9 +350,34 @@ const AdminPaymentLogs = () => {
     );
 
   useEffect(() => {
-    if (!depositModalOpen) return;
+    if (!depositModalOpen) {
+      setDepositRecoveryMode(false);
+      setDepositRecoveryRangeLabel('');
+      return;
+    }
+    setDepositRecoveryMode(false);
+    setDepositRecoveryRangeLabel('');
     fetchExistingDepositRanges();
   }, [depositModalOpen]);
+
+  const startDepositRecoveryForRange = (range) => {
+    const anchor = String(range?.start_date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(anchor)) return;
+    depositThresholdAlertRef.current = '';
+    setDepositRecoveryMode(true);
+    setDepositRecoveryRangeLabel(getRangeLabel(range));
+    setDepositStartDate(anchor);
+    setDepositEndDate(anchor);
+    setDepositData(null);
+    setDepositError('');
+    depositAlertRef.current = '';
+  };
+
+  const exitDepositRecoveryMode = () => {
+    setDepositRecoveryMode(false);
+    setDepositRecoveryRangeLabel('');
+    fetchExistingDepositRanges();
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -378,7 +409,28 @@ const AdminPaymentLogs = () => {
     }
   }, [location.search]);
 
-  const fetchDepositCashSummary = async (startDate, endDate) => {
+  const fetchDepositRecoveryGaps = async (currentStartDate, currentEndDate) => {
+    if (!currentStartDate || !currentEndDate) {
+      setDepositRecoveryGaps(null);
+      return;
+    }
+    setDepositRecoveryGapsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        current_payment_date_from: currentStartDate,
+        current_payment_date_to: currentEndDate,
+      });
+      const res = await apiRequest(`/cash-deposit-summaries/recovery-gaps?${params.toString()}`);
+      setDepositRecoveryGaps(res.data || null);
+    } catch (err) {
+      console.warn('Could not load cash deposit recovery gaps.', err);
+      setDepositRecoveryGaps(null);
+    } finally {
+      setDepositRecoveryGapsLoading(false);
+    }
+  };
+
+  const fetchDepositCashSummary = async (startDate, endDate, recoveryMode = false) => {
     setDepositLoading(true);
     setDepositError('');
     depositAlertRef.current = '';
@@ -388,6 +440,9 @@ const AdminPaymentLogs = () => {
         payment_date_from: startDate,
         payment_date_to: endDate,
       });
+      if (recoveryMode) {
+        params.set('recovery_payment_date', startDate);
+      }
       const res = await apiRequest(`/payments/cash-deposit-summary?${params.toString()}`);
       setDepositData(res.data || null);
     } catch (err) {
@@ -413,8 +468,13 @@ const AdminPaymentLogs = () => {
       return;
     }
 
-    fetchDepositCashSummary(depositStartDate, depositEndDate);
-  }, [depositModalOpen, depositStartDate, depositEndDate, depositExistingRanges]);
+    fetchDepositCashSummary(depositStartDate, depositEndDate, depositRecoveryMode);
+    if (!DEPOSIT_RECOVERY_PERIODS_LOCKED) {
+      fetchDepositRecoveryGaps(depositStartDate, depositEndDate);
+    } else {
+      setDepositRecoveryGaps(null);
+    }
+  }, [depositModalOpen, depositStartDate, depositEndDate, depositExistingRanges, depositRecoveryMode]);
 
   useEffect(() => {
     if (!depositModalOpen || !depositData) return;
@@ -1329,6 +1389,42 @@ const AdminPaymentLogs = () => {
   const depositAlreadyDepositedRows = Array.isArray(depositData?.already_deposited_payments)
     ? depositData.already_deposited_payments
     : [];
+  const depositRemovedSnapshotRows = Array.isArray(depositData?.removed_snapshot_payments)
+    ? depositData.removed_snapshot_payments
+    : [];
+  const depositModalListedPaymentIds = useMemo(() => {
+    const ids = new Set();
+    for (const row of depositPaymentRows) {
+      if (row?.payment_id != null) ids.add(Number(row.payment_id));
+    }
+    for (const row of depositAlreadyDepositedRows) {
+      if (row?.payment_id != null) ids.add(Number(row.payment_id));
+    }
+    return ids;
+  }, [depositPaymentRows, depositAlreadyDepositedRows]);
+  const depositMissingStudentRows = useMemo(() => {
+    const gaps = Array.isArray(depositRecoveryGaps?.missing_students)
+      ? depositRecoveryGaps.missing_students
+      : [];
+    return gaps
+      .filter((gap) => {
+        if (gap?.payment_id == null) return true;
+        return !depositModalListedPaymentIds.has(Number(gap.payment_id));
+      })
+      .map((gap) => ({
+        ...gap,
+        period_start_date: gap.deposit_summary_start_date,
+        period_end_date: gap.deposit_summary_end_date,
+        line_amount:
+          Number(gap.line_amount) ||
+          (Number(gap.payable_amount) || 0) + (Number(gap.tip_amount) || 0),
+      }))
+      .sort((a, b) => {
+        const periodCmp = String(b.period_start_date || '').localeCompare(String(a.period_start_date || ''));
+        if (periodCmp !== 0) return periodCmp;
+        return String(b.issue_date || '').localeCompare(String(a.issue_date || ''));
+      });
+  }, [depositRecoveryGaps, depositModalListedPaymentIds]);
   const depositTotalFromRows = depositPaymentRows.reduce(
     (sum, p) => sum + getPaymentLogTableTotalAmountColumn(p),
     0
@@ -1829,11 +1925,11 @@ const AdminPaymentLogs = () => {
       {/* Deposit Cash — date range summary (server-side from payment logs) */}
       {depositModalOpen && createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-4"
+          className="fixed inset-0 z-[100] overflow-y-auto flex items-start sm:items-center justify-center backdrop-blur-sm bg-black/50 p-4"
           onClick={() => !depositLoading && !depositSubmitLoading && setDepositModalOpen(false)}
         >
           <div
-            className="deposit-cash-modal-root bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className="deposit-cash-modal-root bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[min(90vh,calc(100vh-2rem))] my-4 sm:my-0 flex flex-col overflow-hidden min-h-0"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-5 py-4 border-b border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
@@ -1856,7 +1952,15 @@ const AdminPaymentLogs = () => {
               </button>
             </div>
 
-            <div className="px-5 py-4 border-b border-gray-100 shrink-0 space-y-3">
+            <div
+              className="flex-1 min-h-0 overflow-y-auto"
+              style={{
+                scrollbarWidth: 'thin',
+                scrollbarColor: '#cbd5e0 #f7fafc',
+                WebkitOverflowScrolling: 'touch',
+              }}
+            >
+            <div className="px-5 py-4 border-b border-gray-100 space-y-3">
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
                 <div className="flex-1 min-w-[140px]">
                   <label className="block text-xs font-medium text-gray-600 mb-1">From (payment date)</label>
@@ -1873,14 +1977,25 @@ const AdminPaymentLogs = () => {
                   <input
                     type="date"
                     value={depositEndDate}
-                    onChange={(e) => setDepositEndDate(e.target.value)}
+                    onChange={(e) => {
+                      if (depositRecoveryMode) return;
+                      setDepositEndDate(e.target.value);
+                    }}
                     min={depositStartDate || undefined}
                     max={todayManila()}
-                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                    disabled={
+                      depositRecoveryMode ||
+                      depositLoading ||
+                      depositSubmitLoading ||
+                      depositRangesLoading
+                    }
+                    readOnly={depositRecoveryMode}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
                   />
                   <p className="mt-1 text-[11px] text-gray-500">
-                    Pick any date from the From date up to today. The summary refreshes automatically.
+                    {depositRecoveryMode
+                      ? 'Recovery mode: To is locked to the same payment date as From.'
+                      : 'Pick any date from the From date up to today. The summary refreshes automatically.'}
                   </p>
                 </div>
               </div>
@@ -1947,18 +2062,176 @@ const AdminPaymentLogs = () => {
               <p className="text-xs text-gray-500">
                 <strong>Deposit amount</strong> uses <strong>Cash</strong> payments with status <strong>Completed</strong> only. The selected range follows the <strong>payment date</strong> stored on each payment (same value as the Payment Logs &quot;Payment date&quot; column). The first table lists rows still available for a new deposit; the second table lists cash in the same range that is already part of a <strong>Submitted</strong> or <strong>Approved</strong> deposit (not counted again).
               </p>
-              {depositExistingRanges.length > 0 && (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Previous deposited periods:
-                  {' '}
-                  {depositExistingRanges
-                    .map((range) => getRangeLabel(range))
-                    .join(', ')}
+              {depositRecoveryMode && (
+                <div className="text-xs text-violet-900 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <p>
+                    <strong>Recovery review</strong> for payment date{' '}
+                    <span className="whitespace-nowrap font-semibold">{formatDateManila(depositStartDate) || depositStartDate}</span>
+                    {depositRecoveryRangeLabel ? (
+                      <>
+                        {' '}
+                        (from deposited period {depositRecoveryRangeLabel})
+                      </>
+                    ) : null}
+                    . Removed cash lines from a verified deposit are shown below. New completed cash on this date can be resubmitted in a supplemental deposit.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={exitDepositRecoveryMode}
+                    disabled={depositLoading || depositSubmitLoading || depositRangesLoading}
+                    className="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md border border-violet-300 bg-white text-violet-800 hover:bg-violet-100 disabled:opacity-50"
+                  >
+                    Back to normal deposit
+                  </button>
+                </div>
+              )}
+              {(depositExistingRanges.length > 0 ||
+                depositMissingStudentRows.length > 0 ||
+                DEPOSIT_RECOVERY_PERIODS_LOCKED) && (
+                <div className="relative text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-2">
+                  <div
+                    className={`space-y-2 ${DEPOSIT_RECOVERY_PERIODS_LOCKED ? 'pointer-events-none select-none opacity-45' : ''}`}
+                    aria-hidden={DEPOSIT_RECOVERY_PERIODS_LOCKED}
+                  >
+                  <div>
+                    <p className="font-medium">Previous deposited periods</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Students listed here are <strong>not shown</strong> in the current deposit tables below (outside the current From–To range, removed after verify, or not yet re-recorded).
+                    </p>
+                  </div>
+                  <div
+                    className="overflow-y-auto rounded-md border border-amber-100 bg-white/60 pr-1 max-h-[24rem] sm:max-h-[18.5rem]"
+                    style={{
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: '#cbd5e0 #f7fafc',
+                      WebkitOverflowScrolling: 'touch',
+                    }}
+                  >
+                    <div
+                      className="hidden sm:grid sm:gap-2 px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 border-b border-amber-100"
+                      style={{ gridTemplateColumns: 'minmax(88px,0.9fr) minmax(88px,0.9fr) minmax(120px,1.2fr) minmax(72px,0.7fr) minmax(72px,0.7fr) minmax(88px,0.8fr) auto' }}
+                    >
+                      <span>From</span>
+                      <span>To</span>
+                      <span>Student</span>
+                      <span>Invoice</span>
+                      <span>Amount</span>
+                      <span>Payment date</span>
+                      <span className="text-right pr-1">Recovery</span>
+                    </div>
+                    {depositRecoveryGapsLoading ? (
+                      <p className="px-3 py-4 text-center text-gray-500">Loading students missing from current deposit…</p>
+                    ) : depositMissingStudentRows.length === 0 ? (
+                      <p className="px-3 py-4 text-center text-gray-600">
+                        No students missing from the current deposit view. All prior deposited cash in this range is already listed below.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5 p-1.5">
+                        {depositMissingStudentRows.map((gap) => {
+                          const fromLabel =
+                            formatDateManila(gap.period_start_date) || gap.period_start_date || '—';
+                          const toLabel =
+                            formatDateManila(gap.period_end_date) || gap.period_end_date || '—';
+                          const paymentDateLabel = formatDateManila(gap.issue_date) || gap.issue_date || '—';
+                          const recoveryAnchor = String(gap.period_start_date || '').slice(0, 10);
+                          const matchingRange =
+                            depositExistingRanges.find(
+                              (range) =>
+                                String(range.start_date || '').slice(0, 10) === recoveryAnchor ||
+                                range.cash_deposit_summary_id === gap.deposit_summary_id
+                            ) || {
+                              start_date: gap.period_start_date,
+                              end_date: gap.period_end_date,
+                              cash_deposit_summary_id: gap.deposit_summary_id,
+                            };
+                          const isReviewing =
+                            depositRecoveryMode && depositStartDate === recoveryAnchor;
+                          const rowKey = `${gap.deposit_summary_id || 'dep'}-${gap.payment_id || gap.invoice_id}-${gap.issue_date}-${gap.gap_type}`;
+
+                          return (
+                            <li
+                              key={rowKey}
+                              className="flex flex-col gap-2 rounded-md border border-amber-100/80 bg-white px-2 py-2 sm:grid sm:items-center sm:gap-2"
+                              style={{ gridTemplateColumns: 'minmax(88px,0.9fr) minmax(88px,0.9fr) minmax(120px,1.2fr) minmax(72px,0.7fr) minmax(72px,0.7fr) minmax(88px,0.8fr) auto' }}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">From</p>
+                                <p className="text-xs font-medium text-gray-900 whitespace-nowrap">{fromLabel}</p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">To</p>
+                                <p className="text-xs font-medium text-gray-900 whitespace-nowrap">{toLabel}</p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">Student</p>
+                                <p className="text-xs font-medium text-gray-900 truncate" title={gap.student_name || '—'}>
+                                  {gap.student_name || '—'}
+                                </p>
+                                {gap.gap_type === 'removed_snapshot' ? (
+                                  <p className="text-[10px] text-violet-700 mt-0.5">Removed from live data</p>
+                                ) : (
+                                  <p className="text-[10px] text-sky-700 mt-0.5">Cash not in current range</p>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">Invoice</p>
+                                <p className="text-xs font-medium text-gray-900 whitespace-nowrap">
+                                  {gap.invoice_id ? `INV-${gap.invoice_id}` : '—'}
+                                </p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">Amount</p>
+                                <p className="text-xs font-semibold text-gray-900 whitespace-nowrap">
+                                  {formatCurrency(gap.line_amount)}
+                                </p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:sr-only">Payment date</p>
+                                <p className="text-xs font-medium text-gray-900 whitespace-nowrap">{paymentDateLabel}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => startDepositRecoveryForRange(matchingRange)}
+                                disabled={
+                                  depositLoading ||
+                                  depositSubmitLoading ||
+                                  depositRangesLoading ||
+                                  depositRecoveryGapsLoading ||
+                                  isReviewing ||
+                                  !recoveryAnchor
+                                }
+                                className="self-start sm:self-auto sm:justify-self-end px-2.5 py-1 text-[11px] font-medium rounded-md border border-amber-300 bg-white text-amber-900 hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap"
+                              >
+                                {isReviewing
+                                  ? 'Reviewing this date'
+                                  : `Review recovery (${fromLabel})`}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-amber-700">
+                    Use <strong>Review recovery</strong> when a student was hard-deleted and re-enrolled. It opens that period&apos;s <strong>From</strong> payment date only (To matches From) so you can resubmit affected cash.
+                  </p>
+                  </div>
+                  {DEPOSIT_RECOVERY_PERIODS_LOCKED && (
+                    <div
+                      className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-amber-50/75 backdrop-blur-[1px] cursor-not-allowed"
+                      role="presentation"
+                      aria-label="Previous deposited periods locked"
+                    >
+                      <span className="text-sm sm:text-base font-bold uppercase tracking-[0.2em] text-amber-900 border border-amber-300 bg-white/95 px-5 py-2.5 rounded-md shadow-sm">
+                        Locked
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+            <div className="px-5 py-4">
               {depositData && (
                 <>
                   {Number(depositData.total_cash_deposit_amount || 0) >= CASH_DEPOSIT_WARNING_THRESHOLD && (
@@ -2054,6 +2327,62 @@ const AdminPaymentLogs = () => {
                     </table>
                   </div>
 
+                  {depositRemovedSnapshotRows.length > 0 ? (
+                    <div className="mt-6">
+                      <p className="text-sm font-medium text-gray-800 mb-1">Removed from live data (was in a verified deposit)</p>
+                      <p className="text-xs text-gray-500 mb-2">
+                        These {depositRemovedSnapshotRows.length} line(s) are still recorded on a <strong>Submitted</strong> or <strong>Approved</strong> deposit snapshot but the payment row no longer exists (for example after a hard delete). Record a new cash payment for the re-enrolled student on this payment date, then submit the new line above.
+                      </p>
+                      <div
+                        className="overflow-x-auto rounded-lg border border-violet-200 bg-violet-50/40"
+                        style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
+                      >
+                        <table className="divide-y divide-gray-200 text-sm" style={{ width: '100%', minWidth: '1080px' }}>
+                          <thead className="bg-violet-50">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Payment date</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Invoice</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Student</th>
+                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Amount</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Status (snapshot)</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase whitespace-nowrap">Deposit summary</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {depositRemovedSnapshotRows.map((p) => {
+                              const lineTotal =
+                                (Number(p.payable_amount) || 0) + (Number(p.tip_amount) || 0);
+                              return (
+                                <tr key={`removed-snap-${p.payment_id}-${p.deposit_summary_id}`} className="hover:bg-violet-50/60">
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                                    {formatDate(p.issue_date)}
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
+                                    {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
+                                  </td>
+                                  <td className="px-3 py-2 text-gray-800 min-w-0 max-w-[200px]">
+                                    <span className="truncate block" title={p.student_name || '-'}>
+                                      {p.student_name || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">
+                                    {formatCurrency(lineTotal)}
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-600">{p.status || '—'}</td>
+                                  <td className="px-3 py-2 text-xs text-gray-800 align-top min-w-0">
+                                    <span className="break-words" title={formatDepositInclusionLabel(p)}>
+                                      {formatDepositInclusionLabel(p)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {depositAlreadyDepositedRows.length > 0 ? (
                     <div className="mt-6">
                       <p className="text-sm font-medium text-gray-800 mb-1">Already in a cash deposit (reference only)</p>
@@ -2117,8 +2446,9 @@ const AdminPaymentLogs = () => {
                 <p className="text-sm text-gray-500 text-center py-8">Choose both dates to load totals from the server automatically.</p>
               )}
             </div>
+            </div>
 
-            <div className="px-5 py-3 border-t border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="px-5 py-3 border-t border-gray-200 shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-white rounded-b-xl">
               <p className="text-xs text-gray-500">
                 After you confirm this period, submit it for Superfinance to verify the office cash deposit.
               </p>

@@ -36,6 +36,7 @@ import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js'
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../utils/paymentConfirmationEmailService.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
 import { tryIssuePackageMerchandiseOnFirstPayment } from '../lib/merchandiseReleaseLog.js';
+import { getRemovedCashDepositSnapshotPayments } from '../lib/cashDepositRecovery.js';
 import {
   computeOriginalInvoiceAmount,
   computeOriginalAfterDeletingPayment,
@@ -1948,6 +1949,10 @@ router.get(
  *
  * Restricted to Cash; excludes finance-rejected rows; splits pending vs
  * `already_deposited_payments` using cash_deposit_summary snapshots.
+ *
+ * Optional `recovery_payment_date` (YYYY-MM-DD): single-day recovery review
+ * after hard-delete + re-enroll. Forces start=end to that date and adds
+ * `removed_snapshot_payments` (snapshot lines whose payment_id no longer exists).
  */
 router.get(
   '/cash-deposit-summary',
@@ -1962,6 +1967,10 @@ router.get(
       .optional()
       .isISO8601()
       .withMessage('payment_date_to must be YYYY-MM-DD'),
+    queryValidator('recovery_payment_date')
+      .optional()
+      .isISO8601()
+      .withMessage('recovery_payment_date must be YYYY-MM-DD'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -1971,11 +1980,17 @@ router.get(
       const payTo = sliceYmd(req.query.payment_date_to);
       const legacyStart = sliceYmd(req.query.start_date);
       const legacyEnd = sliceYmd(req.query.end_date);
+      const recoveryDate = sliceYmd(req.query.recovery_payment_date);
       const ymdOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
       let start;
       let end;
-      if (ymdOk(payFrom) && ymdOk(payTo)) {
+      let recoveryMode = false;
+      if (ymdOk(recoveryDate)) {
+        start = recoveryDate;
+        end = recoveryDate;
+        recoveryMode = true;
+      } else if (ymdOk(payFrom) && ymdOk(payTo)) {
         start = payFrom;
         end = payTo;
       } else if (ymdOk(legacyStart) && ymdOk(legacyEnd)) {
@@ -1993,6 +2008,19 @@ router.get(
         return res.status(400).json({
           success: false,
           message: 'Payment date range: from must be on or before to.',
+        });
+      }
+
+      if (
+        recoveryMode &&
+        ymdOk(payFrom) &&
+        ymdOk(payTo) &&
+        (payFrom !== start || payTo !== end)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'recovery_payment_date requires payment_date_from and payment_date_to to match that single day.',
         });
       }
 
@@ -2131,6 +2159,20 @@ router.get(
 
       const alreadyDepositedPayments = (alreadyResult.rows || []).map((row) => mapCashDepositRow(row));
 
+      let removedSnapshotPayments = [];
+      if (recoveryMode) {
+        const branchId =
+          req.user.userType !== 'Superadmin' && req.user.branchId
+            ? req.user.branchId
+            : null;
+        if (branchId) {
+          removedSnapshotPayments = await getRemovedCashDepositSnapshotPayments({
+            branchId,
+            paymentDate: start,
+          });
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -2138,6 +2180,8 @@ router.get(
           end_date: end,
           payment_date_from: start,
           payment_date_to: end,
+          recovery_mode: recoveryMode,
+          recovery_payment_date: recoveryMode ? start : null,
           payment_count: payments.length,
           completed_cash_count: completedCount,
           total_cash_all_amount: Math.round(totalAll * 100) / 100,
@@ -2145,6 +2189,8 @@ router.get(
           payments,
           already_deposited_payments: alreadyDepositedPayments,
           already_deposited_count: alreadyDepositedPayments.length,
+          removed_snapshot_payments: removedSnapshotPayments,
+          removed_snapshot_count: removedSnapshotPayments.length,
         },
       });
     } catch (error) {

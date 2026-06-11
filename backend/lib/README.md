@@ -1,5 +1,18 @@
 # Backend shared libraries
 
+## `cashDepositRecovery.js`
+
+Branch-admin **Deposit Cash** recovery after hard-delete + re-enroll:
+
+| Export | Used by |
+|--------|---------|
+| `getRemovedCashDepositSnapshotPayments` | `GET /payments/cash-deposit-summary?recovery_payment_date=YYYY-MM-DD` |
+| `getCashDepositRecoveryGaps` | `GET /cash-deposit-summaries/recovery-gaps` |
+
+Lists cash lines still stored on a **Submitted/Approved** deposit snapshot whose `payment_id` no longer exists in `paymenttbl`, for one payment date. The UI pairs this with live undeposited cash on that same day so admins can submit a supplemental deposit.
+
+`getCashDepositRecoveryGaps` compares the branch admin&apos;s current Deposit Cash From–To window with prior verified deposits and returns students not yet listed in the modal: snapshot ghosts (hard delete) and completed cash outside the current range that is still undeposited.
+
 ## `closedPeriodBillingAmendment.js`
 
 EOD amendment helpers after billing corrections (hard delete + re-enroll):

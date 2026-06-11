@@ -28,6 +28,7 @@ import {
   isAdvancePaymentInvoice,
   mapPhaseChainsToLocalSlots,
   normalizeAdjacentPhaseDisplayDates,
+  annotateInstallmentPhasePlanSlots,
 } from '../utils/installmentPhaseRowMapping.js';
 import {
   findNextUnbilledLocalPhase,
@@ -548,7 +549,9 @@ router.get(
         phases.push(buildPhaseRow(localPhase, chainByLocalPhase.get(localPhase) || null));
       }
 
-      let normalizedPhases = normalizeAdjacentPhaseDisplayDates(phases, computeStatus);
+      let normalizedPhases = annotateInstallmentPhasePlanSlots(
+        normalizeAdjacentPhaseDisplayDates(phases, computeStatus)
+      );
 
       const fullPaymentConversion = await resolveInstallmentProfileFullPaymentConversion(pool, {
         profileId: Number(profile.installmentinvoiceprofiles_id),

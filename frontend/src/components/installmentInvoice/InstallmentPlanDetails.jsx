@@ -4,6 +4,10 @@ import API_BASE_URL, { apiRequest } from '../../config/api';
 import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
+import {
+  getInstallmentPhaseOutstanding,
+  isInstallmentPlanSlotAddressed,
+} from '../../utils/installmentPhaseSlotStatus';
 import { formatProgramEnrollmentStatus } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
@@ -445,7 +449,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     const addressed =
       totals?.plan_slots_addressed != null
         ? Number(totals.plan_slots_addressed)
-        : phases.filter((p) => p.plan_slot_addressed).length;
+        : phases.filter((p) => isInstallmentPlanSlotAddressed(p)).length;
     const planComplete =
       totals?.plan_complete === true ||
       (denomPlan > 0 && addressed >= denomPlan);
@@ -473,18 +477,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
     if (profile?.upgraded_to_full_payment) return null;
 
     const priorPlanSlotsOk = (upToIndex) =>
-      phases.slice(0, upToIndex).every((prev) => {
-        if (prev.plan_slot_addressed === true) return true;
-        const s = String(prev.status || '').toLowerCase();
-        return s.includes('skipped');
-      });
+      phases.slice(0, upToIndex).every((prev) => isInstallmentPlanSlotAddressed(prev));
 
     for (let i = 0; i < phases.length; i += 1) {
       const p = phases[i];
-      const out =
-        p.is_generated && p.amount != null
-          ? Math.max(0, Number(p.amount) - Number(p.paid_amount || 0))
-          : 0;
+      const out = getInstallmentPhaseOutstanding(p);
       const st = String(p.status || '').toLowerCase();
       const cancelled = st === 'cancelled' || st === 'canceled';
       if (p.is_generated && p.invoice_id && !cancelled && st !== 'paid' && out > 0.009) {
@@ -760,10 +757,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                                 : Number(phase.phase_number) === 1
                                   ? 'Auto-generated'
                                   : 'Generated';
-                      const outstanding =
-                        phase.is_generated && phase.amount != null
-                          ? Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0))
-                          : 0;
+                      const outstanding = getInstallmentPhaseOutstanding(phase);
                       const isPayRow =
                         firstPayAction &&
                         firstPayAction.index === idx &&

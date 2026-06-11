@@ -160,3 +160,49 @@ export function mapPhaseChainsToLocalSlots(phaseChains, profile) {
 
   return chainByLocalPhase;
 }
+
+const PHASE_OUTSTANDING_EPSILON = 0.009;
+
+/**
+ * True when a profile-local installment phase slot has no remaining balance
+ * (paid, skipped gap, or fully settled generated invoice).
+ *
+ * @param {object|null|undefined} phase
+ * @returns {boolean}
+ */
+export function isInstallmentPlanSlotAddressed(phase) {
+  if (!phase) return false;
+  if (phase.plan_slot_addressed === true) return true;
+
+  const status = String(phase.status || '').toLowerCase();
+  if (status.includes('skipped') || phase.billing_kind === 'skipped_gap') {
+    return true;
+  }
+  if (status === 'paid' || status === 'paid all') {
+    return true;
+  }
+
+  if (!phase.is_generated) {
+    return false;
+  }
+
+  const amount = phase.amount != null ? Number(phase.amount) : null;
+  const paid = Number(phase.paid_amount || 0);
+  if (amount != null) {
+    return Math.max(0, amount - paid) <= PHASE_OUTSTANDING_EPSILON;
+  }
+
+  return paid > PHASE_OUTSTANDING_EPSILON && status === 'paid';
+}
+
+/**
+ * @param {Array<object>} phases
+ * @returns {Array<object>}
+ */
+export function annotateInstallmentPhasePlanSlots(phases) {
+  if (!Array.isArray(phases)) return [];
+  return phases.map((phase) => ({
+    ...phase,
+    plan_slot_addressed: isInstallmentPlanSlotAddressed(phase),
+  }));
+}

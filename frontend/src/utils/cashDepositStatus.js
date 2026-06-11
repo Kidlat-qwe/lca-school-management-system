@@ -27,7 +27,7 @@ export function isSuperfinanceUser(userInfo) {
   return false;
 }
 
-/** Pending / legacy Submitted — show Verify and Reject. */
+/** Pending / legacy Submitted — show Verify and Return (Finance/Superfinance UI). */
 export function canSuperfinanceVerifyCashDeposit(status) {
   return CASH_DEPOSIT_PENDING_VERIFY_STATUSES.has(String(status || '').trim());
 }

@@ -16,3 +16,5 @@ Used by: `GET /installment-invoices/profiles/:id/phases`, manual/auto invoice ge
 ## `installmentPhaseRowMapping.js`
 
 Maps invoice chains to profile-local phase rows for Student History / Installment Plan tables. See `normalizeAdjacentPhaseDisplayDates` for issue-date display ordering.
+
+`isInstallmentPlanSlotAddressed` / `annotateInstallmentPhasePlanSlots` mark a phase as cleared when it is paid, skipped, or has no outstanding balance — used so **Pay Now** / advance-pay unlocks the next phase when prior slots are settled.
