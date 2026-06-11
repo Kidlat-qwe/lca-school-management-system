@@ -63,7 +63,7 @@ export function resolveChainProfileLocalPhase(chain, profile) {
   return null;
 }
 
-function sortChainsByBillingOrder(chains) {
+export function sortChainsByBillingOrder(chains) {
   return [...(chains || [])].sort((a, b) => {
     const aIssue = String(a.representative?.issue_date || '').slice(0, 10);
     const bIssue = String(b.representative?.issue_date || '').slice(0, 10);
@@ -129,6 +129,10 @@ export function normalizeAdjacentPhaseDisplayDates(phases, computeStatus) {
  * @param {{ phase_start?: number|null, total_phases?: number|null }} profile
  * @returns {Map<number, object>} localPhaseNumber -> chain
  */
+export function isAdvancePaymentInvoice(invoice) {
+  return /Advance payment\s*[—\-]\s*Phase\s*\d+/i.test(String(invoice?.remarks || ''));
+}
+
 export function mapPhaseChainsToLocalSlots(phaseChains, profile) {
   const sorted = [...(phaseChains || [])].sort(
     (a, b) => Number(a.chain_root_id) - Number(b.chain_root_id)

@@ -1,5 +1,15 @@
 # Backend shared libraries
 
+## `closedPeriodBillingAmendment.js`
+
+EOD amendment helpers after billing corrections (hard delete + re-enroll):
+
+| Export | Used by |
+|--------|---------|
+| `eodHasAmendmentDrift` | EOD list `needs_amendment` flag |
+| `getEodBackfillDates` | `POST /daily-summary-sales/backfill`, `GET /check-today` |
+| `assertAdminMayAmendSummary` | `PUT /daily-summary-sales/:id/amend-for-verification` |
+
 ## `installmentPaymentEligibility.js`
 
 Blocks recording payment on a **later** installment phase when an **earlier** phase on the same `installmentinvoiceprofiles_id` has a completed partial payment with remaining balance (balance-invoice chain included).
@@ -10,7 +20,9 @@ Blocks recording payment on a **later** installment phase when an **earlier** ph
 | `POST /payments` | Returns 400 with `prior_partial_balance_block` message |
 | `POST /installment-invoices/profiles/:id/advance-pay` | Same check for profile-local phases before `phase_index` |
 
-Next-phase **invoice generation** is unchanged; only payment recording is blocked.
+Advance pay only accepts the **next unbilled** profile-local phase (no skipping ahead). `generated_count` is set to the paid phase index. See `utils/installmentPhaseBillingSync.js`.
+
+Next-phase **invoice generation** syncs `generated_count` to the next unbilled slot before creating an invoice.
 
 Frontend: `frontend/src/utils/installmentPaymentBlock.js` (`getInstallmentPaymentBlockAlert`).
 

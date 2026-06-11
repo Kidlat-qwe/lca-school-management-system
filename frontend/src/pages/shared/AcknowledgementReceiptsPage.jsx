@@ -2510,6 +2510,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                                 maximumFractionDigits: 2,
                               })}
                             </div>
+                            {r.is_downpayment_plus_phase1_leader && r.list_paired_phase_ar_number ? (
+                              <div className="text-xs text-amber-700 mt-0.5">
+                                Phase 1 AR# {r.list_paired_phase_ar_number}
+                              </div>
+                            ) : null}
                           </>
                         )}
                       </td>

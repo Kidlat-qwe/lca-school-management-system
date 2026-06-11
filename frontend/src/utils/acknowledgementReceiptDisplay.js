@@ -1,6 +1,7 @@
 /**
- * Display helpers for rows from GET /acknowledgement-receipts when migration 109
- * adds paired Downpayment + Phase 1 (`list_*` fields from joined phase row).
+ * Display helpers for GET /acknowledgement-receipts list rows.
+ * Downpayment + Phase 1 uses two AR rows; each row shows its own line total
+ * (downpayment on the leader, Phase 1 on the paired row).
  */
 
 export function getArListLineTotal(r) {

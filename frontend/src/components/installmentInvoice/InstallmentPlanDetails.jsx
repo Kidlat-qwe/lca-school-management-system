@@ -751,13 +751,15 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                       const billingLabel =
                         phase.billing_kind === 'skipped_gap'
                           ? 'Skipped — no invoice'
-                          : !phase.is_generated
-                            ? '\u2014'
-                            : phase.is_rejoin_invoice
-                              ? 'Rejoin'
-                              : Number(phase.phase_number) === 1
-                                ? 'Auto-generated'
-                                : 'Generated';
+                          : phase.billing_kind === 'advance'
+                            ? 'Advance payment'
+                            : !phase.is_generated
+                              ? '\u2014'
+                              : phase.is_rejoin_invoice
+                                ? 'Rejoin'
+                                : Number(phase.phase_number) === 1
+                                  ? 'Auto-generated'
+                                  : 'Generated';
                       const outstanding =
                         phase.is_generated && phase.amount != null
                           ? Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0))

@@ -8,6 +8,7 @@ import {
   isPhaseInstallmentProfile,
 } from './phaseInstallmentUtils.js';
 import { syncProgramPaymentStatusForInvoice } from './programPaymentStatusService.js';
+import { syncInstallmentGeneratedCountToNextUnbilled } from './installmentPhaseBillingSync.js';
 
 /**
  * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
@@ -126,7 +127,15 @@ export const generateInvoiceFromInstallment = async (
     }
     
     const student = studentResult.rows[0];
-    
+
+    const syncResult = await syncInstallmentGeneratedCountToNextUnbilled(
+      client,
+      installmentInvoice.installmentinvoiceprofiles_id
+    );
+    if (syncResult?.generated_count != null) {
+      profile.generated_count = syncResult.generated_count;
+    }
+
     // Get promo info from profile if available
     const profilePromoResult = await client.query(
       `SELECT promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied 

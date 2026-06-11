@@ -62,6 +62,8 @@
 
   ### Backend dependencies
 
+  Phase rows use sequential slot mapping when `TARGET_PHASE` left an unintentional gap (no drop/rejoin). Advance-paid phases show billing **Advance payment**.
+
   - `GET /api/sms/installment-invoices/profiles/:id/phases` — profile,
     downpayment, phases, totals (see below).
   - `POST /api/sms/payments` — record full payment on an existing installment

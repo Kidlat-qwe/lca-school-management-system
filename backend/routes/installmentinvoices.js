@@ -12,6 +12,7 @@ import { formatYmdLocal } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
   isPhaseInstallmentProfile,
+  resolveProfilePhaseStart,
 } from '../utils/phaseInstallmentUtils.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 import {
@@ -24,9 +25,19 @@ import { todayManilaYmd } from '../utils/templateRenderService.js';
 import pool from '../config/database.js';
 import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
 import {
+  isAdvancePaymentInvoice,
   mapPhaseChainsToLocalSlots,
   normalizeAdjacentPhaseDisplayDates,
 } from '../utils/installmentPhaseRowMapping.js';
+import {
+  findNextUnbilledLocalPhase,
+  generatedCountForNextLocalPhase,
+  hasUnintentionalPhaseGap,
+  isAdvancePaymentRemarks,
+  loadDroppedAbsolutePhasesForProfile,
+  repairProfileTargetPhaseAlignment,
+  syncInstallmentGeneratedCountToNextUnbilled,
+} from '../utils/installmentPhaseBillingSync.js';
 import { getAdvancePayPriorPartialBlockers } from '../lib/installmentPaymentEligibility.js';
 import {
   applyFullPaymentUpgradePhaseDisplay,
@@ -373,12 +384,7 @@ router.get(
       const downpaymentInvoiceId =
         profile.downpayment_invoice_id != null ? Number(profile.downpayment_invoice_id) : null;
 
-      // Pull every invoice linked to this profile, plus its completed
-      // payment total and the latest completed payment date. We
-      // compute paid_amount and latest_payment_date per chain root
-      // afterwards in JS so we can keep the SQL straightforward.
-      const invoicesResult = await query(
-        `SELECT i.invoice_id,
+      const profileInvoicesSql = `SELECT i.invoice_id,
                 i.invoice_description,
                 i.invoice_ar_number,
                 i.amount,
@@ -406,61 +412,78 @@ router.get(
                 ) AS latest_payment_date_for_invoice
          FROM invoicestbl i
          WHERE i.installmentinvoiceprofiles_id = $1
-         ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC`,
-        [id]
+         ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC`;
+
+      const buildChainsFromInvoiceRows = (rows) => {
+        const chainMap = new Map();
+        for (const inv of rows) {
+          const chainRoot = Number(inv.chain_root_id);
+          if (!chainMap.has(chainRoot)) {
+            chainMap.set(chainRoot, {
+              chain_root_id: chainRoot,
+              representative: inv,
+              paid_amount: 0,
+              latest_payment_date: null,
+              invoices: [],
+            });
+          }
+          const chain = chainMap.get(chainRoot);
+          chain.invoices.push(inv);
+          chain.paid_amount += Number(inv.paid_total_for_invoice || 0);
+          const invLatestPay = inv.latest_payment_date_for_invoice || null;
+          if (invLatestPay && (!chain.latest_payment_date || invLatestPay > chain.latest_payment_date)) {
+            chain.latest_payment_date = invLatestPay;
+          }
+          const currentRep = chain.representative;
+          if (
+            (inv.issue_date || '') > (currentRep.issue_date || '') ||
+            ((inv.issue_date || '') === (currentRep.issue_date || '') &&
+              Number(inv.invoice_id) > Number(currentRep.invoice_id))
+          ) {
+            chain.representative = inv;
+          }
+        }
+
+        let dpChain = null;
+        const phChains = [];
+        for (const chain of chainMap.values()) {
+          if (downpaymentInvoiceId && chain.chain_root_id === downpaymentInvoiceId) {
+            dpChain = chain;
+          } else {
+            phChains.push(chain);
+          }
+        }
+        return { downpaymentChain: dpChain, phaseChains: phChains };
+      };
+
+      let invoicesResult = await query(profileInvoicesSql, [id]);
+      let { downpaymentChain, phaseChains } = buildChainsFromInvoiceRows(invoicesResult.rows);
+
+      const droppedAbsolutePhases = await loadDroppedAbsolutePhasesForProfile(
+        pool,
+        profile.student_id,
+        profile.class_id
       );
 
-      const allInvoices = invoicesResult.rows;
-
-      // Group by chain root: each chain represents ONE phase (or the
-      // downpayment). For each chain, prefer the most recently issued
-      // invoice as the representative (balance/re-billed invoice
-      // supersedes the original) but sum payments across the chain.
-      const chains = new Map();
-      for (const inv of allInvoices) {
-        const chainRoot = Number(inv.chain_root_id);
-        if (!chains.has(chainRoot)) {
-          chains.set(chainRoot, {
-            chain_root_id: chainRoot,
-            representative: inv,
-            paid_amount: 0,
-            latest_payment_date: null,
-            invoices: [],
+      let targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
+      if (hasUnintentionalPhaseGap(targetMapped, profile, droppedAbsolutePhases)) {
+        const repairClient = await getClient();
+        try {
+          await repairProfileTargetPhaseAlignment(repairClient, profile, phaseChains, {
+            dryRun: false,
+            droppedAbsolutePhases,
           });
+        } finally {
+          repairClient.release();
         }
-        const chain = chains.get(chainRoot);
-        chain.invoices.push(inv);
-        chain.paid_amount += Number(inv.paid_total_for_invoice || 0);
-        const invLatestPay = inv.latest_payment_date_for_invoice || null;
-        if (invLatestPay && (!chain.latest_payment_date || invLatestPay > chain.latest_payment_date)) {
-          chain.latest_payment_date = invLatestPay;
-        }
-        // Pick the latest invoice in the chain as representative for
-        // status/dates/amount (e.g. balance invoice vs. original).
-        const currentRep = chain.representative;
-        if (
-          (inv.issue_date || '') > (currentRep.issue_date || '') ||
-          ((inv.issue_date || '') === (currentRep.issue_date || '') &&
-            Number(inv.invoice_id) > Number(currentRep.invoice_id))
-        ) {
-          chain.representative = inv;
-        }
+        invoicesResult = await query(profileInvoicesSql, [id]);
+        ({ downpaymentChain, phaseChains } = buildChainsFromInvoiceRows(invoicesResult.rows));
+        targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
+        profile.generated_count = targetMapped.size;
       }
 
-      // Split the downpayment chain off from the phase chains.
-      let downpaymentChain = null;
-      const phaseChains = [];
-      for (const chain of chains.values()) {
-        if (downpaymentInvoiceId && chain.chain_root_id === downpaymentInvoiceId) {
-          downpaymentChain = chain;
-        } else {
-          phaseChains.push(chain);
-        }
-      }
-      // Map chains to profile-local phase slots (1..total_phases) using
-      // TARGET_PHASE when present; fallback to billing issue_date order;
-      // repair adjacent slots when issue dates run backwards.
-      const chainByLocalPhase = mapPhaseChainsToLocalSlots(phaseChains, profile);
+      const chainByLocalPhase = targetMapped;
+      const phaseMappingMode = 'target_phase';
 
       const graceDays = await resolveInstallmentGraceDays(
         pool,
@@ -476,8 +499,12 @@ router.get(
           todayYmd,
         });
 
+      const phaseStart = resolveProfilePhaseStart(profile);
+
       const buildPhaseRow = (phaseNumber, chain) => {
         if (!chain) {
+          const absoluteGap = phaseStart + phaseNumber - 1;
+          const isSkippedGap = droppedAbsolutePhases.has(absoluteGap);
           return {
             phase_number: phaseNumber,
             invoice_id: null,
@@ -490,10 +517,12 @@ router.get(
             paid_amount: 0,
             status: 'Not Generated',
             is_generated: false,
+            billing_kind: isSkippedGap ? 'skipped_gap' : null,
           };
         }
         const rep = chain.representative;
         const amount = rep.amount != null ? Number(rep.amount) : null;
+        const isAdvance = isAdvancePaymentInvoice(rep) || isAdvancePaymentRemarks(rep?.remarks);
         return {
           phase_number: phaseNumber,
           invoice_id: Number(rep.invoice_id),
@@ -506,6 +535,8 @@ router.get(
           paid_amount: Number(chain.paid_amount || 0),
           status: computeStatus(rep.status, rep.due_date),
           is_generated: true,
+          billing_kind: isAdvance ? 'advance' : null,
+          phase_mapping_mode: phaseMappingMode,
         };
       };
 
@@ -1698,7 +1729,16 @@ router.post(
         total_phases: installmentInvoice.total_phases,
         generated_count: installmentInvoice.generated_count || 0,
         phase_start: installmentInvoice.phase_start,
+        installmentinvoiceprofiles_id: installmentInvoice.installmentinvoiceprofiles_id,
       };
+
+      const syncResult = await syncInstallmentGeneratedCountToNextUnbilled(
+        client,
+        installmentInvoice.installmentinvoiceprofiles_id
+      );
+      if (syncResult?.generated_count != null) {
+        profile.generated_count = syncResult.generated_count;
+      }
 
       // Get student information
       const studentResult = await client.query(
@@ -1986,17 +2026,40 @@ router.post(
         return res.status(403).json({ success: false, message: 'Access denied for this branch' });
       }
 
-      const generatedCount = parseInt(profile.generated_count || 0, 10);
       const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
       const phaseIdx = parseInt(phase_index, 10);
 
-      if (phaseIdx <= generatedCount) {
+      const { loadInstallmentProfilePhaseChains } = await import(
+        '../lib/installmentPaymentEligibility.js'
+      );
+      const droppedAbsolutePhases = await loadDroppedAbsolutePhasesForProfile(
+        client,
+        profile.student_id,
+        profile.class_id
+      );
+      const { phaseChains } = await loadInstallmentProfilePhaseChains(client, id);
+      const targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
+      const nextUnbilledLocal = findNextUnbilledLocalPhase(targetMapped, totalPhases);
+
+      if (nextUnbilledLocal == null) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: `Phase ${phaseIdx} has already been generated. Only unpaid future phases can be advance-paid.`,
+          message: 'All installment phases are already billed for this plan.',
         });
       }
+
+      if (phaseIdx !== nextUnbilledLocal) {
+        await client.query('ROLLBACK');
+        const phaseStartAdv = parseInt(profile.phase_start || 1, 10);
+        const nextAbsolute = phaseStartAdv + nextUnbilledLocal - 1;
+        return res.status(400).json({
+          success: false,
+          message: `Advance payment must be for the next unbilled phase (Phase ${nextAbsolute}, profile slot ${nextUnbilledLocal}). Pay or generate earlier phases first.`,
+        });
+      }
+
+      const generatedCount = generatedCountForNextLocalPhase(nextUnbilledLocal);
 
       if (totalPhases !== null && phaseIdx > totalPhases) {
         await client.query('ROLLBACK');
@@ -2171,8 +2234,8 @@ router.post(
         );
       }
 
-      // ---- Increment generated_count on the profile --------------------
-      const newGeneratedCount = generatedCount + 1;
+      // ---- Advance generated_count to the paid phase slot ----------------
+      const newGeneratedCount = phaseIdx;
       const isLastPhase = totalPhases !== null && newGeneratedCount >= totalPhases;
 
       await client.query(

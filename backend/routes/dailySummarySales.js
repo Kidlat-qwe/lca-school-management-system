@@ -21,6 +21,11 @@ import {
   renderMessagingTemplate,
 } from '../utils/templateRenderService.js';
 import { resolveEodStakeholderEmails, SUPERADMIN_USER_TYPE_SQL } from '../utils/eodEmailRecipients.js';
+import {
+  assertAdminMayAmendSummary,
+  eodHasAmendmentDrift,
+  getEodBackfillDates,
+} from '../lib/closedPeriodBillingAmendment.js';
 
 const router = express.Router();
 router.use(verifyFirebaseToken);
@@ -227,7 +232,7 @@ router.get(
         (result.rows || []).map(async (row) => {
           const ymd = summaryDateToYmd(row.summary_date);
           if (!ymd || !row.branch_id) {
-            return { ...row, live_grand_total: null, live_grand_count: null };
+          return { ...row, live_grand_total: null, live_grand_count: null, needs_amendment: false };
           }
           try {
             const agg = await getEodGrandTotalsOnly({
@@ -239,9 +244,10 @@ router.get(
               ...row,
               live_grand_total: agg.total,
               live_grand_count: agg.paymentCount,
+              needs_amendment: eodHasAmendmentDrift(row, agg),
             };
           } catch {
-            return { ...row, live_grand_total: null, live_grand_count: null };
+          return { ...row, live_grand_total: null, live_grand_count: null, needs_amendment: false };
           }
         })
       );
@@ -1413,6 +1419,182 @@ router.put(
 );
 
 /**
+ * PUT /api/sms/daily-summary-sales/:id/amend-for-verification
+ * Refresh an Approved/Submitted EOD after billing correction + re-enrollment (Finance re-verifies).
+ */
+router.put(
+  '/:id/amend-for-verification',
+  requireRole('Admin'),
+  [param('id').isInt().withMessage('id must be an integer'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userBranchId = req.user.branchId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can amend daily summaries.',
+        });
+      }
+
+      const rowRes = await query(
+        `SELECT daily_summary_id,
+                branch_id,
+                summary_date,
+                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                total_amount, payment_count, status, submitted_by
+         FROM daily_summary_salestbl
+         WHERE daily_summary_id = $1`,
+        [id]
+      );
+      if (rowRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+
+      const rec = rowRes.rows[0];
+      const perm = assertAdminMayAmendSummary(req, rec);
+      if (!perm.ok) {
+        return res.status(perm.status).json({ success: false, message: perm.message });
+      }
+
+      if (rec.status !== 'Approved' && rec.status !== 'Submitted') {
+        return res.status(400).json({
+          success: false,
+          message: `Only Approved or Submitted summaries can be amended. Current status: ${rec.status}. Use resubmit for Returned summaries.`,
+        });
+      }
+
+      const summaryDateStr = String(rec.summary_date_ymd || summaryDateToYmd(rec.summary_date)).slice(0, 10);
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: rec.branch_id,
+        summaryDate: summaryDateStr,
+        submittedAfter: null,
+      });
+
+      if (!eodHasAmendmentDrift(rec, snapshot)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'No new or changed sales were found for this date. Record re-enrollment payments first, then amend.',
+        });
+      }
+
+      const updateRes = await query(
+        `UPDATE daily_summary_salestbl
+         SET total_amount = $1,
+             payment_count = $2,
+             status = 'Submitted',
+             approved_by = NULL,
+             approved_at = NULL,
+             remarks = COALESCE(NULLIF(TRIM(remarks), ''), '') ||
+               CASE WHEN COALESCE(TRIM(remarks), '') = '' THEN '' ELSE E'\\n' END ||
+               'Amended after billing correction — pending Finance verification.',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE daily_summary_id = $3
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [snapshot.total, snapshot.paymentCount, id]
+      );
+
+      return res.json({
+        success: true,
+        message: 'End of day amended and sent for Finance verification.',
+        data: updateRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/daily-summary-sales/backfill
+ * Submit EOD for a past date that has sales but no summary row (e.g. after hard delete removed the row).
+ */
+router.post(
+  '/backfill',
+  requireRole('Admin'),
+  [body('summary_date').isISO8601().withMessage('summary_date must be YYYY-MM-DD'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can backfill daily summaries.',
+        });
+      }
+
+      const today = TODAY_MANILA();
+      const requestedDate = String(req.body?.summary_date || '').slice(0, 10);
+      if (requestedDate > today) {
+        return res.status(400).json({
+          success: false,
+          message: `You cannot backfill End of Shift for a future date. Today is ${today}.`,
+        });
+      }
+
+      const backfillDates = await getEodBackfillDates(query, userBranchId, today);
+      if (!backfillDates.includes(requestedDate)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'This date is not eligible for backfill. It may already have an EOD row or has no completed sales.',
+          backfill_dates: backfillDates,
+        });
+      }
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        submittedAfter: null,
+      });
+
+      if (!snapshot.paymentCount || snapshot.total <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No completed sales found for this date — nothing to backfill.',
+        });
+      }
+
+      const insertRes = await query(
+        `INSERT INTO daily_summary_salestbl (branch_id, summary_date, total_amount, payment_count, status, submitted_by, approved_by, approved_at)
+         VALUES ($1, $2, $3, $4, 'Submitted', $5, NULL, NULL)
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [userBranchId, requestedDate, snapshot.total, snapshot.paymentCount, userId]
+      );
+
+      await createDailySummarySubmissionNotification({
+        dailySummaryId: insertRes.rows[0]?.daily_summary_id,
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount: snapshot.total,
+        paymentCount: snapshot.paymentCount,
+        createdBy: userId,
+      });
+
+      await sendEodEmailNotifications({
+        submittedBranchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount: snapshot.total,
+        paymentCount: snapshot.paymentCount,
+        submittedByUserId: userId,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'End of day backfilled and submitted for verification.',
+        data: insertRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * GET /api/sms/daily-summary-sales/check-today
  * Check pending End-of-Shift dates for Admin branch (up to today, Manila).
  */
@@ -1437,13 +1619,15 @@ router.get(
       );
       const record = result.rows[0] || null;
       const pendingDates = await getPendingEodDates(userBranchId, today);
+      const backfillDates = await getEodBackfillDates(query, userBranchId, today);
       const requiredDate = pendingDates[0] || null;
       res.json({
         success: true,
         data: {
-          submitted: pendingDates.length === 0,
+          submitted: pendingDates.length === 0 && backfillDates.length === 0,
           record,
           pending_dates: pendingDates,
+          backfill_dates: backfillDates,
           required_date: requiredDate,
         },
       });

@@ -223,6 +223,15 @@ function appendArListTextSearchClause(sql, params, paramCount, search) {
     OR COALESCE(inv_link.invoice_ar_number, '') ILIKE $${likeIdx}
     OR COALESCE(inv_link.invoice_id::text, '') ILIKE $${likeIdx}
     OR COALESCE(ar.ack_receipt_number, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.package_name_snapshot, '') ILIKE $${likeIdx}
+    OR EXISTS (
+      SELECT 1 FROM acknowledgement_receiptstbl ar_pair_s
+      WHERE ar_pair_s.ack_receipt_id = ar.paired_ack_receipt_id
+        AND (
+          COALESCE(ar_pair_s.ack_receipt_number, '') ILIKE $${likeIdx}
+          OR COALESCE(ar_pair_s.package_name_snapshot, '') ILIKE $${likeIdx}
+        )
+    )
     OR EXISTS (
       SELECT 1 FROM invoicestbl i_s
       WHERE COALESCE(i_s.invoice_ar_number, '') ILIKE $${likeIdx}
@@ -246,15 +255,6 @@ function appendArListTextSearchClause(sql, params, paramCount, search) {
   )`;
 
   return { sql, params, paramCount };
-}
-
-/** Hide downpayment row when phase row exists — skip during search so AR#/invoice AR numbers resolve. */
-function appendArPairedRowHideClause(sql, applyHide) {
-  if (!applyHide) return sql;
-  return `${sql} AND NOT EXISTS (
-    SELECT 1 FROM acknowledgement_receiptstbl ar_parent
-    WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
-  )`;
 }
 
 /** Match AR rows linked to a specific invoice (cross-link from Invoice page). */
@@ -538,8 +538,9 @@ router.get(
 
       const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
       const trimmedSearch = String(search || '').trim();
-      const applyPairedRowHide = hidePairedPhaseRows && !trimmedSearch && !invoiceIdFilter;
 
+      // Downpayment + Phase 1 creates two AR rows (sequential numbers). Each list row
+      // shows its own line amount — downpayment on the leader, Phase 1 on the paired row.
       const listPairJoin = hidePairedPhaseRows
         ? `
         LEFT JOIN acknowledgement_receiptstbl ar_pair ON ar_pair.ack_receipt_id = ar.paired_ack_receipt_id`
@@ -547,20 +548,11 @@ router.get(
 
       const listPairSelect = hidePairedPhaseRows
         ? `,
-          (COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0) + COALESCE(ar_pair.payment_amount, 0) + COALESCE(ar_pair.tip_amount, 0)) AS list_line_total_amount,
-          (COALESCE(ar.package_amount_snapshot, 0) + COALESCE(ar_pair.package_amount_snapshot, 0)) AS list_combined_package_amount,
-          CASE
-            WHEN ar.paired_ack_receipt_id IS NOT NULL THEN
-              CONCAT(
-                'Downpayment + Phase 1',
-                CASE
-                  WHEN p.package_name IS NOT NULL AND LENGTH(TRIM(p.package_name::text)) > 0
-                  THEN CONCAT(' — ', TRIM(p.package_name::text))
-                  ELSE ''
-                END
-              )
-            ELSE COALESCE(ar.package_name_snapshot::text, p.package_name::text, 'N/A')
-          END AS list_package_primary_label`
+          (COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) AS list_line_total_amount,
+          COALESCE(ar.package_amount_snapshot, 0) AS list_combined_package_amount,
+          COALESCE(ar.package_name_snapshot::text, p.package_name::text, 'N/A') AS list_package_primary_label,
+          ar_pair.ack_receipt_number AS list_paired_phase_ar_number,
+          (ar.paired_ack_receipt_id IS NOT NULL) AS is_downpayment_plus_phase1_leader`
         : '';
 
       let sql = `
@@ -582,13 +574,6 @@ router.get(
         ${listPairJoin}
         WHERE 1=1
       `;
-
-      if (applyPairedRowHide) {
-        sql += ` AND NOT EXISTS (
-          SELECT 1 FROM acknowledgement_receiptstbl ar_parent
-          WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
-        )`;
-      }
 
       let params = [];
       let paramCount = 0;
@@ -728,7 +713,6 @@ router.get(
 
       // Total count for pagination
       let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar ${AR_INVOICE_LINK_LATERAL_SQL} WHERE 1=1`;
-      countSql = appendArPairedRowHideClause(countSql, applyPairedRowHide);
       let countParams = [];
       let countParamCount = 0;
 
@@ -834,13 +818,7 @@ router.get(
         invoiceOnlyLineTotal = io.totalLineAmount;
         total += invoiceOnlyCount;
       }
-      const sumLineExpr = hidePairedPhaseRows
-        ? `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0) + COALESCE((
-             SELECT COALESCE(pay.payment_amount, 0) + COALESCE(pay.tip_amount, 0)
-             FROM acknowledgement_receiptstbl pay
-             WHERE pay.ack_receipt_id = ar.paired_ack_receipt_id
-           ), 0)`
-        : `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)`;
+      const sumLineExpr = `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)`;
       const sumSql = countSql.replace(
         /SELECT COUNT\(\*\) AS total/i,
         `SELECT COALESCE(SUM(${sumLineExpr}), 0)::numeric AS total_line_amount`
