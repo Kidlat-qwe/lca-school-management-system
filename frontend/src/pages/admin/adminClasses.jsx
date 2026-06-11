@@ -10176,14 +10176,11 @@ const resolvedBranchId =
                       >
                         <option value="">Choose an option...</option>
                         <option value="package">Select Package</option>
-                        {selectedClassForEnrollment?.number_of_phase && selectedClassForEnrollment.number_of_phase > 0 && (
-                          <option value="per-phase">Enroll per Phase</option>
-                        )}
                         <option value="reservation">Student Class Reservation</option>
                         <option value="ack-receipt">With Acknowledgement Receipt</option>
                       </select>
                       <p className="mt-2 text-sm text-gray-500">
-                        Choose how you want to enroll students. You can select a package or enroll students per phase.
+                        Choose how you want to enroll students: package, reservation, or acknowledgement receipt.
                       </p>
                     </div>
                   </div>
@@ -14953,8 +14950,6 @@ const resolvedBranchId =
                         setUpgradeSelectedAckReceipt(null);
                         if (v === 'package') {
                           setUpgradeStep('package-selection');
-                        } else if (v === 'per-phase') {
-                          setUpgradeStep('per-phase-selection');
                         }
                         // NOTE: "With Acknowledgement Receipt" is locked for reservation upgrades for now.
                       }}
@@ -14963,15 +14958,12 @@ const resolvedBranchId =
                     >
                       <option value="">Choose an option...</option>
                       <option value="package">Select Package</option>
-                      {selectedClassForReservations?.number_of_phase && selectedClassForReservations.number_of_phase > 0 && (
-                        <option value="per-phase">Enroll per Phase</option>
-                      )}
                       <option value="ack-receipt" disabled>
                         With Acknowledgement Receipt (Locked)
                       </option>
                     </select>
                     <p className="mt-2 text-sm text-gray-500">
-                      Choose a package, or enroll per phase. (Acknowledgement Receipt option is temporarily locked for reservation upgrades.)
+                      Choose a package to upgrade this reservation. (Acknowledgement Receipt option is temporarily locked for reservation upgrades.)
                     </p>
                   </div>
                 </div>

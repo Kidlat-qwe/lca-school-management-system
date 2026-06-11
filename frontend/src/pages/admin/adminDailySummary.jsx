@@ -20,10 +20,10 @@ import {
 import FixedTablePagination from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
-import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import AdminDailySummaryDetailsModal from '../../components/dailySummary/AdminDailySummaryDetailsModal';
+import CashDepositResubmitModal from '../../components/dailySummary/CashDepositResubmitModal';
 import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
@@ -95,16 +95,12 @@ const AdminDailySummary = () => {
   const [eodResubmitLoading, setEodResubmitLoading] = useState(false);
 
   const [cashResubmit, setCashResubmit] = useState({ open: false, record: null });
-  const [cashDetail, setCashDetail] = useState(null);
-  const [cashDetailLoading, setCashDetailLoading] = useState(false);
-  const [cashRef, setCashRef] = useState('');
-  const [cashAttach, setCashAttach] = useState('');
-  const [cashUploading, setCashUploading] = useState(false);
-  const [cashResubmitLoading, setCashResubmitLoading] = useState(false);
 
   const [openActionsMenuId, setOpenActionsMenuId] = useState(null);
   const [actionsMenuPosition, setActionsMenuPosition] = useState({ top: 0, right: 0 });
   const [detailsView, setDetailsView] = useState({ open: false, record: null });
+
+  const userType = userInfo?.user_type || userInfo?.userType || '';
 
   const isCash = summaryKind === TAB_CASH;
   const dateModeLabels = getDailySummaryDateModeLabels(isCash);
@@ -278,65 +274,10 @@ const AdminDailySummary = () => {
     }
   };
 
-  const openCashResubmit = async (record) => {
+  const openCashResubmit = (record) => {
     setCashResubmit({ open: true, record });
-    setCashRef(String(record.reference_number || '').trim());
-    setCashAttach(String(record.deposit_attachment_url || '').trim());
-    setCashDetail(null);
-    setCashDetailLoading(true);
-    try {
-      const res = await apiRequest(`/cash-deposit-summaries/${record.cash_deposit_summary_id}/payments`);
-      const d = res?.data;
-      if (d && typeof d === 'object' && !Array.isArray(d)) {
-        setCashDetail(d);
-      } else {
-        setCashDetail({ totals: null, payments: Array.isArray(res?.data) ? res.data : [] });
-      }
-    } catch (err) {
-      appAlert(err.message || 'Failed to load deposit detail');
-    } finally {
-      setCashDetailLoading(false);
-    }
   };
 
-  const submitCashResubmit = async () => {
-    const id = cashResubmit.record?.cash_deposit_summary_id;
-    if (!id) return;
-    const refTrim = String(cashRef || '').trim();
-    const attTrim = String(cashAttach || '').trim();
-    if (!refTrim) {
-      appAlert('Reference number is required.');
-      return;
-    }
-    if (!attTrim) {
-      appAlert('Please upload or keep a deposit proof attachment.');
-      return;
-    }
-    setCashResubmitLoading(true);
-    try {
-      await apiRequest(`/cash-deposit-summaries/${id}/resubmit`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          reference_number: refTrim,
-          deposit_attachment_url: attTrim,
-        }),
-      });
-      appAlert('Cash deposit summary resubmitted for verification.');
-      setCashResubmit({ open: false, record: null });
-      setCashDetail(null);
-      await fetchRecords(pagination.page);
-      await fetchReturnBadge();
-    } catch (err) {
-      appAlert(err.message || 'Resubmit failed');
-    } finally {
-      setCashResubmitLoading(false);
-    }
-  };
-
-  const cashTotals = cashDetail?.totals;
-  const cashModalRows = Array.isArray(cashDetail?.payments) ? cashDetail.payments : [];
-  const cashModalAmountTotal = cashModalRows.reduce((sum, p) => sum + getPaymentLogTableAmountColumn(p), 0);
-  const cashModalGrandTotal = cashModalRows.reduce((sum, p) => sum + getPaymentLogTableTotalAmountColumn(p), 0);
   const tableScrollStyle = { scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' };
   const sortedRecords = sortRows(records, sortConfig, {
     status: { accessor: 'status', type: 'string' },
@@ -777,7 +718,7 @@ const AdminDailySummary = () => {
                   onClick={() => {
                     if (!selectedActionRecord) return;
                     if (isCash) {
-                      void openCashResubmit(selectedActionRecord);
+                      openCashResubmit(selectedActionRecord);
                     } else {
                       openEodResubmit(selectedActionRecord);
                     }
@@ -798,9 +739,22 @@ const AdminDailySummary = () => {
         record={detailsView.record}
         isCashDeposit={isCash}
         fallbackBranchName={branchName}
+        userType={userType}
         onClose={() => {
           setDetailsView({ open: false, record: null });
           setOpenActionsMenuId(null);
+        }}
+      />
+
+      <CashDepositResubmitModal
+        open={cashResubmit.open}
+        record={cashResubmit.record}
+        branchName={branchName}
+        userType={userType}
+        onClose={() => setCashResubmit({ open: false, record: null })}
+        onResubmitted={async () => {
+          await fetchRecords(pagination.page);
+          await fetchReturnBadge();
         }}
       />
 
@@ -1030,147 +984,6 @@ const AdminDailySummary = () => {
           document.body
         )}
 
-      {cashResubmit.open &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[9999] flex items-stretch justify-center bg-black/40 p-2 sm:items-center sm:p-4"
-            onClick={() => !cashResubmitLoading && setCashResubmit({ open: false, record: null })}
-          >
-            <div
-              className="w-full max-w-lg max-h-[min(92dvh,90vh)] overflow-y-auto rounded-t-xl bg-white shadow-xl my-auto sm:my-0 sm:rounded-lg"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="border-b border-gray-200 px-5 py-4">
-                <h3 className="text-lg font-semibold text-gray-900">Resubmit cash deposit</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Period:{' '}
-                  <span className="font-medium text-gray-800">
-                    {cashResubmit.record?.start_date && cashResubmit.record?.end_date
-                      ? `${formatDateManila(cashResubmit.record.start_date)} – ${formatDateManila(
-                          cashResubmit.record.end_date
-                        )}`
-                      : '—'}
-                  </span>
-                </p>
-              </div>
-              <div className="space-y-4 px-5 py-4">
-                {cashResubmit.record?.remarks ? (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-600">Finance notes</p>
-                    <p className="mt-1 rounded-md bg-gray-50 p-3 text-sm text-gray-800 whitespace-pre-wrap">
-                      {cashResubmit.record.remarks}
-                    </p>
-                  </div>
-                ) : null}
-
-                <div>
-                  <label className="label-field text-xs">Reference number</label>
-                  <input
-                    type="text"
-                    value={cashRef}
-                    onChange={(e) => setCashRef(e.target.value)}
-                    className="input-field text-sm w-full"
-                    disabled={cashResubmitLoading}
-                  />
-                </div>
-                <div>
-                  <label className="label-field text-xs">Deposit proof (image)</label>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    disabled={cashResubmitLoading || cashUploading}
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      setCashUploading(true);
-                      try {
-                        const url = await uploadInvoicePaymentImage(file);
-                        if (url) setCashAttach(url);
-                      } catch (err) {
-                        appAlert(err?.message || 'Upload failed');
-                      } finally {
-                        setCashUploading(false);
-                      }
-                    }}
-                    className="block w-full text-sm text-gray-600"
-                  />
-                  {cashAttach ? (
-                    <p className="mt-2 text-xs text-gray-600 break-all">Attached: {cashAttach}</p>
-                  ) : null}
-                </div>
-
-                {cashDetailLoading ? (
-                  <p className="text-sm text-gray-500">Loading current totals…</p>
-                ) : cashTotals ? (
-                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm">
-                    <p className="font-semibold text-gray-800">Current snapshot</p>
-                    <ul className="mt-2 space-y-1 text-gray-700">
-                      <li>Amount total: {formatMoney(cashModalAmountTotal || cashTotals.total_cash_amount)}</li>
-                      <li>Total amount: {formatMoney(cashModalGrandTotal || cashTotals.total_deposit_amount)}</li>
-                    </ul>
-                  </div>
-                ) : null}
-
-                {!cashDetailLoading && cashModalRows.length > 0 ? (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-700 mb-2">Cash payment records (period)</p>
-                    <div className="overflow-x-auto rounded-lg" style={tableScrollStyle}>
-                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '760px' }}>
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Student / payer</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Invoice</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Method</th>
-                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Amount</th>
-                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total Amount</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Ref.</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 bg-white">
-                          {cashModalRows.map((p, idx) => (
-                            <tr key={paymentLogRowKey(p, idx, 'cash-resubmit')}>
-                              <td className="px-3 py-2 text-sm text-gray-900">{p.student_name || '—'}</td>
-                              <td className="px-3 py-2 text-sm text-gray-700">
-                                {p.invoice_description || (p.invoice_id ? `INV-${p.invoice_id}` : '—')}
-                              </td>
-                              <td className="px-3 py-2 text-sm text-gray-600">{p.payment_method || '—'}</td>
-                              <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                {formatMoney(getPaymentLogTableAmountColumn(p))}
-                              </td>
-                              <td className="px-3 py-2 text-right text-sm font-medium text-emerald-700">
-                                {formatMoney(getPaymentLogTableTotalAmountColumn(p))}
-                              </td>
-                              <td className="px-3 py-2 text-sm text-gray-500">{p.reference_number || '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-              <div className="flex flex-col-reverse gap-2 border-t border-gray-200 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
-                <button
-                  type="button"
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
-                  disabled={cashResubmitLoading}
-                  onClick={() => setCashResubmit({ open: false, record: null })}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50 sm:w-auto"
-                  disabled={cashResubmitLoading || cashUploading}
-                  onClick={submitCashResubmit}
-                >
-                  {cashResubmitLoading ? 'Submitting…' : 'Confirm resubmit'}
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
     </div>
   );
 };

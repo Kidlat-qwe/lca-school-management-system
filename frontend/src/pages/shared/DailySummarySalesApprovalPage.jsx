@@ -39,6 +39,9 @@ import {
   getPaymentLogTableAmountColumn,
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
+import CashDepositPaymentEditModal from '../../components/dailySummary/CashDepositPaymentEditModal';
+import CashDepositPaymentInvoiceCell from '../../components/dailySummary/CashDepositPaymentInvoiceCell';
+import { canEditCashDepositPayments } from '../../utils/cashDepositPaymentEdit';
 
 const TAB_END_OF_SHIFT = 'endOfShift';
 const TAB_CASH_DEPOSIT = 'cashDeposit';
@@ -82,6 +85,8 @@ const DailySummarySalesApprovalPage = () => {
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
   const [paymentAttachmentViewerUrl, setPaymentAttachmentViewerUrl] = useState(null);
+  const [cashPaymentEdit, setCashPaymentEdit] = useState(null);
+  const [cashPaymentEditContext, setCashPaymentEditContext] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const openedNotificationDetailRef = useRef(null);
@@ -116,6 +121,41 @@ const DailySummarySalesApprovalPage = () => {
     const res = await apiRequest(`/daily-summary-sales/${id}/payments`);
     return parseDailySummaryPaymentsResponse(res);
   }, [isCashDepositTab]);
+
+  const openCashPaymentEdit = (payment, contextRecord) => {
+    setCashPaymentEdit(payment);
+    setCashPaymentEditContext(contextRecord || null);
+  };
+
+  const closeCashPaymentEdit = () => {
+    setCashPaymentEdit(null);
+    setCashPaymentEditContext(null);
+  };
+
+  const refreshCashPaymentEditContext = useCallback(async () => {
+    const record = cashPaymentEditContext;
+    if (!record?.[recordIdField]) return;
+    const id = record[recordIdField];
+    const data = await fetchRecordDetails(id);
+    if (detailModal.open && detailModal.record?.[recordIdField] === id) {
+      setDetailData(data);
+    }
+    if (verifyModal.open && verifyModal.record?.[recordIdField] === id) {
+      setVerifyData(data);
+    }
+  }, [
+    cashPaymentEditContext,
+    recordIdField,
+    fetchRecordDetails,
+    detailModal.open,
+    detailModal.record,
+    verifyModal.open,
+    verifyModal.record,
+  ]);
+
+  const cashDepositPaymentsEditableFor = (depositRecord) =>
+    isCashDepositTab &&
+    canEditCashDepositPayments({ userType: currentUserType, depositStatus: depositRecord?.status });
 
   const fetchRecords = useCallback(async (page = 1) => {
     try {
@@ -1062,6 +1102,11 @@ const DailySummarySalesApprovalPage = () => {
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                 {isCashDepositTab ? 'Cash payment records (from payment logs)' : 'Completed payments (payment logs)'}
               </p>
+              {isCashDepositTab && cashDepositPaymentsEditableFor(verifyModal.record) ? (
+                <p className="mb-2 text-[11px] text-primary-700">
+                  Click an invoice to update payment details. Totals refresh automatically after you save.
+                </p>
+              ) : null}
               {verifyLoading ? (
                 <p className="text-sm text-gray-500 py-4">Loading payment records...</p>
               ) : isCashDepositTab ? (
@@ -1096,8 +1141,12 @@ const DailySummarySalesApprovalPage = () => {
                           const collected = payable + tip;
                           return (
                           <tr key={paymentLogRowKey(payment, paymentIndex, 'verify-cash')} className="hover:bg-gray-50/80">
-                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
-                              {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              <CashDepositPaymentInvoiceCell
+                                payment={payment}
+                                canEdit={cashDepositPaymentsEditableFor(verifyModal.record)}
+                                onEdit={(p) => openCashPaymentEdit(p, verifyModal.record)}
+                              />
                             </td>
                             <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[160px]">
                               <span className="truncate block" title={payment.student_name || '-'}>
@@ -1527,6 +1576,11 @@ const DailySummarySalesApprovalPage = () => {
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                 {isCashDepositTab ? 'Cash payment records (from payment logs)' : 'Completed payments (payment logs)'}
               </p>
+              {isCashDepositTab && cashDepositPaymentsEditableFor(detailModal.record) ? (
+                <p className="mb-2 text-[11px] text-primary-700">
+                  Click an invoice to update payment details. Totals refresh automatically after you save.
+                </p>
+              ) : null}
               {isCashDepositTab && detailIsUsingSubmittedSnapshot ? (
                 <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
                   Showing the original submitted snapshot — the live recalc found no matching payment rows for this period (rows may have been deleted after submission).
@@ -1567,8 +1621,12 @@ const DailySummarySalesApprovalPage = () => {
                           const collected = payable + tip;
                           return (
                           <tr key={paymentLogRowKey(payment, paymentIndex, 'cash-detail')} className="hover:bg-gray-50/80">
-                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
-                              {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              <CashDepositPaymentInvoiceCell
+                                payment={payment}
+                                canEdit={cashDepositPaymentsEditableFor(detailModal.record)}
+                                onEdit={(p) => openCashPaymentEdit(p, detailModal.record)}
+                              />
                             </td>
                             <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[160px]">
                               <span className="truncate block" title={payment.student_name || '-'}>
@@ -1855,6 +1913,14 @@ const DailySummarySalesApprovalPage = () => {
         url={paymentAttachmentViewerUrl}
         onClose={() => setPaymentAttachmentViewerUrl(null)}
       />
+
+      {cashPaymentEdit ? (
+        <CashDepositPaymentEditModal
+          payment={cashPaymentEdit}
+          onClose={closeCashPaymentEdit}
+          onSaved={refreshCashPaymentEditContext}
+        />
+      ) : null}
 
       {attachmentPreviewUrl && (
         <div

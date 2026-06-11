@@ -31,6 +31,10 @@ import {
   fetchInvoiceOnlyArListRows,
 } from '../utils/arInvoiceOnlyListRows.js';
 import { shouldSyncPaymentLogApprovalOnArVerify } from '../lib/paymentLogArApproval.js';
+import {
+  isDownpaymentPlusPhase1Ack,
+  runArAttachInstallmentFollowUp,
+} from '../lib/arAttachInstallmentFollowUp.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -1807,15 +1811,19 @@ router.post(
       }
 
       const isRejectedOrCancelled = ['Rejected', 'Cancelled', 'Returned'].includes(ackStatus);
+      const ackPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
+      const isCashAck = ackPaymentMethod === 'cash';
       const isVerifiedForAttach = ackStatusUpper === 'VERIFIED';
-      const canAttachAck = !isRejectedOrCancelled && isVerifiedForAttach;
+      const canAttachAck =
+        !isRejectedOrCancelled && (isVerifiedForAttach || isCashAck);
 
       if (!canAttachAck) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message:
-            'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached',
+          message: isCashAck
+            ? 'This cash acknowledgement receipt cannot be attached (rejected or returned).'
+            : 'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached',
         });
       }
 
@@ -2124,20 +2132,28 @@ router.post(
               const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
               console.log(`✅ AR downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
 
+              const isDownpaymentPlusPhase1 = isDownpaymentPlusPhase1Ack(ack);
+
               let phaseAckId = null;
               let phaseAckNum = null;
-              if (ack.installment_option === 'downpayment_plus_phase1' && ack.paired_ack_receipt_id) {
+              let phase1PayAmount = parseFloat(profile.amount) || 0;
+              if (isDownpaymentPlusPhase1 && ack.paired_ack_receipt_id) {
                 const phaseAckRes = await client.query(
-                  'SELECT ack_receipt_id, ack_receipt_number FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+                  `SELECT ack_receipt_id, ack_receipt_number, payment_amount
+                   FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
                   [ack.paired_ack_receipt_id]
                 );
                 if (phaseAckRes.rows.length > 0) {
                   phaseAckId = phaseAckRes.rows[0].ack_receipt_id;
                   phaseAckNum = phaseAckRes.rows[0].ack_receipt_number;
+                  const pairedAmt = parseFloat(phaseAckRes.rows[0].payment_amount);
+                  if (Number.isFinite(pairedAmt) && pairedAmt > 0) {
+                    phase1PayAmount = pairedAmt;
+                  }
                 }
               }
 
-              // Store for async generation after COMMIT
+              // Store for generation after COMMIT (Phase 1 auto-pay when Downpayment + Phase 1 AR)
               const enrollPhase = profile.phase_start != null ? parseInt(profile.phase_start) : 1;
               _pendingInvoiceGeneration = {
                 firstInvoiceRecord,
@@ -2153,28 +2169,29 @@ router.post(
                   phase_start: profile.phase_start,
                 },
                 profileId: invoice.installmentinvoiceprofiles_id,
-                // When "downpayment_plus_phase1" option: auto-pay first phase after generating it
-                autoPayPhase1: ack.installment_option === 'downpayment_plus_phase1',
-                autoPayPhase1Data: ack.installment_option === 'downpayment_plus_phase1' ? {
-                  student_id,
-                  branch_id: profile.branch_id || invoice.branch_id || null,
-                  issue_date: ack.issue_date,
-                  created_by: req.user.userId || null,
-                  ar_verified_by_user_id: arVerifierUserId,
-                  class_id: profile.class_id,
-                  phase_1_amount: parseFloat(profile.amount),
-                  profile_id: invoice.installmentinvoiceprofiles_id,
-                  reference_number: ack.reference_number || null,
-                  payment_attachment_url: ack.payment_attachment_url || null,
-                  enroll_phase: enrollPhase, // Phase to enroll (phase_start for Phase packages, else 1)
-                  phase_ack_receipt_id: phaseAckId,
-                  phase_ack_receipt_number: phaseAckNum,
-                } : null,
+                autoPayPhase1: isDownpaymentPlusPhase1,
+                autoPayPhase1Data: isDownpaymentPlusPhase1
+                  ? {
+                      student_id,
+                      branch_id: profile.branch_id || invoice.branch_id || null,
+                      issue_date: ack.issue_date,
+                      created_by: req.user.userId || null,
+                      ar_verified_by_user_id: arVerifierUserId,
+                      class_id: profile.class_id,
+                      phase_1_amount: phase1PayAmount,
+                      profile_id: invoice.installmentinvoiceprofiles_id,
+                      reference_number: ack.reference_number || null,
+                      payment_attachment_url: ack.payment_attachment_url || null,
+                      enroll_phase: enrollPhase,
+                      phase_ack_receipt_id: phaseAckId,
+                      phase_ack_receipt_number: phaseAckNum,
+                      is_cash_ack: isCashAck,
+                    }
+                  : null,
               };
 
               const skipPendingEnrollment =
-                String(ack.installment_option || '').toLowerCase() === 'downpayment_plus_phase1' &&
-                Boolean(ack.paired_ack_receipt_id);
+                isDownpaymentPlusPhase1 && Boolean(ack.paired_ack_receipt_id);
               await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id, {
                 skip: skipPendingEnrollment,
               });
@@ -2356,197 +2373,21 @@ router.post(
         })();
       }
 
-      // Generate the first installment invoice AFTER the transaction commits
-      // (mirrors the same async pattern used in payments.js)
+      let installmentFollowUp = null;
       if (_pendingInvoiceGeneration) {
-        const { firstInvoiceRecord, profile: genProfile, profileId, autoPayPhase1, autoPayPhase1Data } = _pendingInvoiceGeneration;
-        (async () => {
-          try {
-            const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
-            const { query: dbQuery } = await import('../config/database.js');
-
-            const enrollmentAckReuse =
-              autoPayPhase1 &&
-              autoPayPhase1Data?.phase_ack_receipt_id &&
-              autoPayPhase1Data?.phase_ack_receipt_number
-                ? {
-                    reuseInvoiceArNumber: String(autoPayPhase1Data.phase_ack_receipt_number).trim(),
-                    ack_receipt_id: Number(autoPayPhase1Data.phase_ack_receipt_id),
-                  }
-                : null;
-
-            // Step 1: Generate Phase 1 invoice (reuse Phase 1 AR number on invoice when paired)
-            const generatedInvoice = await generateInvoiceFromInstallment(
-              firstInvoiceRecord,
-              genProfile,
-              enrollmentAckReuse
-            );
-            console.log(`✅ AR downpayment paid: Generated Phase 1 invoice ${generatedInvoice.invoice_id} for profile ${profileId}`);
-
-            // Step 2: If "downpayment_plus_phase1", auto-pay Phase 1 and generate Phase 2
-            if (autoPayPhase1 && autoPayPhase1Data) {
-              try {
-                const { student_id: sid, branch_id: bid, issue_date: ackDate,
-                  created_by: createdBy, ar_verified_by_user_id, class_id, phase_1_amount, profile_id } = autoPayPhase1Data;
-                const phaseApproverUserId = ar_verified_by_user_id || createdBy || null;
-
-                // Create payment for Phase 1 invoice — carry over AR reference and attachment
-                const phase1InvoiceId = generatedInvoice.invoice_id;
-                const phase1InvRow = await dbQuery(
-                  'SELECT created_by FROM invoicestbl WHERE invoice_id = $1',
-                  [phase1InvoiceId]
-                );
-                const phase1ActionOwner =
-                  phase1InvRow.rows[0]?.created_by != null
-                    ? phase1InvRow.rows[0].created_by
-                    : createdBy;
-
-                const hasColPhase1 = await paymenttblHasActionOwnerUserIdColumn();
-                if (hasColPhase1) {
-                  await dbQuery(
-                    `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
-                     payable_amount, issue_date, status, approval_status, approved_by, approved_at, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
-                   VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', 'Approved', $6, CURRENT_TIMESTAMP, $7, $8, $9, $10, $11)`,
-                    [
-                      phase1InvoiceId,
-                      sid,
-                      bid,
-                      phase_1_amount,
-                      ackDate,
-                      phaseApproverUserId,
-                      autoPayPhase1Data.reference_number || null,
-                      'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
-                      createdBy,
-                      autoPayPhase1Data.payment_attachment_url || null,
-                      phase1ActionOwner,
-                    ]
-                  );
-                } else {
-                  await dbQuery(
-                    `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
-                     payable_amount, issue_date, status, approval_status, approved_by, approved_at, reference_number, remarks, created_by, payment_attachment_url)
-                   VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', 'Approved', $6, CURRENT_TIMESTAMP, $7, $8, $9, $10)`,
-                    [
-                      phase1InvoiceId,
-                      sid,
-                      bid,
-                      phase_1_amount,
-                      ackDate,
-                      phaseApproverUserId,
-                      autoPayPhase1Data.reference_number || null,
-                      'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)',
-                      createdBy,
-                      autoPayPhase1Data.payment_attachment_url || null,
-                    ]
-                  );
-                }
-
-                // Mark Phase 1 invoice as Paid
-                await dbQuery(
-                  `UPDATE invoicestbl SET status = 'Paid', amount = 0 WHERE invoice_id = $1`,
-                  [phase1InvoiceId]
-                );
-                console.log(`✅ AR Phase 1 auto-paid: invoice ${phase1InvoiceId}`);
-
-                if (autoPayPhase1Data.phase_ack_receipt_id) {
-                  await dbQuery(
-                    `UPDATE acknowledgement_receiptstbl
-                     SET status = 'Applied', student_id = $1, invoice_id = $2
-                     WHERE ack_receipt_id = $3`,
-                    [sid, phase1InvoiceId, autoPayPhase1Data.phase_ack_receipt_id]
-                  );
-                }
-
-                const profileRowRes = await dbQuery(
-                  `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
-                          ip.downpayment_paid, ip.downpayment_invoice_id, ip.amount, ip.frequency, ip.phase_start
-                   FROM installmentinvoiceprofilestbl ip
-                   WHERE ip.installmentinvoiceprofiles_id = $1`,
-                  [profile_id]
-                );
-                if (profileRowRes.rows.length > 0) {
-                  await syncInstallmentEnrollmentForPaidInvoice({
-                    client: { query: dbQuery },
-                    profileId: profile_id,
-                    profile: profileRowRes.rows[0],
-                    studentId: sid,
-                    sourceLabel:
-                      'System (Auto-enrolled via acknowledgement receipt — Downpayment + Phase 1)',
-                  });
-                }
-
-                // Fetch the updated installmentinvoicestbl record for Phase 2 generation
-                const nextInstallmentRecord = await dbQuery(
-                  `SELECT * FROM installmentinvoicestbl WHERE installmentinvoiceprofiles_id = $1 AND (status IS NULL OR status = '' OR status = 'Pending')
-                   ORDER BY installmentinvoicedtl_id DESC LIMIT 1`,
-                  [profile_id]
-                );
-
-                if (nextInstallmentRecord.rows.length > 0) {
-                  const nextRecord = nextInstallmentRecord.rows[0];
-                  // Generate Phase 2 invoice
-                  const phase2Invoice = await generateInvoiceFromInstallment(nextRecord, {
-                    ...genProfile,
-                    generated_count: generatedInvoice.generated_count || 1,
-                  });
-                  console.log(`✅ AR Phase 2 generated: invoice ${phase2Invoice.invoice_id} for profile ${profile_id}`);
-
-                  // Pre-generated Phase 2 uses the *next* billing cycle's nominal issue (e.g. 25th of next month),
-                  // so it disappears from the main Invoice list when users filter by the enrollment month.
-                  // Align issue_date toward the AR / enrollment date while keeping due_date on the real schedule.
-                  // Never set Phase 2 issue_date earlier than Phase 1's issue_date (billing phases must not go backwards).
-                  const rawAckIssue = autoPayPhase1Data?.issue_date;
-                  let arIssueYmd = null;
-                  if (rawAckIssue != null && String(rawAckIssue).trim() !== '') {
-                    const s = String(rawAckIssue).trim();
-                    arIssueYmd = /^\d{4}-\d{2}-\d{2}$/.test(s)
-                      ? s.slice(0, 10)
-                      : formatYmdLocal(new Date(s));
-                  }
-                  let candidateIssueYmd = arIssueYmd;
-                  if (phase1InvoiceId && /^\d{4}-\d{2}-\d{2}$/.test(String(candidateIssueYmd || ''))) {
-                    const p1IssueRes = await dbQuery(
-                      `SELECT TO_CHAR(issue_date, 'YYYY-MM-DD') AS d FROM invoicestbl WHERE invoice_id = $1`,
-                      [phase1InvoiceId]
-                    );
-                    const phase1IssueYmd = (p1IssueRes.rows[0]?.d || '').slice(0, 10);
-                    if (/^\d{4}-\d{2}-\d{2}$/.test(phase1IssueYmd)) {
-                      candidateIssueYmd =
-                        candidateIssueYmd >= phase1IssueYmd ? candidateIssueYmd : phase1IssueYmd;
-                    }
-                  }
-                  if (candidateIssueYmd && phase2Invoice?.invoice_id) {
-                    const dueRes = await dbQuery(
-                      `SELECT TO_CHAR(due_date, 'YYYY-MM-DD') AS d FROM invoicestbl WHERE invoice_id = $1`,
-                      [phase2Invoice.invoice_id]
-                    );
-                    const dueYmd = (dueRes.rows[0]?.d || '').slice(0, 10);
-                    if (!dueYmd || candidateIssueYmd <= dueYmd) {
-                      await dbQuery(
-                        `UPDATE invoicestbl SET issue_date = $1::date WHERE invoice_id = $2`,
-                        [candidateIssueYmd, phase2Invoice.invoice_id]
-                      );
-                      console.log(
-                        `✅ AR Phase 2 issue_date set to ${candidateIssueYmd} (AR / Phase-1 floor) for invoice ${phase2Invoice.invoice_id}`
-                      );
-                    }
-                  }
-                } else {
-                  console.log(`ℹ️ AR Phase 2 skipped: no pending installment record found (all phases generated)`);
-                }
-              } catch (phase1Error) {
-                console.error(`⚠️ Error auto-paying Phase 1 (AR) for profile ${profileId}:`, phase1Error);
-              }
-            }
-          } catch (invoiceGenError) {
-            console.error(`⚠️ Error generating first installment invoice (AR) for profile ${profileId}:`, invoiceGenError);
-          }
-        })();
+        installmentFollowUp = await runArAttachInstallmentFollowUp(_pendingInvoiceGeneration);
       }
 
+      const phase1Failed =
+        _pendingInvoiceGeneration?.autoPayPhase1 && installmentFollowUp?.error;
+
       res.json({
-        success: true,
-        message: 'Acknowledgement receipt attached and payment recorded successfully',
+        success: !phase1Failed,
+        message: phase1Failed
+          ? `Downpayment recorded, but Phase 1 auto-payment failed: ${installmentFollowUp.error}`
+          : _pendingInvoiceGeneration?.autoPayPhase1 && installmentFollowUp?.phase1_auto_paid
+            ? 'Acknowledgement receipt attached: downpayment and Phase 1 invoices paid.'
+            : 'Acknowledgement receipt attached and payment recorded successfully',
         data: {
           acknowledgement_receipt: {
             ...formatArListApiRow(ack),
@@ -2555,6 +2396,7 @@ router.post(
             payment_id: newPayment.payment_id,
           },
           payment: newPayment,
+          installment_follow_up: installmentFollowUp,
         },
       });
     } catch (err) {

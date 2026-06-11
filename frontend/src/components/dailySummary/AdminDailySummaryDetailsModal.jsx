@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import PaymentAttachmentViewerModal from '../paymentLogs/PaymentAttachmentViewerModal';
+import CashDepositPaymentEditModal from './CashDepositPaymentEditModal';
+import CashDepositPaymentInvoiceCell from './CashDepositPaymentInvoiceCell';
+import { canEditCashDepositPayments } from '../../utils/cashDepositPaymentEdit';
 import {
   isFinanceReturnedSummaryStatus,
   parseCashDepositPaymentsResponse,
@@ -43,13 +46,40 @@ const summaryVerificationActorLabel = (record) => {
 /**
  * Read-only details modal (Superadmin Daily Summary Sales details parity, without verify/reject).
  */
-export default function AdminDailySummaryDetailsModal({ open, record, isCashDeposit, fallbackBranchName, onClose }) {
+export default function AdminDailySummaryDetailsModal({
+  open,
+  record,
+  isCashDeposit,
+  fallbackBranchName,
+  userType = '',
+  onClose,
+}) {
   const [detailData, setDetailData] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
   const [paymentAttachmentViewerUrl, setPaymentAttachmentViewerUrl] = useState(null);
+  const [cashPaymentEdit, setCashPaymentEdit] = useState(null);
 
   const recordIdField = isCashDeposit ? 'cash_deposit_summary_id' : 'daily_summary_id';
+  const cashDepositPaymentsEditable =
+    isCashDeposit &&
+    canEditCashDepositPayments({ userType, depositStatus: record?.status });
+
+  const reloadDetailData = useCallback(async () => {
+    if (!record?.[recordIdField]) return;
+    setDetailLoading(true);
+    try {
+      const id = record[recordIdField];
+      const data = isCashDeposit
+        ? await apiRequest(`/cash-deposit-summaries/${id}/payments`).then(parseCashDepositPaymentsResponse)
+        : await apiRequest(`/daily-summary-sales/${id}/payments`).then(parseDailySummaryPaymentsResponse);
+      setDetailData(data);
+    } catch {
+      setDetailData(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [record, recordIdField, isCashDeposit]);
 
   const formatPeriod = (rec) => {
     if (!rec) return '-';
@@ -406,6 +436,11 @@ export default function AdminDailySummaryDetailsModal({ open, record, isCashDepo
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                   {isCashDeposit ? 'Cash payment records (from payment logs)' : 'Completed payments (payment logs)'}
                 </p>
+                {isCashDeposit && cashDepositPaymentsEditable ? (
+                  <p className="mb-2 text-[11px] text-primary-700">
+                    Click an invoice to update payment details. Totals refresh automatically after you save.
+                  </p>
+                ) : null}
                 {isCashDeposit && detailIsUsingSubmittedSnapshot ? (
                   <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
                     Showing the original submitted snapshot — the live recalc found no matching payment rows for this period
@@ -446,8 +481,12 @@ export default function AdminDailySummaryDetailsModal({ open, record, isCashDepo
                             const collected = payable + tip;
                             return (
                               <tr key={`cash-detail-${payment.payment_id}`} className="hover:bg-gray-50/80">
-                                <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
-                                  {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  <CashDepositPaymentInvoiceCell
+                                    payment={payment}
+                                    canEdit={cashDepositPaymentsEditable}
+                                    onEdit={setCashPaymentEdit}
+                                  />
                                 </td>
                                 <td className="px-3 py-2 text-gray-700 min-w-0 max-w-[160px]">
                                   <span className="truncate block" title={payment.student_name || '-'}>
@@ -722,6 +761,14 @@ export default function AdminDailySummaryDetailsModal({ open, record, isCashDepo
         url={paymentAttachmentViewerUrl}
         onClose={() => setPaymentAttachmentViewerUrl(null)}
       />
+
+      {cashPaymentEdit ? (
+        <CashDepositPaymentEditModal
+          payment={cashPaymentEdit}
+          onClose={() => setCashPaymentEdit(null)}
+          onSaved={reloadDetailData}
+        />
+      ) : null}
 
       {attachmentPreviewUrl &&
         createPortal(

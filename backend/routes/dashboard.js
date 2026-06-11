@@ -28,6 +28,7 @@ import {
   applyPaymentEnrollmentToBranchBreakdown,
   buildOperationalReEnrollmentRateBreakdown,
   loadDailyOperationalEnrollmentFromPayments,
+  loadOperationalReEnrolledStudentsFromPayments,
 } from '../lib/dailyOperationalEnrollmentFromPayments.js';
 import { loadRecentInvoicePaymentsForOperationalDashboard } from '../lib/operationalDashboardRecentPayments.js';
 
@@ -899,10 +900,16 @@ router.get(
         summaryDate,
       });
 
+      const reEnrolledStudentSummary = await loadOperationalReEnrolledStudentsFromPayments(query, {
+        branchId: branchFilter,
+        summaryDate,
+      });
+
       const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
         branchRows: branchBreakdown,
         enrollmentDashboard,
         totals,
+        studentSummary: reEnrolledStudentSummary,
         priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
         priorPeriodType: paymentEnrollment.prior_period_type ?? null,
         retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,
@@ -1085,6 +1092,87 @@ router.get(
       });
     } catch (error) {
       console.error('Error fetching merchandise released details:', error);
+      return next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/operational-re-enrolled-students
+ * Deduped re-enrolled students for operational dashboard breakdown drill-down.
+ * Full payment = 1 event; one student = 1 per branch.
+ */
+router.get(
+  '/operational-re-enrolled-students',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('summary_date').optional().isISO8601({ strict: true }).withMessage('summary_date must be YYYY-MM-DD'),
+    queryValidator('summary_month').optional().matches(/^\d{4}-\d{2}$/).withMessage('summary_month must be YYYY-MM'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const isAdmin = req.user.userType === 'Admin';
+      const branchFilter = isAdmin
+        ? (req.user.branchId || null)
+        : req.query.branch_id
+          ? parseInt(req.query.branch_id, 10)
+          : null;
+
+      const summaryDate = req.query.summary_date ? String(req.query.summary_date).trim().slice(0, 10) : '';
+      const summaryMonth = req.query.summary_month ? String(req.query.summary_month).trim() : '';
+
+      if (summaryDate && summaryMonth) {
+        return res.status(400).json({
+          success: false,
+          message: 'Provide summary_date or summary_month, not both',
+        });
+      }
+
+      let loaderOptions;
+      let periodLabel;
+
+      if (summaryMonth) {
+        const parsed = parseMonthRange(summaryMonth);
+        if (!parsed) {
+          return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+        }
+        if (parsed.key > getCurrentManilaMonthKey()) {
+          return res.status(400).json({
+            success: false,
+            message: 'summary_month cannot be in the future',
+          });
+        }
+        loaderOptions = {
+          branchId: branchFilter,
+          monthStart: parsed.start,
+          monthEndExclusive: parsed.end,
+        };
+        periodLabel = parsed.key;
+      } else {
+        const day = summaryDate || getTodayManila();
+        loaderOptions = { branchId: branchFilter, summaryDate: day };
+        periodLabel = day;
+      }
+
+      const summary = await loadOperationalReEnrolledStudentsFromPayments(query, loaderOptions);
+      const branchEntry =
+        branchFilter != null ? summary.by_branch_id?.get(branchFilter) ?? null : null;
+
+      return res.json({
+        success: true,
+        data: {
+          period_mode: summaryMonth ? 'monthly' : 'daily',
+          period_label: periodLabel,
+          window_label: summary.window_label,
+          selected_branch_id: branchFilter,
+          student_count: branchFilter != null ? branchEntry?.student_count ?? 0 : summary.total_student_count,
+          students: branchFilter != null ? branchEntry?.students ?? [] : summary.students,
+        },
+      });
+    } catch (error) {
+      console.error('Error fetching operational re-enrolled students:', error);
       return next(error);
     }
   }

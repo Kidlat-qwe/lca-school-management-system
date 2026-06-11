@@ -21,6 +21,7 @@ import {
   applyPaymentEnrollmentToBranchBreakdown,
   buildOperationalReEnrollmentRateBreakdown,
   loadMonthlyOperationalEnrollmentFromPayments,
+  loadOperationalReEnrolledStudentsFromPayments,
 } from './dailyOperationalEnrollmentFromPayments.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
@@ -384,10 +385,17 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     monthEndExclusive,
   });
 
+  const reEnrolledStudentSummary = await loadOperationalReEnrolledStudentsFromPayments(runQuery, {
+    branchId: branchFilter,
+    monthStart,
+    monthEndExclusive,
+  });
+
   const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
     branchRows: branchBreakdown,
     enrollmentDashboard,
     totals,
+    studentSummary: reEnrolledStudentSummary,
     priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
     priorPeriodType: paymentEnrollment.prior_period_type ?? null,
     retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,

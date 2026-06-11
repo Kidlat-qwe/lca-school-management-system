@@ -569,6 +569,8 @@ const MonthlyOperationalDashboardView = ({
           breakdown={data?.re_enrollment_rate_breakdown}
           tooltip={MONTHLY_OPERATIONAL.reEnrollmentRateBreakdown}
           emptyMessage="No re-enrollment rate breakdown for this month."
+          periodMode="monthly"
+          summaryMonth={selectedMonth}
         />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">

@@ -46,6 +46,7 @@ Daily and **Monthly** Operational Dashboard enrollment KPIs: **payment issue dat
 | Rejoin | Each class payment on the date with `program_enrollment_status = 'rejoin'` |
 | Dropped / unenrolled | Distinct students with `program_enrollment_status = 'dropped'` and `removed_at` on the summary date (Asia/Manila) |
 | Re-enrollment rate | **Re-enrollment KPI card** count for the window ÷ **retention base** (student+class tracks with enrolled class payments in the **prior calendar day or prior calendar month**) × 100 — same rule daily and monthly (e.g. 11 ÷ 4 for a day, 126 ÷ 211 for June) |
+| Re-enrollment breakdown (students) | Deduped student list per branch: **full payment = 1** re-enrollment event (not per phase); **one student = 1** per branch. Drill-down via `GET /dashboard/operational-re-enrolled-students`. Rate card still uses KPI phase-event count. |
 | Retention base | Distinct student+class tracks with new, re_enrolled, upsell, rejoin, or completed class payments on payment issue date in the period before the selected day/month. Shown on the Completed card |
 
 Only class-related completed payments count (same scope as invoice sales for enrollment billing). Status `pending_enrollment` is excluded. `completed` counts in its own KPI when the linked phase row is completed. `reserved` counts in the reserved KPI. (fullpayment description or installment→full conversion; multi-phase `PHASE_START`/`PHASE_END` only when **not** linked to an installment profile). Installment phase invoices use one `classstudentstbl` row per payment (`TARGET_PHASE` / paid phase). **Installment phase-events** require a **Paid** invoice (partial payments on `Partially Paid` invoices are excluded until settled). Multiple completed payments on the same chain and phase still **dedupe to one** event. Full-payment invoices use one phase-event per row in a tight `enrolled_at` window (matrix-aligned: first phase new, middle re_enrolled, last completed) so same-day phase 1 + phase 2 installments do not bleed into each other.
@@ -113,6 +114,17 @@ Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLin
 Standalone acknowledgement receipt PDFs (`ackReceiptPdfGenerator.js`) build table rows via `backend/utils/ackReceiptTableLineItems.js`: package/merchandise lines at gross, then **Discount/Payment Adjustment** (inferred from gross − `payment_amount`) and **Tip/Payment Adjustment** when present.
 
 Invoice **Download Acknowledgement Receipt** (`GET /invoices/:id/pdf?doc_type=ar` in `routes/invoices.js`) uses `buildInvoiceLinkedArTableRows()`: invoice line items plus payment-level tip/discount from `paymenttbl` (matches invoice list **Total amount** = payable + tip).
+
+## `arAttachInstallmentFollowUp.js`
+
+After `POST /acknowledgement-receipts/:id/attach-to-invoice` pays an installment **downpayment** invoice:
+
+| AR option | Behavior |
+|-----------|----------|
+| `downpayment_only` | Generate Phase 1 invoice only (unpaid) |
+| `downpayment_plus_phase1` | Generate Phase 1, **auto-pay** it (uses paired AR amount when split rows exist), enroll student, generate Phase 2 |
+
+Runs **await**ed before the attach API responds (not fire-and-forget). Cash Phase 1 payments use `approval_status = Pending` on Payment Logs; invoice status is still set to **Paid**.
 
 ## `arPaymentVerificationSync.js`
 

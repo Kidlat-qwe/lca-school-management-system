@@ -424,6 +424,96 @@ export const countsTowardOperationalReEnrollmentKpi = (row) => {
 };
 
 /**
+ * Deduped re-enrolled students for operational breakdown drill-down.
+ * - Full payment → one re-enrollment event per payment (not per phase).
+ * - One student → one count per branch (multiple installment re-enrolls still = 1 student).
+ */
+export function aggregateOperationalReEnrolledStudentsFromDetailRows(detailRows = []) {
+  const globalStudents = new Map();
+  const byBranch = new Map();
+
+  const upsertStudent = (map, studentId, row, branchId) => {
+    if (!map.has(studentId)) {
+      map.set(studentId, {
+        student_id: studentId,
+        student_name: row.student_name || '—',
+        student_email: row.student_email || '',
+        branch_id: branchId,
+        branch_name: row.branch_name || '',
+        class_names: [],
+        payment_labels: [],
+        latest_issue_date: row.issue_date ? String(row.issue_date).slice(0, 10) : null,
+      });
+    }
+    const student = map.get(studentId);
+    const className = row.class_name ? String(row.class_name).trim() : '';
+    if (className && !student.class_names.includes(className)) {
+      student.class_names.push(className);
+    }
+    const fullPay = Boolean(row.is_full_payment);
+    const payLabel = fullPay
+      ? `Full payment (INV-${row.invoice_id})`
+      : `Phase ${row.enrolled_phase_number ?? '—'} (INV-${row.invoice_id})`;
+    if (!student.payment_labels.includes(payLabel)) {
+      student.payment_labels.push(payLabel);
+    }
+    const issueDate = row.issue_date ? String(row.issue_date).slice(0, 10) : null;
+    if (issueDate && (!student.latest_issue_date || issueDate > student.latest_issue_date)) {
+      student.latest_issue_date = issueDate;
+    }
+  };
+
+  for (const row of detailRows || []) {
+    if (!countsTowardOperationalReEnrollmentKpi(row)) continue;
+
+    const branchId = parseInt(row.branch_id, 10);
+    const studentId = parseInt(row.student_id, 10);
+    if (!Number.isFinite(branchId) || !Number.isFinite(studentId)) continue;
+
+    const fullPay = Boolean(row.is_full_payment);
+    const eventKey = fullPay
+      ? `fp:${row.payment_id}`
+      : `inst:${row.payment_id}:${row.enrolled_phase_number ?? 'na'}`;
+
+    if (!byBranch.has(branchId)) {
+      byBranch.set(branchId, { eventKeys: new Set(), students: new Map() });
+    }
+    const branchBucket = byBranch.get(branchId);
+    if (branchBucket.eventKeys.has(eventKey)) continue;
+    branchBucket.eventKeys.add(eventKey);
+
+    upsertStudent(branchBucket.students, studentId, row, branchId);
+    upsertStudent(globalStudents, studentId, row, branchId);
+  }
+
+  const sortStudents = (list) =>
+    [...list].sort((a, b) => String(a.student_name).localeCompare(String(b.student_name)));
+
+  const branchSummaries = [...byBranch.entries()].map(([branch_id, bucket]) => ({
+    branch_id,
+    student_count: bucket.students.size,
+    students: sortStudents(bucket.students.values()),
+  }));
+
+  return {
+    total_student_count: globalStudents.size,
+    students: sortStudents(globalStudents.values()),
+    by_branch: branchSummaries,
+    by_branch_id: new Map(branchSummaries.map((entry) => [entry.branch_id, entry])),
+  };
+}
+
+/** @param {Function} queryFn */
+export async function loadOperationalReEnrolledStudentsFromPayments(queryFn, options = {}) {
+  const detail = await loadOperationalEnrollmentDetailFromPayments(queryFn, options);
+  const summary = aggregateOperationalReEnrolledStudentsFromDetailRows(detail.rows || []);
+  return {
+    ...summary,
+    window_label: detail.window_label,
+  };
+}
+
+/**
  * Retention base from deduped prior-period payment phase-events.
  * Base = student+class tracks with enrolled activity in the prior day/month.
  */
@@ -1011,11 +1101,14 @@ export function buildOperationalReEnrollmentRateBreakdown({
   branchRows = [],
   enrollmentDashboard = {},
   totals = {},
+  studentSummary = null,
   priorPeriodLabel = null,
   priorPeriodType = null,
   retentionRateMode = null,
 }) {
-  const formula = 're_enrollment KPI ÷ retention_base × 100';
+  const formula =
+    'Rate = re-enrollment KPI (phase-events) ÷ retention base × 100. Student column dedupes: full payment = 1, one student = 1 per branch. Click a branch to view the student list.';
+  const studentByBranch = studentSummary?.by_branch_id ?? new Map();
 
   const mapRow = (row, branchNameOverride) => {
     const branchRate = computeOperationalRetentionRate({
@@ -1023,10 +1116,17 @@ export function buildOperationalReEnrollmentRateBreakdown({
       re_enrollment_count: row.re_enrollment_count,
       retention_rate_mode: retentionRateMode || 'kpi_card',
     });
+    const branchId = row.branch_id ?? null;
+    const studentCount =
+      branchId == null
+        ? studentSummary?.total_student_count ?? 0
+        : studentByBranch.get(branchId)?.student_count ?? 0;
+
     return {
-      branch_id: row.branch_id ?? null,
+      branch_id: branchId,
       branch_name: branchNameOverride ?? row.branch_name ?? '—',
       re_enrollment_kpi_count: Number(row.re_enrollment_count) || 0,
+      re_enrolled_student_count: Number(studentCount) || 0,
       retention_base_count: Number(row.retention_base_count) || 0,
       re_enrollment_rate: Number(row.re_enrollment_rate ?? branchRate.re_enrollment_rate) || 0,
     };

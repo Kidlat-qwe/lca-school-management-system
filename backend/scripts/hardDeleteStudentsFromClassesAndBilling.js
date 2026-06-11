@@ -34,7 +34,7 @@ import { getClient } from '../config/database.js';
 const isDryRun = process.argv.includes('--dry-run');
 
 const TARGET_STUDENT_EMAILS = [
-  'jericacanete01@gmail.com',
+  'bronny@gmail.com',
   ,
 ];
 

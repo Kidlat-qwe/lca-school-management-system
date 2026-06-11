@@ -53,7 +53,7 @@ export const DAILY_OPERATIONAL = {
   verificationSection: 'Finance checks for the selected date',
   branchTable: 'Each column uses the same calendar day you selected above.',
   reEnrollmentRateBreakdown:
-    'How the Re-enrollment Rate % card is computed. Retention base = distinct student+class tracks with enrolled payments on the prior calendar day. Rate = re-enrollment KPI count today ÷ retention base × 100.',
+    'Rate uses re-enrollment KPI phase-events ÷ prior-period retention base. The Students re-enrolled column dedupes: full payment = 1, one student = 1 per branch. Click a branch to open the student list.',
   salesGuide:
     'Invoice Sales uses payment issue date. Acknowledgement Receipt Sales matches the AR page total for that day. Verification cards count package ARs by issue date and verification status.',
   chartBranchActivity: 'Compare branches: enrollments, drops, rejoins, and merchandise for this date.',
@@ -105,7 +105,7 @@ export const MONTHLY_OPERATIONAL = {
   verificationSection: 'Finance checks for the selected month',
   branchTable: 'All columns use the selected calendar month.',
   reEnrollmentRateBreakdown:
-    'How the Re-enrollment Rate % card is computed. Retention base = distinct student+class tracks with enrolled payments in the prior calendar month. Rate = re-enrollment KPI count this month ÷ retention base × 100.',
+    'Rate uses re-enrollment KPI phase-events ÷ prior-period retention base. The Students re-enrolled column dedupes: full payment = 1, one student = 1 per branch. Click a branch to open the student list.',
   salesGuide:
     'Invoice Sales uses payment issue date in the month. AR Sales matches the AR page for that month. Verification cards use package AR and payment verification status in the same range.',
   chartBranchActivity: 'Monthly totals by branch: enrollments, drops, rejoins, and merchandise.',
