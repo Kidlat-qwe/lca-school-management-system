@@ -1426,6 +1426,7 @@ router.get(
 
         const invoiceDescription = (invoice.invoice_description || '').trim();
         const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
+        const balanceInvoiceId = invoice.balance_invoice_id || null;
         const { rows: arLineRows, total: arDisplayTotal } = buildInvoiceLinkedArTableRows(
           items,
           paymentsResult.rows,
@@ -1434,6 +1435,8 @@ router.get(
               (!looksLikeInvoiceCodeOnly ? invoiceDescription : '') ||
               `Invoice INV-${invoice.invoice_id}`,
             fallbackAmount: amountPaid,
+            balanceInvoiceId,
+            remainingBalance: amountDue > 0.009 ? amountDue : undefined,
           },
         );
 
@@ -1462,6 +1465,12 @@ router.get(
         doc.font('Helvetica').fontSize(9).fillColor('#111827');
         arLineRows.forEach((row, idx) => {
           const rowH = lineHeights[idx];
+          const isInfoRow = row.excludeFromTotal === true;
+          if (isInfoRow) {
+            doc.font('Helvetica-Oblique').fontSize(9).fillColor('#4b5563');
+          } else {
+            doc.font('Helvetica').fontSize(9).fillColor('#111827');
+          }
           doc.text(row.description, xDesc, rowTop + 6, { width: descTextW, lineGap: 2 });
           doc.text(formatCurrency(row.rate), xRate, rowTop + 6, {
             width: rateW - 16,

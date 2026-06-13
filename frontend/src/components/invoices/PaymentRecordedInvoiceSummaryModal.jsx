@@ -1,9 +1,6 @@
 import { createPortal } from 'react-dom';
 import { formatDateManila } from '../../utils/dateUtils';
-import {
-  buildReceiptTableRowsFromInvoiceItems,
-  sumReceiptTableRows,
-} from '../../utils/invoiceReceiptLineItems';
+import { buildInvoiceLinkedArTableRows } from '../../utils/ackReceiptTableLineItems';
 import AcknowledgementReceiptStylePreview from '../receipts/AcknowledgementReceiptStylePreview';
 
 /**
@@ -52,41 +49,57 @@ export default function PaymentRecordedInvoiceSummaryModal({
   const preparedByText = invoice?.prepared_by_name || '';
   const receivedByText = invoice?.received_by_guardian_name || '';
 
-  const tableRows = buildReceiptTableRowsFromInvoiceItems(items);
+  const invoiceDescription = (invoice.invoice_description || '').trim();
+  const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);
+  const receiptDescription =
+    (!looksLikeInvoiceCodeOnly ? invoiceDescription : '') ||
+    (invId ? `Invoice INV-${invId}` : 'Payment recorded');
+
+  const paymentRowsForReceipt = snap
+    ? [
+        {
+          payable_amount: Number(snap.payable_amount) || 0,
+          discount_amount: Number(snap.discount_amount) || 0,
+          tip_amount: Number(snap.tip_amount) || 0,
+        },
+      ]
+    : [];
+
+  const balanceInvoiceId =
+    invoice.balance_invoice_id || invoice.continued_to_invoice?.invoice_id || null;
+  const remainingBalance =
+    balanceInvoiceId != null
+      ? Number(invoice.continued_to_invoice?.amount ?? 0)
+      : undefined;
+
+  const { rows: linkedArRows, total: totalAmount } = buildInvoiceLinkedArTableRows(
+    items,
+    paymentRowsForReceipt,
+    {
+      fallbackDescription: receiptDescription,
+      fallbackAmount: snap ? Number(snap.payable_amount) || 0 : undefined,
+      balanceInvoiceId,
+      remainingBalance,
+    },
+  );
+
+  const tableRows = linkedArRows.map((row) => ({
+    description: row.description,
+    rate: row.rate,
+    amount: row.amount,
+    excludeFromTotal: row.excludeFromTotal,
+  }));
+
   if (tableRows.length === 0 && snap) {
     const p = Number(snap.payable_amount) || 0;
     if (p > 0) {
       tableRows.push({
-        description: 'Payment recorded',
+        description: receiptDescription,
         rate: p,
         amount: p,
       });
     }
   }
-  if (snap && Number(snap.discount_amount) > 0) {
-    const d = Number(snap.discount_amount) || 0;
-    tableRows.push({
-      description: 'Discount/Payment Adjustment',
-      rate: -d,
-      amount: -d,
-    });
-  }
-  if (snap && Number(snap.tip_amount) > 0) {
-    const t = Number(snap.tip_amount) || 0;
-    tableRows.push({
-      description: 'Tip/Payment Adjustment',
-      rate: t,
-      amount: t,
-    });
-  }
-  const totalFromLines = sumReceiptTableRows(tableRows);
-  const invoiceAmount = Number(invoice.amount);
-  const totalAmount =
-    totalFromLines !== 0
-      ? totalFromLines
-      : Number.isFinite(invoiceAmount)
-        ? invoiceAmount
-        : 0;
 
   const addr = (branchInfo?.address || '').trim();
   const phone = (branchInfo?.phone || '').trim();

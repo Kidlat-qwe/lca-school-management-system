@@ -5,9 +5,136 @@ import {
   PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
   PAYMENT_TIP_ADJUSTMENT_LABEL,
 } from '../constants/paymentFormLabels';
+import { buildReceiptTableRowsFromInvoiceItems } from './invoiceReceiptLineItems';
+
+export const ACK_RECEIPT_PARTIAL_PAYMENT_SUFFIX = ' (Partial payment)';
+
+function formatBalanceInvoiceLabel(balanceInvoiceId) {
+  const id = Number(balanceInvoiceId);
+  return Number.isFinite(id) && id > 0 ? `INV-${id}` : null;
+}
 
 const roundCurrency = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+function buildArReceiptLineRows(items, options = {}) {
+  const rows = buildReceiptTableRowsFromInvoiceItems(items).map((row) => ({
+    description: row.description,
+    netAmount: row.amount,
+  }));
+  if (rows.length > 0) return rows;
+  const fallbackAmount = roundCurrency(options.fallbackAmount || 0);
+  if (fallbackAmount !== 0 || options.fallbackDescription) {
+    return [
+      {
+        description: options.fallbackDescription || 'Payment',
+        netAmount: fallbackAmount,
+      },
+    ];
+  }
+  return [];
+}
+
+export function sumInvoicePaymentSettled(payments = []) {
+  return roundCurrency(
+    (payments || []).reduce(
+      (s, p) => s + (Number(p.payable_amount) || 0) + (Number(p.discount_amount) || 0),
+      0,
+    ),
+  );
+}
+
+/** Invoice-linked AR preview — matches backend buildInvoiceLinkedArTableRows. */
+export function buildInvoiceLinkedArTableRows(items, payments = [], options = {}) {
+  const paymentDiscount = roundCurrency(
+    (payments || []).reduce((s, p) => s + (Number(p.discount_amount) || 0), 0),
+  );
+  const paymentTip = roundCurrency(
+    (payments || []).reduce((s, p) => s + (Number(p.tip_amount) || 0), 0),
+  );
+  const totalSettled = sumInvoicePaymentSettled(payments);
+
+  const itemRows = buildArReceiptLineRows(items, {
+    fallbackDescription: options.fallbackDescription,
+    fallbackAmount: options.fallbackAmount,
+  });
+  const itemsGrandTotal = roundCurrency(
+    itemRows.reduce((s, r) => s + (Number(r.netAmount) || 0), 0),
+  );
+
+  const isPartialReceipt =
+    totalSettled > 0.009 &&
+    itemsGrandTotal > 0.009 &&
+    totalSettled + 0.009 < itemsGrandTotal;
+
+  const remainingBalance = isPartialReceipt
+    ? roundCurrency(
+        options.remainingBalance != null && !Number.isNaN(Number(options.remainingBalance))
+          ? Number(options.remainingBalance)
+          : Math.max(0, itemsGrandTotal - totalSettled),
+      )
+    : 0;
+
+  let rows;
+  if (isPartialReceipt) {
+    const baseDescription =
+      (options.fallbackDescription || itemRows[0]?.description || 'Payment').trim() ||
+      'Payment';
+    const description = `${baseDescription}${ACK_RECEIPT_PARTIAL_PAYMENT_SUFFIX}`;
+    const lineAmount = roundCurrency(totalSettled);
+    rows = [{ description, rate: lineAmount, amount: lineAmount }];
+  } else if (itemRows.length > 0) {
+    rows = itemRows.map((row) => ({
+      description: row.description,
+      rate: row.netAmount,
+      amount: row.netAmount,
+    }));
+  } else {
+    const fallback = roundCurrency(options.fallbackAmount || totalSettled);
+    rows = [
+      {
+        description: options.fallbackDescription || 'Payment',
+        rate: fallback,
+        amount: fallback,
+      },
+    ];
+  }
+
+  if (isPartialReceipt && remainingBalance > 0.009) {
+    const balanceLabel = formatBalanceInvoiceLabel(options.balanceInvoiceId);
+    rows.push({
+      description: balanceLabel
+        ? `Remaining balance (${balanceLabel})`
+        : 'Remaining balance',
+      rate: remainingBalance,
+      amount: remainingBalance,
+      excludeFromTotal: true,
+    });
+  }
+
+  if (!isPartialReceipt && paymentDiscount > 0) {
+    rows.push({
+      description: PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
+      rate: -paymentDiscount,
+      amount: -paymentDiscount,
+    });
+  }
+  if (paymentTip > 0) {
+    rows.push({
+      description: PAYMENT_TIP_ADJUSTMENT_LABEL,
+      rate: paymentTip,
+      amount: paymentTip,
+    });
+  }
+
+  const total = roundCurrency(
+    rows.reduce(
+      (s, r) => s + (r.excludeFromTotal ? 0 : Number(r.amount) || 0),
+      0,
+    ),
+  );
+  return { rows, total, isPartialPayment: isPartialReceipt, remainingBalance };
+}
 
 function parseMerchandiseSnapshot(ar) {
   if (!ar?.merchandise_items_snapshot) return [];

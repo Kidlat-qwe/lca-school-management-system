@@ -5,6 +5,12 @@ import { buildArReceiptLineRows, roundCurrency } from './invoiceReceiptLineItems
 
 export const ACK_RECEIPT_TIP_LINE_LABEL = 'Tip/Payment Adjustment';
 export const ACK_RECEIPT_DISCOUNT_LINE_LABEL = 'Discount/Payment Adjustment';
+export const ACK_RECEIPT_PARTIAL_PAYMENT_SUFFIX = ' (Partial payment)';
+
+function formatBalanceInvoiceLabel(balanceInvoiceId) {
+  const id = Number(balanceInvoiceId);
+  return Number.isFinite(id) && id > 0 ? `INV-${id}` : null;
+}
 
 function parseMerchandiseSnapshot(ar) {
   if (!ar?.merchandise_items_snapshot) return [];
@@ -127,33 +133,95 @@ export function buildAckReceiptTableRows(ar) {
   return { rows, total };
 }
 
+/** Sum payable + discount from completed invoice payments (settlement, not tip). */
+export function sumInvoicePaymentSettled(payments = []) {
+  return roundCurrency(
+    (payments || []).reduce(
+      (s, p) => s + (Number(p.payable_amount) || 0) + (Number(p.discount_amount) || 0),
+      0,
+    ),
+  );
+}
+
 /**
  * Invoice-linked AR PDF (GET /invoices/:id/pdf?doc_type=ar): invoice lines plus
  * payment-level Discount/Payment Adjustment and Tip/Payment Adjustment from paymenttbl.
  *
+ * When settlement is less than invoice line total (partial payment), the receipt
+ * shows the amount actually paid — not the full invoice balance.
+ *
  * @param {Array} items - invoiceitemstbl rows
- * @param {Array<{ discount_amount?: number, tip_amount?: number }>} payments - completed payments
- * @param {{ fallbackDescription?: string, fallbackAmount?: number }} [options]
+ * @param {Array<{ payable_amount?: number, discount_amount?: number, tip_amount?: number }>} payments
+ * @param {{ fallbackDescription?: string, fallbackAmount?: number, remainingBalance?: number, balanceInvoiceId?: number }} [options]
  */
 export function buildInvoiceLinkedArTableRows(items, payments = [], options = {}) {
-  const itemRows = buildArReceiptLineRows(items, {
-    fallbackDescription: options.fallbackDescription,
-    fallbackAmount: options.fallbackAmount,
-  });
-  const rows = itemRows.map((row) => ({
-    description: row.description,
-    rate: row.netAmount,
-    amount: row.netAmount,
-  }));
-
   const paymentDiscount = roundCurrency(
     (payments || []).reduce((s, p) => s + (Number(p.discount_amount) || 0), 0),
   );
   const paymentTip = roundCurrency(
     (payments || []).reduce((s, p) => s + (Number(p.tip_amount) || 0), 0),
   );
+  const totalSettled = sumInvoicePaymentSettled(payments);
 
-  if (paymentDiscount > 0) {
+  const itemRows = buildArReceiptLineRows(items, {
+    fallbackDescription: options.fallbackDescription,
+    fallbackAmount: options.fallbackAmount,
+  });
+  const itemsGrandTotal = roundCurrency(
+    itemRows.reduce((s, r) => s + (Number(r.netAmount) || 0), 0),
+  );
+
+  const isPartialReceipt =
+    totalSettled > 0.009 &&
+    itemsGrandTotal > 0.009 &&
+    totalSettled + 0.009 < itemsGrandTotal;
+
+  const remainingBalance = isPartialReceipt
+    ? roundCurrency(
+        options.remainingBalance != null && !Number.isNaN(Number(options.remainingBalance))
+          ? Number(options.remainingBalance)
+          : Math.max(0, itemsGrandTotal - totalSettled),
+      )
+    : 0;
+
+  let rows;
+  if (isPartialReceipt) {
+    const baseDescription =
+      (options.fallbackDescription || itemRows[0]?.description || 'Payment').trim() ||
+      'Payment';
+    const description = `${baseDescription}${ACK_RECEIPT_PARTIAL_PAYMENT_SUFFIX}`;
+    const lineAmount = roundCurrency(totalSettled);
+    rows = [{ description, rate: lineAmount, amount: lineAmount }];
+  } else if (itemRows.length > 0) {
+    rows = itemRows.map((row) => ({
+      description: row.description,
+      rate: row.netAmount,
+      amount: row.netAmount,
+    }));
+  } else {
+    const fallback = roundCurrency(options.fallbackAmount || totalSettled);
+    rows = [
+      {
+        description: options.fallbackDescription || 'Payment',
+        rate: fallback,
+        amount: fallback,
+      },
+    ];
+  }
+
+  if (isPartialReceipt && remainingBalance > 0.009) {
+    const balanceLabel = formatBalanceInvoiceLabel(options.balanceInvoiceId);
+    rows.push({
+      description: balanceLabel
+        ? `Remaining balance (${balanceLabel})`
+        : 'Remaining balance',
+      rate: remainingBalance,
+      amount: remainingBalance,
+      excludeFromTotal: true,
+    });
+  }
+
+  if (!isPartialReceipt && paymentDiscount > 0) {
     rows.push({
       description: ACK_RECEIPT_DISCOUNT_LINE_LABEL,
       rate: -paymentDiscount,
@@ -168,12 +236,13 @@ export function buildInvoiceLinkedArTableRows(items, payments = [], options = {}
     });
   }
 
-  const total =
-    rows.length > 0
-      ? roundCurrency(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0))
-      : roundCurrency((Number(options.fallbackAmount) || 0) + paymentTip);
-
-  return { rows, total };
+  const total = roundCurrency(
+    rows.reduce(
+      (s, r) => s + (r.excludeFromTotal ? 0 : Number(r.amount) || 0),
+      0,
+    ),
+  );
+  return { rows, total, isPartialPayment: isPartialReceipt, remainingBalance };
 }
 
 /** Sum payment-level discount/tip from completed invoice payments. */

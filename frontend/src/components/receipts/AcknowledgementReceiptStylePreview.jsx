@@ -118,7 +118,7 @@ export default function AcknowledgementReceiptStylePreview({
               </tr>
             ) : (
               rows.map((row, idx) => (
-                <tr key={idx}>
+                <tr key={idx} className={row.excludeFromTotal ? 'text-gray-600' : undefined}>
                   <td className={descCellClass}>{row.description || '—'}</td>
                   <td className={`${cellBorder} whitespace-nowrap text-right`}>
                     {formatPhpReceiptLine(row.rate)}
