@@ -9,6 +9,10 @@
 import '../config/loadEnv.js';
 import { getClient } from '../config/database.js';
 import { resolveProfilePhaseStart } from '../utils/phaseInstallmentUtils.js';
+import {
+  determineRejoinAwarePhaseStatus,
+  PROGRAM_ENROLLMENT_STATUS,
+} from '../utils/enrollmentStatus.js';
 
 const dryRun = process.argv.includes('--dry-run');
 
@@ -48,6 +52,20 @@ function invoiceEligible(inv) {
   if (inv.status === 'Paid') return true;
   if (inv.status === 'Partially Paid' && Number(inv.completed_paid) > 0) return true;
   return false;
+}
+
+async function resolvePhaseEnrollmentStatus(client, { studentId, classId, absolutePhase, phaseStart }) {
+  const defaultStatus =
+    absolutePhase === phaseStart
+      ? PROGRAM_ENROLLMENT_STATUS.NEW
+      : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
+  return determineRejoinAwarePhaseStatus({
+    db: client,
+    studentId,
+    classId,
+    phaseNumber: absolutePhase,
+    defaultStatus,
+  });
 }
 
 async function reinstateRow(client, { classstudentId, status, label }) {
@@ -125,7 +143,12 @@ async function fixManualUnenrollPaidPhases(client, { studentId, fullName, classI
       console.log(`  Skip P${phase} — not manual unenroll (${row.removed_reason})`);
       continue;
     }
-    const status = phase === phaseStart ? 'new' : 're_enrolled';
+    const status = await resolvePhaseEnrollmentStatus(client, {
+      studentId,
+      classId,
+      absolutePhase: phase,
+      phaseStart,
+    });
     await reinstateRow(client, {
       classstudentId: row.classstudent_id,
       status,
@@ -144,7 +167,6 @@ async function fixPhaseStartPackage(client, { studentId, fullName, classId }) {
   }
 
   const phaseStart = invoices[0].phase_start;
-  const firstPaidAbsolute = invoices.find(invoiceEligible)?.absolute_phase ?? phaseStart;
 
   for (const inv of invoices) {
     if (!invoiceEligible(inv)) {
@@ -152,8 +174,12 @@ async function fixPhaseStartPackage(client, { studentId, fullName, classId }) {
       continue;
     }
 
-    const status =
-      inv.absolute_phase === firstPaidAbsolute ? 'new' : 're_enrolled';
+    const status = await resolvePhaseEnrollmentStatus(client, {
+      studentId,
+      classId,
+      absolutePhase: inv.absolute_phase,
+      phaseStart,
+    });
 
     await ensurePhaseRow(client, {
       studentId,

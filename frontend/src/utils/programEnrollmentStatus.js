@@ -57,6 +57,12 @@ export const PROGRAM_ENROLLMENT_STATUS_ITEMS = [
     tone: 'bg-green-100 text-green-800',
     description: 'Student completed this enrolled phase.',
   },
+  {
+    key: 'not_yet_enrolled',
+    label: 'Not yet enrolled',
+    tone: 'bg-slate-100 text-slate-600',
+    description: 'Invoice not generated yet; no enrollment for this phase.',
+  },
 ];
 
 const STATUS_LABELS = Object.fromEntries(
@@ -79,6 +85,25 @@ export const PROGRAM_ENROLLMENT_STATUS_FILTER_OPTIONS = [
 export function formatProgramEnrollmentStatus(status) {
   const key = String(status || '').trim().toLowerCase();
   return STATUS_LABELS[key] || (status ? String(status) : '—');
+}
+
+/** Installment plan phases table — clearer dropped / not-yet labels. */
+export function formatInstallmentPlanPhaseEnrollment(status) {
+  const key = String(status || '').trim().toLowerCase();
+  switch (key) {
+    case 'dropped':
+      return 'Dropped';
+    case 'not_yet_enrolled':
+      return 'Not yet enrolled';
+    case 're_enrolled':
+      return 'Re-enrolled';
+    case 'new':
+      return 'New';
+    case 'rejoin':
+      return 'Rejoin';
+    default:
+      return formatProgramEnrollmentStatus(status);
+  }
 }
 
 export function programEnrollmentStatusBadgeClass(status) {

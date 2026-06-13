@@ -26,9 +26,12 @@ import pool from '../config/database.js';
 import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
 import {
   isAdvancePaymentInvoice,
+  isInstallmentPlanSlotAddressed,
   mapPhaseChainsToLocalSlots,
   normalizeAdjacentPhaseDisplayDates,
   annotateInstallmentPhasePlanSlots,
+  loadEnrollmentStatusByAbsolutePhase,
+  attachEnrollmentToInstallmentPhaseRows,
 } from '../utils/installmentPhaseRowMapping.js';
 import {
   findNextUnbilledLocalPhase,
@@ -523,7 +526,17 @@ router.get(
         }
         const rep = chain.representative;
         const amount = rep.amount != null ? Number(rep.amount) : null;
+        const paidAmount = Number(chain.paid_amount || 0);
         const isAdvance = isAdvancePaymentInvoice(rep) || isAdvancePaymentRemarks(rep?.remarks);
+        const profilePhaseAmount =
+          profile.amount != null ? Number(profile.amount) : 0;
+        const expectedAmount = amount != null ? amount : profilePhaseAmount;
+        let displayStatus = computeStatus(rep.status, rep.due_date);
+        if (Math.max(0, expectedAmount - paidAmount) <= 0.009) {
+          displayStatus = 'Paid';
+        } else if (paidAmount > 0.009 && expectedAmount <= 0.009) {
+          displayStatus = 'Paid';
+        }
         return {
           phase_number: phaseNumber,
           invoice_id: Number(rep.invoice_id),
@@ -533,8 +546,8 @@ router.get(
           due_date: rep.due_date || null,
           payment_date: chain.latest_payment_date || null,
           amount,
-          paid_amount: Number(chain.paid_amount || 0),
-          status: computeStatus(rep.status, rep.due_date),
+          paid_amount: paidAmount,
+          status: displayStatus,
           is_generated: true,
           billing_kind: isAdvance ? 'advance' : null,
           phase_mapping_mode: phaseMappingMode,
@@ -553,6 +566,15 @@ router.get(
         normalizeAdjacentPhaseDisplayDates(phases, computeStatus)
       );
 
+      const enrollmentByPhase =
+        profile.student_id != null && profile.class_id != null
+          ? await loadEnrollmentStatusByAbsolutePhase(
+              query,
+              Number(profile.student_id),
+              Number(profile.class_id)
+            )
+          : new Map();
+
       const fullPaymentConversion = await resolveInstallmentProfileFullPaymentConversion(pool, {
         profileId: Number(profile.installmentinvoiceprofiles_id),
         studentId: profile.student_id != null ? Number(profile.student_id) : null,
@@ -567,6 +589,11 @@ router.get(
           fullPaymentConversion
         );
       }
+
+      normalizedPhases = attachEnrollmentToInstallmentPhaseRows(normalizedPhases, {
+        phaseStart,
+        enrollmentByAbsolutePhase: enrollmentByPhase,
+      });
 
       const downpaymentRep = downpaymentChain?.representative || null;
       const downpayment = downpaymentRep
@@ -608,6 +635,7 @@ router.get(
       // Plus any unpaid portion of the downpayment.
       const outstandingGenerated = normalizedPhases.reduce((sum, p) => {
         if (!p.is_generated || p.amount == null) return sum;
+        if (String(p.program_enrollment_status || '').toLowerCase() === 'dropped') return sum;
         return sum + Math.max(0, Number(p.amount) - Number(p.paid_amount || 0));
       }, 0);
       const outstandingNotGenerated = normalizedPhases.reduce(

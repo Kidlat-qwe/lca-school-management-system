@@ -112,6 +112,7 @@ export function normalizeAdjacentPhaseDisplayDates(phases, computeStatus) {
     if (typeof computeStatus === 'function') {
       for (const row of [a, b]) {
         if (row.status === 'Paid' || row.status === 'Cancelled') continue;
+        if (isInstallmentPlanSlotAddressed(row)) continue;
         row.status = computeStatus('pending', row.due_date);
       }
     }
@@ -164,6 +165,14 @@ export function mapPhaseChainsToLocalSlots(phaseChains, profile) {
 const PHASE_OUTSTANDING_EPSILON = 0.009;
 
 /**
+ * @param {object|null|undefined} phase
+ * @returns {boolean}
+ */
+export function isDroppedEnrollmentPhase(phase) {
+  return String(phase?.program_enrollment_status || '').toLowerCase() === 'dropped';
+}
+
+/**
  * True when a profile-local installment phase slot has no remaining balance
  * (paid, skipped gap, or fully settled generated invoice).
  *
@@ -173,6 +182,7 @@ const PHASE_OUTSTANDING_EPSILON = 0.009;
 export function isInstallmentPlanSlotAddressed(phase) {
   if (!phase) return false;
   if (phase.plan_slot_addressed === true) return true;
+  if (isDroppedEnrollmentPhase(phase)) return true;
 
   const status = String(phase.status || '').toLowerCase();
   if (status.includes('skipped') || phase.billing_kind === 'skipped_gap') {
@@ -205,4 +215,66 @@ export function annotateInstallmentPhasePlanSlots(phases) {
     ...phase,
     plan_slot_addressed: isInstallmentPlanSlotAddressed(phase),
   }));
+}
+
+/**
+ * Enrollment label for installment plan phase rows (absolute class phase).
+ * @param {Map<number, { program_enrollment_status: string }>} enrollmentByAbsolutePhase
+ */
+export function resolveInstallmentPhaseEnrollmentStatus({
+  absolutePhase,
+  enrollmentByAbsolutePhase,
+  phaseRow,
+}) {
+  const enroll = enrollmentByAbsolutePhase?.get(absolutePhase);
+  if (enroll?.program_enrollment_status) {
+    return enroll.program_enrollment_status;
+  }
+  if (!phaseRow?.is_generated) {
+    return 'not_yet_enrolled';
+  }
+  return null;
+}
+
+/**
+ * Load latest enrollment status per absolute phase for a student/class track.
+ * @param {Function} queryFn
+ */
+export async function loadEnrollmentStatusByAbsolutePhase(queryFn, studentId, classId) {
+  const result = await queryFn(
+    `SELECT DISTINCT ON (phase_number)
+       phase_number,
+       program_enrollment_status
+     FROM classstudentstbl
+     WHERE student_id = $1
+       AND class_id = $2
+       AND phase_number IS NOT NULL
+     ORDER BY phase_number ASC, classstudent_id DESC`,
+    [studentId, classId]
+  );
+  const map = new Map();
+  for (const row of result.rows || []) {
+    const phase = parseInt(row.phase_number, 10);
+    if (Number.isFinite(phase)) {
+      map.set(phase, row);
+    }
+  }
+  return map;
+}
+
+export function attachEnrollmentToInstallmentPhaseRows(phases, { phaseStart, enrollmentByAbsolutePhase }) {
+  const start = Math.max(1, parseInt(phaseStart, 10) || 1);
+  return (phases || []).map((phaseRow) => {
+    const localPhase = parseInt(phaseRow.phase_number, 10);
+    const absolutePhase = start + localPhase - 1;
+    return {
+      ...phaseRow,
+      absolute_phase_number: absolutePhase,
+      program_enrollment_status: resolveInstallmentPhaseEnrollmentStatus({
+        absolutePhase,
+        enrollmentByAbsolutePhase,
+        phaseRow,
+      }),
+    };
+  });
 }

@@ -1,0 +1,59 @@
+﻿INV-721 260376  Khalid Zephyr Ladioray Mormolindo       LCA Pampanga    Paid
+INV-719 260374  Alessandria Callista T. Lao     LCA Malolos     Paid
+INV-718 260373  Jeremiah Donny Bautista Padre   LCA Pampanga    Paid
+INV-716 260371  Lucas Oliver Leon Panlilio      LCA Pampanga    Paid
+INV-715 260370  FINLEY RHEIN C. LIMON   LCA Malolos     Paid
+INV-680 260335  Miguel Rohan R. Mampusti        LCA Malolos     Paid
+INV-679 260334  Penelope Jeene A. Cudia LCA Malolos     Paid
+INV-554 260207  Denzo Joaquin Tarroza Garcia    LCA Malolos     Paid
+INV-1275        260940  Neliah Kursten O. Arcenal       LCA Cavite      Paid
+INV-987 260649  Alizah Sucil Nipa       LCA Pampanga    Paid
+INV-985 260647  Rye Keonne S. Cabral    LCA Guiguinto   Paid
+INV-983 260645  Ethan Rai G. Panganiban LCA Malolos     Paid
+INV-981 260643  Catalina Yv Alinday     LCA Malolos     Paid
+INV-979 260641  Lewis Axel S. Marasigan LCA Malolos     Paid
+INV-978 260640  Lily Isabel Igna        LCA Cavite      Paid
+INV-975 260637  Kyle Andrei Salonga     LCA Malolos     Paid
+INV-974 260636  Theo Samuel P. Morales  LCA Malolos     Paid
+INV-971 260633  Mathiana Victoria Reyes Florendo        LCA Guiguinto   Paid
+INV-970 260632  Jacob Lewis Ramirez Datingaling LCA Guiguinto   Paid
+INV-969 260631  Mathiana Victoria Reyes Florendo        LCA Guiguinto   Paid
+INV-967 260629  Patrizio Marcus M. Omandam      LCA Cavite      Paid
+INV-966 260628  Primo Lucas Navarro     LCA Malolos     Paid
+INV-965 260627  Maria Alliyah Carmeli M. David  LCA Guiguinto   Paid
+INV-964 260626  Junia Patriella Montano LCA Malolos     Paid
+INV-963 260625  Theo Austin Galang      LCA Malolos     Paid
+INV-962 260624  Theo Austin Galang      LCA Malolos     Partially Paid
+INV-960 260622  Stephen Sky Belangoy    LCA Pampanga    Paid
+INV-958 260620  Felicity Anne Zabanal   LCA Malolos     Paid
+INV-957 260619  Ryan Sebastian Quienday LCA Malolos     Paid
+INV-956 260618  Ryan Sebastian Quienday LCA Malolos     Paid
+INV-953 260615  Sabrina M. Resurreccion LCA Malolos     Partially Paid
+INV-952 260614  Dave Chester Santos     LCA Malolos     Paid
+INV-954 260616  Sabrina M. Resurreccion LCA Malolos     Paid
+INV-948 260609  Gavin Ysmael Santos     LCA Guiguinto   Paid
+INV-942 260603  Miguel Achilles Bulaong LCA Malolos     Paid
+INV-941 260602  Sabrina M. Resurreccion LCA Malolos     Paid
+INV-940 260601  Sabrina M. Resurreccion LCA Malolos     Paid
+INV-937 260598  Jaden Kyler Javier Cruz LCA Malolos     Paid
+INV-935 260596  Hailey Lindsay Espeño Sulat     LCA Guiguinto   Partially Paid
+INV-930 260591  Aziel Samuel P. Dela Paz        LCA Malolos     Paid
+INV-927 260588  Keith Ezequiel Sia      LCA Cavite      Paid
+INV-926 260586  Hailey Lindsay Espeño Sulat     LCA Guiguinto   Paid
+INV-924 260584  Isabella Cali David Marquez     LCA Guiguinto   Paid
+INV-920 260580  Zion Ezekiel Capalad    LCA Malolos     Paid
+INV-917 260577  Azalea Aerith E. Fullantes      LCA Malolos     Partially Paid
+INV-915 260575  Zion Alexander Infante De Leon  LCA Pampanga    Paid
+INV-912 260572  Gabriel Matthew Austria LCA Cavite      Paid
+INV-907 260567  Melody Faith DC Fajardo LCA Malolos     Paid
+INV-904 260564  Sophia Aurora Adalee    LCA Pampanga    Paid
+INV-902 260562  Ma. Chandria Dale Layog LCA Malolos     Paid
+INV-901 260561  Matthew R. Sabino       LCA Malolos     Paid
+INV-897 260557  Quintessa Avery D. Manibog      LCA Pampanga    Paid
+INV-895 260555  Ethan Arellano  LCA Pampanga    Paid
+INV-888 260548  Lucia Amelie Lopez Cruz LCA Malolos     Paid
+INV-886 260546  Rovinne Geronne Enriquez        LCA Malolos     Partially Paid
+INV-881 260541  ROM NATHANIEL S. GABRILLO       LCA Malolos     Paid
+INV-871 260531  Johann Astro Agullana   LCA Cavite      Paid
+INV-870 260530  Isaac Brylle T. Gauna   LCA Guiguinto   Paid
+INV-866 260526  Kendra Rafferty Dinoy   LCA Malolos     Paid

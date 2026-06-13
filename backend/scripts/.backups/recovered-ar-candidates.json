@@ -1,0 +1,52 @@
+{
+  "exported_at": "2026-06-11T07:49:17.213Z",
+  "count": 8,
+  "rows": [
+    {
+      "invoice_id": 138,
+      "invoice_ar_number": "291182",
+      "source": "db-remarks"
+    },
+    {
+      "invoice_id": 139,
+      "invoice_ar_number": "291182",
+      "source": "db-remarks"
+    },
+    {
+      "invoice_id": 396,
+      "invoice_ar_number": "260045",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    },
+    {
+      "invoice_id": 733,
+      "invoice_ar_number": "260388",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    },
+    {
+      "invoice_id": 939,
+      "invoice_ar_number": "260600",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    },
+    {
+      "invoice_id": 955,
+      "invoice_ar_number": "260617",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    },
+    {
+      "invoice_id": 1267,
+      "invoice_ar_number": "260932",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    },
+    {
+      "invoice_id": 1278,
+      "invoice_ar_number": "260942",
+      "source": "file",
+      "file": "C:\\Users\\DELL\\.cursor\\projects\\c-Users-DELL-Desktop-My-Projects-Physical-School-Management-System\\terminals\\16.txt"
+    }
+  ]
+}

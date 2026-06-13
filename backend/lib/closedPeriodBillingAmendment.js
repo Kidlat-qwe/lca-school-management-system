@@ -28,7 +28,7 @@ export function eodHasAmendmentDrift(summaryRow, liveTotals) {
 
 /**
  * Calendar dates with completed sales but no daily_summary_salestbl row (EOD gap after hard delete).
- * @param {Function} db Query function (pool.query or compatible)
+ * @param {Function|{ query: Function }} db pool.query, getClient(), or the app's `query` helper
  * @param {number} branchId
  * @param {string} todayYmd YYYY-MM-DD (Manila today)
  * @returns {Promise<string[]>}
@@ -36,7 +36,10 @@ export function eodHasAmendmentDrift(summaryRow, liveTotals) {
 export async function getEodBackfillDates(db, branchId, todayYmd) {
   if (!branchId || !todayYmd) return [];
 
-  const result = await db.query(
+  const runQuery =
+    typeof db === 'function' ? db : (text, params) => db.query(text, params);
+
+  const result = await runQuery(
     `WITH sales_dates AS (
        SELECT DISTINCT p.issue_date::date AS d
        FROM paymenttbl p

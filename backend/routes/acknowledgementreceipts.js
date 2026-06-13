@@ -26,10 +26,7 @@ import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
 import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
-import {
-  countInvoiceOnlyArListRows,
-  fetchInvoiceOnlyArListRows,
-} from '../utils/arInvoiceOnlyListRows.js';
+import { isArInvoiceOnlyGhostListRow } from '../utils/arInvoiceOnlyListRows.js';
 import { shouldSyncPaymentLogApprovalOnArVerify } from '../lib/paymentLogArApproval.js';
 import {
   isDownpaymentPlusPhase1Ack,
@@ -537,7 +534,6 @@ router.get(
       const offset = (pageNum - 1) * limitNum;
 
       const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
-      const trimmedSearch = String(search || '').trim();
 
       // Downpayment + Phase 1 creates two AR rows (sequential numbers). Each list row
       // shows its own line amount — downpayment on the leader, Phase 1 on the paired row.
@@ -672,44 +668,7 @@ router.get(
 
       const result = await query(sql, params);
 
-      const statusListForInvoiceOnly = status
-        ? String(status).split(',').map((s) => s.trim()).filter(Boolean)
-        : [];
-
-      const invoiceOnlyFilters = {
-        search: trimmedSearch,
-        invoiceId: invoiceIdFilter,
-        branchId:
-          req.user.userType !== 'Superadmin' && req.user.branchId
-            ? req.user.branchId
-            : branch_id || null,
-        paymentFrom,
-        paymentTo,
-        issueFrom: arFrom,
-        issueTo: arTo,
-        createdFrom,
-        createdTo,
-        paymentMethod: payment_method || null,
-        statusFilter: statusListForInvoiceOnly,
-      };
-
-      let invoiceOnlyRows = [];
-      if (trimmedSearch || invoiceIdFilter) {
-        invoiceOnlyRows = await fetchInvoiceOnlyArListRows(invoiceOnlyFilters);
-      }
-
-      const mergedRows = [...invoiceOnlyRows, ...result.rows];
-      const linkedInvoiceIdsFromAr = new Set(
-        result.rows
-          .map((row) => Number(row.linked_invoice_id || row.invoice_id))
-          .filter((id) => Number.isFinite(id) && id > 0)
-      );
-      const dedupedRows = mergedRows.filter((row, idx, arr) => {
-        if (!row.invoice_only_payment) return true;
-        const invId = Number(row.linked_invoice_id);
-        if (linkedInvoiceIdsFromAr.has(invId)) return false;
-        return arr.findIndex((r) => r.invoice_only_payment && Number(r.linked_invoice_id) === invId) === idx;
-      });
+      const listRows = result.rows.filter((row) => !isArInvoiceOnlyGhostListRow(row));
 
       // Total count for pagination
       let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar ${AR_INVOICE_LINK_LATERAL_SQL} WHERE 1=1`;
@@ -809,27 +768,18 @@ router.get(
       }
 
       const countResult = await query(countSql, countParams);
-      let total = parseInt(countResult.rows[0].total, 10) || 0;
-      let invoiceOnlyCount = 0;
-      let invoiceOnlyLineTotal = 0;
-      if (trimmedSearch || invoiceIdFilter) {
-        const io = await countInvoiceOnlyArListRows(invoiceOnlyFilters);
-        invoiceOnlyCount = io.count;
-        invoiceOnlyLineTotal = io.totalLineAmount;
-        total += invoiceOnlyCount;
-      }
+      const total = parseInt(countResult.rows[0].total, 10) || 0;
       const sumLineExpr = `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)`;
       const sumSql = countSql.replace(
         /SELECT COUNT\(\*\) AS total/i,
         `SELECT COALESCE(SUM(${sumLineExpr}), 0)::numeric AS total_line_amount`
       );
       const sumResult = await query(sumSql, countParams);
-      const filterTotalLineAmount =
-        (parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0) + invoiceOnlyLineTotal;
+      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
 
       res.json({
         success: true,
-        data: dedupedRows.map(formatArListApiRow),
+        data: listRows.map(formatArListApiRow),
         filterTotalLineAmount,
         pagination: {
           page: pageNum,

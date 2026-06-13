@@ -103,7 +103,7 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                           {row.re_enrolled_count}/{row.prior_month_enrolled_count}
                         </div>
                         <div className="text-[11px] tabular-nums text-amber-800">
-                          {Number(row.re_enrollment_rate ?? 0).toFixed(0)}%
+                          {Number(row.re_enrollment_rate ?? 0).toFixed(2)}%
                         </div>
                       </>
                     ) : row.has_prior_month && Number(row.re_enrolled_count) > 0 ? (

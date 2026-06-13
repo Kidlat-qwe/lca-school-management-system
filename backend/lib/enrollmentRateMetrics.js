@@ -9,6 +9,30 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
+/** Billing anchor: earliest active enrolled phase (exclude dropped/unenrolled rows). */
+const MATRIX_BILLING_ANCHOR_ACTIVE_WHERE = `
+  AND program_enrollment_status IN ${ENROLLED_STATUSES}
+  AND removed_at IS NULL
+`;
+
+/** Dropped rows below installment package phase_start are orphan repair artifacts — omit from matrix. */
+const MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL = `
+  AND NOT (
+    cs.program_enrollment_status = 'dropped'
+    AND COALESCE(cs.phase_number, 1) < COALESCE(
+      (
+        SELECT NULLIF(ip.phase_start, 0)
+        FROM installmentinvoiceprofilestbl ip
+        WHERE ip.student_id = cs.student_id
+          AND ip.class_id = cs.class_id
+        ORDER BY ip.installmentinvoiceprofiles_id DESC
+        LIMIT 1
+      ),
+      1
+    )
+  )
+`;
+
 /** Dashboard "reserved" from reservedstudentstbl only after the reservation fee is paid. */
 const RESERVATION_FEE_PAID_SQL = `(
   r.status = 'Fee Paid'
@@ -2810,6 +2834,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
         WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
           AND (
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
@@ -2818,7 +2843,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           ${classJoin}
       ),
 
-      -- Installment anchor: earliest phase + enrolled_at month (payment-driven).
+      -- Installment anchor: earliest active enrolled phase + enrolled_at month.
       anchor AS (
         SELECT DISTINCT ON (student_id, class_id)
           student_id,
@@ -2827,6 +2852,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date        AS base_month
         FROM scoped_rows
         WHERE enrolled_at IS NOT NULL
+          ${MATRIX_BILLING_ANCHOR_ACTIVE_WHERE}
         ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC
       ),
 
@@ -2943,6 +2969,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${scopeBranchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
         WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
           AND (
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
@@ -2967,6 +2994,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date        AS base_month
         FROM scoped_rows
         WHERE enrolled_at IS NOT NULL
+          ${MATRIX_BILLING_ANCHOR_ACTIVE_WHERE}
         ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC
       ),
       phase_billing AS (
@@ -3231,12 +3259,19 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     if (!displayMonthKeys.has(monthKey)) continue;
 
     const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
+    const existing = student.months[monthKey];
+    if (
+      existing?.mark === '1' &&
+      ENROLLED_STATUSES_LIST.includes(String(existing.status || '').toLowerCase())
+    ) {
+      continue;
+    }
     student.months[monthKey] = {
       mark: '-',
       label: 'dropped/unenrolled',
       status: 'dropped',
       calendar_dropped: true,
-      is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+      is_full_payment: Boolean(existing?.is_full_payment),
     };
   }
 
@@ -3335,6 +3370,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     const firstEverMonthKey = toManilaMonthKey(student.first_enrolled_at);
     // First calendar month in the program should stay "new", not "rejoin".
     if (firstEverMonthKey && monthKey === firstEverMonthKey) continue;
+
+    const existing = student.months[monthKey];
+    // Billing-month cells win over enrolled_at calendar month (installment phase-offset model).
+    if (existing?.mark === '1') continue;
 
     student.months[monthKey] = {
       mark: '1',
@@ -3606,6 +3645,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       if (!cell || cell.mark !== '1') continue;
       if (cell.status === 'upsell' && m.key === firstEnrolledKey) {
         cell.label = 'upsell';
+      } else if (cell.status === 'rejoin' || cell.calendar_rejoin) {
+        cell.label = 'rejoin';
       } else if (cell.status === 'new' && m.key !== firstEnrolledKey) {
         cell.label = 're-enrolled';
       } else if (cell.status === 're_enrolled' || cell.calendar_continuation) {

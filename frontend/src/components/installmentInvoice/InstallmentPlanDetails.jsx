@@ -6,9 +6,10 @@ import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import {
   getInstallmentPhaseOutstanding,
+  isDroppedEnrollmentPhase,
   isInstallmentPlanSlotAddressed,
 } from '../../utils/installmentPhaseSlotStatus';
-import { formatProgramEnrollmentStatus } from '../../utils/programEnrollmentStatus';
+import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
 import {
@@ -37,6 +38,7 @@ import {
  * Props:
  *   - profileId            (number|string) installmentinvoiceprofiles_id
  *   - showStudentName      (bool, default true)
+ *   - embedded             (bool, default false) tighter phases table for Student history modal
  *   - className            (string, optional)  applied to the wrapper
  */
 
@@ -78,7 +80,7 @@ const statusBadgeClass = (status) => {
 // Keep this list in sync with the Invoice payment modal (Invoice.jsx).
 const PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
-const InstallmentPlanDetails = ({ profileId, showStudentName = true, className = '' }) => {
+const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = false, className = '' }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
@@ -481,6 +483,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
 
     for (let i = 0; i < phases.length; i += 1) {
       const p = phases[i];
+      if (isDroppedEnrollmentPhase(p)) continue;
       const out = getInstallmentPhaseOutstanding(p);
       const st = String(p.status || '').toLowerCase();
       const cancelled = st === 'cancelled' || st === 'canceled';
@@ -528,7 +531,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             </div>
           )}
 
-          <section className="rounded-lg border border-gray-200 bg-gray-50 p-4 sm:p-5">
+          <section className={`rounded-lg border border-gray-200 bg-gray-50 ${embedded ? 'p-3' : 'p-4 sm:p-5'}`}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               {showStudentName && (
                 <div>
@@ -709,14 +712,19 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
             </div>
 
             <div
-              className="overflow-x-auto"
+              className={`overflow-x-auto rounded-b-lg ${
+                embedded ? '[&_th]:!px-1.5 [&_td]:!px-1.5' : ''
+              }`}
               style={{
                 scrollbarWidth: 'thin',
                 scrollbarColor: '#cbd5e0 #f7fafc',
                 WebkitOverflowScrolling: 'touch',
               }}
             >
-              <table style={{ width: '100%', minWidth: '1120px' }} className="divide-y divide-gray-200">
+              <table
+                style={{ width: '100%', minWidth: embedded ? '1040px' : '1120px' }}
+                className="divide-y divide-gray-200"
+              >
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Phase</th>
@@ -744,6 +752,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                   ) : (
                     phases.map((phase, idx) => {
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
+                      const isDroppedEnrollment = isDroppedEnrollmentPhase(phase);
                       const isNotGenerated = phase.status === 'Not Generated';
                       const billingLabel =
                         phase.billing_kind === 'skipped_gap'
@@ -776,7 +785,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 max-w-[140px]">
                             {phase.program_enrollment_status
-                              ? formatProgramEnrollmentStatus(phase.program_enrollment_status)
+                              ? formatInstallmentPlanPhaseEnrollment(phase.program_enrollment_status)
                               : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 text-xs text-gray-600 whitespace-nowrap" title="Installment invoice slot">
@@ -804,9 +813,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                             {formatCurrency(phase.paid_amount || 0)}
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass(phase.status)}`}>
-                              {phase.status}
-                            </span>
+                            {isDroppedEnrollment ? (
+                              '\u2014'
+                            ) : (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass(phase.status)}`}>
+                                {phase.status}
+                              </span>
+                            )}
                           </td>
                           <td className="px-2 py-2.5 text-xs text-gray-600 max-w-[160px]">
                             {phase.phase_note ? (
@@ -814,7 +827,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, className =
                             ) : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
-                            {isPayRow ? (
+                            {isDroppedEnrollment ? (
+                              '\u2014'
+                            ) : isPayRow ? (
                               <button
                                 type="button"
                                 onClick={() => {

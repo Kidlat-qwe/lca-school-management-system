@@ -1,4 +1,9 @@
 import { getCanonicalInstallmentPhaseCounts, parseTargetPhase } from './balanceInvoice.js';
+import { loadInstallmentProfilePhaseChains } from '../lib/installmentPaymentEligibility.js';
+import {
+  mapPhaseChainsToLocalSlots,
+  parseAbsolutePhaseFromInvoice,
+} from './installmentPhaseRowMapping.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
@@ -12,6 +17,32 @@ const ACTIVE_PHASE_STATUSES = [
   'completed',
   'pending_enrollment',
 ];
+
+/**
+ * Absolute class phase for the invoice being paid (chain slot), not generated_count.
+ */
+async function resolveTargetPhaseForPaidInvoice({ client, profileId, profile, invoice }) {
+  if (!invoice) return null;
+
+  const phaseStart = profile.phase_start != null ? parseInt(profile.phase_start, 10) : 1;
+  const fromInvoiceRow = parseAbsolutePhaseFromInvoice(invoice);
+  if (fromInvoiceRow != null && fromInvoiceRow >= phaseStart) {
+    return fromInvoiceRow;
+  }
+
+  if (!invoice.invoice_id) return null;
+
+  const chainRootId = Number(invoice.invoice_chain_root_id || invoice.invoice_id);
+  const { phaseChains } = await loadInstallmentProfilePhaseChains(client, profileId);
+  const chainByLocal = mapPhaseChainsToLocalSlots(phaseChains, profile);
+
+  for (const [localPhase, chain] of chainByLocal.entries()) {
+    if (Number(chain.chain_root_id) === chainRootId) {
+      return phaseStart + Number(localPhase) - 1;
+    }
+  }
+  return null;
+}
 
 /**
  * When a later phase is paid (including out-of-order), insert any missing
@@ -97,18 +128,24 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
   const maxPhase = totalPhases ? phaseStart + totalPhases - 1 : null;
 
-  const storedGeneratedCount =
-    profile.generated_count != null ? parseInt(profile.generated_count, 10) : 0;
-  const effectiveProgressCount = Math.max(paidInstallmentCount, storedGeneratedCount);
-
-  let targetPhase = phaseStart + effectiveProgressCount - 1;
-  if (maxPhase !== null) {
-    targetPhase = Math.min(targetPhase, maxPhase);
-  }
-
   const remarkTargetPhase = invoice?.remarks ? parseTargetPhase(invoice.remarks) : null;
+  const invoiceTargetPhase = await resolveTargetPhaseForPaidInvoice({
+    client,
+    profileId,
+    profile,
+    invoice,
+  });
+
+  let targetPhase;
   if (remarkTargetPhase != null && remarkTargetPhase >= phaseStart) {
     targetPhase = maxPhase !== null ? Math.min(remarkTargetPhase, maxPhase) : remarkTargetPhase;
+  } else if (invoiceTargetPhase != null) {
+    targetPhase = maxPhase !== null ? Math.min(invoiceTargetPhase, maxPhase) : invoiceTargetPhase;
+  } else {
+    targetPhase = phaseStart + paidInstallmentCount - 1;
+    if (maxPhase !== null) {
+      targetPhase = Math.min(targetPhase, maxPhase);
+    }
   }
 
   const markCompletedIfFullyPaid = async () => {
@@ -161,7 +198,7 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   };
 
   const installmentDefaultStatus =
-    paidInstallmentCount <= 1
+    Number(targetPhase) === phaseStart
       ? PROGRAM_ENROLLMENT_STATUS.NEW
       : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
   const installmentEnrollStatus = await determineRejoinAwarePhaseStatus({

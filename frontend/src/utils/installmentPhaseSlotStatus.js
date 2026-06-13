@@ -1,5 +1,9 @@
 const PHASE_OUTSTANDING_EPSILON = 0.009;
 
+/** Enrollment was dropped for this phase — billing slot is bypassed for pay/unlock. */
+export const isDroppedEnrollmentPhase = (phase) =>
+  String(phase?.program_enrollment_status || '').toLowerCase() === 'dropped';
+
 /**
  * True when an installment phase row has no remaining balance and earlier
  * phases can advance to the next slot.
@@ -7,6 +11,7 @@ const PHASE_OUTSTANDING_EPSILON = 0.009;
 export const isInstallmentPlanSlotAddressed = (phase) => {
   if (!phase) return false;
   if (phase.plan_slot_addressed === true) return true;
+  if (isDroppedEnrollmentPhase(phase)) return true;
 
   const status = String(phase.status || '').toLowerCase();
   if (status.includes('skipped') || phase.billing_kind === 'skipped_gap') {

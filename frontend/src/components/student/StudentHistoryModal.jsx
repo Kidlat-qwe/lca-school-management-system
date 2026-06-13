@@ -714,7 +714,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
         aria-labelledby="student-history-title"
       >
         <div
-          className="bg-white rounded-t-xl sm:rounded-xl shadow-2xl flex flex-col w-full max-w-[min(96vw,1320px)] min-h-0 my-auto border border-gray-200 h-[95vh] sm:h-[min(90vh,720px)]"
+          className="bg-white rounded-t-xl sm:rounded-xl shadow-2xl flex flex-col w-full max-w-[min(98vw,1780px)] min-h-0 my-auto border border-gray-200 h-[96vh] sm:h-[min(94vh,880px)]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -744,7 +744,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
           {/* Body: sidebar (lg+) or top scroll-tabs (mobile) */}
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
             {/* Sidebar (lg+) */}
-            <aside className="hidden lg:block lg:w-60 lg:shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto">
+            <aside className="hidden lg:block lg:w-52 xl:w-56 lg:shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto">
               <nav className="p-3 space-y-1" aria-label="Student history sections">
                 {TABS.map((t) => {
                   const isActive = activeTab === t.id;
@@ -801,7 +801,13 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
             </div>
 
             {/* Tab content */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+            <div
+              className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden ${
+                activeTab === 'invoices'
+                  ? 'px-2 sm:px-3 py-3 sm:py-4'
+                  : 'px-4 py-4 sm:px-6 sm:py-5'
+              }`}
+            >
               {loading && (
                 <div className="flex justify-center py-16">
                   <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
@@ -1111,7 +1117,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                       return (
                         <section
                           key={`plan-${profileId}`}
-                          className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5"
+                          className="rounded-lg border border-gray-200 bg-white p-2 sm:p-3"
                         >
                           <header className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
                             <h3 className="text-sm sm:text-base font-semibold text-gray-900">
@@ -1126,6 +1132,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                           <InstallmentPlanDetails
                             profileId={profileId}
                             showStudentName={false}
+                            embedded
                           />
                         </section>
                       );

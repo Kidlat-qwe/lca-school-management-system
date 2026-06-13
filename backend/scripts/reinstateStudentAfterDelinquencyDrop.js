@@ -9,6 +9,11 @@
  */
 import '../config/loadEnv.js';
 import { getClient } from '../config/database.js';
+import {
+  determineRejoinAwarePhaseStatus,
+  PROGRAM_ENROLLMENT_STATUS,
+} from '../utils/enrollmentStatus.js';
+import { resolveProfilePhaseStart } from '../utils/phaseInstallmentUtils.js';
 
 const dryRun = process.argv.includes('--dry-run');
 const emailArg = process.argv.find((a) => a.startsWith('--email='));
@@ -72,7 +77,24 @@ async function main() {
 
     for (const row of rowsRes.rows) {
       const phase = parseInt(row.phase_number, 10) || 1;
-      const status = phase === 1 ? 'new' : 're_enrolled';
+      const profileRes = await client.query(
+        `SELECT phase_start FROM installmentinvoiceprofilestbl
+         WHERE student_id = $1 AND class_id = $2
+         ORDER BY installmentinvoiceprofiles_id DESC LIMIT 1`,
+        [studentId, row.class_id]
+      );
+      const phaseStart = resolveProfilePhaseStart(profileRes.rows[0] || {});
+      const defaultStatus =
+        phase === phaseStart
+          ? PROGRAM_ENROLLMENT_STATUS.NEW
+          : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
+      const status = await determineRejoinAwarePhaseStatus({
+        db: client,
+        studentId,
+        classId: row.class_id,
+        phaseNumber: phase,
+        defaultStatus,
+      });
       console.log(
         `  classstudent_id=${row.classstudent_id} class=${row.class_name} phase=${phase} -> ${status}`
       );

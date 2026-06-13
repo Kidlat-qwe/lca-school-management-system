@@ -20,6 +20,7 @@ import {
   formatArLinkedInvoiceLabel,
   getArListLineTotal,
   getArListPackagePrimaryLabel,
+  isArInvoiceOnlyGhostListRow,
 } from '../../utils/acknowledgementReceiptDisplay';
 import {
   getArListRowDomId,
@@ -355,7 +356,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
       if (fetchSeq !== arListFetchSeqRef.current) return [];
-      const rows = response.data || [];
+      const rows = (response.data || []).filter((r) => !isArInvoiceOnlyGhostListRow(r));
       setReceipts(rows);
       if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
         setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
@@ -460,6 +461,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   useEffect(() => {
     if (!crossLinkLoadedReceipt) return;
+    if (isArInvoiceOnlyGhostListRow(crossLinkLoadedReceipt)) return;
     const rowKey = crossLinkLoadedReceipt.invoice_only_payment
       ? `inv:${crossLinkLoadedReceipt.linked_invoice_id}`
       : crossLinkLoadedReceipt.ack_receipt_id
@@ -807,7 +809,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           forceBranchId,
         });
         const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
-        all.push(...(response.data || []));
+        all.push(...(response.data || []).filter((r) => !isArInvoiceOnlyGhostListRow(r)));
         totalPages = Number(response.pagination?.totalPages || 1);
         page += 1;
       } while (page <= totalPages);

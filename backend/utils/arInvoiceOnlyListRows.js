@@ -6,6 +6,17 @@
 
 import { query } from '../config/database.js';
 
+/** Synthetic AR-list label for invoice-only payments (hidden from default AR page). */
+export const AR_INVOICE_ONLY_PACKAGE_LABEL = 'Invoice payment (no AR record)';
+
+/** True when a list row is an invoice-only ghost, not a real acknowledgement receipt. */
+export function isArInvoiceOnlyGhostListRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (row.invoice_only_payment) return true;
+  const label = String(row.list_package_primary_label ?? row.package_name_snapshot ?? '').trim();
+  return label === AR_INVOICE_ONLY_PACKAGE_LABEL;
+}
+
 const INVOICE_ONLY_NOT_LINKED_SQL = `
   NOT EXISTS (
     SELECT 1 FROM acknowledgement_receiptstbl ar
@@ -150,7 +161,7 @@ const INVOICE_ONLY_SELECT_SQL = `
     0::numeric AS tip_amount,
     p.issue_date AS payment_date,
     'Package' AS ar_type,
-    'Invoice payment (no AR record)' AS package_name_snapshot,
+    '${AR_INVOICE_ONLY_PACKAGE_LABEL}' AS package_name_snapshot,
     COALESCE(p.payable_amount, i.amount, 0) AS list_line_total_amount
   FROM invoicestbl i
   LEFT JOIN branchestbl b ON i.branch_id = b.branch_id
@@ -172,6 +183,38 @@ const INVOICE_ONLY_SELECT_SQL = `
   ) p ON TRUE
 `;
 
+function resolveInvoiceOnlyWhere(filters = {}) {
+  return buildInvoiceOnlyWhere({
+    search: filters.search || '',
+    invoiceId: filters.invoiceId || null,
+    branchId: filters.branchId || null,
+    paymentFrom: filters.paymentFrom || null,
+    paymentTo: filters.paymentTo || null,
+    issueFrom: filters.issueFrom || null,
+    issueTo: filters.issueTo || null,
+    createdFrom: filters.createdFrom || null,
+    createdTo: filters.createdTo || null,
+    paymentMethod: filters.paymentMethod || null,
+    statusFilter: filters.statusFilter || null,
+  });
+}
+
+/**
+ * All invoices that surface as "Invoice payment (no AR record)" on the AR list
+ * (invoice_ar_number set, no linked acknowledgement_receiptstbl row).
+ *
+ * @param {object} [filters] - optional branch / date / invoice filters
+ * @returns {Promise<object[]>}
+ */
+export async function fetchAllInvoiceOnlyArListCandidates(filters = {}) {
+  const { sql: whereSql, params } = resolveInvoiceOnlyWhere(filters);
+  const result = await query(
+    `${INVOICE_ONLY_SELECT_SQL} ${whereSql} ORDER BY i.issue_date DESC NULLS LAST, i.invoice_id DESC`,
+    params
+  );
+  return result.rows;
+}
+
 /**
  * @param {object} filters - same branch/search/date/status as AR list GET
  * @returns {Promise<object[]>}
@@ -181,18 +224,10 @@ export async function fetchInvoiceOnlyArListRows(filters = {}) {
   const invoiceId = filters.invoiceId;
   if (!trimmedSearch && !invoiceId) return [];
 
-  const { sql: whereSql, params } = buildInvoiceOnlyWhere({
+  const { sql: whereSql, params } = resolveInvoiceOnlyWhere({
+    ...filters,
     search: trimmedSearch,
     invoiceId,
-    branchId: filters.branchId,
-    paymentFrom: filters.paymentFrom,
-    paymentTo: filters.paymentTo,
-    issueFrom: filters.issueFrom,
-    issueTo: filters.issueTo,
-    createdFrom: filters.createdFrom,
-    createdTo: filters.createdTo,
-    paymentMethod: filters.paymentMethod,
-    statusFilter: filters.statusFilter,
   });
 
   const result = await query(`${INVOICE_ONLY_SELECT_SQL} ${whereSql} ORDER BY i.invoice_id DESC`, params);

@@ -4,6 +4,16 @@
  * (downpayment on the leader, Phase 1 on the paired row).
  */
 
+/** Synthetic invoice-only rows — hidden on the AR page (AR# still on Invoice page). */
+export const AR_INVOICE_ONLY_PACKAGE_LABEL = 'Invoice payment (no AR record)';
+
+/** True when the row is not a real acknowledgement receipt (invoice-only ghost). */
+export function isArInvoiceOnlyGhostListRow(r) {
+  if (!r) return false;
+  if (r.invoice_only_payment) return true;
+  return getArListPackagePrimaryLabel(r).trim() === AR_INVOICE_ONLY_PACKAGE_LABEL;
+}
+
 export function getArListLineTotal(r) {
   const v = r?.list_line_total_amount;
   if (v != null && v !== '' && !Number.isNaN(Number(v))) return Number(v);
