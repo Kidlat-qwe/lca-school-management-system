@@ -79,3 +79,25 @@ export async function resolvePairedAckReceiptIds(ackReceiptId, runQuery = query)
   }
   return [...ids];
 }
+
+/** payment_amount + tip_amount for one acknowledgement receipt row. */
+export function ackReceiptRowLineAmount(row) {
+  return Number(row?.payment_amount || 0) + Number(row?.tip_amount || 0);
+}
+
+/**
+ * Combined line total for SMS/email payment confirmation.
+ * When the row is a Downpayment + Phase 1 leader or follower, sums both AR line amounts.
+ *
+ * @param {object} row — ack row with optional paired_* / parent_* join columns
+ */
+export function getAckReceiptCombinedLineTotal(row) {
+  const self = ackReceiptRowLineAmount(row);
+  if (row?.paired_ack_receipt_id != null) {
+    return self + Number(row.paired_payment_amount || 0) + Number(row.paired_tip_amount || 0);
+  }
+  if (row?.parent_ack_receipt_id != null) {
+    return self + Number(row.parent_payment_amount || 0) + Number(row.parent_tip_amount || 0);
+  }
+  return self;
+}

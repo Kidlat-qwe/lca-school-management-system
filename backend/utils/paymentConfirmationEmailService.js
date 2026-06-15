@@ -3,6 +3,7 @@ import {
   sendSystemNotificationEmailToEach,
 } from './emailService.js';
 import { buildArPdfAttachmentForPaymentConfirmation } from './paymentArPdfAttachment.js';
+import { getAckReceiptCombinedLineTotal } from '../lib/ackReceiptPairedColumn.js';
 import { collectPhilippineMobiles } from './sms/semaphoreSmsService.js';
 import { sendPairedTemplateSms } from './sms/templateSmsService.js';
 import {
@@ -244,9 +245,17 @@ export const sendInvoicePaymentConfirmationByInvoiceId = async (client, invoiceI
 export const sendArPaymentConfirmationByAckId = async (client, ackReceiptId) => {
   const ackRes = await client.query(
     `SELECT ar.ack_receipt_id, ar.ack_receipt_number, ar.prospect_student_name, ar.prospect_student_email,
-            ar.prospect_student_phone, ar.issue_date, ar.payment_amount, ar.reference_number, ar.branch_id,
+            ar.prospect_student_phone, ar.issue_date, ar.payment_amount, ar.tip_amount, ar.reference_number,
+            ar.branch_id, ar.paired_ack_receipt_id,
+            paired.payment_amount AS paired_payment_amount,
+            paired.tip_amount AS paired_tip_amount,
+            parent.ack_receipt_id AS parent_ack_receipt_id,
+            parent.payment_amount AS parent_payment_amount,
+            parent.tip_amount AS parent_tip_amount,
             i.invoice_ar_number
      FROM acknowledgement_receiptstbl ar
+     LEFT JOIN acknowledgement_receiptstbl paired ON paired.ack_receipt_id = ar.paired_ack_receipt_id
+     LEFT JOIN acknowledgement_receiptstbl parent ON parent.paired_ack_receipt_id = ar.ack_receipt_id
      LEFT JOIN invoicestbl i ON i.invoice_id = ar.invoice_id
      WHERE ar.ack_receipt_id = $1
      LIMIT 1`,
@@ -264,11 +273,12 @@ export const sendArPaymentConfirmationByAckId = async (client, ackReceiptId) => 
   }
 
   const ackNumber = ack.invoice_ar_number || ack.ack_receipt_number || `AR-${ack.ack_receipt_id}`;
+  const amountPaid = getAckReceiptCombinedLineTotal(ack);
   const templateVariables = {
     recipientName: ack.prospect_student_name || 'Client',
     studentName: ack.prospect_student_name || 'Student',
     invoiceNumber: ackNumber,
-    amountPaid: formatPhp(ack.payment_amount),
+    amountPaid: formatPhp(amountPaid),
     paymentDate: formatDateYmd(ack.issue_date),
     schoolName: DEFAULT_SCHOOL_NAME,
   };
@@ -279,7 +289,7 @@ export const sendArPaymentConfirmationByAckId = async (client, ackReceiptId) => 
     ackReceiptId: ack.ack_receipt_id,
     ackReceiptNumber: ackNumber,
     issueDate: ack.issue_date,
-    amountPaid: ack.payment_amount,
+    amountPaid,
     referenceNumber: ack.reference_number,
   });
 
