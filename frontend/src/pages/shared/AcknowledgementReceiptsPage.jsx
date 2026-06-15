@@ -34,6 +34,9 @@ import {
 } from '../../utils/billingListCrossLink';
 import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
 import AcknowledgementReceiptStatusLegend from '../../components/receipts/AcknowledgementReceiptStatusLegend';
+import ArFinanceVerifyModal from '../../components/receipts/ArFinanceVerifyModal';
+import ArPairedReceiptSummaryBlocks from '../../components/receipts/ArPairedReceiptSummaryBlocks';
+import { resolveAckReceiptLeaderPair } from '../../utils/enrollmentAckReceiptList';
 import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
 import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
 import {
@@ -248,10 +251,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [packageArPdfLoading, setPackageArPdfLoading] = useState(false);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [verifyLoadingId, setVerifyLoadingId] = useState(null);
+  const [financeVerifyModal, setFinanceVerifyModal] = useState({
+    open: false,
+    receipt: null,
+    pairedReceipt: null,
+    loading: false,
+    mode: 'verify',
+    remarks: '',
+  });
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingReceiptId, setEditingReceiptId] = useState(null);
   const [editingReceiptMeta, setEditingReceiptMeta] = useState(null);
+  const [editingPairedReceiptMeta, setEditingPairedReceiptMeta] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
   const [isResubmitFlow, setIsResubmitFlow] = useState(false);
   const [financeReturnNote, setFinanceReturnNote] = useState('');
@@ -446,7 +458,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     [searchTerm, statusFilter, paymentMethodFilter, dateFilterMode, filterIssueMonth, selectedBranchId]
   );
 
-  const { focusAckReceiptId, focusInvoiceOnlyId, crossLinkLoadedReceipt } = useAckReceiptFocusFromQuery({
+  const { focusAckReceiptId, focusInvoiceOnlyId, crossLinkLoadedReceipt, focusAckReceiptRow } =
+    useAckReceiptFocusFromQuery({
     searchParams,
     setSearchParams,
     setSearchTerm,
@@ -1675,84 +1688,145 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleVerifyReceipt = async (receipt, approve) => {
     if (!receipt?.ack_receipt_id || verifyLoadingId) return;
-    const confirmed = await appConfirm({
-      title: approve ? 'Verify Acknowledgement Receipt' : 'Return Acknowledgement Receipt',
-      message: approve
-        ? 'Are you sure you want to verify this acknowledgement receipt?'
-        : 'Are you sure you want to return this acknowledgement receipt to the branch?',
-      confirmLabel: approve ? 'Verify' : 'Return',
-      cancelLabel: 'Cancel',
-      variant: 'info',
-      destructive: !approve,
-    });
-    if (!confirmed) return;
+    openFinanceActionModal(receipt, approve ? 'verify' : 'return');
+  };
 
-    const promptedRemarks = !approve
-      ? await appPrompt({
-          title: 'Return Acknowledgement Receipt',
-          message: 'Add a note for the acknowledgement receipt creator (required).',
-          placeholder: 'Reason for return...',
-          confirmLabel: 'Return',
-          cancelLabel: 'Cancel',
-          variant: 'info',
-          required: true,
-        })
-      : '';
-    if (!approve && promptedRemarks === null) return;
-    const remarks = (promptedRemarks || '').trim();
+  const openFinanceActionModal = async (receipt, mode = 'verify') => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    setFinanceVerifyModal({
+      open: true,
+      receipt,
+      pairedReceipt: null,
+      loading: true,
+      mode,
+      remarks: '',
+    });
+    try {
+      const response = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`);
+      const data = response.data || receipt;
+      setFinanceVerifyModal((prev) => ({
+        ...prev,
+        open: true,
+        receipt: data,
+        pairedReceipt: data.paired_acknowledgement_receipt || null,
+        loading: false,
+        mode,
+        remarks: '',
+      }));
+    } catch (err) {
+      console.error('Failed to load AR details for finance action:', err);
+      setFinanceVerifyModal((prev) => ({
+        ...prev,
+        open: true,
+        receipt,
+        pairedReceipt: null,
+        loading: false,
+        mode,
+        remarks: '',
+      }));
+    }
+  };
+
+  const closeFinanceVerifyModal = () => {
+    if (verifyLoadingId) return;
+    setFinanceVerifyModal({
+      open: false,
+      receipt: null,
+      pairedReceipt: null,
+      loading: false,
+      mode: 'verify',
+      remarks: '',
+    });
+  };
+
+  const setFinanceVerifyModalMode = (mode) => {
+    setFinanceVerifyModal((prev) => ({
+      ...prev,
+      mode,
+      remarks: '',
+    }));
+  };
+
+  const setFinanceVerifyModalRemarks = (remarks) => {
+    setFinanceVerifyModal((prev) => ({ ...prev, remarks }));
+  };
+
+  const handleVerifyModalArNumberClick = (targetReceipt) => {
+    const ackId = targetReceipt?.ack_receipt_id;
+    if (!ackId) return;
+    setFinanceVerifyModal({
+      open: false,
+      receipt: null,
+      pairedReceipt: null,
+      loading: false,
+      mode: 'verify',
+      remarks: '',
+    });
+    focusAckReceiptRow(ackId);
+  };
+
+  const handleEditModalArLineClick = (targetReceipt) => {
+    const ackId = targetReceipt?.ack_receipt_id;
+    if (!ackId) return;
+    closeEditModal();
+    focusAckReceiptRow(ackId);
+  };
+
+  const submitFinanceVerify = async () => {
+    const receipt = financeVerifyModal.receipt;
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
-      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
-        body: JSON.stringify({
-          action: approve ? 'verify' : 'return',
-          remarks: remarks || undefined,
-        }),
+        body: JSON.stringify({ action: 'verify' }),
       });
-      appAlert(approve ? 'Acknowledgement receipt verified.' : 'Acknowledgement receipt returned.');
+      appAlert(result.message || 'Acknowledgement receipt verified.');
+      closeFinanceVerifyModal();
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
-      console.error('AR verify/return error:', err);
-      appAlert(err?.message || `Failed to ${approve ? 'verify' : 'return'} acknowledgement receipt.`);
+      console.error('AR verify error:', err);
+      appAlert(err?.message || 'Failed to verify acknowledgement receipt.');
     } finally {
       setVerifyLoadingId(null);
     }
   };
 
-  const handleRejectReceipt = async (receipt) => {
-    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
-    const confirmed = await appConfirm({
-      title: 'Reject Acknowledgement Receipt',
-      message:
-        'Rejecting will permanently close this acknowledgement receipt. The branch admin will need to create and submit a NEW acknowledgement receipt to continue. Proceed?',
-      confirmLabel: 'Reject',
-      cancelLabel: 'Cancel',
-      variant: 'error',
-      destructive: true,
-    });
-    if (!confirmed) return;
-
-    const promptedRemarks = await appPrompt({
-      title: 'Reject Acknowledgement Receipt',
-      message:
-        'Add a reason for rejection (required). The branch admin will be notified to recreate the acknowledgement receipt.',
-      placeholder: 'Reason for rejection...',
-      confirmLabel: 'Reject',
-      cancelLabel: 'Cancel',
-      variant: 'error',
-      required: true,
-    });
-    if (promptedRemarks === null) return;
-    const remarks = (promptedRemarks || '').trim();
-    if (!remarks) return;
-
+  const submitFinanceReturn = async () => {
+    const { receipt, remarks } = financeVerifyModal;
+    const remarksTrimmed = String(remarks || '').trim();
+    if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
       await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
-        body: JSON.stringify({ action: 'reject', remarks }),
+        body: JSON.stringify({ action: 'return', remarks: remarksTrimmed }),
+      });
+      appAlert('Acknowledgement receipt returned.');
+      closeFinanceVerifyModal();
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR return error:', err);
+      appAlert(err?.message || 'Failed to return acknowledgement receipt.');
+    } finally {
+      setVerifyLoadingId(null);
+    }
+  };
+
+  const submitFinanceReject = async () => {
+    const { receipt, remarks } = financeVerifyModal;
+    const remarksTrimmed = String(remarks || '').trim();
+    if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'reject', remarks: remarksTrimmed }),
       });
       appAlert('Acknowledgement receipt rejected. The branch admin must create a new one.');
+      closeFinanceVerifyModal();
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
       console.error('AR reject error:', err);
@@ -1762,55 +1836,92 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
   };
 
+  const handleRejectReceipt = (receipt) => {
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    openFinanceActionModal(receipt, 'reject');
+  };
+
   const closeEditModal = () => {
     if (editSaving) return;
     setEditModalOpen(false);
     setEditingReceiptId(null);
     setEditingReceiptMeta(null);
+    setEditingPairedReceiptMeta(null);
     setEditFormErrors({});
     setIsResubmitFlow(false);
     setFinanceReturnNote('');
     setEditAttachmentUploading(false);
   };
 
-  const openEditModalForReceipt = (receipt, { asResubmit = false } = {}) => {
+  const populateEditModalFromReceipt = (leader, phase1 = null, { asResubmit = false } = {}) => {
+    if (!leader?.ack_receipt_id) return;
+    setEditingReceiptId(leader.ack_receipt_id);
+    setEditingReceiptMeta(leader);
+    setEditingPairedReceiptMeta(phase1);
+    setIsResubmitFlow(asResubmit);
+    const returnNote =
+      extractLatestTagNote(leader.prospect_student_notes, 'Returned') ||
+      extractLatestTagNote(phase1?.prospect_student_notes, 'Returned');
+    setFinanceReturnNote(asResubmit ? returnNote : '');
+    const combinedLine =
+      getArListLineTotal(leader) + (phase1 ? getArListLineTotal(phase1) : 0);
+    setEditPayableAmount(phase1 ? combinedLine : Number(leader.payment_amount || 0) || 0);
+    if (asResubmit && leader.branch_id) {
+      fetchPackages(leader.branch_id);
+    }
+    setEditFormData({
+      package_id: leader.package_id ? String(leader.package_id) : '',
+      prospect_student_name: leader.prospect_student_name || '',
+      prospect_student_contact: leader.prospect_student_contact || '',
+      prospect_student_email: leader.prospect_student_email || '',
+      prospect_student_phone: leader.prospect_student_phone || '',
+      prospect_student_notes: leader.prospect_student_notes || '',
+      level_tag: leader.level_tag || '',
+      reference_number: leader.reference_number || phase1?.reference_number || '',
+      payment_method: leader.payment_method || 'Cash',
+      issue_date:
+        leader.issue_date != null && String(leader.issue_date).trim() !== ''
+          ? String(leader.issue_date).slice(0, 10)
+          : '',
+      tip_amount:
+        leader.tip_amount == null || Number(leader.tip_amount) === 0
+          ? ''
+          : String(Number(leader.tip_amount)),
+      payment_attachment_url:
+        leader.payment_attachment_url || phase1?.payment_attachment_url || '',
+    });
+    setEditFormErrors({});
+  };
+
+  const openEditModalForReceipt = (receipt, { asResubmit = false, pairedReceipt = null } = {}) => {
     if (!receipt?.ack_receipt_id) return;
     setOpenActionMenuId(null);
     setActionMenuRect(null);
-    setEditingReceiptId(receipt.ack_receipt_id);
-    setEditingReceiptMeta(receipt);
-    setIsResubmitFlow(asResubmit);
-    setFinanceReturnNote(asResubmit ? extractLatestTagNote(receipt.prospect_student_notes, 'Returned') : '');
-    setEditPayableAmount(Number(receipt.payment_amount || 0) || 0);
-    if (asResubmit && receipt.branch_id) {
-      fetchPackages(receipt.branch_id);
-    }
-    setEditFormData({
-      package_id: receipt.package_id ? String(receipt.package_id) : '',
-      prospect_student_name: receipt.prospect_student_name || '',
-      prospect_student_contact: receipt.prospect_student_contact || '',
-      prospect_student_email: receipt.prospect_student_email || '',
-      prospect_student_phone: receipt.prospect_student_phone || '',
-      prospect_student_notes: receipt.prospect_student_notes || '',
-      level_tag: receipt.level_tag || '',
-      reference_number: receipt.reference_number || '',
-      payment_method: receipt.payment_method || 'Cash',
-      issue_date:
-        receipt.issue_date != null && String(receipt.issue_date).trim() !== ''
-          ? String(receipt.issue_date).slice(0, 10)
-          : '',
-      tip_amount:
-        receipt.tip_amount == null || Number(receipt.tip_amount) === 0
-          ? ''
-          : String(Number(receipt.tip_amount)),
-      payment_attachment_url: receipt.payment_attachment_url || '',
-    });
-    setEditFormErrors({});
+    const { leader, phase1 } = resolveAckReceiptLeaderPair(receipt, pairedReceipt);
+    populateEditModalFromReceipt(leader, phase1, { asResubmit });
     setEditModalOpen(true);
   };
 
-  const openResubmitModalForReceipt = (receipt) => {
-    openEditModalForReceipt(receipt, { asResubmit: true });
+  const openResubmitModalForReceipt = async (receipt) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    setEditModalOpen(true);
+    setEditSaving(false);
+    populateEditModalFromReceipt(receipt, null, { asResubmit: true });
+    try {
+      const response = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`);
+      const data = response.data || receipt;
+      const { leader, phase1 } = resolveAckReceiptLeaderPair(
+        data,
+        data.paired_acknowledgement_receipt || null
+      );
+      populateEditModalFromReceipt(leader, phase1, { asResubmit: true });
+    } catch (err) {
+      console.error('Failed to load paired AR details for resubmit:', err);
+      const { leader, phase1 } = resolveAckReceiptLeaderPair(receipt, null);
+      populateEditModalFromReceipt(leader, phase1, { asResubmit: true });
+    }
   };
 
   const openViewReceiptModal = (receipt) => {
@@ -1885,6 +1996,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     const { name, value } = e.target;
     if (isAckIssueDateLocked(editingReceiptMeta) && name === 'issue_date') return;
     if (name === 'package_id') {
+      if (editingPairedReceiptMeta) return;
       const pkg = packages.find((p) => String(p.package_id) === String(value));
       const packagePrice = Number(pkg?.package_price || 0);
       const downpayment = Number(pkg?.downpayment_amount || 0);
@@ -1907,7 +2019,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const validateEditForm = () => {
     const errors = {};
-    if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' && !(editFormData.package_id || '').trim()) {
+    if (
+      isResubmitFlow &&
+      editingReceiptMeta?.ar_type === 'Package' &&
+      !editingPairedReceiptMeta &&
+      !(editFormData.package_id || '').trim()
+    ) {
       errors.package_id = 'Package is required';
     }
     if (!(editFormData.prospect_student_name || '').trim()) {
@@ -1963,7 +2080,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       if (!isAckIssueDateLocked(editingReceiptMeta)) {
         payload.issue_date = editFormData.issue_date;
       }
-      if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package') {
+      if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' && !editingPairedReceiptMeta) {
         payload.package_id = parseInt(editFormData.package_id, 10);
       }
 
@@ -1973,11 +2090,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       });
 
       if (isResubmitFlow) {
-        await apiRequest(`/acknowledgement-receipts/${editingReceiptId}/resubmit`, {
+        const resubmitResult = await apiRequest(`/acknowledgement-receipts/${editingReceiptId}/resubmit`, {
           method: 'PUT',
           body: JSON.stringify({}),
         });
-        appAlert('Acknowledgement receipt updated and resubmitted successfully.');
+        appAlert(
+          resubmitResult.message ||
+            (editingPairedReceiptMeta
+              ? 'Downpayment and Phase 1 acknowledgement receipts updated and resubmitted successfully.'
+              : 'Acknowledgement receipt updated and resubmitted successfully.')
+        );
       } else {
         appAlert('Acknowledgement receipt updated successfully.');
       }
@@ -2521,9 +2643,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                                 maximumFractionDigits: 2,
                               })}
                             </div>
-                            {r.is_downpayment_plus_phase1_leader && r.list_paired_phase_ar_number ? (
-                              <div className="text-xs text-amber-700 mt-0.5">
-                                Phase 1 AR# {r.list_paired_phase_ar_number}
+                            {r.is_downpayment_plus_phase1_leader ? (
+                              <div className="text-xs font-medium text-amber-700 mt-0.5">Downpayment</div>
+                            ) : r.is_paired_phase1_follower ? (
+                              <div className="text-xs font-medium text-amber-700 mt-0.5">
+                                Phase 1
+                                {r.list_paired_leader_ar_number ? (
+                                  <span className="font-normal text-amber-600">
+                                    {' '}
+                                    · paired with AR# {r.list_paired_leader_ar_number}
+                                  </span>
+                                ) : null}
                               </div>
                             ) : null}
                           </>
@@ -2665,6 +2795,27 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </div>
 
         <PaymentAttachmentViewerModal open={viewerOpen} url={viewerUrl} onClose={closeAttachmentViewer} />
+
+        <ArFinanceVerifyModal
+          open={financeVerifyModal.open}
+          mode={financeVerifyModal.mode}
+          receipt={financeVerifyModal.receipt}
+          pairedReceipt={financeVerifyModal.pairedReceipt}
+          loading={financeVerifyModal.loading}
+          remarks={financeVerifyModal.remarks}
+          onRemarksChange={setFinanceVerifyModalRemarks}
+          submitting={Boolean(
+            financeVerifyModal.receipt?.ack_receipt_id &&
+              verifyLoadingId === financeVerifyModal.receipt.ack_receipt_id
+          )}
+          onClose={closeFinanceVerifyModal}
+          onConfirmVerify={submitFinanceVerify}
+          onConfirmReturn={submitFinanceReturn}
+          onConfirmReject={submitFinanceReject}
+          onModeChange={setFinanceVerifyModalMode}
+          onViewAttachment={openAttachmentViewer}
+          onArNumberClick={handleVerifyModalArNumberClick}
+        />
 
         {openActionMenuId && actionMenuRect && actionMenuReceipt && (isAdminOrSuperadmin || isFinanceOrSuperfinance)
           ? createPortal(
@@ -4068,12 +4219,18 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             onClick={closeEditModal}
           >
             <div
-              className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl"
+              className={`w-full max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl ${
+                isResubmitFlow && editingPairedReceiptMeta ? 'max-w-5xl' : 'max-w-3xl'
+              }`}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
                 <h3 className="text-base font-semibold text-gray-900">
-                  {isResubmitFlow ? 'Review & Resubmit Acknowledgement Receipt' : 'Edit Acknowledgement Receipt'}
+                  {isResubmitFlow
+                    ? editingPairedReceiptMeta
+                      ? 'Review & Resubmit Downpayment + Phase 1'
+                      : 'Review & Resubmit Acknowledgement Receipt'
+                    : 'Edit Acknowledgement Receipt'}
                 </h3>
                 <button
                   type="button"
@@ -4095,6 +4252,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <p className="mt-1 text-sm text-orange-800">{financeReturnNote}</p>
                   </div>
                 ) : null}
+                {isResubmitFlow && editingPairedReceiptMeta ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                    <ArPairedReceiptSummaryBlocks
+                      leader={editingReceiptMeta}
+                      phase1={editingPairedReceiptMeta}
+                      onLineClick={handleEditModalArLineClick}
+                      showListHint
+                    />
+                  </div>
+                ) : (
                 <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Receipt details</p>
                   <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-700 sm:grid-cols-2">
@@ -4112,10 +4279,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <p><span className="font-semibold">Reference No.:</span> {editingReceiptMeta?.reference_number || '-'}</p>
                   </div>
                 </div>
+                )}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="label-field text-xs">Package</label>
-                    {isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' ? (
+                    {isResubmitFlow &&
+                    editingReceiptMeta?.ar_type === 'Package' &&
+                    !editingPairedReceiptMeta ? (
                       <>
                         <select
                           name="package_id"
@@ -4136,14 +4306,27 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     ) : (
                       <input
                         type="text"
-                        value={editingReceiptMeta?.ar_type === 'Merchandise'
-                          ? 'Merchandise'
-                          : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || 'N/A')}
-                        className="input-field text-sm bg-gray-100"
+                        value={
+                          editingPairedReceiptMeta
+                            ? packages.find((p) => String(p.package_id) === String(editFormData.package_id))?.package_name ||
+                              editingReceiptMeta?.package_name ||
+                              editingReceiptMeta?.package_name_snapshot ||
+                              'N/A'
+                            : editingReceiptMeta?.ar_type === 'Merchandise'
+                              ? 'Merchandise'
+                              : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || 'N/A')
+                        }
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
                         disabled
                         readOnly
+                        tabIndex={-1}
                       />
                     )}
+                    {editingPairedReceiptMeta ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Package cannot be changed for a Downpayment + Phase 1 pair.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div>
@@ -4158,6 +4341,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       disabled
                       readOnly
                     />
+                    {editingPairedReceiptMeta ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Combined downpayment + Phase 1 line total (each AR keeps its own amount).
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="sm:col-span-2">
@@ -4394,7 +4582,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     }`}
                     disabled={editSaving}
                   >
-                    {editSaving ? 'Saving...' : isResubmitFlow ? 'Save & Resubmit' : 'Save Changes'}
+                    {editSaving ? 'Saving...' : isResubmitFlow
+                      ? editingPairedReceiptMeta
+                        ? 'Save & Resubmit Both'
+                        : 'Save & Resubmit'
+                      : 'Save Changes'}
                   </button>
                 </div>
               </form>

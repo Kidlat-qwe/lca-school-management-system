@@ -37,3 +37,45 @@ export const AR_LIST_LINE_AMOUNT_SUM_SQL = `(COALESCE(ar.payment_amount, 0) + CO
                  FROM acknowledgement_receiptstbl pay
                  WHERE pay.ack_receipt_id = ar.paired_ack_receipt_id
                ), 0))`;
+
+/**
+ * Resolve all acknowledgement receipt IDs in a Downpayment + Phase 1 pair.
+ * Returns the given id alone when no pair exists.
+ *
+ * @param {number|string} ackReceiptId
+ * @param {typeof query} [runQuery]
+ * @returns {Promise<number[]>}
+ */
+export async function resolvePairedAckReceiptIds(ackReceiptId, runQuery = query) {
+  const id = Number(ackReceiptId);
+  if (!Number.isFinite(id) || id <= 0) return [];
+
+  const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn(runQuery);
+  if (!hasPairedCol) return [id];
+
+  const rowRes = await runQuery(
+    `SELECT ack_receipt_id, paired_ack_receipt_id
+     FROM acknowledgement_receiptstbl
+     WHERE ack_receipt_id = $1`,
+    [id]
+  );
+  if (rowRes.rows.length === 0) return [id];
+
+  const row = rowRes.rows[0];
+  const ids = new Set([Number(row.ack_receipt_id)]);
+  if (row.paired_ack_receipt_id != null) {
+    ids.add(Number(row.paired_ack_receipt_id));
+  } else {
+    const parentRes = await runQuery(
+      `SELECT ack_receipt_id
+       FROM acknowledgement_receiptstbl
+       WHERE paired_ack_receipt_id = $1
+       LIMIT 1`,
+      [id]
+    );
+    if (parentRes.rows[0]?.ack_receipt_id != null) {
+      ids.add(Number(parentRes.rows[0].ack_receipt_id));
+    }
+  }
+  return [...ids];
+}

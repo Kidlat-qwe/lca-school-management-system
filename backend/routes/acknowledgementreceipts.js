@@ -16,7 +16,10 @@ import {
   sendArPaymentConfirmationByAckId,
   sendInvoicePaymentConfirmationByInvoiceId,
 } from '../utils/paymentConfirmationEmailService.js';
-import { ackReceiptHasPairedAckReceiptIdColumn } from '../lib/ackReceiptPairedColumn.js';
+import {
+  ackReceiptHasPairedAckReceiptIdColumn,
+  resolvePairedAckReceiptIds,
+} from '../lib/ackReceiptPairedColumn.js';
 import {
   MERCH_RELEASE_SOURCE,
   buildMerchandiseArReleaseBatchId,
@@ -548,7 +551,23 @@ router.get(
           COALESCE(ar.package_amount_snapshot, 0) AS list_combined_package_amount,
           COALESCE(ar.package_name_snapshot::text, p.package_name::text, 'N/A') AS list_package_primary_label,
           ar_pair.ack_receipt_number AS list_paired_phase_ar_number,
-          (ar.paired_ack_receipt_id IS NOT NULL) AS is_downpayment_plus_phase1_leader`
+          ar_pair.ack_receipt_id AS list_paired_phase_ack_receipt_id,
+          ar_pair.payment_amount AS list_paired_phase_payment_amount,
+          ar_pair.tip_amount AS list_paired_phase_tip_amount,
+          ar_pair.status AS list_paired_phase_status,
+          ar_pair.package_name_snapshot AS list_paired_phase_package_name,
+          ar_pair.package_amount_snapshot AS list_paired_phase_package_amount,
+          (ar.paired_ack_receipt_id IS NOT NULL) AS is_downpayment_plus_phase1_leader,
+          EXISTS (
+            SELECT 1 FROM acknowledgement_receiptstbl ar_parent
+            WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
+          ) AS is_paired_phase1_follower,
+          (
+            SELECT ar_leader.ack_receipt_number
+            FROM acknowledgement_receiptstbl ar_leader
+            WHERE ar_leader.paired_ack_receipt_id = ar.ack_receipt_id
+            LIMIT 1
+          ) AS list_paired_leader_ar_number`
         : '';
 
       let sql = `
@@ -1496,7 +1515,7 @@ router.post(
                 ack_receipt_number: pairedAckReceipt.ack_receipt_number,
               },
               message:
-                'Two sequential AR numbers were issued (downpayment, then Phase 1). Only the downpayment receipt appears on the AR list; Phase 1 is linked for printing and matches the Phase 1 invoice AR number after enrollment.',
+                'Two sequential AR numbers were issued (downpayment, then Phase 1). Both appear on the AR list as separate rows; verifying either marks both as Verified.',
             }
           : {}),
         ...(isMerchandise && ackReceipt.invoice_id && !pairedAckReceipt
@@ -1564,9 +1583,40 @@ router.get(
         });
       }
 
+      let pairedAckRow = null;
+      const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn();
+      if (hasPairedCol) {
+        const pairedId =
+          ar.paired_ack_receipt_id != null
+            ? Number(ar.paired_ack_receipt_id)
+            : (
+                await query(
+                  `SELECT ack_receipt_id
+                   FROM acknowledgement_receiptstbl
+                   WHERE paired_ack_receipt_id = $1
+                   LIMIT 1`,
+                  [id]
+                )
+              ).rows[0]?.ack_receipt_id;
+        if (pairedId) {
+          const pairedResult = await query(sql, [pairedId]);
+          pairedAckRow = pairedResult.rows[0] || null;
+        }
+      }
+
       res.json({
         success: true,
-        data: formatArListApiRow(ar),
+        data: {
+          ...formatArListApiRow(ar),
+          ...(pairedAckRow
+            ? {
+                paired_acknowledgement_receipt: {
+                  ...formatArListApiRow(pairedAckRow),
+                  ack_receipt_number: pairedAckRow.ack_receipt_number,
+                },
+              }
+            : {}),
+        },
       });
     } catch (err) {
       next(err);
@@ -2634,6 +2684,48 @@ router.put(
         params
       );
 
+      const pairedIds = await resolvePairedAckReceiptIds(id);
+      const syncIds = pairedIds.filter((pid) => pid !== Number(id));
+      if (syncIds.length > 0) {
+        const sharedUpdates = [];
+        const sharedParams = [];
+        const pushShared = (column, value) => {
+          sharedParams.push(value);
+          sharedUpdates.push(`${column} = $${sharedParams.length}`);
+        };
+        const sharedFieldMap = [
+          ['prospect_student_name', raw.prospect_student_name],
+          ['prospect_student_contact', raw.prospect_student_contact],
+          ['prospect_student_email', raw.prospect_student_email],
+          ['prospect_student_phone', raw.prospect_student_phone],
+          ['prospect_student_notes', raw.prospect_student_notes],
+          ['level_tag', raw.level_tag],
+          ['reference_number', raw.reference_number],
+          ['payment_attachment_url', raw.payment_attachment_url],
+          ['payment_method', raw.payment_method],
+        ];
+        for (const [column, rawVal] of sharedFieldMap) {
+          if (!Object.prototype.hasOwnProperty.call(raw, column)) continue;
+          if (column === 'prospect_student_contact') {
+            pushShared(column, String(rawVal || '').trim() || null);
+          } else if (column === 'prospect_student_phone') {
+            const phones = collectPhilippineMobiles(rawVal);
+            pushShared(column, phones[0] || null);
+          } else {
+            pushShared(column, String(rawVal ?? '').trim() || null);
+          }
+        }
+        if (sharedUpdates.length > 0) {
+          sharedParams.push(syncIds);
+          await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET ${sharedUpdates.join(', ')}
+             WHERE ack_receipt_id = ANY($${sharedParams.length}::int[])`,
+            sharedParams
+          );
+        }
+      }
+
       return res.json({
         success: true,
         message: 'Acknowledgement receipt updated successfully',
@@ -2859,6 +2951,11 @@ router.put(
       const verifiedByOnUpdate = action === 'verify' ? verifierUserId : null;
       const verifiedAtOnUpdate = action === 'verify' ? new Date() : null;
 
+      const ackIdsToUpdate =
+        isPackageAr && (await ackReceiptHasPairedAckReceiptIdColumn())
+          ? await resolvePairedAckReceiptIds(id)
+          : [Number(id)];
+
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
       const updateRes = hasVerifierCols
         ? await query(
@@ -2867,18 +2964,22 @@ router.put(
                  prospect_student_notes = $2,
                  verified_by_user_id = $3,
                  verified_at = $4
-             WHERE ack_receipt_id = $5
+             WHERE ack_receipt_id = ANY($5::int[])
              RETURNING *`,
-            [nextStatus, updatedNotes, verifiedByOnUpdate, verifiedAtOnUpdate, id]
+            [nextStatus, updatedNotes, verifiedByOnUpdate, verifiedAtOnUpdate, ackIdsToUpdate]
           )
         : await query(
             `UPDATE acknowledgement_receiptstbl
              SET status = $1,
                  prospect_student_notes = $2
-             WHERE ack_receipt_id = $3
+             WHERE ack_receipt_id = ANY($3::int[])
              RETURNING *`,
-            [nextStatus, updatedNotes, id]
+            [nextStatus, updatedNotes, ackIdsToUpdate]
           );
+
+      const primaryUpdatedRow =
+        updateRes.rows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
+        updateRes.rows[0];
 
       if (action === 'return') {
         const returnedByUserId = req.user.userId || req.user.user_id || null;
@@ -2904,10 +3005,14 @@ router.put(
 
       const linkedPay = await query(
         `SELECT payment_id FROM acknowledgement_receiptstbl
-         WHERE ack_receipt_id = $1 AND payment_id IS NOT NULL`,
-        [id]
+         WHERE ack_receipt_id = ANY($1::int[]) AND payment_id IS NOT NULL`,
+        [ackIdsToUpdate]
       );
-      const linkedPaymentId = linkedPay.rows[0]?.payment_id;
+      const linkedPaymentIds = [
+        ...new Set(
+          linkedPay.rows.map((row) => row.payment_id).filter((pid) => pid != null)
+        ),
+      ];
 
       // Keep payment logs in sync when Finance verifies and a payment row already exists for this AR.
       if (
@@ -2915,7 +3020,7 @@ router.put(
         verifierUserId &&
         shouldSyncPaymentLogApprovalOnArVerify(req.user?.userType)
       ) {
-        if (linkedPaymentId) {
+        for (const linkedPaymentId of linkedPaymentIds) {
           await query(
             `UPDATE paymenttbl
              SET approval_status = 'Approved',
@@ -2928,32 +3033,46 @@ router.put(
         }
       }
 
-      if (action === 'unverify' && linkedPaymentId) {
-        await query(
-          `UPDATE paymenttbl
-           SET approval_status = 'Pending',
-               approved_by = NULL,
-               approved_at = NULL,
-               finance_verified_reference_number = NULL
-           WHERE payment_id = $1
-             AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
-          [linkedPaymentId]
-        );
+      if (action === 'unverify') {
+        for (const linkedPaymentId of linkedPaymentIds) {
+          await query(
+            `UPDATE paymenttbl
+             SET approval_status = 'Pending',
+                 approved_by = NULL,
+                 approved_at = NULL,
+                 finance_verified_reference_number = NULL
+             WHERE payment_id = $1
+               AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+            [linkedPaymentId]
+          );
+        }
       }
+
+      const pairedUpdateCount =
+        isPackageAr && ackIdsToUpdate.length > 1 ? ackIdsToUpdate.length : 0;
 
       const successMessage =
         action === 'unverify'
-          ? 'Acknowledgement receipt verification revoked'
+          ? pairedUpdateCount > 0
+            ? 'Acknowledgement receipt pair verification revoked'
+            : 'Acknowledgement receipt verification revoked'
           : action === 'verify'
-            ? 'Acknowledgement receipt verified successfully'
+            ? pairedUpdateCount > 0
+              ? `Downpayment and Phase 1 acknowledgement receipts verified (${pairedUpdateCount} ARs)`
+              : 'Acknowledgement receipt verified successfully'
             : action === 'reject'
-              ? 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
-              : 'Acknowledgement receipt returned successfully';
+              ? pairedUpdateCount > 0
+                ? 'Acknowledgement receipt pair rejected. The branch admin must create new acknowledgement receipts.'
+                : 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
+              : pairedUpdateCount > 0
+                ? 'Acknowledgement receipt pair returned successfully'
+                : 'Acknowledgement receipt returned successfully';
 
       return res.json({
         success: true,
         message: successMessage,
-        data: formatArListApiRow(updateRes.rows[0]),
+        data: formatArListApiRow(primaryUpdatedRow),
+        paired_verify_count: pairedUpdateCount || undefined,
       });
     } catch (err) {
       return next(err);
@@ -2992,6 +3111,31 @@ router.put(
       }
 
       const ack = ackResult.rows[0];
+      const pairedIds = await resolvePairedAckReceiptIds(id);
+      const rowsToResubmit = await query(
+        `SELECT ack_receipt_id, ar_type, status, branch_id, created_by, prospect_student_notes
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = ANY($1::int[])`,
+        [pairedIds]
+      );
+      for (const row of rowsToResubmit.rows) {
+        if (row.ar_type !== 'Package') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only Package acknowledgement receipts can be resubmitted in this flow',
+          });
+        }
+        if (row.status !== 'Returned') {
+          return res.status(400).json({
+            success: false,
+            message:
+              pairedIds.length > 1
+                ? 'All Downpayment + Phase 1 acknowledgement receipts must be Returned before resubmitting'
+                : 'Only returned acknowledgement receipts can be resubmitted',
+          });
+        }
+      }
+
       if (ack.ar_type !== 'Package') {
         return res.status(400).json({
           success: false,
@@ -3020,35 +3164,46 @@ router.put(
         });
       }
 
-      const updatedNotes = remarks
-        ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[Resubmitted] ${remarks}`
-        : ack.prospect_student_notes;
-
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
-      const updateRes = hasVerifierCols
-        ? await query(
-            `UPDATE acknowledgement_receiptstbl
-             SET status = 'Submitted',
-                 prospect_student_notes = $1,
-                 verified_by_user_id = NULL,
-                 verified_at = NULL
-             WHERE ack_receipt_id = $2
-             RETURNING *`,
-            [updatedNotes, id]
-          )
-        : await query(
-            `UPDATE acknowledgement_receiptstbl
-             SET status = 'Submitted',
-                 prospect_student_notes = $1
-             WHERE ack_receipt_id = $2
-             RETURNING *`,
-            [updatedNotes, id]
-          );
+      const updatedRows = [];
+      for (const row of rowsToResubmit.rows) {
+        const rowNotes = remarks
+          ? `${row.prospect_student_notes ? `${row.prospect_student_notes}\n` : ''}[Resubmitted] ${remarks}`
+          : row.prospect_student_notes;
+        const rowUpdate = hasVerifierCols
+          ? await query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Submitted',
+                   prospect_student_notes = $1,
+                   verified_by_user_id = NULL,
+                   verified_at = NULL
+               WHERE ack_receipt_id = $2
+               RETURNING *`,
+              [rowNotes, row.ack_receipt_id]
+            )
+          : await query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Submitted',
+                   prospect_student_notes = $1
+               WHERE ack_receipt_id = $2
+               RETURNING *`,
+              [rowNotes, row.ack_receipt_id]
+            );
+        if (rowUpdate.rows[0]) updatedRows.push(rowUpdate.rows[0]);
+      }
+
+      const primaryUpdatedRow =
+        updatedRows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
+        updatedRows[0];
 
       return res.json({
         success: true,
-        message: 'Acknowledgement receipt resubmitted successfully',
-        data: formatArListApiRow(updateRes.rows[0]),
+        message:
+          pairedIds.length > 1
+            ? 'Downpayment and Phase 1 acknowledgement receipts resubmitted successfully'
+            : 'Acknowledgement receipt resubmitted successfully',
+        data: formatArListApiRow(primaryUpdatedRow),
+        paired_resubmit_count: pairedIds.length > 1 ? pairedIds.length : undefined,
       });
     } catch (err) {
       return next(err);

@@ -311,5 +311,20 @@ export function useAckReceiptFocusFromQuery({
     return () => window.clearTimeout(timer);
   }, [focusAckReceiptId, focusInvoiceOnlyId, sortedReceipts, paginationPage]);
 
-  return { focusAckReceiptId, focusInvoiceOnlyId, crossLinkLoadedReceipt };
+  return {
+    focusAckReceiptId,
+    focusInvoiceOnlyId,
+    crossLinkLoadedReceipt,
+    setFocusAckReceiptId,
+    focusAckReceiptRow: (ackReceiptId) => {
+      const id = Number(ackReceiptId);
+      if (!Number.isFinite(id) || id <= 0) return;
+      setFocusInvoiceOnlyId(null);
+      setFocusAckReceiptId(id);
+    },
+    clearAckReceiptRowFocus: () => {
+      setFocusAckReceiptId(null);
+      setFocusInvoiceOnlyId(null);
+    },
+  };
 }

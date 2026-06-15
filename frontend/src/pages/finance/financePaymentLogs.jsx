@@ -25,6 +25,7 @@ import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import PaymentFinanceVerifyModal from '../../components/paymentLogs/PaymentFinanceVerifyModal';
 import { PaymentLogPackageItemCell } from '../../components/paymentLogs/PaymentLogPackageItemCell';
 import { getPaymentLogPackageItemDisplayText } from '../../utils/paymentLogPackageItem';
 import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPaymentLogStatus';
@@ -50,7 +51,6 @@ const FinancePaymentLogs = () => {
   const paymentLogsUrlBootstrap = parsePaymentLogsLocationSearch(location.search);
   const [financeLogTab, setFinanceLogTab] = useState(() => paymentLogsUrlBootstrap.logTab);
   const [selectedRejectedPayment, setSelectedRejectedPayment] = useState(null);
-  const [returnReasonInput, setReturnReasonInput] = useState('');
   const [returnActionLoading, setReturnActionLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -99,11 +99,10 @@ const FinancePaymentLogs = () => {
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
   const [showReferenceModal, setShowReferenceModal] = useState(false);
-  const [showReturnModal, setShowReturnModal] = useState(false);
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [rejectReasonInput, setRejectReasonInput] = useState('');
+  const [verifyModalMode, setVerifyModalMode] = useState('verify');
+  const [verifyModalRemarks, setVerifyModalRemarks] = useState('');
+  const [verifyModalReferenceInput, setVerifyModalReferenceInput] = useState('');
   const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
-  const [referenceModalInput, setReferenceModalInput] = useState('');
   const [paymentDateInput, setPaymentDateInput] = useState('');
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
@@ -319,11 +318,9 @@ const FinancePaymentLogs = () => {
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
-    setReferenceModalInput('');
-    setReturnReasonInput('');
-    // Pre-fill the editable Payment Date with the payment's current date.
-    // The list query exposes the same column under both payment_date and
-    // issue_date aliases; prefer payment_date and fall back to issue_date.
+    setVerifyModalMode('verify');
+    setVerifyModalRemarks('');
+    setVerifyModalReferenceInput('');
     const initialDate =
       (payment?.payment_date || payment?.issue_date || '').toString().slice(0, 10);
     setPaymentDateInput(initialDate);
@@ -331,32 +328,18 @@ const FinancePaymentLogs = () => {
   };
 
   const closeReferenceModal = () => {
+    if (referenceModalUpdating || returnActionLoading) return;
     setShowReferenceModal(false);
     setSelectedPaymentForReference(null);
-    setReferenceModalInput('');
-    setReturnReasonInput('');
+    setVerifyModalMode('verify');
+    setVerifyModalRemarks('');
+    setVerifyModalReferenceInput('');
     setPaymentDateInput('');
   };
 
-  const openReturnModal = () => {
-    if (!selectedPaymentForReference) return;
-    setShowReturnModal(true);
-  };
-
-  const closeReturnModal = () => {
-    setShowReturnModal(false);
-    setReturnReasonInput('');
-  };
-
-  const openRejectModal = () => {
-    if (!selectedPaymentForReference) return;
-    setRejectReasonInput('');
-    setShowRejectModal(true);
-  };
-
-  const closeRejectModal = () => {
-    setShowRejectModal(false);
-    setRejectReasonInput('');
+  const changeVerifyModalMode = (mode) => {
+    setVerifyModalMode(mode);
+    setVerifyModalRemarks('');
   };
 
   const openReturnDetailsModal = (payment) => {
@@ -371,7 +354,7 @@ const FinancePaymentLogs = () => {
 
   const handleReturnToBranch = async () => {
     if (!selectedPaymentForReference) return;
-    const note = returnReasonInput.trim();
+    const note = verifyModalRemarks.trim();
     if (!note) {
       appAlert('Please enter notes explaining why the payment is being returned.');
       return;
@@ -387,7 +370,6 @@ const FinancePaymentLogs = () => {
           body: JSON.stringify({ reason: note }),
         });
       }
-      closeReturnModal();
       closeReferenceModal();
       await fetchPayments(pagination.page);
       await fetchReturnedPaymentLogCount();
@@ -405,7 +387,7 @@ const FinancePaymentLogs = () => {
 
   const handleRejectPayment = async () => {
     if (!selectedPaymentForReference) return;
-    const note = rejectReasonInput.trim();
+    const note = verifyModalRemarks.trim();
     if (!note) {
       appAlert('Please enter a reject reason before rejecting this payment.');
       return;
@@ -421,7 +403,6 @@ const FinancePaymentLogs = () => {
           body: JSON.stringify({ reason: note }),
         });
       }
-      closeRejectModal();
       closeReferenceModal();
       await fetchPayments(1);
       await fetchReturnedPaymentLogCount();
@@ -437,31 +418,28 @@ const FinancePaymentLogs = () => {
     }
   };
 
-  const handleUpdateReferenceNumber = async (e) => {
-    e.preventDefault();
+  const handleVerifyPayment = async () => {
     if (!selectedPaymentForReference) return;
-    const enteredRef = referenceModalInput.trim();
+
+    const enteredRef = verifyModalReferenceInput.trim();
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
     if (!enteredRef) {
-      appAlert('Please enter your Finance/Superfinance reference number before approval.');
+      appAlert('Please enter the reference number before approval.');
       return;
     }
     if (!originalRef) {
       appAlert(
-        'This payment has no issued reference number. Please Return to branch and ask encoder to provide/fix it first.'
+        'This payment has no reference number on file. Use Return to branch and ask the encoder to fix it first.'
       );
       return;
     }
     if (enteredRef !== originalRef) {
       appAlert(
-        'Reference number does not match the issued reference number. You cannot approve this payment.\n\nPlease use Return to branch.'
+        'Reference number does not match the recorded reference. You cannot approve this payment.\n\nPlease use Return to branch.'
       );
       return;
     }
 
-    // Validate the optional updated payment date. We always send what is in the
-    // form; the backend only changes issue_date when this value is present and
-    // valid, so the no-edit case is still a safe re-affirmation of the date.
     const trimmedDate = (paymentDateInput || '').trim();
     if (trimmedDate && !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
       appAlert('Payment date must be a valid date (YYYY-MM-DD).');
@@ -1479,252 +1457,27 @@ const FinancePaymentLogs = () => {
         document.body
       )}
 
-      {/* Reference Number modal (portaled so overlay covers header) */}
-      {showReferenceModal && selectedPaymentForReference && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={closeReferenceModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-lg sm:max-w-2xl md:max-w-4xl max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 sm:p-6">
-              <div className="flex justify-between items-start gap-3 mb-3">
-                <h2 className="text-xl font-semibold text-gray-900">Payment Status info</h2>
-                <button
-                  type="button"
-                  onClick={closeReferenceModal}
-                  className="text-gray-400 hover:text-gray-600 shrink-0"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <p className="text-sm text-gray-600 mb-4 md:mb-6">
-                Payment INV-{selectedPaymentForReference.invoice_id} · {selectedPaymentForReference.student_name || 'N/A'}
-              </p>
-              <form onSubmit={handleUpdateReferenceNumber}>
-                <div
-                  className={`flex flex-col gap-6 ${selectedPaymentForReference.payment_attachment_url ? 'md:flex-row md:items-start md:gap-8' : ''}`}
-                >
-                  {selectedPaymentForReference.payment_attachment_url && (
-                    <div className="w-full md:w-[40%] md:max-w-md md:shrink-0">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAttachmentViewerUrl(selectedPaymentForReference.payment_attachment_url);
-                          setShowAttachmentViewer(true);
-                        }}
-                        className="block w-full cursor-pointer text-left rounded-lg border border-gray-200 bg-gray-50 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 overflow-hidden"
-                      >
-                        <img
-                          src={selectedPaymentForReference.payment_attachment_url}
-                          alt="Payment attachment"
-                          className="max-h-52 w-full md:max-h-[min(60vh,400px)] object-contain mx-auto"
-                        />
-                      </button>
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1 flex flex-col gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Payment Date
-                      </label>
-                      <input
-                        type="date"
-                        value={paymentDateInput}
-                        onChange={(e) => setPaymentDateInput(e.target.value)}
-                        className="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                        disabled={referenceModalUpdating || returnActionLoading}
-                      />
-                      <p className="mt-1 text-xs text-gray-500">
-                        Adjust the date if needed. Saving will update the payment date everywhere it is shown.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Finance/Superfinance Reference Number
-                      </label>
-                      <input
-                        type="text"
-                        value={referenceModalInput}
-                        onChange={(e) => setReferenceModalInput(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                        placeholder="Enter verification reference number"
-                        required
-                      />
-                    </div>
-                    <div className="pt-4 border-t border-gray-200">
-                      <p className="text-xs text-gray-600 mb-2">
-                        If the reference and attachment do not match, use <span className="font-medium text-gray-800">Return to branch</span>. You will be asked for a required note in the next step.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={openReturnModal}
-                        className="mt-1 w-full sm:w-auto px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md border border-amber-200 disabled:opacity-50"
-                        disabled={referenceModalUpdating || returnActionLoading}
-                      >
-                        Return to branch
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mt-6 pt-4 border-t border-gray-100">
-                  <button
-                    type="button"
-                    onClick={closeReferenceModal}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openRejectModal}
-                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={referenceModalUpdating || returnActionLoading}
-                  >
-                    {referenceModalUpdating ? 'Saving...' : 'Verify & approve'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {showReturnModal && selectedPaymentForReference && createPortal(
-        <div
-          className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-sm bg-black/20 p-4"
-          onClick={closeReturnModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Return to branch</h2>
-                <button
-                  type="button"
-                  onClick={closeReturnModal}
-                  className="text-gray-400 hover:text-gray-600"
-                  disabled={returnActionLoading}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <p className="text-sm text-gray-600 mb-3">
-                Add a note so the branch knows exactly what to fix or why INV-{selectedPaymentForReference.invoice_id} is being rejected.
-              </p>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Note to branch <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={returnReasonInput}
-                onChange={(e) => setReturnReasonInput(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
-                placeholder="e.g. Reference on image does not match encoded reference"
-                disabled={returnActionLoading}
-              />
-              <div className="mt-4 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={closeReturnModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                  disabled={returnActionLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleReturnToBranch}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-md disabled:opacity-50"
-                  disabled={returnActionLoading}
-                >
-                  {returnActionLoading ? 'Returning...' : 'Confirm return'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {showRejectModal && selectedPaymentForReference && createPortal(
-        <div
-          className="fixed inset-0 z-[10001] flex items-center justify-center backdrop-blur-sm bg-black/30 p-4"
-          onClick={closeRejectModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Reject payment</h2>
-                <button
-                  type="button"
-                  onClick={closeRejectModal}
-                  className="text-gray-400 hover:text-gray-600"
-                  disabled={returnActionLoading}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <p className="text-sm text-gray-600 mb-3">
-                Rejecting <span className="font-medium text-gray-800">INV-{selectedPaymentForReference.invoice_id}</span> is permanent. The invoice will be marked as Rejected so the branch can record a new payment, and this amount will not count toward revenue.
-              </p>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Reject reason <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={rejectReasonInput}
-                onChange={(e) => setRejectReasonInput(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 text-sm"
-                placeholder="Explain why this payment is being rejected"
-                disabled={returnActionLoading}
-              />
-              <div className="mt-4 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={closeRejectModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                  disabled={returnActionLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRejectPayment}
-                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md disabled:opacity-50"
-                  disabled={returnActionLoading}
-                >
-                  {returnActionLoading ? 'Rejecting...' : 'Confirm reject'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <PaymentFinanceVerifyModal
+        open={showReferenceModal && Boolean(selectedPaymentForReference)}
+        mode={verifyModalMode}
+        payment={selectedPaymentForReference}
+        paymentDate={paymentDateInput}
+        onPaymentDateChange={setPaymentDateInput}
+        referenceNumber={verifyModalReferenceInput}
+        onReferenceNumberChange={setVerifyModalReferenceInput}
+        remarks={verifyModalRemarks}
+        onRemarksChange={setVerifyModalRemarks}
+        submitting={referenceModalUpdating || returnActionLoading}
+        onClose={closeReferenceModal}
+        onConfirmVerify={handleVerifyPayment}
+        onConfirmReturn={handleReturnToBranch}
+        onConfirmReject={handleRejectPayment}
+        onModeChange={changeVerifyModalMode}
+        onViewAttachment={(url) => {
+          setAttachmentViewerUrl(url);
+          setShowAttachmentViewer(true);
+        }}
+      />
 
       {showReturnDetailsModal && selectedReturnDetailsPayment && createPortal(
         <div

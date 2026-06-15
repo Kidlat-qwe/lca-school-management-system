@@ -13,6 +13,8 @@ import {
   getArListLineTotal,
   getArListPackagePrimaryLabel,
 } from '../../utils/acknowledgementReceiptDisplay';
+import { getEnrollmentAckReceiptLineTotal } from '../../utils/enrollmentAckReceiptList';
+import EnrollmentAckReceiptPickerTable from '../../components/enrollment/EnrollmentAckReceiptPickerTable';
 import {
   formatProgramEnrollmentStatus,
   pickGroupedProgramEnrollmentStatus,
@@ -4639,7 +4641,7 @@ const initializePackageMerchSelections = useCallback(
               ? {
                   ack_receipt_id: selectedAckReceipt.ack_receipt_id,
                   ack_installment_option: selectedAckReceipt.installment_option || null,
-                  ack_paid_amount: selectedAckReceipt.payment_amount != null ? Number(selectedAckReceipt.payment_amount) : null,
+                  ack_paid_amount: getEnrollmentAckReceiptLineTotal(selectedAckReceipt),
                 }
               : {}),
             ...((selectedEnrollmentOption === 'package' || selectedEnrollmentOption === 'per-phase' || selectedEnrollmentOption === 'ack-receipt') &&
@@ -10679,80 +10681,22 @@ const initializePackageMerchSelections = useCallback(
                           No acknowledgement receipts found for this branch/search yet.
                         </p>
                       ) : (
-                        <div
-                          className="overflow-x-auto rounded-lg"
-                          style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
-                        >
-                          <table
-                            className="min-w-full divide-y divide-gray-200 text-sm"
-                            style={{ width: '100%', minWidth: '620px' }}
-                          >
-                            <thead className="bg-gray-50">
-                              <tr>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Payer</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
-                              </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                              {ackReceipts.map((ar) => {
-                                const isCashMethod = String(ar.payment_method || '').trim().toLowerCase() === 'cash';
-                                const isVerified = String(ar.status || '').trim() === 'Verified';
-                                const canUseReceipt = isVerified || isCashMethod;
-                                const disabledReason = isCashMethod
-                                  ? ''
-                                  : 'This receipt is not verified yet. Finance/Superfinance must verify it first.';
-                                return (
-                                <tr key={ar.ack_receipt_id}>
-                                  <td className="px-4 py-3">
-                                    <div className="text-gray-900">{ar.prospect_student_name}</div>
-                                    {ar.prospect_student_contact && (
-                                      <div className="text-xs text-gray-500 truncate">{ar.prospect_student_contact}</div>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <div className="text-gray-900">{getArListPackagePrimaryLabel(ar)}</div>
-                                    <div className="text-xs text-gray-500">
-                                      ₱{getArListCombinedPackageAmount(ar).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3 text-gray-900">
-                                    ₱{getArListLineTotal(ar).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                  </td>
-                                  <td className="px-4 py-3 text-gray-900">
-                                    {ar.issue_date ? formatDateManila(ar.issue_date) : '-'}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <button
-                                      type="button"
-                                      disabled={!canUseReceipt}
-                                      title={!canUseReceipt ? disabledReason : 'Use this acknowledgement receipt'}
-                                      onClick={() => {
-                                        if (!canUseReceipt) return;
-                                        const pkg = packages.find((p) => p.package_id === ar.package_id);
-                                        if (!pkg) {
-                                          appAlert('Package from this acknowledgement receipt is not available in this branch. Please check package configuration.');
-                                          return;
-                                        }
-                                        setSelectedAckReceipt(ar);
-                                        handlePackageSelect(pkg);
-                                      }}
-                                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                                        canUseReceipt
-                                          ? 'text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E]'
-                                          : 'text-gray-400 bg-gray-100 cursor-not-allowed border border-gray-200'
-                                      }`}
-                                    >
-                                      Use This Receipt
-                                    </button>
-                                  </td>
-                                </tr>
-                              )})}
-                            </tbody>
-                          </table>
-                        </div>
+                        <EnrollmentAckReceiptPickerTable
+                          ackReceipts={ackReceipts}
+                          showReferenceColumn={false}
+                          minWidth="620px"
+                          onUseReceipt={(ar) => {
+                            const pkg = packages.find((p) => p.package_id === ar.package_id);
+                            if (!pkg) {
+                              appAlert(
+                                'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
+                              );
+                              return;
+                            }
+                            setSelectedAckReceipt(ar);
+                            handlePackageSelect(pkg);
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -11077,7 +11021,13 @@ const initializePackageMerchSelections = useCallback(
                                 </span>
                                 {selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt && (
                                   <span className="block text-xs text-amber-700 mt-1">
-                                    Paid via Acknowledgement Receipt: {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')} — Amount: ₱{Number(selectedAckReceipt.payment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    Paid via Acknowledgement Receipt:{' '}
+                                    {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')}{' '}
+                                    — Amount: ₱
+                                    {getEnrollmentAckReceiptLineTotal(selectedAckReceipt).toLocaleString('en-US', {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
                                   </span>
                                 )}
                               </span>
@@ -15494,99 +15444,21 @@ const initializePackageMerchSelections = useCallback(
                           No acknowledgement receipts found for this branch/search yet.
                         </p>
                       ) : (
-                        <div
-                          className="overflow-x-auto rounded-lg"
-                          style={{
-                            scrollbarWidth: 'thin',
-                            scrollbarColor: '#cbd5e0 #f7fafc',
-                            WebkitOverflowScrolling: 'touch',
+                        <EnrollmentAckReceiptPickerTable
+                          ackReceipts={ackReceipts}
+                          showReferenceColumn={false}
+                          minWidth="620px"
+                          onUseReceipt={async (ar) => {
+                            const pkg = packages.find((p) => p.package_id === ar.package_id);
+                            if (!pkg) {
+                              appAlert(
+                                'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
+                              );
+                              return;
+                            }
+                            await applyUpgradePackageSelection(pkg, ar);
                           }}
-                        >
-                          <table
-                            className="min-w-full divide-y divide-gray-200 text-sm"
-                            style={{ width: '100%', minWidth: '620px' }}
-                          >
-                            <thead className="bg-gray-50">
-                              <tr>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Payer</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Package</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Amount</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Issue Date</th>
-                                <th className="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
-                              </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                              {ackReceipts.map((ar) => {
-                                const isCashMethod =
-                                  String(ar.payment_method || '').trim().toLowerCase() === 'cash';
-                                const isVerified = String(ar.status || '').trim() === 'Verified';
-                                const canUseReceipt = isVerified || isCashMethod;
-                                const disabledReason = isCashMethod
-                                  ? ''
-                                  : 'This receipt is not verified yet. Finance/Superfinance must verify it first.';
-                                return (
-                                  <tr key={ar.ack_receipt_id}>
-                                    <td className="px-4 py-3">
-                                      <div className="text-gray-900">{ar.prospect_student_name}</div>
-                                      {ar.prospect_student_contact && (
-                                        <div className="text-xs text-gray-500 truncate">
-                                          {ar.prospect_student_contact}
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="text-gray-900">
-                                        {getArListPackagePrimaryLabel(ar)}
-                                      </div>
-                                      <div className="text-xs text-gray-500">
-                                        ₱
-                                        {getArListCombinedPackageAmount(ar).toLocaleString('en-US', {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })}
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-900">
-                                      ₱
-                                      {getArListLineTotal(ar).toLocaleString('en-US', {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2,
-                                      })}
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-900">
-                                      {ar.issue_date ? formatDateManila(ar.issue_date) : '-'}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <button
-                                        type="button"
-                                        disabled={!canUseReceipt}
-                                        title={!canUseReceipt ? disabledReason : 'Use this acknowledgement receipt'}
-                                        onClick={async () => {
-                                          if (!canUseReceipt) return;
-                                          const pkg = packages.find((p) => p.package_id === ar.package_id);
-                                          if (!pkg) {
-                                            appAlert(
-                                              'Package from this acknowledgement receipt is not available in this branch. Please check package configuration.'
-                                            );
-                                            return;
-                                          }
-                                          await applyUpgradePackageSelection(pkg, ar);
-                                        }}
-                                        className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                                          canUseReceipt
-                                            ? 'text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E]'
-                                            : 'text-gray-400 bg-gray-100 cursor-not-allowed border border-gray-200'
-                                        }`}
-                                      >
-                                        Use This Receipt
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
+                        />
                       )}
                     </div>
                   </div>
