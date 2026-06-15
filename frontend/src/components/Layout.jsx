@@ -5,6 +5,7 @@ import Sidebar from './Sidebar';
 import NavigationActivityLogger from './NavigationActivityLogger';
 import HighPriorityAnnouncementModal from './HighPriorityAnnouncementModal';
 import BranchCashHoldingAlertModal from './BranchCashHoldingAlertModal';
+import BranchAdminHelpFloatingButton from './branchAdmin/BranchAdminHelpFloatingButton';
 import { GlobalBranchFilterProvider } from '../contexts/GlobalBranchFilterContext';
 
 const LayoutBody = () => {
@@ -33,6 +34,8 @@ const LayoutBody = () => {
         <HighPriorityAnnouncementModal />
         {/* Branch Admin: urgent login-time alert when undeposited cash exceeds threshold */}
         <BranchCashHoldingAlertModal />
+        {/* Branch Admin: floating link to frontdesk user manual */}
+        <BranchAdminHelpFloatingButton />
       </div>
   );
 };

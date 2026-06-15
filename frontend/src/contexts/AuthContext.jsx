@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
@@ -34,6 +34,18 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [isCreatingUser, setIsCreatingUser] = useState(false);
   const [originalUserInfo, setOriginalUserInfo] = useState(null);
+  const isCreatingUserRef = useRef(false);
+  const userInfoRef = useRef(null);
+  const loginInProgressRef = useRef(false);
+
+  const setUserInfoAndRef = (nextUserInfo) => {
+    userInfoRef.current = nextUserInfo;
+    setUserInfo(nextUserInfo);
+  };
+
+  useEffect(() => {
+    isCreatingUserRef.current = isCreatingUser;
+  }, [isCreatingUser]);
 
   // Signup function
   const signup = async (email, password, userData, isCurrentUser = true) => {
@@ -129,7 +141,7 @@ export const AuthProvider = ({ children }) => {
         email: firebaseUser.email,
         emailVerified: firebaseUser.emailVerified,
       };
-      setUserInfo(userInfoData);
+      setUserInfoAndRef(userInfoData);
       applyUserSessionCache(userInfoData);
       return { success: true, user: userInfoData };
     } catch (error) {
@@ -150,37 +162,35 @@ export const AuthProvider = ({ children }) => {
 
   // Login function
   const login = async (email, password) => {
+    loginInProgressRef.current = true;
     try {
       const emailTrim = String(email || '').trim();
       const passwordValue = String(password || '');
 
       const userCredential = await signInWithEmailAndPassword(auth, emailTrim, passwordValue);
       const token = await userCredential.user.getIdToken();
-      
-      // Store token
+
       localStorage.setItem('firebase_token', token);
-      
-      // Verify token and get user info from backend (POST request as per backend route)
-      try {
-        const response = await apiRequest('/auth/verify', {
-          method: 'POST',
-        });
-        if (response && response.user) {
-          setUserInfo(response.user);
-          applyUserSessionCache(response.user);
-          return { success: true, user: response.user };
-        }
-      } catch (verifyError) {
-        console.warn('Verify endpoint failed, user may not be in database yet:', verifyError);
-        // Return minimal user info from Firebase
-        const minimalUser = {
-          uid: userCredential.user.uid,
-          email: userCredential.user.email,
-          emailVerified: userCredential.user.emailVerified,
+
+      const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
+      if (response?.user) {
+        const normalizedUser = {
+          ...response.user,
+          user_id: response.user.userId || response.user.user_id,
+          userId: response.user.userId || response.user.user_id,
+          full_name: response.user.fullName || response.user.full_name,
+          fullName: response.user.fullName || response.user.full_name,
+          user_type: response.user.userType || response.user.user_type,
+          userType: response.user.userType || response.user.user_type,
+          branch_id: response.user.branchId ?? response.user.branch_id,
+          branchId: response.user.branchId ?? response.user.branch_id,
         };
-        setUserInfo(minimalUser);
-        return { success: true, user: minimalUser };
+        setUserInfoAndRef(normalizedUser);
+        applyUserSessionCache(normalizedUser);
+        return { success: true, user: normalizedUser };
       }
+
+      throw new Error('Could not load your account profile. Please try again.');
     } catch (error) {
       console.error('Login error:', error);
 
@@ -197,13 +207,17 @@ export const AuthProvider = ({ children }) => {
       if (code === 'auth/wrong-password') {
         throw new Error('Wrong password.');
       }
+      if (code === 'auth/quota-exceeded') {
+        throw new Error(
+          'Authentication service is temporarily busy. Please wait a minute and try again.'
+        );
+      }
 
       // Newer Firebase SDKs may return `auth/invalid-credential` for wrong password OR unknown email.
       if (code === 'auth/invalid-credential') {
         try {
           const methods = await fetchSignInMethodsForEmail(auth, String(email || '').trim());
           if (!methods || methods.length === 0) {
-            // Firebase may hide existence; fall back to DB check for UX (requested).
             try {
               const existsRes = await apiRequest('/auth/check-email', {
                 method: 'POST',
@@ -222,7 +236,19 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
+      if (error.response?.status === 401) {
+        localStorage.removeItem('firebase_token');
+        await signOut(auth).catch(() => {});
+        throw new Error('Session could not be verified. Please try signing in again.');
+      }
+
+      if (error instanceof Error && error.message) {
+        throw error;
+      }
+
       throw new Error('Failed to login. Please check your credentials.');
+    } finally {
+      loginInProgressRef.current = false;
     }
   };
 
@@ -233,7 +259,7 @@ export const AuthProvider = ({ children }) => {
       localStorage.removeItem('firebase_token');
       clearAllApiCache();
       setCurrentUser(null);
-      setUserInfo(null);
+      setUserInfoAndRef(null);
     } catch (error) {
       console.error('Logout error:', error);
       throw error;
@@ -267,7 +293,7 @@ export const AuthProvider = ({ children }) => {
           profile_picture_url: response.user.profile_picture_url || null,
         };
         console.log('Refreshing user info:', normalizedUser);
-        setUserInfo(normalizedUser);
+        setUserInfoAndRef(normalizedUser);
         applyUserSessionCache(normalizedUser);
         return normalizedUser;
       }
@@ -277,48 +303,77 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Listen for auth state changes
+  // Listen for auth state changes (subscribe once — avoid re-subscribe loops that hammer token refresh).
   useEffect(() => {
     let isMounted = true;
-    let skipVerify = false; // Flag to skip verify if userInfo was just set by signup/login
-    
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!isMounted) return;
-      
+
       setCurrentUser(user);
-      
+
       if (user) {
         try {
-          // Force refresh token so backend always gets a valid one (avoids 401 from expired token)
-          const token = await user.getIdToken(true);
+          if (loginInProgressRef.current) {
+            if (isMounted) setLoading(false);
+            return;
+          }
+
+          // Use the SDK cache; only refresh when the token is expired or near expiry.
+          // Forcing refresh on every auth callback can trigger auth/quota-exceeded.
+          let token;
+          try {
+            token = await user.getIdToken();
+          } catch (tokenError) {
+            if (tokenError?.code === 'auth/quota-exceeded') {
+              token = localStorage.getItem('firebase_token');
+              if (!token) throw tokenError;
+              console.warn(
+                'Firebase token refresh quota exceeded; continuing with the last stored token.'
+              );
+            } else {
+              throw tokenError;
+            }
+          }
           localStorage.setItem('firebase_token', token);
-          
-          // If we're creating a user (superadmin creating personnel), don't update userInfo
-          // The signup function will handle restoring the original session
-          if (isCreatingUser) {
+
+          if (isCreatingUserRef.current) {
             console.log('⏸️ Skipping userInfo update - creating user in progress');
             return;
           }
-          
-          // Only try to verify if we don't have complete user info
-          // Skip verify if it was just set by signup/login (they handle it themselves)
-          const currentUserInfo = userInfo;
-          if (!currentUserInfo || !currentUserInfo.userId) {
+
+          const currentUserInfo = userInfoRef.current;
+          const hasEstablishedSession = (info) =>
+            Boolean(
+              info &&
+                (info.userId || info.user_id) &&
+                (info.userType || info.user_type)
+            );
+
+          if (!hasEstablishedSession(currentUserInfo)) {
             try {
-              // Pass the fresh token so verify never uses a stale one from localStorage
               const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
-              if (response && response.user && isMounted) {
-                setUserInfo(response.user);
-                applyUserSessionCache(response.user);
+              if (response?.user && isMounted) {
+                const normalizedUser = {
+                  ...response.user,
+                  user_id: response.user.userId || response.user.user_id,
+                  userId: response.user.userId || response.user.user_id,
+                  user_type: response.user.userType || response.user.user_type,
+                  userType: response.user.userType || response.user.user_type,
+                  branch_id: response.user.branchId ?? response.user.branch_id,
+                  branchId: response.user.branchId ?? response.user.branch_id,
+                };
+                setUserInfoAndRef(normalizedUser);
+                applyUserSessionCache(normalizedUser);
               }
             } catch (error) {
-              const is401 = error.response?.status === 401 || error.message?.includes('Invalid or expired token');
-              if (is401 && isMounted) {
-                // Backend rejected the token (expired or server config). Sign out so user gets a clean login and can try again.
+              const is401 =
+                error.response?.status === 401 || error.message?.includes('Invalid or expired token');
+              if (is401 && isMounted && !hasEstablishedSession(userInfoRef.current)) {
                 localStorage.removeItem('firebase_token');
                 clearAllApiCache();
                 signOut(auth).catch(() => {});
-                setUserInfo(null);
+                setUserInfoAndRef(null);
               }
               if (error.message && !error.message.includes('404') && !is401) {
                 console.warn('Could not verify user with backend:', error.message);
@@ -327,22 +382,18 @@ export const AuthProvider = ({ children }) => {
           }
         } catch (error) {
           console.error('Error in auth state change:', error);
-          if (isMounted && !userInfo && !isCreatingUser) {
-            setUserInfo(null);
+          if (isMounted && !userInfoRef.current && !isCreatingUserRef.current) {
+            setUserInfoAndRef(null);
           }
         }
       } else {
-        // User signed out
         localStorage.removeItem('firebase_token');
-        if (isMounted) {
-          // If we're creating a user, don't clear userInfo - it will be restored by signup function
-          if (!isCreatingUser) {
-            clearAllApiCache();
-            setUserInfo(null);
-          }
+        if (isMounted && !isCreatingUserRef.current && !loginInProgressRef.current) {
+          clearAllApiCache();
+          setUserInfoAndRef(null);
         }
       }
-      
+
       if (isMounted) {
         setLoading(false);
       }
@@ -352,7 +403,7 @@ export const AuthProvider = ({ children }) => {
       isMounted = false;
       unsubscribe();
     };
-  }, [isCreatingUser, userInfo]); // Include isCreatingUser and userInfo in deps
+  }, []);
 
   const value = {
     currentUser,
