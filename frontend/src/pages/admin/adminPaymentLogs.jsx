@@ -77,6 +77,20 @@ const CASH_DEPOSIT_WARNING_THRESHOLD = 100000;
 /** Temporary lock for Previous deposited periods / recovery UI until feature is re-enabled. */
 const DEPOSIT_RECOVERY_PERIODS_LOCKED = true;
 
+/** EOD preview rows must match the selected summary date (payment/AR issue_date). */
+function filterEodRowsBySummaryDate(rows, summaryDateYmd, dateField = 'issue_date') {
+  const ymd = String(summaryDateYmd || '').slice(0, 10);
+  if (!ymd || !Array.isArray(rows)) return [];
+  return rows.filter((row) => String(row?.[dateField] || '').slice(0, 10) === ymd);
+}
+
+function endOfShiftPreviewMatchesDate(preview, selectedDate) {
+  if (!preview) return false;
+  const selected = String(selectedDate || '').slice(0, 10);
+  const previewDate = String(preview.summary_date || '').slice(0, 10);
+  return Boolean(selected && previewDate && selected === previewDate);
+}
+
 const AdminPaymentLogs = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -589,6 +603,7 @@ const AdminPaymentLogs = () => {
       setEndOfShiftPreview(null);
       return;
     }
+    setEndOfShiftPreview(null);
     setEndOfShiftPreviewLoading(true);
     try {
       const previewRes = await apiRequest(`/daily-summary-sales/preview?date=${encodeURIComponent(date)}`);
@@ -1429,8 +1444,16 @@ const AdminPaymentLogs = () => {
     (sum, p) => sum + getPaymentLogTableTotalAmountColumn(p),
     0
   );
-  const endOfShiftPaymentRows = Array.isArray(endOfShiftPreview?.payments) ? endOfShiftPreview.payments : [];
-  const endOfShiftArRows = Array.isArray(endOfShiftPreview?.ar_receipts) ? endOfShiftPreview.ar_receipts : [];
+  const endOfShiftPreviewReady =
+    endOfShiftPreviewMatchesDate(endOfShiftPreview, endOfShiftSelectedDate) && !endOfShiftPreviewLoading;
+  const endOfShiftPaymentRows = useMemo(() => {
+    if (!endOfShiftPreviewReady) return [];
+    return filterEodRowsBySummaryDate(endOfShiftPreview.payments, endOfShiftSelectedDate);
+  }, [endOfShiftPreview, endOfShiftPreviewReady, endOfShiftSelectedDate]);
+  const endOfShiftArRows = useMemo(() => {
+    if (!endOfShiftPreviewReady) return [];
+    return filterEodRowsBySummaryDate(endOfShiftPreview.ar_receipts, endOfShiftSelectedDate);
+  }, [endOfShiftPreview, endOfShiftPreviewReady, endOfShiftSelectedDate]);
   const endOfShiftPendingDateSet = useMemo(() => new Set(endOfShiftPendingDates), [endOfShiftPendingDates]);
   const endOfShiftCalendarCells = useMemo(
     () => buildCalendarCells(endOfShiftCalendarMonth),
@@ -2632,21 +2655,21 @@ const AdminPaymentLogs = () => {
             {endOfShiftPreviewLoading && (
               <p className="mt-3 text-sm text-blue-600 shrink-0">Loading preview for selected date…</p>
             )}
-            {endOfShiftPreview && !endOfShiftPreviewLoading && (
+            {endOfShiftPreviewReady && endOfShiftPreview && (
               <>
                 <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
                   Total for {formatDateManila(endOfShiftSelectedDate) || endOfShiftSelectedDate}: ₱
-                  {(endOfShiftTotalFromRows || endOfShiftPreview.total_amount || 0).toLocaleString('en-US', {
+                  {(endOfShiftTotalFromRows || 0).toLocaleString('en-US', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}{' '}
-                  ({Number(endOfShiftPreview.completed_payment_count ?? 0)} completed payment row(s),{' '}
-                  {Number(endOfShiftPreview.ar_sales_count ?? 0)} standalone acknowledgement receipt(s))
+                  ({endOfShiftPaymentRows.length} completed payment row(s),{' '}
+                  {endOfShiftArRows.length} standalone acknowledgement receipt(s))
                 </p>
                 <p className="mt-1 text-xs text-gray-500 shrink-0">
                   Collected per row is payable plus tip (matches the selected day total). Invoice total is the invoice document amount from line items (or manual invoice amount).
                 </p>
-                {Array.isArray(endOfShiftPreview.payments) && endOfShiftPreview.payments.length > 0 && (
+                {endOfShiftPaymentRows.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                       Payment records (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
@@ -2656,7 +2679,7 @@ const AdminPaymentLogs = () => {
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="w-[9%] py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
-                            <th className="w-[9%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Date</th>
+                            <th className="w-[9%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Issue date</th>
                             <th className="w-[17%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Student</th>
                             <th className="w-[10%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Level tag</th>
                             <th className="w-[11%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Payment method</th>
@@ -2668,7 +2691,7 @@ const AdminPaymentLogs = () => {
                           </tr>
                         </thead>
                         <tbody className="bg-white">
-                          {endOfShiftPreview.payments.map((p) => {
+                          {endOfShiftPaymentRows.map((p) => {
                             const tip = parseFloat(p.tip_amount) || 0;
                             const payable = parseFloat(p.payable_amount) || 0;
                             const totalAmount = getPaymentLogTableTotalAmountColumn(p);
@@ -2680,8 +2703,8 @@ const AdminPaymentLogs = () => {
                                 <td className="py-2.5 ps-4 pe-3 font-medium text-gray-900 truncate align-top" title={p.invoice_id ? `INV-${p.invoice_id}` : ''}>
                                   {p.invoice_id ? `INV-${p.invoice_id}` : '-'}
                                 </td>
-                                <td className="py-2.5 px-3 text-gray-700 truncate align-top" title={p.invoice_date ? formatDate(p.invoice_date) : ''}>
-                                  {p.invoice_date ? formatDate(p.invoice_date) : '-'}
+                                <td className="py-2.5 px-3 text-gray-700 truncate align-top" title={p.issue_date ? formatDate(p.issue_date) : ''}>
+                                  {p.issue_date ? formatDate(p.issue_date) : '-'}
                                 </td>
                                 <td className="py-2.5 px-3 text-gray-700 min-w-0 align-top">
                                   <span className="truncate block" title={p.student_name || '-'}>{p.student_name || '-'}</span>
@@ -2731,7 +2754,7 @@ const AdminPaymentLogs = () => {
                     </div>
                   </div>
                 )}
-                {Array.isArray(endOfShiftPreview.ar_receipts) && endOfShiftPreview.ar_receipts.length > 0 && (
+                {endOfShiftArRows.length > 0 && (
                   <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                       Standalone Acknowledgement Receipt sales (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
@@ -2777,7 +2800,7 @@ const AdminPaymentLogs = () => {
                           </tr>
                         </thead>
                         <tbody className="bg-white">
-                          {endOfShiftPreview.ar_receipts.map((a) => {
+                          {endOfShiftArRows.map((a) => {
                             const tip = parseFloat(a.tip_amount) || 0;
                             const pamt = parseFloat(a.payment_amount) || 0;
                             const totalAmount = pamt + tip;
@@ -2841,8 +2864,7 @@ const AdminPaymentLogs = () => {
                     </div>
                   </div>
                 )}
-                {Number(endOfShiftPreview.completed_payment_count ?? 0) === 0 &&
-                  Number(endOfShiftPreview.ar_sales_count ?? 0) === 0 && (
+                {endOfShiftPaymentRows.length === 0 && endOfShiftArRows.length === 0 && (
                   <p className="mt-3 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                     No completed payments or standalone acknowledgement receipt for this date. You can still submit to close the day with zero sales.
                   </p>

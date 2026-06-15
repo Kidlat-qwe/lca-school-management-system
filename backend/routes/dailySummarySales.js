@@ -765,6 +765,11 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
     });
   }
 
+  const summaryYmd = String(summaryDate).slice(0, 10);
+  const paymentsForDate = payments.filter(
+    (p) => String(p.issue_date || '').slice(0, 10) === summaryYmd
+  );
+
   return {
     total,
     paymentCount,
@@ -772,7 +777,7 @@ const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = n
     completedPaymentCount,
     arSalesTotal: arTotal,
     arSalesCount: arCount,
-    payments,
+    payments: paymentsForDate,
   };
 };
 
