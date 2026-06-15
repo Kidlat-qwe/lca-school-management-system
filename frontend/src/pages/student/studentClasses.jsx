@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { formatDateManila } from '../../utils/dateUtils';
@@ -786,6 +786,15 @@ const StudentClasses = () => {
       </div>
 
       <div className="bg-white rounded-lg shadow">
+        {filteredClasses.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredClasses.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="classes"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
             className="overflow-x-auto rounded-lg"
             style={{

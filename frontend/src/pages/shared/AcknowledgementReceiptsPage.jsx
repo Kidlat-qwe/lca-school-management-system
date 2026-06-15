@@ -7,7 +7,7 @@ import { paymentAndIssueDateFilterUtil as receiptDateFilterUtil, DATE_FILTER_MOD
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import { downloadAcknowledgementReceiptsXlsx } from '../../utils/acknowledgementReceiptsExcelExport';
@@ -2369,6 +2369,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
                 </div>
               ) : null}
+              {pagination.total > 0 && (
+                <TablePaginationSummary
+                  page={pagination.page}
+                  totalItems={pagination.total}
+                  itemsPerPage={pagination.limit}
+                  itemLabel="receipts"
+                  className="px-4 pt-4 pb-2"
+                />
+              )}
               <div
                 className="overflow-x-auto rounded-lg"
                 style={{

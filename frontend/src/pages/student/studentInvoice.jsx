@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
@@ -528,6 +528,15 @@ const StudentInvoice = () => {
 
       {/* Invoices List */}
       <div className="bg-white rounded-lg shadow">
+        {filteredInvoices.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredInvoices.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="invoices"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
             className="overflow-x-auto rounded-lg"
             style={{

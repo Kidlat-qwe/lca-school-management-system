@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import StatusLegend from '../../components/reports/StatusLegend';
 import {
   formatProgramEnrollmentStatus,
@@ -352,6 +352,15 @@ const AdminReport = () => {
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow">
+          {pagination.total > 0 && (
+            <TablePaginationSummary
+              page={pagination.page}
+              totalItems={pagination.total}
+              itemsPerPage={pagination.limit}
+              itemLabel={config.itemLabel}
+              className="px-4 pt-4 pb-2"
+            />
+          )}
           <div
             className="overflow-x-auto rounded-lg"
             style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}

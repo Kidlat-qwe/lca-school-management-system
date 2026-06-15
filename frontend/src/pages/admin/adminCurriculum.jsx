@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const ITEMS_PER_PAGE = 10;
@@ -393,6 +393,15 @@ const AdminCurriculum = () => {
       )}
 
       <div className="bg-white rounded-lg shadow">
+        {filteredCurricula.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredCurricula.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="curricula"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
           className="overflow-x-auto rounded-lg"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}

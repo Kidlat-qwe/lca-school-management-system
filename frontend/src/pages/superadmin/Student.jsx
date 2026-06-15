@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StudentHistoryModal from '../../components/student/StudentHistoryModal';
 
@@ -565,6 +565,15 @@ const Student = () => {
       {/* Student List */}
       <div className="bg-white rounded-lg shadow">
         {/* Table View - Responsive */}
+        {totalItems > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            itemLabel="students"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
             className="overflow-x-auto rounded-lg"
             style={{

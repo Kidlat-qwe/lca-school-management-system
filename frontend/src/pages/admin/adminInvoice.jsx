@@ -23,7 +23,7 @@ import {
 import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
 import { buildInvoiceListRequestParams } from '../../utils/invoiceListApiParams';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -1815,6 +1815,15 @@ const AdminInvoice = () => {
       {/* Invoices List */}
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
+        {listPagination.total > 0 && (
+          <TablePaginationSummary
+            page={listPagination.page}
+            totalItems={listPagination.total}
+            itemsPerPage={listPagination.limit}
+            itemLabel="invoices"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1280px', tableLayout: 'fixed' }}>
               <colgroup>

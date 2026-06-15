@@ -17,7 +17,7 @@ import {
   getDailySummaryDateModeLabels,
   hasActiveDailySummaryListDateFilter,
 } from '../../utils/dailySummaryListDateFilters';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -539,6 +539,16 @@ const AdminDailySummary = () => {
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+      )}
+
+      {!loading && pagination.total > 0 && (
+        <TablePaginationSummary
+          page={pagination.page}
+          totalItems={pagination.total}
+          itemsPerPage={pagination.limit}
+          itemLabel={isCash ? 'deposits' : 'summaries'}
+          className="px-4 pt-4 pb-2"
+        />
       )}
 
       {loading ? (

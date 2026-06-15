@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
@@ -8278,6 +8278,15 @@ const resolvedBranchId =
       {/* Classes List */}
       <div className="bg-white rounded-lg shadow">
         {/* Table View - Horizontal Scroll on All Screens */}
+        {filteredClasses.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredClasses.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="classes"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
           <div className="max-h-[600px] overflow-y-auto relative">
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px' }}>

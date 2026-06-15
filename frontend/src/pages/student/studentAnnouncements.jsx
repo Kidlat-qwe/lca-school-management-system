@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 
 const StudentAnnouncements = () => {
   const { userInfo } = useAuth();
@@ -321,6 +321,15 @@ const StudentAnnouncements = () => {
 
       {/* Announcements Table */}
       <div className="bg-white rounded-lg shadow">
+        {totalItems > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            itemLabel="entries"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
           <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px' }}>
             <thead className="bg-gray-50">

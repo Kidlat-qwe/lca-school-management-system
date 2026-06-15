@@ -6,6 +6,7 @@ import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { UNIFORM_SIZE_OPTIONS } from '../../utils/uniformMerchandise';
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -902,12 +903,11 @@ const Merchandise = () => {
                             className="input-field"
                           >
                             <option value="">Select Size</option>
-                            <option value="Extra Small">Extra Small</option>
-                            <option value="Small">Small</option>
-                            <option value="Medium">Medium</option>
-                            <option value="Large">Large</option>
-                            <option value="Extra Large">Extra Large</option>
-                            <option value="2XL">2XL</option>
+                            {UNIFORM_SIZE_OPTIONS.map((size) => (
+                              <option key={size} value={size}>
+                                {size}
+                              </option>
+                            ))}
                           </select>
                         </div>
                       )}

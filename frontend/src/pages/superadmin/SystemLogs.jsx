@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { formatDateTimeManila } from '../../utils/dateUtils';
 
 const ACTIONS = ['', 'GET', 'POST', 'UPDATE', 'DELETE'];
@@ -251,6 +251,15 @@ const SystemLogs = () => {
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        {pagination.total > 0 && (
+          <TablePaginationSummary
+            page={pagination.page}
+            totalItems={pagination.total}
+            itemsPerPage={pagination.limit}
+            itemLabel="entries"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
           className="overflow-x-auto rounded-lg"
           style={{

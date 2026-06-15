@@ -19,7 +19,7 @@ import {
   buildPaymentLogDateParams,
   buildPaymentLogListDateParams,
 } from '../../utils/paymentLogDateFilters';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
@@ -2888,6 +2888,15 @@ const AdminPaymentLogs = () => {
             <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
           </div>
         ) : null}
+        {pagination.total > 0 && (
+          <TablePaginationSummary
+            page={pagination.page}
+            totalItems={pagination.total}
+            itemsPerPage={10}
+            itemLabel="payments"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
           className="overflow-x-auto rounded-lg"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}

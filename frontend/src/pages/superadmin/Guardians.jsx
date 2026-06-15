@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 
 const Guardians = () => {
@@ -108,6 +108,15 @@ const Guardians = () => {
           </div>
         ) : (
           <>
+          {totalItems > 0 && (
+            <TablePaginationSummary
+              page={currentPage}
+              totalItems={totalItems}
+              itemsPerPage={itemsPerPage}
+              itemLabel="guardians"
+              className="px-4 pt-4 pb-2"
+            />
+          )}
           <div
             className="overflow-x-auto rounded-lg"
             style={{

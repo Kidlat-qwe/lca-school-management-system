@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 
 const TeacherStudentList = () => {
@@ -167,6 +167,15 @@ const TeacherStudentList = () => {
       )}
 
       <div className="bg-white rounded-lg shadow">
+        {filteredStudents.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredStudents.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="students"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
             className="overflow-x-auto rounded-lg"
             style={{

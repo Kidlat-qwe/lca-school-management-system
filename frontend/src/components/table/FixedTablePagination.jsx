@@ -1,5 +1,36 @@
 import React from 'react';
 
+export const getPaginationRange = (page, totalItems, itemsPerPage) => {
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const startItem = totalItems === 0 ? 0 : (safePage - 1) * itemsPerPage + 1;
+  const endItem = Math.min(safePage * itemsPerPage, totalItems);
+  return { startItem, endItem, safePage };
+};
+
+export const TablePaginationSummary = ({
+  page,
+  totalItems,
+  itemsPerPage,
+  itemLabel = 'items',
+  className = '',
+}) => {
+  if (!totalItems) return null;
+
+  const { startItem, endItem } = getPaginationRange(page, totalItems, itemsPerPage);
+
+  return (
+    <div className={`text-xs sm:text-sm text-gray-600 ${className}`.trim()}>
+      Showing{' '}
+      <span className="font-medium">
+        {startItem.toLocaleString()} - {endItem.toLocaleString()}
+      </span>{' '}
+      of{' '}
+      <span className="font-medium">{totalItems.toLocaleString()}</span>{' '}
+      {itemLabel}
+    </div>
+  );
+};
+
 const FixedTablePagination = ({
   page,
   totalPages,
@@ -8,11 +39,8 @@ const FixedTablePagination = ({
   itemLabel = 'items',
   onPageChange,
 }) => {
-  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const { safePage } = getPaginationRange(page, totalItems, itemsPerPage);
   const safeTotalPages = Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1;
-
-  const startItem = totalItems === 0 ? 0 : (safePage - 1) * itemsPerPage + 1;
-  const endItem = Math.min(safePage * itemsPerPage, totalItems);
 
   const handleChangePage = (nextPage) => {
     const clamped = Math.min(Math.max(nextPage, 1), safeTotalPages);
@@ -27,17 +55,12 @@ const FixedTablePagination = ({
 
   return (
     <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-      <div className="text-xs sm:text-sm text-gray-600">
-        Showing{' '}
-        <span className="font-medium">
-          {startItem.toLocaleString()} - {endItem.toLocaleString()}
-        </span>{' '}
-        of{' '}
-        <span className="font-medium">
-          {totalItems.toLocaleString()}
-        </span>{' '}
-        {itemLabel}
-      </div>
+      <TablePaginationSummary
+        page={safePage}
+        totalItems={totalItems}
+        itemsPerPage={itemsPerPage}
+        itemLabel={itemLabel}
+      />
 
       <div className="flex items-center gap-2">
         <button
@@ -72,4 +95,3 @@ const FixedTablePagination = ({
 };
 
 export default FixedTablePagination;
-

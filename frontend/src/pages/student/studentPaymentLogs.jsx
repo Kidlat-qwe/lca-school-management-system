@@ -3,7 +3,7 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import * as XLSX from 'xlsx';
 import { appendPaymentLogsAmountTotalRow } from '../../utils/paymentLogsExcelExport';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
@@ -509,6 +509,15 @@ const StudentPaymentLogs = () => {
 
       {/* Payment Logs List */}
       <div className="bg-white rounded-lg shadow">
+        {filteredPayments.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredPayments.length}
+            itemsPerPage={itemsPerPage}
+            itemLabel="payments"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
             className="overflow-x-auto rounded-lg"
             style={{

@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const RECIPIENT_GROUPS = [
@@ -878,6 +878,15 @@ const AdminAnnouncements = () => {
         </div>
 
         {/* Table */}
+        {totalItems > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            itemLabel="entries"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div
           className="overflow-x-auto rounded-lg"
           style={{

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
 import {
@@ -339,6 +339,15 @@ const FinanceInstallmentInvoice = () => {
       {/* Invoices Table */}
       <div className="bg-white rounded-lg shadow">
         {/* Desktop Table View */}
+        {filteredInvoices.length > 0 && (
+          <TablePaginationSummary
+            page={currentPage}
+            totalItems={filteredInvoices.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            itemLabel="invoices"
+            className="px-4 pt-4 pb-2"
+          />
+        )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
           <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1240px' }}>
             <colgroup>

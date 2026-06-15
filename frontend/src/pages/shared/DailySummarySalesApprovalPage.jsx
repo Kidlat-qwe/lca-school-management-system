@@ -19,7 +19,7 @@ import {
   getDailySummaryDateModeLabels,
   hasActiveDailySummaryListDateFilter,
 } from '../../utils/dailySummaryListDateFilters';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert } from '../../utils/appAlert';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -868,6 +868,15 @@ const DailySummarySalesApprovalPage = () => {
         {getDailySummaryDateFilterHint(isCashDepositTab)}
       </p>
 
+      {pagination.total > 0 && (
+        <TablePaginationSummary
+          page={pagination.page}
+          totalItems={pagination.total}
+          itemsPerPage={10}
+          itemLabel={itemLabel}
+          className="px-4 pt-4 pb-2"
+        />
+      )}
       <div
         className="overflow-x-auto rounded-lg"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}

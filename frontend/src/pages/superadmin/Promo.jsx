@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
-import FixedTablePagination from '../../components/table/FixedTablePagination';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 
@@ -801,6 +801,15 @@ const Promo = () => {
       {/* Promos List */}
       <div className="bg-white rounded-lg shadow">
           {/* Desktop Table View */}
+          {filteredPromos.length > 0 && (
+            <TablePaginationSummary
+              page={currentPage}
+              totalItems={filteredPromos.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+              itemLabel="promos"
+              className="px-4 pt-4 pb-2"
+            />
+          )}
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1000px', tableLayout: 'fixed' }}>
               <colgroup>
