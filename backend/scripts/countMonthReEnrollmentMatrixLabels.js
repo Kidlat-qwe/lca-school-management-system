@@ -15,6 +15,8 @@ import '../config/loadEnv.js';
 import { query } from '../config/database.js';
 import {
   aggregateMonthMatrixKpiTotals,
+  countMonthMatrixRateHeaderDenominator,
+  countMonthMatrixRateHeaderNumerator,
   countMonthMatrixStatusLabels,
   loadStudentMonthEnrollmentMatrix,
 } from '../lib/enrollmentRateMetrics.js';
@@ -121,9 +123,36 @@ const main = async () => {
   const months = matrix.months || [];
   const kpiTotals = aggregateMonthMatrixKpiTotals(students, months);
 
-  const perMonth = months.map((month) => {
+  const perMonth = months.map((month, index) => {
     const counts = countMonthMatrixStatusLabels(students, month.key);
     const stat = (matrix.month_stats || []).find((row) => row.month_key === month.key) || {};
+    const prevKey = index > 0 ? months[index - 1].key : null;
+    const visibleRateNumerator = countMonthMatrixRateHeaderNumerator(students, month.key);
+    const visibleRateDenominator =
+      prevKey != null
+        ? countMonthMatrixRateHeaderDenominator(students, prevKey, month.key, months)
+        : 0;
+    let visibleReEnrolled = 0;
+    let visibleCompleted = 0;
+    let priorNew = 0;
+    let priorReEnrolled = 0;
+    let priorRejoin = 0;
+    let priorUpsell = 0;
+    for (const student of students) {
+      const cell = student.months?.[month.key];
+      if (cell?.label && cell.mark === '1') {
+        if (cell.label === 're-enrolled') visibleReEnrolled += 1;
+        else if (cell.label === 'completed') visibleCompleted += 1;
+      }
+      if (prevKey) {
+        const priorCell = student.months?.[prevKey];
+        if (!priorCell?.label || priorCell.mark !== '1') continue;
+        if (priorCell.label === 'new') priorNew += 1;
+        else if (priorCell.label === 're-enrolled') priorReEnrolled += 1;
+        else if (priorCell.label === 'rejoin') priorRejoin += 1;
+        else if (priorCell.label === 'upsell') priorUpsell += 1;
+      }
+    }
     return {
       month_key: month.key,
       month_label: month.label,
@@ -134,6 +163,15 @@ const main = async () => {
       reserved_cells: counts.reserved_count,
       dropped_cells: counts.dropped_unenrolled_count,
       rejoin_cells: counts.rejoin_count,
+      visible_re_enrolled_cells: visibleReEnrolled,
+      visible_completed_cells: visibleCompleted,
+      prior_month_new: priorNew,
+      prior_month_re_enrolled: priorReEnrolled,
+      prior_month_rejoin: priorRejoin,
+      prior_month_upsell: priorUpsell,
+      prior_month_active_total: priorNew + priorReEnrolled + priorRejoin + priorUpsell,
+      visible_rate_numerator: visibleRateNumerator,
+      visible_rate_denominator: visibleRateDenominator,
       rate_numerator: stat.re_enrolled_count ?? 0,
       rate_denominator: stat.prior_month_enrolled_count ?? 0,
       rate_percent: stat.re_enrollment_rate,
@@ -178,7 +216,7 @@ const main = async () => {
       upsell_kpi_card: kpiTotals.upsell_count,
       rate_numerator_sum_for_percent_card: matrix.total_re_enrolled_count ?? sumRateNumerators,
       note:
-        'KPI Re-enrollment, rate header numerators, and Total Re-enrollment Rate % numerator are aligned (all re-enrolled cells).',
+        'Rate denominator = prior-month new + re-enrolled + rejoin + upsell. Rate numerator = re-enrolled + completed in current month (upsell excluded).',
     },
     cells: detailRows,
   };

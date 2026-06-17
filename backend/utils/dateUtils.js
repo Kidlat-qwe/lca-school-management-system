@@ -1,12 +1,52 @@
 const MANILA_TZ = 'Asia/Manila';
 
+/** Business timezone for all calendar dates (Philippines, UTC+8). */
+export { MANILA_TZ };
+
+/**
+ * Format a timestamp as YYYY-MM-DD in Asia/Manila (Philippines business calendar).
+ * Use this for issue dates, due dates, "today", and invoice month filters.
+ * @param {Date|string|number} dateObj
+ * @returns {string|null}
+ */
 export const formatYmdLocal = (dateObj) => {
   const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
   if (Number.isNaN(d.getTime())) return null;
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return d.toLocaleDateString('en-CA', { timeZone: MANILA_TZ });
+};
+
+/** Today's date in Asia/Manila as YYYY-MM-DD. */
+export const todayYmdManila = () => formatYmdLocal(new Date());
+
+const YMD_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Normalize any date input to YYYY-MM-DD on the Philippines business calendar.
+ * Plain YYYY-MM-DD strings are returned as-is (no timezone shift).
+ * Timestamps are converted using Asia/Manila.
+ * @param {string|Date|number|null|undefined} dateInput
+ * @param {{ fallbackToToday?: boolean }} [options]
+ * @returns {string|null}
+ */
+export const coerceToManilaYmd = (dateInput, { fallbackToToday = false } = {}) => {
+  if (dateInput == null || String(dateInput).trim() === '') {
+    return fallbackToToday ? todayYmdManila() : null;
+  }
+
+  if (dateInput instanceof Date) {
+    const formatted = formatYmdLocal(dateInput);
+    if (formatted) return formatted;
+    return fallbackToToday ? todayYmdManila() : null;
+  }
+
+  const str = String(dateInput).trim();
+  if (YMD_ONLY_RE.test(str)) {
+    return str;
+  }
+
+  const formatted = formatYmdLocal(new Date(str));
+  if (formatted) return formatted;
+  return fallbackToToday ? todayYmdManila() : null;
 };
 
 export const parseYmdToLocalNoon = (ymd) => {

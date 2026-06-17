@@ -21,47 +21,69 @@ const CombinedStatsCard = ({
   onClick,
   ariaLabel,
   size = 'default',
+  hideTitle = false,
 }) => {
   const helpText = tooltip ?? subtitle;
   const isFinancial = size === 'financial';
   const Wrapper = onClick ? 'button' : 'div';
+  const showHeader = Boolean(!hideTitle && (title || iconName));
 
   return (
     <Wrapper
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       aria-label={ariaLabel || (onClick ? title : undefined)}
-      className={`group relative h-full w-full overflow-hidden rounded-2xl bg-white text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${
+      className={`group relative h-full w-full overflow-visible rounded-2xl bg-white text-left shadow-sm ring-1 ring-gray-100 transition-all duration-300 hover:shadow-lg hover:ring-gray-200 ${
         isFinancial ? 'p-6' : 'p-5'
       } ${onClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2' : ''}`}
     >
       <div className="flex h-full flex-col">
-        <div className="flex items-start justify-between gap-3">
-          <p className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm font-semibold leading-tight text-gray-700">
-            <span>{title}</span>
-            {helpText ? (
-              <MatrixInfoTooltip label={`About ${title}`}>{helpText}</MatrixInfoTooltip>
+        {showHeader ? (
+          <div className="flex items-start justify-between gap-3">
+            <p className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm font-semibold leading-tight text-gray-700">
+              {title ? <span>{title}</span> : null}
+              {helpText && title ? (
+                <MatrixInfoTooltip label={`About ${title}`}>{helpText}</MatrixInfoTooltip>
+              ) : null}
+            </p>
+            {iconName ? (
+              <div
+                className={`flex flex-shrink-0 items-center justify-center rounded-xl shadow-sm transition-transform duration-300 group-hover:scale-110 ${accent} ${
+                  isFinancial ? 'h-14 w-14' : 'h-11 w-11 rounded-lg'
+                }`}
+              >
+                <DashboardStatIcon
+                  name={iconName}
+                  className={`text-white drop-shadow-sm ${isFinancial ? 'h-7 w-7' : 'h-5 w-5'}`}
+                />
+              </div>
             ) : null}
-          </p>
-          <div
-            className={`flex flex-shrink-0 items-center justify-center rounded-xl shadow-sm transition-transform duration-300 group-hover:scale-110 ${accent} ${
-              isFinancial ? 'h-14 w-14' : 'h-11 w-11 rounded-lg'
-            }`}
-          >
-            <DashboardStatIcon
-              name={iconName}
-              className={`text-white drop-shadow-sm ${isFinancial ? 'h-7 w-7' : 'h-5 w-5'}`}
-            />
           </div>
-        </div>
-        <div className={`mt-3 ${metricsLayout === 'stacked' ? 'space-y-3' : 'space-y-2'}`}>
-          {metrics.map((row) =>
+        ) : iconName ? (
+          <div className="flex justify-end">
+            <div
+              className={`flex flex-shrink-0 items-center justify-center rounded-xl shadow-sm transition-transform duration-300 group-hover:scale-110 ${accent} h-11 w-11 rounded-lg`}
+            >
+              <DashboardStatIcon name={iconName} className="h-5 w-5 text-white drop-shadow-sm" />
+            </div>
+          </div>
+        ) : null}
+        <div className={`${showHeader || iconName ? 'mt-3' : ''} ${metricsLayout === 'stacked' ? 'space-y-4' : 'space-y-2'}`}>
+          {metrics.map((row, index) =>
             metricsLayout === 'stacked' ? (
-              <div key={row.label}>
-                <p className="text-xs font-semibold text-gray-600">{row.label}</p>
+              <div
+                key={row.label}
+                className={index > 0 ? 'border-t border-gray-100 pt-4' : undefined}
+              >
+                <p className="flex items-center text-xs font-semibold text-gray-600">
+                  <span>{row.label}</span>
+                  {row.tooltip ? (
+                    <MatrixInfoTooltip label={`About ${row.label}`}>{row.tooltip}</MatrixInfoTooltip>
+                  ) : null}
+                </p>
                 <p
                   className={`mt-0.5 font-bold tabular-nums leading-tight text-gray-900 break-words ${
-                    isFinancial ? 'text-2xl tracking-tight' : 'text-lg'
+                    isFinancial ? 'text-2xl tracking-tight' : 'text-[1.65rem]'
                   }`}
                 >
                   {row.value}

@@ -8,7 +8,7 @@ import {
   calculateNextInvoiceMonth,
   parseFrequency,
 } from '../utils/installmentInvoiceGenerator.js';
-import { formatYmdLocal } from '../utils/dateUtils.js';
+import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
   isPhaseInstallmentProfile,
@@ -21,7 +21,6 @@ import {
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from '../utils/programPaymentStatusService.js';
-import { todayManilaYmd } from '../utils/templateRenderService.js';
 import pool from '../config/database.js';
 import { determineRejoinAwarePhaseStatus } from '../utils/enrollmentStatus.js';
 import {
@@ -493,7 +492,7 @@ router.get(
         pool,
         profile.branch_id != null ? Number(profile.branch_id) : null
       );
-      const todayYmd = todayManilaYmd();
+      const todayYmd = todayYmdManila();
 
       const computeStatus = (invoiceStatus, dueDate) =>
         computeInstallmentPhaseDisplayStatus({
@@ -1097,7 +1096,7 @@ router.post(
         // invoice cycle (visible on the current month's invoice page).
         // See payments.js → createFirstInstallmentRecordAfterDownpayment
         // for the full design rationale on mid-year enrollments.
-        const todayYmd = formatYmdLocal(new Date());
+        const todayYmd = todayYmdManila();
         const insertResult = await client.query(
           `INSERT INTO installmentinvoicestbl
            (installmentinvoiceprofiles_id, scheduled_date, status, student_name,
@@ -1123,7 +1122,7 @@ router.post(
         // prior reservation upgrade. If it was anchored to a future date
         // (typical for mid-year enrollments), realign it to TODAY so the
         // about-to-be-generated invoice lands in the current cycle.
-        const todayYmd = formatYmdLocal(new Date());
+        const todayYmd = todayYmdManila();
         const existingNextGen = firstRecord.next_generation_date
           ? formatYmdLocal(new Date(firstRecord.next_generation_date))
           : null;
@@ -1154,7 +1153,9 @@ router.post(
         total_phases: profile.total_phases,
         phase_start: profile.phase_start,
       };
-      const generatedInvoice = await generateInvoiceFromInstallment(firstRecord, genProfile);
+      const generatedInvoice = await generateInvoiceFromInstallment(firstRecord, genProfile, {
+        enrollmentInvoiceIssueYmd: todayYmd,
+      });
 
       res.status(201).json({
         success: true,
@@ -1831,7 +1832,7 @@ router.post(
       // future issue_date makes a just-generated invoice look "missing". Align issue_date
       // to today when it would otherwise be in the future; keep due_date on the real schedule.
       const issueYmd = String(effectiveIssueDate || '').trim().slice(0, 10);
-      const todayYmd = formatYmdLocal(new Date());
+      const todayYmd = todayYmdManila();
       const dueYmd = String(effectiveDueDate || '').trim().slice(0, 10);
       let displayIssueYmd = issueYmd;
       if (/^\d{4}-\d{2}-\d{2}$/.test(displayIssueYmd) && /^\d{4}-\d{2}-\d{2}$/.test(todayYmd) && displayIssueYmd > todayYmd) {
@@ -2138,7 +2139,7 @@ router.post(
 
       const issueDateYmd = payment_date
         ? String(payment_date).slice(0, 10)
-        : formatYmdLocal(new Date()); // today server time
+        : todayYmdManila();
       const dueDateYmd = formatYmdLocal(dueDate);
 
       const invoiceAmount = Number(profile.amount || 0);

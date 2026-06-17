@@ -115,6 +115,31 @@ const RE_ENROLLMENT_KPI_STATUS_FILTER_SQL = `
   )
 `;
 
+/** Branch-level KPI aggregates — daily uses distinct students per status label for summary cards. */
+const buildEnrollmentBranchAggregateSelectSql = (dailyStudentSummary = false) => {
+  if (dailyStudentSummary) {
+    return `
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 'new')::bigint AS new_enrollees,
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 're_enrolled')::bigint AS re_enrollment_count,
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 'upsell')::bigint AS upsell_count,
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 'reserved')::bigint AS reserved_count,
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 'completed')::bigint AS completed_count,
+        COUNT(DISTINCT student_id) FILTER (WHERE program_enrollment_status = 'rejoin')::bigint AS rejoin_count,
+        COUNT(*) FILTER (WHERE ${RE_ENROLLMENT_KPI_STATUS_FILTER_SQL})::bigint AS re_enrollment_kpi_count
+    `;
+  }
+
+  return `
+        COUNT(*) FILTER (WHERE program_enrollment_status = 'new')::bigint AS new_enrollees,
+        COUNT(*) FILTER (WHERE ${RE_ENROLLMENT_KPI_STATUS_FILTER_SQL})::bigint AS re_enrollment_count,
+        COUNT(*) FILTER (WHERE program_enrollment_status = 'upsell')::bigint AS upsell_count,
+        COUNT(*) FILTER (WHERE program_enrollment_status = 'reserved')::bigint AS reserved_count,
+        COUNT(*) FILTER (WHERE program_enrollment_status = 'completed')::bigint AS completed_count,
+        COUNT(*) FILTER (WHERE program_enrollment_status = 'rejoin')::bigint AS rejoin_count,
+        COUNT(*) FILTER (WHERE ${RE_ENROLLMENT_KPI_STATUS_FILTER_SQL})::bigint AS re_enrollment_kpi_count
+    `;
+};
+
 /** All installment phase invoices paid for student + class (matches enrollment matrix). */
 const INSTALLMENT_PACKAGE_COMPLETE_FOR_PAYMENT_SQL = `
   EXISTS (
@@ -629,7 +654,7 @@ export function computeDailyOperationalRetentionRateFromDetailRows(
  * @param {{ branchId?: number|null, summaryDate?: string, monthStart?: string, monthEndExclusive?: string }} options
  */
 export async function loadOperationalEnrollmentFromPayments(queryFn, options = {}) {
-  const { branchId = null } = options;
+  const { branchId = null, dailyStudentSummary = false } = options;
   const window = resolveDateWindow(options);
 
   const paymentParams = [...window.params];
@@ -748,12 +773,7 @@ export async function loadOperationalEnrollmentFromPayments(queryFn, options = {
       ${ENROLLMENT_EVENT_DEDUPE_CTE_SQL}
       SELECT
         branch_id,
-        COUNT(*) FILTER (WHERE program_enrollment_status = 'new')::bigint AS new_enrollees,
-        COUNT(*) FILTER (WHERE ${RE_ENROLLMENT_KPI_STATUS_FILTER_SQL})::bigint AS re_enrollment_count,
-        COUNT(*) FILTER (WHERE program_enrollment_status = 'upsell')::bigint AS upsell_count,
-        COUNT(*) FILTER (WHERE program_enrollment_status = 'reserved')::bigint AS reserved_count,
-        COUNT(*) FILTER (WHERE program_enrollment_status = 'completed')::bigint AS completed_count,
-        COUNT(*) FILTER (WHERE program_enrollment_status = 'rejoin')::bigint AS rejoin_count
+        ${buildEnrollmentBranchAggregateSelectSql(dailyStudentSummary)}
       FROM with_status
       GROUP BY branch_id
     `,
@@ -782,10 +802,12 @@ export async function loadOperationalEnrollmentFromPayments(queryFn, options = {
 
   for (const row of paymentResult.rows || []) {
     const branch_id = parseInt(row.branch_id, 10);
+    const reEnrollmentKpi = parseInt(row.re_enrollment_kpi_count, 10) || 0;
     byBranchMap.set(branch_id, {
       branch_id,
       new_enrollees: parseInt(row.new_enrollees, 10) || 0,
       re_enrollment_count: parseInt(row.re_enrollment_count, 10) || 0,
+      re_enrollment_kpi_count: reEnrollmentKpi,
       upsell_count: parseInt(row.upsell_count, 10) || 0,
       reserved_count: parseInt(row.reserved_count, 10) || 0,
       completed_count: parseInt(row.completed_count, 10) || 0,
@@ -805,6 +827,7 @@ export async function loadOperationalEnrollmentFromPayments(queryFn, options = {
         branch_id,
         new_enrollees: 0,
         re_enrollment_count: 0,
+        re_enrollment_kpi_count: 0,
         upsell_count: 0,
         reserved_count: 0,
         completed_count: 0,
@@ -820,19 +843,20 @@ export async function loadOperationalEnrollmentFromPayments(queryFn, options = {
     (acc, row) => ({
       new_enrollees: acc.new_enrollees + row.new_enrollees,
       re_enrollment_count: acc.re_enrollment_count + row.re_enrollment_count,
+      re_enrollment_kpi_count: acc.re_enrollment_kpi_count + (row.re_enrollment_kpi_count || 0),
       upsell_count: acc.upsell_count + row.upsell_count,
       reserved_count: acc.reserved_count + row.reserved_count,
       completed_count: acc.completed_count + row.completed_count,
       rejoin_count: acc.rejoin_count + row.rejoin_count,
       dropped_unenrolled_count: acc.dropped_unenrolled_count + row.dropped_unenrolled_count,
     }),
-    EMPTY_TOTALS()
+    { ...EMPTY_TOTALS(), re_enrollment_kpi_count: 0 }
   );
 
   const retention = await loadOperationalRetentionFromPayments(queryFn, options);
   const rateMetrics = computeOperationalRetentionRate({
     retention_base_count: retention.retention_base_count,
-    re_enrollment_count: totals.re_enrollment_count,
+    re_enrollment_count: totals.re_enrollment_kpi_count || totals.re_enrollment_count,
   });
 
   const retentionBranchMap = new Map(
@@ -1033,7 +1057,11 @@ export async function loadOperationalEnrollmentDetailFromPayments(queryFn, optio
 /** @param {Function} queryFn @param {{ branchId?: number|null, summaryDate: string }} options */
 export async function loadDailyOperationalEnrollmentFromPayments(queryFn, options = {}) {
   const { branchId = null, summaryDate } = options;
-  const result = await loadOperationalEnrollmentFromPayments(queryFn, { branchId, summaryDate });
+  const result = await loadOperationalEnrollmentFromPayments(queryFn, {
+    branchId,
+    summaryDate,
+    dailyStudentSummary: true,
+  });
   return { ...result, summary_date: summaryDate };
 }
 
@@ -1083,6 +1111,8 @@ export function applyPaymentEnrollmentToBranchBreakdown(branchBreakdown, payment
       ...row,
       new_enrollees: paymentRow?.new_enrollees ?? 0,
       re_enrollment_count: paymentRow?.re_enrollment_count ?? 0,
+      re_enrollment_kpi_count:
+        paymentRow?.re_enrollment_kpi_count ?? paymentRow?.re_enrollment_count ?? 0,
       upsell_count: paymentRow?.upsell_count ?? 0,
       reserved_count: paymentRow?.reserved_count ?? 0,
       completed_count: paymentRow?.completed_count ?? 0,
@@ -1113,7 +1143,7 @@ export function buildOperationalReEnrollmentRateBreakdown({
   const mapRow = (row, branchNameOverride) => {
     const branchRate = computeOperationalRetentionRate({
       retention_base_count: row.retention_base_count,
-      re_enrollment_count: row.re_enrollment_count,
+      re_enrollment_count: row.re_enrollment_kpi_count ?? row.re_enrollment_count,
       retention_rate_mode: retentionRateMode || 'kpi_card',
     });
     const branchId = row.branch_id ?? null;
@@ -1125,7 +1155,8 @@ export function buildOperationalReEnrollmentRateBreakdown({
     return {
       branch_id: branchId,
       branch_name: branchNameOverride ?? row.branch_name ?? '—',
-      re_enrollment_kpi_count: Number(row.re_enrollment_count) || 0,
+      re_enrollment_kpi_count:
+        Number(row.re_enrollment_kpi_count ?? row.re_enrollment_count) || 0,
       re_enrolled_student_count: Number(studentCount) || 0,
       retention_base_count: Number(row.retention_base_count) || 0,
       re_enrollment_rate: Number(row.re_enrollment_rate ?? branchRate.re_enrollment_rate) || 0,
@@ -1142,6 +1173,7 @@ export function buildOperationalReEnrollmentRateBreakdown({
       {
         branch_id: null,
         re_enrollment_count: totals.re_enrollment_count,
+        re_enrollment_kpi_count: totals.re_enrollment_kpi_count ?? totals.re_enrollment_count,
         retention_base_count:
           enrollmentDashboard.retention_base_count ?? totals.retention_base_count,
         re_enrollment_rate: enrollmentDashboard.re_enrollment_rate,

@@ -112,20 +112,22 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const initialListIssueToRaw = (searchParams.get('issue_date_to') || '').trim().slice(0, 10);
   const initialListIssueFrom = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueFromRaw) ? initialListIssueFromRaw : '';
   const initialListIssueTo = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueToRaw) ? initialListIssueToRaw : '';
-  // Hydrate the date-filter mode from the URL: issue_date_* wins over
-  // payment_date_*; if neither is present we boot with the default Month mode
-  // pre-applied to the current Manila month.
-  const initialDateFilterMode = (initialListIssueFrom || initialListIssueTo)
-    ? DATE_FILTER_MODES.ISSUE_DATE
-    : (initialPaymentFrom || initialPaymentTo)
-      ? DATE_FILTER_MODES.PAYMENT_DATE
-      : receiptDateFilterUtil.DEFAULT_MODE;
-  // Always boot the Month picker with the current Manila month, even when
-  // the URL is hydrating one of the other modes — the user may swap modes
-  // afterwards and we want the Month picker pre-populated.
-  const initialIssueMonth = shouldClearArDateFiltersOnLanding(searchParams)
-    ? ''
-    : receiptDateFilterUtil.defaultMonth();
+  const initialArMonthRaw = (searchParams.get('ar_month') || '').trim();
+  const initialArMonth = /^\d{4}-\d{2}$/.test(initialArMonthRaw) ? initialArMonthRaw : '';
+  // Hydrate the date-filter mode from the URL: ar_month → Month; issue_date_* → Issue Date;
+  // payment_date_* → Payment date; otherwise default Month + current Manila month.
+  const initialDateFilterMode = initialArMonth
+    ? DATE_FILTER_MODES.MONTH
+    : (initialListIssueFrom || initialListIssueTo)
+      ? DATE_FILTER_MODES.ISSUE_DATE
+      : (initialPaymentFrom || initialPaymentTo)
+        ? DATE_FILTER_MODES.PAYMENT_DATE
+        : receiptDateFilterUtil.DEFAULT_MODE;
+  const initialIssueMonth = initialArMonth
+    ? initialArMonth
+    : shouldClearArDateFiltersOnLanding(searchParams)
+      ? ''
+      : receiptDateFilterUtil.defaultMonth();
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

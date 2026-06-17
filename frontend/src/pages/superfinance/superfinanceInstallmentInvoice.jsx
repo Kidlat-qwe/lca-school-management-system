@@ -5,12 +5,8 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
-import { appAlert, appConfirm } from '../../utils/appAlert';
+import { appAlert } from '../../utils/appAlert';
 import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
-import {
-  canGenerateInstallmentInvoice,
-  installmentGenerateBlockedReason,
-} from '../../utils/installmentInvoiceCanGenerate';
 import InstallmentInvoicePhasesModal from '../../components/installmentInvoice/InstallmentInvoicePhasesModal';
 
 const ITEMS_PER_PAGE = 10;
@@ -30,48 +26,9 @@ const SuperfinanceInstallmentInvoice = () => {
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
   const [openActionMenu, setOpenActionMenu] = useState(null);
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
-  const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
-  const [selectedInvoiceForGeneration, setSelectedInvoiceForGeneration] = useState(null);
-  const [generateFormData, setGenerateFormData] = useState({
-    issue_date: '',
-    due_date: '',
-    invoice_month: '',
-    generation_date: '',
-    next_issue_date: '',
-    next_due_date: '',
-    next_invoice_month: '',
-    next_generation_date: '',
-  });
-  const [generateFormErrors, setGenerateFormErrors] = useState({});
-  const [generating, setGenerating] = useState(false);
   const [branches, setBranches] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [phasesModalProfileId, setPhasesModalProfileId] = useState(null);
-
-  const getFrequencyMonths = (frequency) => {
-    const match = String(frequency || '1 month(s)').match(/(\d+)/);
-    return parseInt(match?.[1] || '1', 10);
-  };
-
-  const parseYmdLocalNoon = (ymd) => {
-    if (!ymd) return null;
-    const [y, m, d] = String(ymd).split('-').map(Number);
-    if (!y || !m || !d) return null;
-    return new Date(y, m - 1, d, 12, 0, 0, 0);
-  };
-
-  const formatYmd = (date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  const addMonths = (date, months) => {
-    const nextDate = new Date(date);
-    nextDate.setMonth(nextDate.getMonth() + months);
-    return nextDate;
-  };
 
   useEffect(() => {
     fetchInvoices();
@@ -178,131 +135,6 @@ const SuperfinanceInstallmentInvoice = () => {
       return;
     }
     setPhasesModalProfileId(profileId);
-  };
-
-  const handleGenerateInvoice = (invoice) => {
-    setOpenActionMenu(null);
-    setActionMenuPosition(null);
-    if (!invoice?.installmentinvoicedtl_id) {
-      appAlert('Installment schedule is not created yet for this student. It will appear once the first schedule row is generated.');
-      return;
-    }
-
-    if (!canGenerateInstallmentInvoice(invoice)) {
-      const reason = installmentGenerateBlockedReason(invoice);
-      if (reason === 'unenrolled') {
-        appAlert(
-          'This student is unenrolled. Installment history stays visible, but you cannot generate new installment invoices.'
-        );
-      } else if (reason === 'complete') {
-        appAlert(
-          'Phase progress for this installment plan is already complete. No further installment invoices can be generated.'
-        );
-      } else if (reason === 'superseded') {
-        appAlert(
-          'This is an older installment plan row for the same class. A newer plan exists—use Generate Invoice on the latest row, or extend the existing profile instead of creating a duplicate.'
-        );
-      } else {
-        appAlert('Invoice generation is not available for this record.');
-      }
-      return;
-    }
-
-    setSelectedInvoiceForGeneration(invoice);
-    
-    const months = getFrequencyMonths(invoice.frequency);
-    const storedGenerationDate = invoice.next_generation_date
-      ? parseYmdLocalNoon(String(invoice.next_generation_date).slice(0, 10))
-      : null;
-    const generationDate = storedGenerationDate || new Date();
-    generationDate.setHours(0, 0, 0, 0);
-    generationDate.setDate(25);
-
-    const issueDate = new Date(generationDate);
-    const invoiceMonth = new Date(issueDate.getFullYear(), issueDate.getMonth() + 1, 1);
-    const dueDate = new Date(invoiceMonth);
-    dueDate.setDate(5);
-
-    const nextGenerationDate = addMonths(new Date(generationDate), months);
-    nextGenerationDate.setDate(25);
-    const nextInvoiceMonth = new Date(invoiceMonth);
-    nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
-    nextInvoiceMonth.setDate(1);
-    const nextIssueDate = new Date(nextGenerationDate);
-    const nextDueDate = new Date(nextInvoiceMonth);
-    nextDueDate.setDate(5);
-
-    setGenerateFormData({
-      issue_date: formatYmd(issueDate),
-      due_date: formatYmd(dueDate),
-      invoice_month: formatYmd(invoiceMonth),
-      generation_date: formatYmd(generationDate),
-      next_issue_date: formatYmd(nextIssueDate),
-      next_due_date: formatYmd(nextDueDate),
-      next_invoice_month: formatYmd(nextInvoiceMonth),
-      next_generation_date: formatYmd(nextGenerationDate),
-    });
-    
-    setIsGenerateModalOpen(true);
-  };
-  
-  const closeGenerateModal = () => {
-    setIsGenerateModalOpen(false);
-    setSelectedInvoiceForGeneration(null);
-    setGenerateFormData({
-      issue_date: '',
-      due_date: '',
-      invoice_month: '',
-      generation_date: '',
-      next_issue_date: '',
-      next_due_date: '',
-      next_invoice_month: '',
-      next_generation_date: '',
-    });
-    setGenerateFormErrors({});
-  };
-  
-  const handleGenerateSubmit = async (e) => {
-    e.preventDefault();
-    setGenerateFormErrors({});
-    
-    // Validation
-    const errors = {};
-    if (!generateFormData.issue_date) errors.issue_date = 'Issue date is required';
-    if (!generateFormData.due_date) errors.due_date = 'Due date is required';
-    if (!generateFormData.invoice_month) errors.invoice_month = 'Invoice month is required';
-    if (!generateFormData.next_issue_date) errors.next_issue_date = 'Next issue date is required';
-    if (!generateFormData.next_due_date) errors.next_due_date = 'Next due date is required';
-    if (!generateFormData.next_invoice_month) errors.next_invoice_month = 'Next invoice month is required';
-    if (!generateFormData.next_generation_date) errors.next_generation_date = 'Next generation date is required';
-    
-    if (Object.keys(errors).length > 0) {
-      setGenerateFormErrors(errors);
-      return;
-    }
-    
-    try {
-      setGenerating(true);
-      await apiRequest(
-        `/installment-invoices/invoices/${selectedInvoiceForGeneration.installmentinvoicedtl_id}/generate`,
-        {
-          method: 'POST',
-          body: JSON.stringify(generateFormData),
-        }
-      );
-      
-      closeGenerateModal();
-      fetchInvoices(); // Refresh the list
-      
-      // Show success message
-      setError(''); // Clear any previous errors
-      appAlert('Invoice generated successfully!');
-    } catch (err) {
-      setGenerateFormErrors({ submit: err.message || 'Failed to generate invoice' });
-      console.error('Error generating invoice:', err);
-    } finally {
-      setGenerating(false);
-    }
   };
 
   if (loading) {
@@ -636,42 +468,16 @@ const SuperfinanceInstallmentInvoice = () => {
                 const invoice = filteredInvoices.find(inv => (inv.installmentinvoicedtl_id ?? `profile-${inv.installmentinvoiceprofiles_id}`) === openActionMenu);
                 if (!invoice) return null;
                 return (
-                  <>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleViewEdit(invoice);
-                      }}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      View Details
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleGenerateInvoice(invoice);
-                      }}
-                      disabled={!canGenerateInstallmentInvoice(invoice)}
-                      className={`block w-full text-left px-4 py-2 text-sm transition-colors ${
-                        !canGenerateInstallmentInvoice(invoice)
-                          ? 'text-gray-400 cursor-not-allowed'
-                          : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      Generate Invoice
-                      {installmentGenerateBlockedReason(invoice) === 'unenrolled' && (
-                        <span className="ml-2 text-xs">(Stopped)</span>
-                      )}
-                      {installmentGenerateBlockedReason(invoice) === 'complete' && (
-                        <span className="ml-2 text-xs">(Complete)</span>
-                      )}
-                      {installmentGenerateBlockedReason(invoice) === 'superseded' && (
-                        <span className="ml-2 text-xs">(Older plan)</span>
-                      )}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleViewEdit(invoice);
+                    }}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                  >
+                    View Details
+                  </button>
                 );
               })()}
             </div>
@@ -680,237 +486,12 @@ const SuperfinanceInstallmentInvoice = () => {
         document.body
       )}
 
+      {/* Plan details / generate & pay: InstallmentInvoicePhasesModal */}
       <InstallmentInvoicePhasesModal
         open={phasesModalProfileId != null}
         profileId={phasesModalProfileId}
         onClose={() => setPhasesModalProfileId(null)}
       />
-
-      {/* Generate Invoice Modal */}
-      {isGenerateModalOpen && selectedInvoiceForGeneration && createPortal(
-        <div 
-          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
-          onClick={closeGenerateModal}
-        >
-          <div 
-            className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  GENERATE INVOICE - SINGLE
-                </h2>
-                <div className="text-sm text-gray-500 mt-1">
-                  <p>Generate invoice for {selectedInvoiceForGeneration.student_name}</p>
-                  {(selectedInvoiceForGeneration.class_name || selectedInvoiceForGeneration.program_name) && (
-                    <p className="mt-0.5">
-                      {[selectedInvoiceForGeneration.class_name, selectedInvoiceForGeneration.program_name]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  )}
-                  {selectedInvoiceForGeneration.total_phases !== null && selectedInvoiceForGeneration.total_phases !== undefined && (
-                    <p className="mt-1">
-                      Phase Progress: {selectedInvoiceForGeneration.generated_count || 0} / {selectedInvoiceForGeneration.total_phases} invoices generated
-                    </p>
-                  )}
-                </div>
-              </div>
-              <button
-                onClick={closeGenerateModal}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <form onSubmit={handleGenerateSubmit} className="flex flex-col flex-1 overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-6">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Current Invoice Detail */}
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Current Invoice Detail</h3>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Issue Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.issue_date}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.issue_date ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.issue_date && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.issue_date}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Due Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.due_date}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.due_date ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.due_date && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.due_date}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Invoice Month <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.invoice_month}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.invoice_month ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.invoice_month && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.invoice_month}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Generation Date
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.generation_date}
-                        readOnly
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Next Invoice Detail */}
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Next Invoice Detail</h3>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Next Invoice Issue Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.next_issue_date}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.next_issue_date ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.next_issue_date && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.next_issue_date}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Next Invoice Due Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.next_due_date}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.next_due_date ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.next_due_date && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.next_due_date}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Next Invoice Month <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.next_invoice_month}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.next_invoice_month ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.next_invoice_month && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.next_invoice_month}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Next Invoice Generation Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={generateFormData.next_generation_date}
-                        readOnly
-                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 ${
-                          generateFormErrors.next_generation_date ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        required
-                      />
-                      {generateFormErrors.next_generation_date && (
-                        <p className="text-red-500 text-xs mt-1">{generateFormErrors.next_generation_date}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {generateFormErrors.submit && (
-                  <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                    {generateFormErrors.submit}
-                  </div>
-                )}
-              </div>
-
-              {/* Modal Footer */}
-              <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={closeGenerateModal}
-                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-                  disabled={generating}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={generating}
-                >
-                  {generating ? 'Generating...' : 'Generate'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   );
 };

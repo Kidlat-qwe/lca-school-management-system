@@ -6,7 +6,7 @@ import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
-import { formatYmdLocal, parseYmdToLocalNoon } from '../utils/dateUtils.js';
+import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
 import {
@@ -5290,7 +5290,7 @@ router.post(
       }
 
       // Create invoice — issue_date is the calendar day of enrollment (local business date).
-      const issueDateStr = formatYmdLocal(new Date());
+      const issueDateStr = todayYmdManila();
       
       // Determine due_date based on installment settings
       // If installment settings are enabled and valid, use the installment due_date

@@ -179,6 +179,10 @@ const FinanceFinancialDashboard = () => {
     } else {
       params.set('status', 'Submitted,Pending,Paid');
     }
+    if (issueDateFrom.trim() && issueDateTo.trim()) {
+      params.set('payment_date_from', issueDateFrom.trim());
+      params.set('payment_date_to', issueDateTo.trim());
+    }
     navigate(`/finance/acknowledgement-receipts?${params.toString()}`);
   };
   const openPaymentLogsByVerification = (type) => {

@@ -3,7 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
-import { formatYmdLocal } from '../utils/dateUtils.js';
+import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
 import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
 import {
   determineEnrollmentStatus as detEnrollmentStatus,
@@ -2133,6 +2133,9 @@ router.post(
 
               // Store for generation after COMMIT (Phase 1 auto-pay when Downpayment + Phase 1 AR)
               const enrollPhase = profile.phase_start != null ? parseInt(profile.phase_start) : 1;
+              const arDownpaymentIssueYmd = coerceToManilaYmd(ack.issue_date, {
+                fallbackToToday: true,
+              });
               _pendingInvoiceGeneration = {
                 firstInvoiceRecord,
                 profile: {
@@ -2147,6 +2150,7 @@ router.post(
                   phase_start: profile.phase_start,
                 },
                 profileId: invoice.installmentinvoiceprofiles_id,
+                paymentIssueDateYmd: arDownpaymentIssueYmd,
                 autoPayPhase1: isDownpaymentPlusPhase1,
                 autoPayPhase1Data: isDownpaymentPlusPhase1
                   ? {

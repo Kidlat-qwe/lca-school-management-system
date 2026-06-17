@@ -1,25 +1,17 @@
 import { useMemo, useState } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
 import {
   sortMatrixStudentsByEnrollmentDate,
-  toggleEnrollmentDateSort,
-  matrixTrackDisplayName,
+  sortMonthMatrixStudentsByStatus,
 } from '../../utils/enrollmentMatrixSort';
+import { useEnrollmentMatrixStudentHistory } from '../../utils/enrollmentMatrixStudentHistory';
+import { computeMonthMatrixColumnSequences } from '../../utils/enrollmentMatrixStatusSequence';
 import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
 import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';
-import EnrollmentMatrixStudentColumnHeader, {
-  enrollmentMatrixStudentNameTitle,
-} from './EnrollmentMatrixStudentColumnHeader';
+import EnrollmentMatrixStudentColumnHeader from './EnrollmentMatrixStudentColumnHeader';
+import EnrollmentMatrixStudentNameCell from './EnrollmentMatrixStudentNameCell';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
+import StudentHistoryModal from '../student/StudentHistoryModal';
 
 const RATE_HEADER_HEIGHT_PX = 44;
 const COLUMN_HEADER_HEIGHT_PX = 44;
@@ -28,11 +20,35 @@ const COLUMN_HEADER_HEIGHT_PX = 44;
  * Student × month enrollment matrix (Jan–Dec for selected year).
  */
 const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = '' }) => {
+  const [studentSortMode, setStudentSortMode] = useState('status');
   const [studentSortDirection, setStudentSortDirection] = useState('asc');
+  const { historyStudent, isHistoryOpen, openHistory, closeHistory } =
+    useEnrollmentMatrixStudentHistory();
   const months = matrix?.months ?? [];
-  const students = useMemo(
-    () => sortMatrixStudentsByEnrollmentDate(matrix?.students ?? [], studentSortDirection),
-    [matrix?.students, studentSortDirection]
+  const students = useMemo(() => {
+    const rows = matrix?.students ?? [];
+    if (studentSortMode === 'enrollment_date') {
+      return sortMatrixStudentsByEnrollmentDate(rows, studentSortDirection);
+    }
+    return sortMonthMatrixStudentsByStatus(rows, months, displayYear);
+  }, [matrix?.students, months, displayYear, studentSortMode, studentSortDirection]);
+
+  const handleToggleStudentSort = () => {
+    if (studentSortMode === 'status') {
+      setStudentSortMode('enrollment_date');
+      setStudentSortDirection('asc');
+      return;
+    }
+    if (studentSortDirection === 'asc') {
+      setStudentSortDirection('desc');
+      return;
+    }
+    setStudentSortMode('status');
+    setStudentSortDirection('asc');
+  };
+  const statusSequencesByTrack = useMemo(
+    () => computeMonthMatrixColumnSequences(students, months),
+    [students, months]
   );
   const monthStats = matrix?.month_stats ?? [];
   const cohortSize = students.length;
@@ -47,15 +63,6 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
     );
   }
 
-  const chartData = monthStats
-    .filter((row) => row.has_prior_month && row.prior_month_enrolled_count > 0)
-    .map((row) => ({
-      month: row.month,
-      re_enrollment_rate: row.re_enrollment_rate,
-      re_enrolled_count: row.re_enrolled_count,
-      prior_month_enrolled_count: row.prior_month_enrolled_count,
-    }));
-
   const tooltipText = MONTHLY_ENROLLMENT_DASHBOARD.matrixTitleTooltip(displayYear || '');
 
   return (
@@ -69,9 +76,9 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
 
       <EnrollmentMatrixStatusLegend />
 
-      {/* Scroll container: vertical scroll stays inside this box so sticky headers work */}
+      {/* Horizontal scroll only — full table height flows with the page (no inner vertical scrollbar). */}
       <div
-        className="relative isolate max-h-[min(720px,calc(100vh-14rem))] overflow-auto rounded-lg border border-gray-200 bg-white"
+        className="relative isolate overflow-x-auto rounded-lg border border-gray-200 bg-white"
         style={{
           scrollbarWidth: 'thin',
           scrollbarColor: '#cbd5e0 #f7fafc',
@@ -128,8 +135,9 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                 }}
               >
                 <EnrollmentMatrixStudentColumnHeader
+                  sortMode={studentSortMode}
                   sortDirection={studentSortDirection}
-                  onToggleSort={() => setStudentSortDirection(toggleEnrollmentDateSort)}
+                  onToggleSort={handleToggleStudentSort}
                 />
               </th>
               {months.map((m) => (
@@ -146,22 +154,33 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
 
           <tbody className="divide-y divide-gray-100 text-sm">
             {students.length > 0 ? (
-              students.map((student) => (
-                <tr key={student.enrollment_track_key || `${student.student_id}-${student.class_id}`} className="group bg-white hover:bg-gray-50">
-                  <td
-                    className="sticky left-0 z-[1] bg-white px-4 py-2.5 font-medium text-gray-900 shadow-[2px_0_4px_rgba(0,0,0,0.04)] group-hover:bg-gray-50"
-                    style={{ minWidth: '200px', maxWidth: '280px' }}
-                    title={enrollmentMatrixStudentNameTitle(student)}
-                  >
-                    <span className="block truncate">{matrixTrackDisplayName(student)}</span>
-                  </td>
-                  {months.map((m) => (
-                    <td key={`${student.enrollment_track_key || student.student_id}-${m.key}`} className="bg-white px-3 py-2.5 text-center group-hover:bg-gray-50">
-                      <EnrollmentMatrixCellBadge cell={student.months?.[m.key]} />
+              students.map((student) => {
+                const trackKey =
+                  student.enrollment_track_key || `${student.student_id}-${student.class_id}`;
+                const statusSequences = statusSequencesByTrack[trackKey] || {};
+
+                return (
+                  <tr key={trackKey} className="group bg-white hover:bg-gray-50">
+                    <td
+                      className="sticky left-0 z-[1] bg-white px-4 py-2.5 shadow-[2px_0_4px_rgba(0,0,0,0.04)] group-hover:bg-gray-50"
+                      style={{ minWidth: '200px', maxWidth: '280px' }}
+                    >
+                      <EnrollmentMatrixStudentNameCell track={student} onOpenHistory={openHistory} />
                     </td>
-                  ))}
-                </tr>
-              ))
+                    {months.map((m) => (
+                      <td
+                        key={`${trackKey}-${m.key}`}
+                        className="bg-white px-3 py-2.5 text-center group-hover:bg-gray-50"
+                      >
+                        <EnrollmentMatrixCellBadge
+                          cell={student.months?.[m.key]}
+                          sequence={statusSequences[m.key]}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td
@@ -176,28 +195,7 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
         </table>
       </div>
 
-      <div className="h-56 w-full min-w-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="month" tick={{ fontSize: 10 }} interval={0} />
-            <YAxis tick={{ fontSize: 12 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-            <Tooltip
-              formatter={(value, name, props) => {
-                if (name === 'Re-enrollment rate') {
-                  const row = props?.payload;
-                  return [
-                    `${Number(value).toFixed(2)}% (${Number(row?.re_enrolled_count || 0).toLocaleString()} / ${Number(row?.prior_month_enrolled_count || 0).toLocaleString()})`,
-                    name,
-                  ];
-                }
-                return [value, name];
-              }}
-            />
-            <Bar dataKey="re_enrollment_rate" name="Re-enrollment rate" fill="#4F46E5" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <StudentHistoryModal isOpen={isHistoryOpen} student={historyStudent} onClose={closeHistory} />
     </div>
   );
 };

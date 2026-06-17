@@ -14,7 +14,7 @@ const EnrollmentMatrixStatusLegend = ({ className = '' }) => (
           <span
             className={`inline-flex min-w-[1.75rem] items-center justify-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${item.tone}`}
           >
-            {item.key === 'not_enrolled' ? '—' : '1'}
+            {item.key === 'not_enrolled' ? '—' : 'n'}
           </span>
           <span className="text-xs font-medium text-gray-700">{item.label}</span>
         </div>

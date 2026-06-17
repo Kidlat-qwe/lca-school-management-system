@@ -3,7 +3,7 @@
  * Phase 2) invoices. For Downpayment + Phase 1 ARs, auto-pay Phase 1 in the same flow.
  */
 import { query } from '../config/database.js';
-import { formatYmdLocal } from '../utils/dateUtils.js';
+import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
 import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
 
@@ -17,8 +17,14 @@ import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnr
  * }} pending
  */
 export async function runArAttachInstallmentFollowUp(pending) {
-  const { firstInvoiceRecord, profile: genProfile, profileId, autoPayPhase1, autoPayPhase1Data } =
-    pending;
+  const {
+    firstInvoiceRecord,
+    profile: genProfile,
+    profileId,
+    autoPayPhase1,
+    autoPayPhase1Data,
+    paymentIssueDateYmd: pendingPaymentIssueDateYmd,
+  } = pending;
 
   const result = {
     phase1_invoice_id: null,
@@ -30,20 +36,26 @@ export async function runArAttachInstallmentFollowUp(pending) {
   try {
     const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
 
-    const enrollmentAckReuse =
-      autoPayPhase1 &&
+    const rawPaymentIssue =
+      pendingPaymentIssueDateYmd ?? autoPayPhase1Data?.issue_date ?? null;
+    const paymentIssueDateYmd = coerceToManilaYmd(rawPaymentIssue);
+
+    const enrollmentAckReuse = {
+      ...(autoPayPhase1 &&
       autoPayPhase1Data?.phase_ack_receipt_id &&
       autoPayPhase1Data?.phase_ack_receipt_number
         ? {
             reuseInvoiceArNumber: String(autoPayPhase1Data.phase_ack_receipt_number).trim(),
             ack_receipt_id: Number(autoPayPhase1Data.phase_ack_receipt_id),
           }
-        : null;
+        : {}),
+      ...(paymentIssueDateYmd ? { enrollmentInvoiceIssueYmd: paymentIssueDateYmd } : {}),
+    };
 
     const generatedInvoice = await generateInvoiceFromInstallment(
       firstInvoiceRecord,
       genProfile,
-      enrollmentAckReuse
+      Object.keys(enrollmentAckReuse).length > 0 ? enrollmentAckReuse : null
     );
     result.phase1_invoice_id = generatedInvoice.invoice_id;
 
@@ -159,7 +171,7 @@ export async function runArAttachInstallmentFollowUp(pending) {
       let arIssueYmd = null;
       if (rawAckIssue != null && String(rawAckIssue).trim() !== '') {
         const s = String(rawAckIssue).trim();
-        arIssueYmd = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(0, 10) : formatYmdLocal(new Date(s));
+        arIssueYmd = coerceToManilaYmd(s);
       }
       let candidateIssueYmd = arIssueYmd;
       if (phase1InvoiceId && /^\d{4}-\d{2}-\d{2}$/.test(String(candidateIssueYmd || ''))) {

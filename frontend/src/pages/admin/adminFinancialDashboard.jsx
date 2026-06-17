@@ -21,6 +21,7 @@ import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons
 import CombinedStatsCard from '../../components/dashboard/CombinedStatsCard';
 import { buildPaymentLogDateParams, PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
 import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { appendFinancialDashboardArMonthParams } from '../../utils/financialDashboardMonthRange';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 
@@ -151,6 +152,7 @@ const AdminFinancialDashboard = () => {
     } else {
       params.set('status', 'Submitted,Pending,Paid');
     }
+    appendFinancialDashboardArMonthParams(params, selectedMonth);
     navigate(`/admin/acknowledgement-receipts?${params.toString()}`);
   };
   const arVerification = useMemo(

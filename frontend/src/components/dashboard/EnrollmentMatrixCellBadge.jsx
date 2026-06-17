@@ -1,13 +1,17 @@
 import {
-  enrollmentMatrixCellTitle,
+  enrollmentMatrixCellHoverTitle,
+  enrollmentMatrixCellShowsSequence,
   enrollmentMatrixCellTone,
 } from '../../utils/programEnrollmentStatus';
 
-const EnrollmentMatrixCellBadge = ({ cell }) => {
-  const mark = cell?.mark ?? '-';
+const EnrollmentMatrixCellBadge = ({ cell, sequence = null, periodKey = null }) => {
   const label = cell?.label ?? '';
   const tone = enrollmentMatrixCellTone(cell);
-  const cellTitle = enrollmentMatrixCellTitle(cell);
+  const cellTitle = enrollmentMatrixCellHoverTitle(cell, { periodKey });
+  const showsSequence = enrollmentMatrixCellShowsSequence(cell);
+  const displayValue = showsSequence
+    ? String(sequence != null && sequence > 0 ? sequence : 1)
+    : '-';
 
   return (
     <div className="flex flex-col items-center gap-0.5">
@@ -15,7 +19,7 @@ const EnrollmentMatrixCellBadge = ({ cell }) => {
         className={`inline-flex min-w-[2rem] items-center justify-center rounded-md px-2 py-1 text-xs font-semibold tabular-nums ${tone}`}
         title={cellTitle}
       >
-        {mark === '1' ? '1' : '-'}
+        {displayValue}
       </span>
       {label ? (
         <span

@@ -25,7 +25,6 @@ import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
-import OperationalReEnrollmentRateTable from './OperationalReEnrollmentRateTable';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -152,7 +151,6 @@ const DailyOperationalDashboardView = ({
       ),
     [branchMetrics]
   );
-  const enrollmentDashboard = data?.enrollment_dashboard || {};
   const totalPaymentsAmount = useMemo(() => {
     const invoice = Number(data?.totals?.daily_sales_amount) || 0;
     const ar = Number(data?.totals?.ar_sales_amount) || 0;
@@ -303,7 +301,7 @@ const DailyOperationalDashboardView = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <CombinedStatsCard
             title="New Enrollees & Re-enrollment"
             iconName="users"
@@ -333,33 +331,6 @@ const DailyOperationalDashboardView = ({
               { label: 'Upsell', value: formatNumber(totals.upsell_count || 0) },
             ]}
             tooltip={DAILY_OPERATIONAL.reservedUpsell}
-          />
-          <CombinedStatsCard
-            title="Completed & Retention Base"
-            iconName="checkCircle"
-            accent="bg-gradient-to-br from-violet-500 to-purple-600"
-            metrics={[
-              { label: 'Completed', value: formatNumber(totals.completed_count || 0) },
-              {
-                label: 'Retention base',
-                value: formatNumber(
-                  enrollmentDashboard.retention_base_count ??
-                    totals.retention_base_count ??
-                    0
-                ),
-              },
-            ]}
-            tooltip={DAILY_OPERATIONAL.completedRetentionCombined}
-          />
-          <StatsCard
-            title="Re-enrollment Rate"
-            value={`${Number(enrollmentDashboard.re_enrollment_rate || 0).toFixed(2)}%`}
-            iconName="chartBar"
-            accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            tooltip={DAILY_OPERATIONAL.reEnrollmentRate(
-              formatNumber(enrollmentDashboard.re_enrollment_rate_retained_count || 0),
-              formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
-            )}
           />
         </div>
 
@@ -557,14 +528,6 @@ const DailyOperationalDashboardView = ({
             </table>
           </div>
         </div>
-
-        <OperationalReEnrollmentRateTable
-          breakdown={data?.re_enrollment_rate_breakdown}
-          tooltip={DAILY_OPERATIONAL.reEnrollmentRateBreakdown}
-          emptyMessage="No re-enrollment rate breakdown for this date."
-          periodMode="daily"
-          summaryDate={selectedDate}
-        />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <ChartCard

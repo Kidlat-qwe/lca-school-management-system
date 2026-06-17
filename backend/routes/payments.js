@@ -9,7 +9,7 @@ import {
   normalizeNotificationRecipients,
 } from '../utils/emailService.js';
 import { plainTextToEmailHtml } from '../utils/templateRenderService.js';
-import { formatYmdLocal } from '../utils/dateUtils.js';
+import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
   getPhaseDueDateYmd,
@@ -222,7 +222,7 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
   studentName,
   paymentIssueDate,
 }) => {
-  const paymentDateYmd = paymentIssueDate || formatYmdLocal(new Date());
+  const paymentDateYmd = coerceToManilaYmd(paymentIssueDate, { fallbackToToday: true });
 
   let scheduledDateYmd = profile.bill_invoice_due_date || paymentDateYmd;
   let firstGenerationYmd = paymentDateYmd;
@@ -2746,6 +2746,9 @@ router.post(
               
               // Store invoice generation data to process after transaction commits
               // This avoids transaction conflicts
+              const downpaymentPaymentIssueYmd = coerceToManilaYmd(issue_date, {
+                fallbackToToday: true,
+              });
               const invoiceGenData = {
                 firstInvoiceRecord,
                 profile: {
@@ -2760,7 +2763,8 @@ router.post(
                   total_phases: profile.total_phases,
                   phase_start: profile.phase_start,
                 },
-                profileId: invoice.installmentinvoiceprofiles_id
+                profileId: invoice.installmentinvoiceprofiles_id,
+                paymentIssueDateYmd: downpaymentPaymentIssueYmd,
               };
               
               await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id);
@@ -2996,14 +3000,17 @@ router.post(
 
       // Generate first installment invoice after transaction commits (if downpayment was paid)
       if (req._pendingInvoiceGeneration) {
-        const { firstInvoiceRecord, profile, profileId } = req._pendingInvoiceGeneration;
+        const { firstInvoiceRecord, profile, profileId, paymentIssueDateYmd } =
+          req._pendingInvoiceGeneration;
         // Process asynchronously so it doesn't block the response
         (async () => {
           try {
             const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
             
             // Generate the first installment invoice immediately (so it appears in invoice page)
-            const generatedInvoice = await generateInvoiceFromInstallment(firstInvoiceRecord, profile);
+            const generatedInvoice = await generateInvoiceFromInstallment(firstInvoiceRecord, profile, {
+              enrollmentInvoiceIssueYmd: paymentIssueDateYmd,
+            });
             
             console.log(`✅ Downpayment paid: Generated first installment invoice ${generatedInvoice.invoice_id} for profile ${profileId}`);
           } catch (invoiceGenError) {
@@ -3490,10 +3497,9 @@ router.put(
                   );
                   const studentName = studentResult.rows[0]?.full_name || 'Student';
                   
-                  const firstPaymentIssueDate =
-                    effectiveIssueDateForLogic != null && effectiveIssueDateForLogic !== ''
-                      ? formatYmdLocal(new Date(effectiveIssueDateForLogic))
-                      : formatYmdLocal(new Date());
+                  const firstPaymentIssueDate = coerceToManilaYmd(effectiveIssueDateForLogic, {
+                    fallbackToToday: true,
+                  });
                   const { firstInvoiceRecord } = await createFirstInstallmentRecordAfterDownpayment({
                     client,
                     profileId: invoice.installmentinvoiceprofiles_id,
@@ -3520,7 +3526,8 @@ router.put(
                       total_phases: profile.total_phases,
                       phase_start: profile.phase_start,
                     },
-                    profileId: invoice.installmentinvoiceprofiles_id
+                    profileId: invoice.installmentinvoiceprofiles_id,
+                    paymentIssueDateYmd: firstPaymentIssueDate,
                   };
                   
                   await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, payment.student_id);
@@ -3578,14 +3585,17 @@ router.put(
 
       // Generate first installment invoice after transaction commits (if downpayment was paid)
       if (req._pendingInvoiceGeneration) {
-        const { firstInvoiceRecord, profile, profileId } = req._pendingInvoiceGeneration;
+        const { firstInvoiceRecord, profile, profileId, paymentIssueDateYmd } =
+          req._pendingInvoiceGeneration;
         // Process asynchronously so it doesn't block the response
         (async () => {
           try {
             const { generateInvoiceFromInstallment } = await import('../utils/installmentInvoiceGenerator.js');
             
             // Generate the first installment invoice immediately (so it appears in invoice page)
-            const generatedInvoice = await generateInvoiceFromInstallment(firstInvoiceRecord, profile);
+            const generatedInvoice = await generateInvoiceFromInstallment(firstInvoiceRecord, profile, {
+              enrollmentInvoiceIssueYmd: paymentIssueDateYmd,
+            });
             
             console.log(`✅ Downpayment paid (via update): Generated first installment invoice ${generatedInvoice.invoice_id} for profile ${profileId}`);
           } catch (invoiceGenError) {

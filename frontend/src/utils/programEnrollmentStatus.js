@@ -176,6 +176,17 @@ const MATRIX_STATUS_BY_KEY = Object.fromEntries(
   ENROLLMENT_MATRIX_STATUS_ITEMS.map((item) => [item.key, item])
 );
 
+/** Row sort order for matrix tables (matches legend top → bottom). */
+const MATRIX_STATUS_SORT_RANK = Object.fromEntries(
+  ENROLLMENT_MATRIX_STATUS_ITEMS.map((item, index) => [item.key, index])
+);
+
+/** @param {string|null|undefined} statusKey */
+export function matrixStudentStatusSortRank(statusKey) {
+  const key = statusKey || 'not_enrolled';
+  return MATRIX_STATUS_SORT_RANK[key] ?? MATRIX_STATUS_SORT_RANK.not_enrolled;
+}
+
 const normalizeMatrixLabelKey = (label) =>
   String(label || '')
     .trim()
@@ -195,6 +206,18 @@ const MATRIX_LABEL_TO_KEY = {
   dropped: 'dropped',
   'not enrolled': 'dropped',
 };
+
+/** Statuses that receive per-column sequence numbers in month/phase matrices. */
+export const MATRIX_SEQUENCE_STATUS_KEYS = new Set([
+  'new',
+  're_enrolled',
+  'completed',
+  'rejoin',
+  'upsell',
+  'pending_enrollment',
+  'reserved',
+  'dropped',
+]);
 
 /**
  * Resolve badge tone for phase/month enrollment matrix cells.
@@ -227,6 +250,56 @@ export function enrollmentMatrixCellTitle(cell) {
   const label = cell?.label?.trim();
   if (label) return label;
   return cell?.mark === '1' ? 'Enrolled' : 'Not enrolled';
+}
+
+/** Hover text for matrix status badges — includes enrolled phase when known. */
+export function enrollmentMatrixCellHoverTitle(cell, options = {}) {
+  const rawPhase = options.periodKey ?? cell?.phase_number;
+  const phaseNumber = parseInt(rawPhase, 10);
+  const hasPhase = Number.isFinite(phaseNumber) && phaseNumber > 0;
+
+  if (cell?.from_previous_reserved && cell?.label === 'new') {
+    return hasPhase
+      ? `Enrolled in Phase ${phaseNumber} · Previous reserved`
+      : 'Previous reserved';
+  }
+
+  if (!enrollmentMatrixCellShowsSequence(cell)) {
+    if (hasPhase) return `Phase ${phaseNumber} · Not enrolled`;
+    return enrollmentMatrixCellTitle(cell);
+  }
+
+  const statusLabel = cell?.label?.trim() || enrollmentMatrixCellTitle(cell);
+  if (hasPhase) {
+    return `Enrolled in Phase ${phaseNumber} · ${statusLabel}`;
+  }
+  return statusLabel;
+}
+
+/** Stable key for per-status sequence counters on matrix rows (month or phase). */
+export function enrollmentMatrixSequenceKey(cell) {
+  if (!cell) return null;
+
+  const labelKey = MATRIX_LABEL_TO_KEY[normalizeMatrixLabelKey(cell?.label)];
+  if (labelKey && MATRIX_SEQUENCE_STATUS_KEYS.has(labelKey)) {
+    return labelKey;
+  }
+
+  const statusKey = String(cell?.status || '').trim().toLowerCase();
+  if (statusKey && MATRIX_SEQUENCE_STATUS_KEYS.has(statusKey)) {
+    return statusKey;
+  }
+
+  if (cell.mark === '1') {
+    return 're_enrolled';
+  }
+
+  return null;
+}
+
+/** True when the cell should show a numbered badge (all matrix statuses except empty / not enrolled). */
+export function enrollmentMatrixCellShowsSequence(cell) {
+  return enrollmentMatrixSequenceKey(cell) != null;
 }
 
 const ACTIVE_ENROLLMENT_STATUSES = new Set(['new', 're_enrolled', 'upsell', 'rejoin']);

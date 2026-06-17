@@ -1,24 +1,49 @@
 import { useMemo, useState } from 'react';
 import {
   sortMatrixStudentsByEnrollmentDate,
-  toggleEnrollmentDateSort,
-  matrixTrackDisplayName,
+  sortPhaseMatrixStudentsByStatus,
 } from '../../utils/enrollmentMatrixSort';
+import { useEnrollmentMatrixStudentHistory } from '../../utils/enrollmentMatrixStudentHistory';
+import { computePhaseMatrixColumnSequences } from '../../utils/enrollmentMatrixStatusSequence';
 import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
 import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';
-import EnrollmentMatrixStudentColumnHeader, {
-  enrollmentMatrixStudentNameTitle,
-} from './EnrollmentMatrixStudentColumnHeader';
+import EnrollmentMatrixStudentColumnHeader from './EnrollmentMatrixStudentColumnHeader';
+import EnrollmentMatrixStudentNameCell from './EnrollmentMatrixStudentNameCell';
+import StudentHistoryModal from '../student/StudentHistoryModal';
 
 /**
  * Student × phase enrollment matrix.
  */
 const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
+  const [studentSortMode, setStudentSortMode] = useState('status');
   const [studentSortDirection, setStudentSortDirection] = useState('asc');
+  const { historyStudent, isHistoryOpen, openHistory, closeHistory } =
+    useEnrollmentMatrixStudentHistory();
   const phases = matrix?.phases ?? [];
-  const students = useMemo(
-    () => sortMatrixStudentsByEnrollmentDate(matrix?.students ?? [], studentSortDirection),
-    [matrix?.students, studentSortDirection]
+  const students = useMemo(() => {
+    const rows = matrix?.students ?? [];
+    if (studentSortMode === 'enrollment_date') {
+      return sortMatrixStudentsByEnrollmentDate(rows, studentSortDirection);
+    }
+    return sortPhaseMatrixStudentsByStatus(rows, phases);
+  }, [matrix?.students, phases, studentSortMode, studentSortDirection]);
+
+  const handleToggleStudentSort = () => {
+    if (studentSortMode === 'status') {
+      setStudentSortMode('enrollment_date');
+      setStudentSortDirection('asc');
+      return;
+    }
+    if (studentSortDirection === 'asc') {
+      setStudentSortDirection('desc');
+      return;
+    }
+    setStudentSortMode('status');
+    setStudentSortDirection('asc');
+  };
+  const statusSequencesByTrack = useMemo(
+    () => computePhaseMatrixColumnSequences(students, phases),
+    [students, phases]
   );
   const phaseStats = matrix?.phase_stats ?? [];
   const cohortSize = students.length;
@@ -37,9 +62,8 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
       <EnrollmentMatrixStatusLegend />
 
       <div
-        className="overflow-x-auto overflow-y-auto rounded-lg border border-gray-200"
+        className="overflow-x-auto rounded-lg border border-gray-200"
         style={{
-          maxHeight: '720px',
           scrollbarWidth: 'thin',
           scrollbarColor: '#cbd5e0 #f7fafc',
           WebkitOverflowScrolling: 'touch',
@@ -87,8 +111,10 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
                 style={{ minWidth: '160px' }}
               >
                 <EnrollmentMatrixStudentColumnHeader
+                  sortMode={studentSortMode}
                   sortDirection={studentSortDirection}
-                  onToggleSort={() => setStudentSortDirection(toggleEnrollmentDateSort)}
+                  focusPeriodLabel="latest phase"
+                  onToggleSort={handleToggleStudentSort}
                 />
               </th>
               {phases.map((phase) => (
@@ -103,22 +129,34 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
           </thead>
           <tbody className="divide-y divide-gray-100 text-sm">
             {students.length > 0 ? (
-              students.map((student) => (
-                <tr key={student.enrollment_track_key || `${student.student_id}-${student.class_id}`} className="hover:bg-gray-50/80">
-                  <td
-                    className="sticky left-0 z-20 bg-white px-4 py-2.5 font-medium text-gray-900"
-                    style={{ minWidth: '200px', maxWidth: '280px' }}
-                    title={enrollmentMatrixStudentNameTitle(student)}
-                  >
-                    <span className="block truncate">{matrixTrackDisplayName(student)}</span>
-                  </td>
-                  {phases.map((phase) => (
-                    <td key={`${student.enrollment_track_key || student.student_id}-${phase.key}`} className="px-3 py-2.5 text-center">
-                      <EnrollmentMatrixCellBadge cell={student.phases?.[phase.key]} />
+              students.map((student) => {
+                const trackKey =
+                  student.enrollment_track_key || `${student.student_id}-${student.class_id}`;
+                const statusSequences = statusSequencesByTrack[trackKey] || {};
+
+                return (
+                  <tr key={trackKey} className="hover:bg-gray-50/80">
+                    <td
+                      className="sticky left-0 z-20 bg-white px-4 py-2.5"
+                      style={{ minWidth: '200px', maxWidth: '280px' }}
+                    >
+                      <EnrollmentMatrixStudentNameCell track={student} onOpenHistory={openHistory} />
                     </td>
-                  ))}
-                </tr>
-              ))
+                    {phases.map((phase) => (
+                      <td
+                        key={`${trackKey}-${phase.key}`}
+                        className="px-3 py-2.5 text-center"
+                      >
+                        <EnrollmentMatrixCellBadge
+                          cell={student.phases?.[phase.key]}
+                          sequence={statusSequences[phase.key]}
+                          periodKey={phase.key}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan={phases.length + 1} className="px-4 py-8 text-center text-sm text-gray-500">
@@ -129,6 +167,8 @@ const StudentPhaseEnrollmentMatrixChart = ({ matrix, className = '' }) => {
           </tbody>
         </table>
       </div>
+
+      <StudentHistoryModal isOpen={isHistoryOpen} student={historyStudent} onClose={closeHistory} />
     </div>
   );
 };

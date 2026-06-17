@@ -102,8 +102,9 @@ export const getPhaseDueDateYmd = async (db, classId, phaseNumber, dueDaysBefore
  * Builds invoice/generation dates from the earliest class session per phase (MIN scheduled_date).
  *
  * Due date is always (phase start − PHASE_INSTALLMENT_DUE_DAYS_BEFORE) — never raised to match a
- * billing "generation day" (e.g. 25th). Issue date uses issueDateOverride when it is on or before
- * due; otherwise it is capped to due so payment is never due before the stated issue date.
+ * billing "generation day" (e.g. 25th). Issue date uses issueDateOverride when provided (e.g.
+ * downpayment payment day); when no override, it defaults to the due date. Explicit overrides
+ * are never capped to due — mid-phase enrollments may issue after the phase due date.
  */
 export const buildPhaseInstallmentSchedule = async ({
   db,
@@ -147,9 +148,15 @@ export const buildPhaseInstallmentSchedule = async ({
   // Authoritative due: always one day before first session of this phase (auto-detected per class).
   const currentDueDate = subtractDays(currentPhaseStart, PHASE_INSTALLMENT_DUE_DAYS_BEFORE);
 
+  const explicitIssueOverride = normalizeDateInput(issueDateOverride);
   let currentIssueDate =
-    normalizeDateInput(issueDateOverride) || subtractDays(currentPhaseStart, PHASE_INSTALLMENT_DUE_DAYS_BEFORE);
-  if (currentDueDate && currentIssueDate && currentIssueDate.getTime() > currentDueDate.getTime()) {
+    explicitIssueOverride || subtractDays(currentPhaseStart, PHASE_INSTALLMENT_DUE_DAYS_BEFORE);
+  if (
+    currentDueDate &&
+    currentIssueDate &&
+    !explicitIssueOverride &&
+    currentIssueDate.getTime() > currentDueDate.getTime()
+  ) {
     currentIssueDate = new Date(currentDueDate.getTime());
   }
 

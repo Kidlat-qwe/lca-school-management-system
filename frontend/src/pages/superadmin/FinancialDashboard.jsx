@@ -20,6 +20,10 @@ import { formatDateManila } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 import CombinedStatsCard from '../../components/dashboard/CombinedStatsCard';
 import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
+import {
+  appendFinancialDashboardArMonthParams,
+  appendFinancialDashboardPaymentMonthParams,
+} from '../../utils/financialDashboardMonthRange';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
@@ -158,10 +162,19 @@ const FinancialDashboard = () => {
     return branch?.branch_name || 'All Branches';
   }, [selectedBranchId, metrics]);
 
+  const addMonthRangeParams = (params) => {
+    appendFinancialDashboardPaymentMonthParams(params, selectedMonth);
+  };
+
+  const addArMonthRangeParams = (params) => {
+    appendFinancialDashboardArMonthParams(params, selectedMonth);
+  };
+
   const openPaymentLogsByVerification = (type) => {
     const params = new URLSearchParams();
     params.set('notificationTab', 'main');
     params.set('financeApproval', type === 'verified' ? 'approved' : 'pending');
+    addMonthRangeParams(params);
     navigate(`/superadmin/payment-logs?${params.toString()}`);
   };
   const openArByVerification = (type) => {
@@ -172,6 +185,7 @@ const FinancialDashboard = () => {
     } else {
       params.set('status', 'Submitted,Pending,Paid');
     }
+    addArMonthRangeParams(params);
     navigate(`/superadmin/acknowledgement-receipts?${params.toString()}`);
   };
 
@@ -254,7 +268,12 @@ const FinancialDashboard = () => {
             trendClassName="text-gray-500"
             accent="bg-gradient-to-br from-indigo-400 to-indigo-500"
             iconName="currency"
-            onClick={() => navigate('/superadmin/payment-logs')}
+            onClick={() => {
+              const params = new URLSearchParams();
+              params.set('notificationTab', 'main');
+              addMonthRangeParams(params);
+              navigate(`/superadmin/payment-logs?${params.toString()}`);
+            }}
           />
           <StatsCard
             title="Total Amount"

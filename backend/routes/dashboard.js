@@ -20,13 +20,17 @@ import {
   AR_LIST_LINE_AMOUNT_SUM_SQL,
 } from '../lib/ackReceiptPairedColumn.js';
 import {
+  loadFinancialDashboardArVerification,
+  loadFinancialDashboardPaymentVerification,
+  parseManilaMonthInclusiveRange,
+} from '../lib/financialDashboardVerificationMetrics.js';
+import {
   loadMerchandiseReleasedDetails,
   loadRecentMerchandiseReleasesForOperationalDashboard,
   merchandiseReleaseDashboardCteDaily,
 } from '../lib/merchandiseReleaseLog.js';
 import {
   applyPaymentEnrollmentToBranchBreakdown,
-  buildOperationalReEnrollmentRateBreakdown,
   loadDailyOperationalEnrollmentFromPayments,
   loadOperationalReEnrolledStudentsFromPayments,
 } from '../lib/dailyOperationalEnrollmentFromPayments.js';
@@ -308,131 +312,21 @@ router.get(
         : (monthStartDate ? [monthStartDate, monthEndDate] : []);
       const invoiceStatusResult = await query(invoiceStatusQuery, invoiceStatusParams);
 
-      // Completed payments by Finance/Superfinance approval — same logic as
-      // GET /payments/financial-dashboard-metrics (payment business date = paymenttbl.issue_date).
-      const paymentDateMonthFilterBranch = monthStartDate
-        ? `AND p.issue_date >= $2::date AND p.issue_date < $3::date`
-        : '';
-      const paymentDateMonthFilterAll = monthStartDate
-        ? `WHERE p.issue_date >= $1::date AND p.issue_date < $2::date`
-        : '';
-      const paymentVerificationQuery = branchFilter
-        ? `
-          SELECT
-            COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
-            )::bigint AS verified_count,
-            COALESCE(
-              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
-              ),
-              0
-            ) AS verified_amount,
-            COUNT(*) FILTER (
-              WHERE p.status = 'Completed'
-                AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-            )::bigint AS unverified_count,
-            COALESCE(
-              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed'
-                  AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                  AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-              ),
-              0
-            ) AS unverified_amount
-          FROM paymenttbl p
-          WHERE p.branch_id = $1
-            ${paymentDateMonthFilterBranch}
-        `
-        : `
-          SELECT
-            COUNT(*) FILTER (
-              WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
-            )::bigint AS verified_count,
-            COALESCE(
-              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed' AND COALESCE(p.approval_status, 'Pending') = 'Approved'
-              ),
-              0
-            ) AS verified_amount,
-            COUNT(*) FILTER (
-              WHERE p.status = 'Completed'
-                AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-            )::bigint AS unverified_count,
-            COALESCE(
-              SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) FILTER (
-                WHERE p.status = 'Completed'
-                  AND COALESCE(p.approval_status, 'Pending') <> 'Approved'
-                  AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
-              ),
-              0
-            ) AS unverified_amount
-          FROM paymenttbl p
-          ${paymentDateMonthFilterAll}
-        `;
-      const paymentVerificationParams = branchFilter
-        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
-        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
-      const paymentVerificationResult = await query(paymentVerificationQuery, paymentVerificationParams);
-      const pvRow = paymentVerificationResult.rows[0] || {};
-
-      // Package AR lifecycle split for verification monitoring.
-      // Verified includes already-applied ARs since those passed verification.
-      const arVerificationQuery = branchFilter
-        ? `
-          SELECT
-            COUNT(*) FILTER (
-              WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
-            )::bigint AS verified_count,
-            COALESCE(
-              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
-                WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
-              ),
-              0
-            ) AS verified_amount,
-            COUNT(*) FILTER (
-              WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
-            )::bigint AS unverified_count,
-            COALESCE(
-              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
-                WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
-              ),
-              0
-            ) AS unverified_amount
-          FROM acknowledgement_receiptstbl ar
-          WHERE ar.branch_id = $1
-            ${monthStartDate ? 'AND ar.issue_date >= $2::date AND ar.issue_date < $3::date' : ''}
-        `
-        : `
-          SELECT
-            COUNT(*) FILTER (
-              WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
-            )::bigint AS verified_count,
-            COALESCE(
-              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
-                WHERE ar.ar_type = 'Package' AND ar.status IN ('Verified', 'Applied')
-              ),
-              0
-            ) AS verified_amount,
-            COUNT(*) FILTER (
-              WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
-            )::bigint AS unverified_count,
-            COALESCE(
-              SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) FILTER (
-                WHERE ar.ar_type = 'Package' AND COALESCE(ar.status, 'Submitted') NOT IN ('Verified', 'Applied', 'Rejected', 'Cancelled')
-              ),
-              0
-            ) AS unverified_amount
-          FROM acknowledgement_receiptstbl ar
-          ${monthStartDate ? 'WHERE ar.issue_date >= $1::date AND ar.issue_date < $2::date' : ''}
-        `;
-      const arVerificationParams = branchFilter
-        ? (monthStartDate ? [...branchParams, monthStartDate, monthEndDate] : branchParams)
-        : (monthStartDate ? [monthStartDate, monthEndDate] : []);
-      const arVerificationResult = await query(arVerificationQuery, arVerificationParams);
-      const arvRow = arVerificationResult.rows[0] || {};
+      // Payment + AR verification — aligned with Payment Logs (finance-unified) and
+      // Acknowledgement Receipts list drill-down (inclusive month on issue_date).
+      const verificationMonthKey = selectedMonth || getCurrentManilaMonthKey();
+      const verificationDateRange = parseManilaMonthInclusiveRange(verificationMonthKey);
+      const verificationScope = {
+        branchId: branchFilter,
+        dateFrom: verificationDateRange?.from || null,
+        dateTo: verificationDateRange?.to || null,
+      };
+      const [paymentVerification, arVerification] = await Promise.all([
+        loadFinancialDashboardPaymentVerification(query, verificationScope),
+        loadFinancialDashboardArVerification(query, verificationScope),
+      ]);
+      const pvRow = paymentVerification;
+      const arvRow = arVerification;
 
       const reservationStatusQuery = branchFilter
         ? `
@@ -900,21 +794,6 @@ router.get(
         summaryDate,
       });
 
-      const reEnrolledStudentSummary = await loadOperationalReEnrolledStudentsFromPayments(query, {
-        branchId: branchFilter,
-        summaryDate,
-      });
-
-      const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
-        branchRows: branchBreakdown,
-        enrollmentDashboard,
-        totals,
-        studentSummary: reEnrolledStudentSummary,
-        priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
-        priorPeriodType: paymentEnrollment.prior_period_type ?? null,
-        retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,
-      });
-
       res.json({
         success: true,
         data: {
@@ -924,7 +803,6 @@ router.get(
           enrollment_kpi_source: paymentEnrollment.source,
           totals,
           enrollment_dashboard: enrollmentDashboard,
-          re_enrollment_rate_breakdown: reEnrollmentRateBreakdown,
           recent_invoice_payments: recentInvoicePayments,
           recent_merchandise_releases: recentMerchandiseReleases,
           branch_breakdown: branchBreakdown,

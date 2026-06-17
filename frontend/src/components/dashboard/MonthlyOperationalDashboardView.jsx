@@ -25,7 +25,6 @@ import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL, MONTHLY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
-import OperationalReEnrollmentRateTable from './OperationalReEnrollmentRateTable';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -183,6 +182,14 @@ const MonthlyOperationalDashboardView = ({
     ar_unverified_amount: 0,
     active_branches: 0,
   };
+
+  const totalActiveStudents = useMemo(
+    () =>
+      (Number(totals.new_enrollees) || 0) +
+      (Number(totals.re_enrollment_count) || 0) +
+      (Number(totals.rejoin_count) || 0),
+    [totals.new_enrollees, totals.re_enrollment_count, totals.rejoin_count]
+  );
 
   const selectedBranchName = useMemo(() => {
     if (branchName) return branchName;
@@ -358,15 +365,26 @@ const MonthlyOperationalDashboardView = ({
             ]}
             tooltip={MONTHLY_OPERATIONAL.completedRetentionCombined}
           />
-          <StatsCard
-            title="Re-enrollment Rate"
-            value={`${Number(enrollmentDashboard.re_enrollment_rate || 0).toFixed(2)}%`}
+          <CombinedStatsCard
+            hideTitle
             iconName="chartBar"
             accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            tooltip={MONTHLY_OPERATIONAL.reEnrollmentSnapshot(
-              formatNumber(enrollmentDashboard.re_enrollment_rate_retained_count || 0),
-              formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
-            )}
+            metricsLayout="stacked"
+            metrics={[
+              {
+                label: 'Re-enrollment Rate',
+                value: `${Number(enrollmentDashboard.re_enrollment_rate || 0).toFixed(2)}%`,
+                tooltip: MONTHLY_OPERATIONAL.reEnrollmentSnapshot(
+                  formatNumber(enrollmentDashboard.re_enrollment_rate_retained_count || 0),
+                  formatNumber(enrollmentDashboard.re_enrollment_rate_prior_count || 0)
+                ),
+              },
+              {
+                label: 'Total Active Students',
+                value: formatNumber(totalActiveStudents),
+                tooltip: MONTHLY_OPERATIONAL.totalActiveStudents,
+              },
+            ]}
           />
         </div>
 
@@ -564,16 +582,6 @@ const MonthlyOperationalDashboardView = ({
             </table>
           </div>
         </div>
-
-        <OperationalReEnrollmentRateTable
-          breakdown={data?.re_enrollment_rate_breakdown}
-          tooltip={MONTHLY_OPERATIONAL.reEnrollmentRateBreakdown}
-          emptyMessage="No re-enrollment rate breakdown for this month."
-          periodMode="monthly"
-          summaryMonth={selectedMonth}
-          branchRows={data?.branch_breakdown || data?.branches || []}
-          branchFilterId={branchId}
-        />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <ChartCard

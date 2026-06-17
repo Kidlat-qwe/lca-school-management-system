@@ -11,17 +11,16 @@
  *
  * Merchandise Released uses merchandise_release_logtbl (stock deductions: Merchandise AR + package enroll).
  *
- * New enrollees / re-enrollment / rejoin: same as daily operational — each completed
- * class-related payment in the month (payment issue_date), bucketed by
- * program_enrollment_status on classstudentstbl. Dropped uses removed_at in month.
+ * New enrollees / re-enrollment / rejoin / upsell / dropped: Month Re-enrollment matrix
+ * for the selected billing month (same rules as the Re-enrollment matrix table).
  */
 
 import { query } from '../config/database.js';
 import {
+  loadMonthlyOperationalEnrollmentFromMonthMatrix,
+} from './enrollmentRateMetrics.js';
+import {
   applyPaymentEnrollmentToBranchBreakdown,
-  buildOperationalReEnrollmentRateBreakdown,
-  loadMonthlyOperationalEnrollmentFromPayments,
-  loadOperationalReEnrolledStudentsFromPayments,
 } from './dailyOperationalEnrollmentFromPayments.js';
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
@@ -273,16 +272,15 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     ar_unverified_amount: parseFloat(row.ar_unverified_amount) || 0,
   }));
 
-  const paymentEnrollment = await loadMonthlyOperationalEnrollmentFromPayments(runQuery, {
+  const matrixEnrollment = await loadMonthlyOperationalEnrollmentFromMonthMatrix(runQuery, {
     branchId: branchFilter,
-    monthStart,
-    monthEndExclusive,
     summaryMonth: monthRange.key,
+    branches,
   });
 
   const branchBreakdown = applyPaymentEnrollmentToBranchBreakdown(
     branchBreakdownBase,
-    paymentEnrollment
+    matrixEnrollment
   );
 
   const totals = branchBreakdown.reduce(
@@ -363,14 +361,14 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
   const monthEndInclusive = getMonthEndInclusiveYmd(monthRange);
 
   const enrollmentDashboard = {
-    re_enrollment_rate: paymentEnrollment.re_enrollment_rate,
-    re_enrollment_rate_retained_count: paymentEnrollment.re_enrollment_rate_retained_count,
-    re_enrollment_rate_prior_count: paymentEnrollment.re_enrollment_rate_prior_count,
-    retention_base_count: paymentEnrollment.retention_base_count ?? 0,
-    retention_re_enrollment_count: paymentEnrollment.retention_re_enrollment_count ?? 0,
-    prior_period_label: paymentEnrollment.prior_period_label ?? null,
-    prior_period_type: paymentEnrollment.prior_period_type ?? null,
-    retention_rate_mode: paymentEnrollment.retention_rate_mode ?? null,
+    re_enrollment_rate: matrixEnrollment.re_enrollment_rate,
+    re_enrollment_rate_retained_count: matrixEnrollment.re_enrollment_rate_retained_count,
+    re_enrollment_rate_prior_count: matrixEnrollment.re_enrollment_rate_prior_count,
+    retention_base_count: matrixEnrollment.retention_base_count ?? 0,
+    retention_re_enrollment_count: matrixEnrollment.retention_re_enrollment_count ?? 0,
+    prior_period_label: matrixEnrollment.prior_period_label ?? null,
+    prior_period_type: matrixEnrollment.prior_period_type ?? null,
+    retention_rate_mode: matrixEnrollment.retention_rate_mode ?? null,
   };
 
   const recentInvoicePayments = await loadRecentInvoicePaymentsForOperationalDashboard(runQuery, {
@@ -385,32 +383,15 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
     monthEndExclusive,
   });
 
-  const reEnrolledStudentSummary = await loadOperationalReEnrolledStudentsFromPayments(runQuery, {
-    branchId: branchFilter,
-    monthStart,
-    monthEndExclusive,
-  });
-
-  const reEnrollmentRateBreakdown = buildOperationalReEnrollmentRateBreakdown({
-    branchRows: branchBreakdown,
-    enrollmentDashboard,
-    totals,
-    studentSummary: reEnrolledStudentSummary,
-    priorPeriodLabel: paymentEnrollment.prior_period_label ?? null,
-    priorPeriodType: paymentEnrollment.prior_period_type ?? null,
-    retentionRateMode: paymentEnrollment.retention_rate_mode ?? null,
-  });
-
   return {
     summary_month: monthRange.key,
     month_start: monthStart,
     month_end_exclusive: monthEndExclusive,
     month_end_inclusive: monthEndInclusive,
     verification_as_of: `${monthStart}–${monthEndInclusive}`,
-    enrollment_kpi_source: paymentEnrollment.source,
+    enrollment_kpi_source: matrixEnrollment.source,
     totals,
     enrollment_dashboard: enrollmentDashboard,
-    re_enrollment_rate_breakdown: reEnrollmentRateBreakdown,
     recent_invoice_payments: recentInvoicePayments,
     recent_merchandise_releases: recentMerchandiseReleases,
     branch_breakdown: branchBreakdown,

@@ -1,6 +1,6 @@
 import { query, getClient } from '../config/database.js';
 import { insertInvoiceWithArNumberReuseOrAllocate } from './invoiceArNumber.js';
-import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila, coerceToManilaYmd } from './dateUtils.js';
 import { getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
 import {
   buildPhaseInstallmentSchedule,
@@ -207,14 +207,20 @@ export const generateInvoiceFromInstallment = async (
     
     const profileGeneratedCount = parseInt(profile.generated_count, 10) || 0;
     const rawEnrollmentIssue = enrollmentAckReuse?.enrollmentInvoiceIssueYmd;
-    const enrollmentInvoiceIssueYmd =
+    const explicitEnrollmentIssueYmd =
       rawEnrollmentIssue != null && String(rawEnrollmentIssue).trim() !== ''
         ? String(rawEnrollmentIssue).trim().slice(0, 10)
         : '';
-    const enrollmentIssueForFirst =
-      profileGeneratedCount === 0 && /^\d{4}-\d{2}-\d{2}$/.test(enrollmentInvoiceIssueYmd)
-        ? enrollmentInvoiceIssueYmd
-        : null;
+    const hasExplicitEnrollmentIssue = /^\d{4}-\d{2}-\d{2}$/.test(explicitEnrollmentIssueYmd);
+    let enrollmentIssueForFirst = hasExplicitEnrollmentIssue ? explicitEnrollmentIssueYmd : null;
+    // First phase after downpayment: issue on generation day (e.g. payment date), not phase due date.
+    if (
+      !enrollmentIssueForFirst &&
+      profileGeneratedCount === 0 &&
+      isPhaseInstallmentProfile(profile)
+    ) {
+      enrollmentIssueForFirst = todayYmdManila();
+    }
 
     const phaseSchedule = isPhaseInstallmentProfile(profile)
       ? await buildPhaseInstallmentSchedule({
@@ -244,6 +250,12 @@ export const generateInvoiceFromInstallment = async (
     } else if (enrollmentIssueForFirst) {
       const e = parseYmdToLocalNoon(enrollmentIssueForFirst);
       if (e) issueDate = e;
+    }
+
+    // Explicit payment/enrollment issue date always wins over schedule defaults (due date cap).
+    if (enrollmentIssueForFirst) {
+      const explicitIssue = parseYmdToLocalNoon(enrollmentIssueForFirst);
+      if (explicitIssue) issueDate = explicitIssue;
     }
     
     // Calculate final invoice amount after promo discount
@@ -449,7 +461,7 @@ export const generateInvoiceFromInstallment = async (
          SET status = 'Generated', scheduled_date = $1
          WHERE installmentinvoicedtl_id = $2`,
         [
-          formatYmdLocal(new Date()),
+          todayYmdManila(),
           installmentInvoice.installmentinvoicedtl_id,
         ]
       );
@@ -462,7 +474,7 @@ export const generateInvoiceFromInstallment = async (
         [
           formatYmdLocal(nextGenDate),
           formatYmdLocal(nextInvoiceMonth),
-          formatYmdLocal(new Date()), // Update scheduled_date to today (when it was generated)
+          todayYmdManila(), // Update scheduled_date to today (Philippines business calendar)
           installmentInvoice.installmentinvoicedtl_id,
         ]
       );
@@ -524,10 +536,7 @@ export const generateInvoiceFromInstallment = async (
  * @returns {Object} Summary of processed invoices with details
  */
 export const processDueInstallmentInvoices = async () => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  // Use local date formatting so “today” matches business timezone.
-  const todayStr = formatYmdLocal(today);
+  const todayStr = todayYmdManila();
   
   try {
     // Find all active installment invoices where next_generation_date <= today
