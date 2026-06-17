@@ -3700,13 +3700,14 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       monthKey === firstEverMonthKey &&
       monthKey > firstBillingKey
     ) {
+      const priorCell = student.months[monthKey];
       student.months[monthKey] = {
         mark: '1',
         label: 're-enrolled',
         status: 're_enrolled',
-        phase_number: matrixCellPhaseNumber(existing?.phase_number, 1),
+        phase_number: matrixCellPhaseNumber(priorCell?.phase_number, 1),
         calendar_continuation: true,
-        is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
+        is_full_payment: Boolean(priorCell?.is_full_payment),
       };
       continue;
     }
