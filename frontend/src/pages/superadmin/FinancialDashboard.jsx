@@ -135,17 +135,22 @@ const FinancialDashboard = () => {
     [metrics]
   );
 
-  /** Same scope as Payment verification below: Completed rows by payment issue date in selected month. */
+  /** Same scope as Invoice month total and Monthly Operational invoice sales: completed payments by payment date. */
   const totalPaymentsCount = useMemo(() => {
+    if (paymentVerification.net_count != null && paymentVerification.net_count !== undefined) {
+      return Number(paymentVerification.net_count) || 0;
+    }
     const v = Number(paymentVerification.verified_count) || 0;
     const u = Number(paymentVerification.unverified_count) || 0;
     return v + u;
   }, [paymentVerification]);
 
-  const totalPaymentsAmount = useMemo(
-    () => (Number(paymentVerification.verified_amount) || 0) + (Number(paymentVerification.unverified_amount) || 0),
-    [paymentVerification]
-  );
+  const totalPaymentsAmount = useMemo(() => {
+    if (paymentVerification.net_amount != null && paymentVerification.net_amount !== undefined) {
+      return Number(paymentVerification.net_amount) || 0;
+    }
+    return (Number(paymentVerification.verified_amount) || 0) + (Number(paymentVerification.unverified_amount) || 0);
+  }, [paymentVerification]);
 
   const formatPeso = (n) =>
     `₱${(Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

@@ -5,14 +5,20 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import StudentMonthEnrollmentMatrixChart from '../../components/dashboard/StudentMonthEnrollmentMatrixChart';
 import MatrixInfoTooltip from '../../components/dashboard/MatrixInfoTooltip';
 import {
-  EnrollmentCombinedStatsCard,
-  EnrollmentStatsCard,
+  EnrollmentYearMonthCombinedStatsCard,
+  EnrollmentYearMonthStatsCard,
 } from '../../components/dashboard/EnrollmentDashboardKpiCards';
 import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { manilaMonthYYYYMM } from '../../utils/dateUtils';
 import {
-  aggregateMonthMatrixKpiTotals,
-  matrixCohortStats,
-  reEnrollmentRateFromMatrixStats,
+  aggregateMonthMatrixKpiTotalsForMonth,
+  aggregateMonthMatrixKpiTotalsForMonthKeys,
+  countUniqueMatrixStudentsForMonth,
+  countUniqueMatrixStudentsForMonthKeys,
+  filterMonthStatsByKeys,
+  getYearToDateMonthKeys,
+  reEnrollmentRateForMonth,
+  reEnrollmentRateForMonthKeys,
   sumMonthStatsReEnrolledNumerators,
 } from '../../utils/enrollmentMatrixRate';
 
@@ -124,27 +130,79 @@ const MonthlyEnrollmentDashboard = () => {
   }, [classes, selectedProgramId]);
   const displayYear = data?.selected_year ?? selectedYear;
 
-  const matrixKpiTotals = useMemo(
-    () => aggregateMonthMatrixKpiTotals(studentMonthMatrix),
-    [studentMonthMatrix]
+  const currentMonthKey = manilaMonthYYYYMM();
+  const currentMonthInSelectedYear = String(displayYear) === currentMonthKey.slice(0, 4);
+
+  const yearToDateMonthKeys = useMemo(
+    () => getYearToDateMonthKeys(studentMonthMatrix, displayYear, currentMonthKey),
+    [studentMonthMatrix, displayYear, currentMonthKey]
   );
 
-  const matrixCohort = useMemo(() => matrixCohortStats(studentMonthMatrix), [studentMonthMatrix]);
-
-  const reEnrollmentFromRateNumerators = useMemo(
-    () => sumMonthStatsReEnrolledNumerators(studentMonthMatrix?.month_stats ?? []),
-    [studentMonthMatrix?.month_stats]
+  const ytdKpiTotals = useMemo(
+    () => aggregateMonthMatrixKpiTotalsForMonthKeys(studentMonthMatrix, yearToDateMonthKeys),
+    [studentMonthMatrix, yearToDateMonthKeys]
   );
 
-  const totalReEnrollmentRate = useMemo(
+  const ytdUniqueStudentCount = useMemo(
+    () => countUniqueMatrixStudentsForMonthKeys(studentMonthMatrix, yearToDateMonthKeys),
+    [studentMonthMatrix, yearToDateMonthKeys]
+  );
+
+  const ytdReEnrollmentFromRateNumerators = useMemo(
     () =>
-      reEnrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats ?? [], {
-        total_re_enrolled_count: studentMonthMatrix?.total_re_enrolled_count,
-        total_prior_month_enrolled_count: studentMonthMatrix?.total_prior_month_enrolled_count,
-        total_re_enrollment_rate: studentMonthMatrix?.total_re_enrollment_rate,
-      }),
-    [studentMonthMatrix]
+      sumMonthStatsReEnrolledNumerators(
+        filterMonthStatsByKeys(studentMonthMatrix?.month_stats ?? [], yearToDateMonthKeys)
+      ),
+    [studentMonthMatrix?.month_stats, yearToDateMonthKeys]
   );
+
+  const ytdReEnrollmentRate = useMemo(
+    () => reEnrollmentRateForMonthKeys(studentMonthMatrix, yearToDateMonthKeys),
+    [studentMonthMatrix, yearToDateMonthKeys]
+  );
+
+  const currentMonthLabel = useMemo(() => {
+    const fromMatrix = studentMonthMatrix?.months?.find((m) => m.key === currentMonthKey);
+    if (fromMatrix?.label) return fromMatrix.label;
+    const [y, m] = currentMonthKey.split('-');
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+    return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'Asia/Manila' });
+  }, [studentMonthMatrix?.months, currentMonthKey]);
+
+  const monthKpiTotals = useMemo(() => {
+    if (!currentMonthInSelectedYear) return null;
+    return aggregateMonthMatrixKpiTotalsForMonth(studentMonthMatrix, currentMonthKey);
+  }, [studentMonthMatrix, currentMonthKey, currentMonthInSelectedYear]);
+
+  const monthMatrixCohort = useMemo(() => {
+    if (!currentMonthInSelectedYear) return null;
+    return {
+      uniqueStudentCount: countUniqueMatrixStudentsForMonth(studentMonthMatrix, currentMonthKey),
+    };
+  }, [studentMonthMatrix, currentMonthKey, currentMonthInSelectedYear]);
+
+  const monthReEnrollmentRate = useMemo(() => {
+    if (!currentMonthInSelectedYear) return null;
+    return reEnrollmentRateForMonth(studentMonthMatrix, currentMonthKey);
+  }, [studentMonthMatrix, currentMonthKey, currentMonthInSelectedYear]);
+
+  const monthReEnrollmentCount = useMemo(() => {
+    if (!currentMonthInSelectedYear) return null;
+    const row = (studentMonthMatrix?.month_stats ?? []).find((r) => r.month_key === currentMonthKey);
+    return row ? Number(row.re_enrolled_count) || 0 : 0;
+  }, [studentMonthMatrix?.month_stats, currentMonthKey, currentMonthInSelectedYear]);
+
+  const yearPeriodLabel = `Year ${displayYear}`;
+  const shortCurrentMonthLabel = useMemo(() => {
+    const fromMatrix = studentMonthMatrix?.months?.find((m) => m.key === currentMonthKey);
+    const raw = fromMatrix?.label || currentMonthLabel;
+    return String(raw).split(' ')[0].toUpperCase();
+  }, [studentMonthMatrix?.months, currentMonthKey, currentMonthLabel]);
+
+  const monthPeriodLabel = shortCurrentMonthLabel;
+
+  const monthMetricValue = (value) =>
+    currentMonthInSelectedYear ? value : '—';
 
   const selectedBranchName = useMemo(() => {
     if (!selectedBranchId) return 'All Branches';
@@ -168,14 +226,16 @@ const MonthlyEnrollmentDashboard = () => {
     );
   }
 
-  const newEnrolleesCount = matrixKpiTotals.new_enrollees_count;
-  /** Sum of rate-header numerators — matches adding each month's re-enrolled fraction numerator. */
-  const reEnrollmentCount = reEnrollmentFromRateNumerators;
-  const droppedCount = matrixKpiTotals.dropped_count;
-  const rejoinCount = matrixKpiTotals.rejoin_count;
-  const upsellCount = matrixKpiTotals.upsell_count;
-  /** Sum of amber "reserved" labeled cells in the matrix table for the year. */
-  const reservedStudents = matrixKpiTotals.reserved_count;
+  const newEnrolleesCount = ytdKpiTotals.new_enrollees_count;
+  /** Sum of rate-header numerators Jan–current month — matches matrix rate row sums in that range. */
+  const reEnrollmentCount = ytdReEnrollmentFromRateNumerators;
+  const droppedCount = ytdKpiTotals.dropped_count;
+  const rejoinCount = ytdKpiTotals.rejoin_count;
+  const upsellCount = ytdKpiTotals.upsell_count;
+  /** Sum of amber "reserved" labeled cells Jan–current month. */
+  const reservedStudents = ytdKpiTotals.reserved_count;
+  const ytdRetentionBase = ytdReEnrollmentRate.priorEnrolledCount;
+  const ytdUniqueStudents = ytdUniqueStudentCount;
 
   return (
     <div className="space-y-6">
@@ -224,54 +284,109 @@ const MonthlyEnrollmentDashboard = () => {
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <EnrollmentCombinedStatsCard
+        <EnrollmentYearMonthCombinedStatsCard
           title="Matrix Cohort"
           iconName="users"
           accent="bg-gradient-to-br from-emerald-400 to-slate-500"
-          metrics={[
-            { label: 'Retention base', value: totalReEnrollmentRate.priorEnrolledCount },
-            { label: 'Students', value: matrixCohort.uniqueStudentCount },
+          yearLabel={yearPeriodLabel}
+          monthLabel={monthPeriodLabel}
+          yearMetrics={[
+            { label: 'Retention base', value: ytdRetentionBase },
+            { label: 'Students', value: ytdUniqueStudents },
+          ]}
+          monthMetrics={[
+            {
+              label: 'Retention base',
+              value: monthMetricValue(monthReEnrollmentRate?.priorEnrolledCount ?? 0),
+            },
+            {
+              label: 'Students',
+              value: monthMetricValue(monthMatrixCohort?.uniqueStudentCount ?? 0),
+            },
           ]}
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.matrixCohortYear(displayYear)}
         />
-        <EnrollmentCombinedStatsCard
+        <EnrollmentYearMonthCombinedStatsCard
           title="New Enrollees / Re-enrollment"
           iconName="users"
           accent="bg-gradient-to-br from-teal-400 to-cyan-500"
-          metrics={[
+          yearLabel={yearPeriodLabel}
+          monthLabel={monthPeriodLabel}
+          yearMetrics={[
             { label: 'New enrollees', value: newEnrolleesCount },
             { label: 'Re-enrollment', value: reEnrollmentCount },
           ]}
+          monthMetrics={[
+            {
+              label: 'New enrollees',
+              value: monthMetricValue(monthKpiTotals?.new_enrollees_count ?? 0),
+            },
+            {
+              label: 'Re-enrollment',
+              value: monthMetricValue(monthReEnrollmentCount ?? 0),
+            },
+          ]}
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.newReenrollYear(displayYear)}
         />
-        <EnrollmentCombinedStatsCard
+        <EnrollmentYearMonthCombinedStatsCard
           title="Dropped / Rejoin"
           iconName="userMinus"
           accent="bg-gradient-to-br from-rose-500 to-orange-500"
-          metrics={[
+          yearLabel={yearPeriodLabel}
+          monthLabel={monthPeriodLabel}
+          yearMetrics={[
             { label: 'Dropped', value: droppedCount },
             { label: 'Rejoin', value: rejoinCount },
           ]}
+          monthMetrics={[
+            {
+              label: 'Dropped',
+              value: monthMetricValue(monthKpiTotals?.dropped_count ?? 0),
+            },
+            {
+              label: 'Rejoin',
+              value: monthMetricValue(monthKpiTotals?.rejoin_count ?? 0),
+            },
+          ]}
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.droppedRejoinYear(displayYear)}
         />
-        <EnrollmentCombinedStatsCard
+        <EnrollmentYearMonthCombinedStatsCard
           title="Reserved / Upsell"
           iconName="clipboardList"
           accent="bg-gradient-to-br from-indigo-400 to-violet-500"
-          metrics={[
+          yearLabel={yearPeriodLabel}
+          monthLabel={monthPeriodLabel}
+          yearMetrics={[
             { label: 'Reserved', value: reservedStudents },
             { label: 'Upsell', value: upsellCount },
           ]}
+          monthMetrics={[
+            {
+              label: 'Reserved',
+              value: monthMetricValue(monthKpiTotals?.reserved_count ?? 0),
+            },
+            {
+              label: 'Upsell',
+              value: monthMetricValue(monthKpiTotals?.upsell_count ?? 0),
+            },
+          ]}
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reservedUpsellYear(displayYear)}
         />
-        <EnrollmentStatsCard
+        <EnrollmentYearMonthStatsCard
           title="Total Re-enrollment Rate"
-          value={`${totalReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
+          yearLabel={yearPeriodLabel}
+          monthLabel={monthPeriodLabel}
+          yearValue={`${ytdReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
+          monthValue={
+            currentMonthInSelectedYear && monthReEnrollmentRate
+              ? `${monthReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`
+              : '—'
+          }
           iconName="chartBar"
           accent="bg-gradient-to-br from-blue-400 to-cyan-500"
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reEnrollmentRate(
-            totalReEnrollmentRate.reEnrolledCount,
-            totalReEnrollmentRate.priorMonthEnrolledCount,
+            ytdReEnrollmentRate.reEnrolledCount,
+            ytdReEnrollmentRate.priorMonthEnrolledCount,
             displayYear
           )}
         />
@@ -282,9 +397,7 @@ const MonthlyEnrollmentDashboard = () => {
           <div className="min-w-0 flex-1">
             <h3 className="flex flex-wrap items-center gap-1 text-lg font-semibold text-gray-900">
               <span>Month Student Re-enrollment Matrix — {displayYear}</span>
-              <MatrixInfoTooltip label="How to read this matrix">
-                {MONTHLY_ENROLLMENT_DASHBOARD.matrixTitleTooltip(displayYear)}
-              </MatrixInfoTooltip>
+              
             </h3>
           </div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">

@@ -41,16 +41,31 @@ Frontend: `frontend/src/utils/installmentPaymentBlock.js` (`getInstallmentPaymen
 
 Partial-payment parents (`balance_invoice_id` set) are **not** payable from the list — **Pay** is disabled on that row (e.g. INV-566 after ₱3,000 partial). Record the remaining balance on the balance continuation row only (e.g. INV-567, action label **Pay balance**). Balance continuation rows are included in payment-date list filters via `issue_date` when they have no payments yet. See `frontend/src/utils/invoicePaymentTarget.js`.
 
+## `paymentDateNetTotals.js`
+
+Shared **net payment totals** by payment date (`paymenttbl.issue_date`) for Payment Logs, Invoice summaries, Financial Dashboard, and Monthly Operational Dashboard.
+
+| Field | Rule |
+|-------|------|
+| Gross | Completed payment lines in scope (any approval status) |
+| Returned deduction | `approval_status = Returned` (same payment date scope) |
+| Rejected deduction | `status = Rejected` or `approval_status = Rejected` |
+| **Net** | Gross − returned − rejected (aligned across all screens) |
+
+When a returned payment is **resubmitted and approved**, or a **new payment** records after rejection, approval/status changes and net totals refresh automatically.
+
 ## `financialDashboardVerificationMetrics.js`
 
 Superadmin **Financial Dashboard** payment / AR verification cards (`GET /dashboard` → `payment_verification`, `ar_verification`):
 
 | Card | Matches drill-down |
 |------|-------------------|
-| Total Payments | Payment Logs main tab (`/payments/finance-unified`, `pending_only=0`) — completed rows + unapplied package AR |
-| Verified / Unverified payments | Same list with `approval_status=Approved` or `pending_only=1` |
+| Total Payments | Completed invoice payment lines by payment date — matches Invoice month total and Monthly Operational invoice sales / total payments |
+| Verified / Unverified payments | Same payment lines with `approval_status=Approved` or pending (not Returned/Rejected) |
 | Verified AR | Acknowledgement Receipts — `status=Verified,Applied`, Month filter on `ar.issue_date` |
 | Unverified AR | Acknowledgement Receipts — `status=Submitted,Pending,Paid`, same month scope |
+
+**Payment Logs** `filterTotalLineAmount` on `GET /payments/finance-unified` sums the same completed invoice payment lines (payment date). Unapplied package AR may appear in the list but is excluded from the header total. **Invoice** payment-date summary (`computeInvoiceFilterSummary`) uses the same payment-line rules.
 
 Month scope uses inclusive calendar bounds (`YYYY-MM-01` … last day of month), same as Payment Logs month mode.
 
@@ -168,7 +183,9 @@ After `POST /acknowledgement-receipts/:id/attach-to-invoice` pays an installment
 | AR option | Behavior |
 |-----------|----------|
 | `downpayment_only` | Generate Phase 1 invoice only (unpaid) |
-| `downpayment_plus_phase1` | Generate Phase 1, **auto-pay** it (uses paired AR amount when split rows exist), enroll student, generate Phase 2 |
+| `downpayment_plus_phase1` | Generate Phase 1 with paired AR number, auto-pay (Paid), apply paired AR, enroll student. **Phase 2 is not pre-generated** — it is created on the normal installment schedule. |
+
+`resolveDownpaymentPhase1AckPair` (`ackReceiptPairedColumn.js`) resolves the downpayment leader and Phase 1 follower even when attach is called with either row id, so `autoPayPhase1` always runs when the AR pair exists. If Phase 1 was already generated but left Unpaid, follow-up pays that invoice instead of creating a duplicate.
 
 Runs **await**ed before the attach API responds (not fire-and-forget). Cash Phase 1 payments use `approval_status = Pending` on Payment Logs; invoice status is still set to **Paid**.
 
@@ -176,10 +193,12 @@ Runs **await**ed before the attach API responds (not fire-and-forget). Cash Phas
 
 Keeps cash acknowledgement receipts aligned with Payment Logs and Cash Deposit approval.
 
-| AR type | Created as | Becomes Verified when |
-|---------|------------|------------------------|
-| **Merchandise** (cash) | `Paid` + linked `payment_id` | Finance approves payment in Payment Logs, or Superfinance verifies Cash Deposit |
-| **Package** (cash) | `Submitted` (no payment yet) | Finance verifies on AR page or unapplied Payment Logs row (existing flow) |
+| AR type | AR page status on issue | Finance AR verify | Payment Logs approval |
+|---------|-------------------------|-------------------|------------------------|
+| **Merchandise** (cash) | `Verified` | Not needed (auto) | Finance approves payment row |
+| **Merchandise** (non-cash) | `Paid` | Finance verifies on AR page → payment auto-approved | Auto-approved when Finance verifies AR |
+| **Package** (cash) | `Verified` | Not needed (auto) | Pending until Finance approves (unapplied AR row / payment after attach) |
+| **Package** (non-cash) | `Submitted` | Finance verifies on AR page | Auto-approved when Finance verifies AR (unapplied row or on attach) |
 
 | Entry point | Behavior |
 |-------------|----------|
@@ -187,6 +206,6 @@ Keeps cash acknowledgement receipts aligned with Payment Logs and Cash Deposit a
 | `PUT /payments/:id/approve` (revoke) | `syncArUnverifiedFromPaymentRevoke` — Verified → Paid (merchandise) |
 | `PUT /cash-deposit-summaries/:id/approve` | After bulk payment approve, same AR sync for snapshot payment IDs |
 
-Reverse direction (AR verify → payment approved) remains in `routes/acknowledgementreceipts.js`.
+Reverse direction (AR verify → payment approved) remains in `routes/acknowledgementreceipts.js`. **Non-cash** verify requires `finance_verified_reference_number` in the request body; it must match each AR row’s `reference_number` (Downpayment + Phase 1 pairs validate both). Linked `paymenttbl` rows receive the same finance reference on auto-approve.
 
 **Download Invoice** (`GET /invoices/:id/pdf` and `utils/pdfGenerator.js`) appends **Discount/Payment Adjustment** and **Tip/Payment Adjustment** rows from `paymenttbl`, updates the **Total** to `grandTotal − discount + tip`, and shows collected amount (`payable + tip`) in the payment section.

@@ -26,6 +26,13 @@ import { buildInvoiceListRequestParams } from '../../utils/invoiceListApiParams'
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import {
+  isPaymentReferenceNumberRequired,
+  normalizePaymentReferenceNumber,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+} from '../../constants/paymentFormLabels';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
@@ -44,6 +51,7 @@ import {
   useOpenInvoiceFromPaymentLogsNavigation,
   useScrollToFocusedInvoiceRow,
 } from '../../utils/invoiceFocusNavigation';
+import { getInvoiceIssuedByLabel } from '../../utils/issuedByDisplay';
 import { InvoiceArNumberLink } from '../../components/billing/BillingCrossLinks';
 import {
   getInitialInvoiceSearchFromParams,
@@ -160,7 +168,7 @@ const SuperfinanceInvoice = () => {
   const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState(null);
   const [paymentFormData, setPaymentFormData] = useState({
     student_id: '',
-    payment_method: 'Cash',
+    payment_method: '',
     payment_type: '',
     payable_amount: '',
     tip_amount: '',
@@ -859,7 +867,7 @@ const SuperfinanceInvoice = () => {
       
       setPaymentFormData({
         student_id: defaultStudentId,
-        payment_method: 'Cash',
+        payment_method: '',
         payment_type: '',
         payable_amount: invoiceData.amount || '',
         tip_amount: '',
@@ -927,7 +935,7 @@ const SuperfinanceInvoice = () => {
     setSelectedInvoiceForPayment(null);
     setPaymentFormData({
       student_id: '',
-      payment_method: 'Cash',
+      payment_method: '',
       payment_type: '',
       payable_amount: '',
       tip_amount: '',
@@ -1087,9 +1095,11 @@ const SuperfinanceInvoice = () => {
     if (!paymentFormData.student_id) {
       errors.student_id = 'Student is required';
     }
-    // Payment method is now fixed to "Cash" and cannot be changed
     if (!paymentFormData.payment_type) {
       errors.payment_type = 'Payment type is required';
+    }
+    if (!paymentFormData.payment_method) {
+      errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
     }
     if (!paymentFormData.payable_amount || parseFloat(paymentFormData.payable_amount) <= 0) {
       errors.payable_amount = 'Payable amount must be greater than 0';
@@ -1118,7 +1128,7 @@ const SuperfinanceInvoice = () => {
       errors.discount_amount = 'Discount amount must be less than payable amount';
     }
     const refNum = (paymentFormData.reference_number || '').trim();
-    if (!refNum) {
+    if (isPaymentReferenceNumberRequired(paymentFormData.payment_method) && !refNum) {
       errors.reference_number = 'Reference number is required';
     }
     const attachmentUrl = (paymentFormData.attachment_url || '').trim();
@@ -1156,7 +1166,11 @@ const SuperfinanceInvoice = () => {
         discount_amount: discountApplied,
         tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
         issue_date: paymentFormData.issue_date,
-        reference_number: (paymentFormData.reference_number || '').trim(),
+        reference_number:
+          normalizePaymentReferenceNumber(
+            paymentFormData.payment_method,
+            paymentFormData.reference_number,
+          ) || '',
       };
 
       const payload = {
@@ -1168,7 +1182,11 @@ const SuperfinanceInvoice = () => {
         discount_amount: discountApplied,
         tip_amount: paymentFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(paymentFormData.tip_amount)),
         issue_date: paymentFormData.issue_date,
-        reference_number: (paymentFormData.reference_number || '').trim(),
+        reference_number:
+          normalizePaymentReferenceNumber(
+            paymentFormData.payment_method,
+            paymentFormData.reference_number,
+          ) || undefined,
       };
 
       const userRemarks = (paymentFormData.remarks || '').trim();
@@ -1793,9 +1811,9 @@ const SuperfinanceInvoice = () => {
         <div className="mt-4 flex flex-col gap-2 border-t border-gray-100 pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
           <p className="text-xs text-gray-500">
             {dateFilterMode === DATE_FILTER_MODES.MONTH
-              ? 'Month uses payment date (same as Payment Logs). Totals match Payment Logs for that month.'
+              ? 'Month uses payment date — same as Monthly Operational Dashboard and Payment Logs. Total matches invoice payment lines for that month.'
               : dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE
-                ? 'Payment date range (inclusive). Totals match Payment Logs for the same range.'
+                ? 'Payment date range (inclusive). Total matches Payment Logs and Monthly Operational for the same range.'
                 : 'Issue date range (inclusive). Invoice list is loaded page by page from the server.'}
           </p>
           {filterStatuses.includes('Unpaid') && (
@@ -1846,8 +1864,8 @@ const SuperfinanceInvoice = () => {
         </div>
         {isPaymentDateScope ? (
           <p className="text-[11px] text-gray-500 leading-snug">
-            Payment date filter: total amount and payment lines follow your status selection.
-            All statuses includes rejected-approval payments in this period when that month has them.
+            Payment date filter: total amount and payment lines for completed invoice payments in this period.
+            Excludes returned and rejected approval. Matches Monthly Operational invoice sales and Payment Logs total amount.
           </p>
         ) : (
           <p className="text-[11px] text-gray-500 leading-snug">
@@ -1876,7 +1894,7 @@ const SuperfinanceInvoice = () => {
           />
         )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1280px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1410px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '170px' }} />
                 <col style={{ width: '150px' }} />
@@ -1886,6 +1904,7 @@ const SuperfinanceInvoice = () => {
                 <col style={{ width: '110px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '120px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '130px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '90px' }} />
@@ -1915,6 +1934,9 @@ const SuperfinanceInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '120px', minWidth: '120px' }}>
                     Due Date
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
+                    Issued by
+                  </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
                     Actions
                   </th>
@@ -1923,7 +1945,7 @@ const SuperfinanceInvoice = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="px-6 py-10 text-center">
+                    <td colSpan={12} className="px-6 py-10 text-center">
                       <div className="inline-flex items-center gap-2 text-sm text-gray-600">
                         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600" />
                         Loading invoices...
@@ -1932,7 +1954,7 @@ const SuperfinanceInvoice = () => {
                   </tr>
                 ) : sortedInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-6 py-12 text-center">
+                    <td colSpan={12} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || studentNameSearch || filterBranch || filterStatuses.length > 0
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -2089,6 +2111,14 @@ const SuperfinanceInvoice = () => {
                         {invoice.due_date
                           ? formatDateManila(invoice.due_date)
                           : '-'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 align-middle whitespace-nowrap" style={{ maxWidth: '160px' }}>
+                      <div
+                        className="text-sm text-gray-900 truncate"
+                        title={getInvoiceIssuedByLabel(invoice) === '—' ? undefined : getInvoiceIssuedByLabel(invoice)}
+                      >
+                        {getInvoiceIssuedByLabel(invoice)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -3317,18 +3347,12 @@ const SuperfinanceInvoice = () => {
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       name="payment_method"
                       value={paymentFormData.payment_method}
                       onChange={handlePaymentInputChange}
-                      className={`input-field text-sm ${paymentFormErrors.payment_method ? 'border-red-500' : ''}`}
-                      required
-                    >
-                      <option value="Cash">Cash</option>
-                      <option value="Online Banking">Online Banking</option>
-                      <option value="Credit Card">Credit Card</option>
-                      <option value="E-wallets">E-wallets</option>
-                    </select>
+                      error={paymentFormErrors.payment_method}
+                    />
                     {paymentFormErrors.payment_method && (
                       <p className="text-xs text-red-500 mt-1">{paymentFormErrors.payment_method}</p>
                     )}
@@ -3483,20 +3507,13 @@ const SuperfinanceInvoice = () => {
                   )}
                 </div>
 
-                <div>
-                  <label className="label-field text-xs">Reference Number *</label>
-                  <input
-                    type="text"
-                    name="reference_number"
-                    value={paymentFormData.reference_number}
-                    onChange={handlePaymentInputChange}
-                    className={`input-field text-sm ${paymentFormErrors.reference_number ? 'border-red-500' : ''}`}
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
-                  />
-                  {paymentFormErrors.reference_number && (
-                    <p className="text-xs text-red-500 mt-1">{paymentFormErrors.reference_number}</p>
-                  )}
-                </div>
+                <PaymentReferenceNumberField
+                  paymentMethod={paymentFormData.payment_method}
+                  name="reference_number"
+                  value={paymentFormData.reference_number}
+                  onChange={handlePaymentInputChange}
+                  error={paymentFormErrors.reference_number}
+                />
 
                 <div>
                   <label className="label-field text-xs">Remarks</label>

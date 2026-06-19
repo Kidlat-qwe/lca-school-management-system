@@ -919,6 +919,69 @@ export const countMonthMatrixRateHeaderNumerator = (students, monthKey) =>
     (student, key) => student.months?.[key]
   );
 
+const emptyRateBreakdown = () => ({
+  new: 0,
+  re_enrolled: 0,
+  upsell: 0,
+  rejoin: 0,
+  completed: 0,
+  total: 0,
+});
+
+const countMatrixRateHeaderNumeratorBreakdown = (students, currentKey, periodCellsAccessor) => {
+  const breakdown = emptyRateBreakdown();
+  for (const student of students) {
+    const cell = periodCellsAccessor(student, currentKey);
+    if (!matrixCellCountsTowardReEnrollmentRate(cell, student)) continue;
+
+    const normalizedLabel = String(cell.label || '').trim().toLowerCase();
+    if (normalizedLabel === 'completed') {
+      breakdown.completed += 1;
+    } else {
+      breakdown.re_enrolled += 1;
+    }
+  }
+  breakdown.total = breakdown.re_enrolled + breakdown.completed;
+  return breakdown;
+};
+
+const countMatrixRateHeaderDenominatorBreakdown = (
+  students,
+  prevKey,
+  currentPeriodKey,
+  periodCellsAccessor,
+  firstEnrolledKeyAccessor
+) => {
+  const breakdown = emptyRateBreakdown();
+  for (const student of students) {
+    const firstEnrolledKey = firstEnrolledKeyAccessor(student);
+    if (firstEnrolledKey != null && currentPeriodKey === firstEnrolledKey) continue;
+
+    const cell = periodCellsAccessor(student, prevKey);
+    if (!cell?.label || cell.mark !== '1') continue;
+    if (!matrixLabelCountsTowardRateDenominator(cell.label, cell)) continue;
+
+    const normalizedLabel = String(cell.label || '').trim().toLowerCase();
+    const status = String(cell?.status || '').trim().toLowerCase();
+
+    if (normalizedLabel === 'new' || status === 'new') {
+      breakdown.new += 1;
+    } else if (
+      normalizedLabel === 're-enrolled' ||
+      normalizedLabel === 're_enrolled' ||
+      status === 're_enrolled'
+    ) {
+      breakdown.re_enrolled += 1;
+    } else if (normalizedLabel === 'upsell' || status === 'upsell') {
+      breakdown.upsell += 1;
+    } else if (normalizedLabel === 'rejoin' || status === 'rejoin') {
+      breakdown.rejoin += 1;
+    }
+  }
+  breakdown.total = breakdown.new + breakdown.re_enrolled + breakdown.upsell + breakdown.rejoin;
+  return breakdown;
+};
+
 /** Visible month-matrix rate header denominator (prior month active enrollment statuses). */
 export const countMonthMatrixRateHeaderDenominator = (
   students,
@@ -985,6 +1048,24 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
       key,
       monthCells
     );
+    const numeratorBreakdown = countMatrixRateHeaderNumeratorBreakdown(
+      students,
+      key,
+      monthCells
+    );
+    const denominatorBreakdown = countMatrixRateHeaderDenominatorBreakdown(
+      students,
+      prevKey,
+      key,
+      monthCells,
+      firstMonthKeyAccessor
+    );
+    const priorPeriodLabel =
+      index > 0
+        ? displayMonths[index - 1].label
+        : selectedYear != null
+          ? `Dec ${selectedYear - 1}`
+          : null;
 
     totalReEnrolled += reEnrolledCount;
     totalPriorMonthEnrolled += priorMonthEnrolledCount;
@@ -1001,6 +1082,9 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
       prior_month_enrolled_count: priorMonthEnrolledCount,
       re_enrollment_rate: reEnrollmentRate,
       has_prior_month: true,
+      prior_period_label: priorPeriodLabel,
+      numerator_breakdown: numeratorBreakdown,
+      denominator_breakdown: denominatorBreakdown,
     };
   });
 
@@ -1054,6 +1138,19 @@ export const computeReEnrollmentPhaseStats = (displayPhases, students) => {
       key,
       phaseCells
     );
+    const numeratorBreakdown = countMatrixRateHeaderNumeratorBreakdown(
+      students,
+      key,
+      phaseCells
+    );
+    const denominatorBreakdown = countMatrixRateHeaderDenominatorBreakdown(
+      students,
+      prevKey,
+      key,
+      phaseCells,
+      (student) => student.first_enrolled_phase ?? null
+    );
+    const priorPeriodLabel = displayPhases[index - 1]?.label ?? null;
 
     totalReEnrolled += reEnrolledCount;
     totalPriorPhaseEnrolled += priorPhaseEnrolledCount;
@@ -1070,6 +1167,9 @@ export const computeReEnrollmentPhaseStats = (displayPhases, students) => {
       prior_phase_enrolled_count: priorPhaseEnrolledCount,
       re_enrollment_rate: reEnrollmentRate,
       has_prior_phase: true,
+      prior_period_label: priorPeriodLabel,
+      numerator_breakdown: numeratorBreakdown,
+      denominator_breakdown: denominatorBreakdown,
     };
   });
 
@@ -3639,6 +3739,72 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     };
     if (!student.first_enrolled_at && row.reserved_at) {
       student.first_enrolled_at = row.reserved_at;
+    }
+    if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
+      student.first_enrolled_month_key = monthKey;
+    }
+  }
+
+  // Pending enrollment by downpayment-paid month (enrolled_at on pending row).
+  // Installment tracks with only pending_enrollment have no billing anchor yet, so the main
+  // billing-month query cannot place them; mirror the reserved calendar overlay.
+  const pendingCalendarResult = await queryFn(
+    `
+      SELECT DISTINCT
+        cs.student_id,
+        cs.class_id,
+        c.class_name,
+        c.level_tag AS class_level_tag,
+        u.full_name,
+        COALESCE(cs.phase_number, 1) AS phase_number,
+        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key,
+        cs.enrolled_at
+      FROM classstudentstbl cs
+      INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
+      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
+      WHERE cs.program_enrollment_status = 'pending_enrollment'
+        AND cs.removed_at IS NULL
+        AND cs.enrolled_at IS NOT NULL
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date
+        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date
+        ${calendarProgramJoin}
+        ${calendarClassJoin}
+    `,
+    calendarOverlayParams
+  );
+
+  for (const row of pendingCalendarResult.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const monthKey = row.month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(
+      studentId,
+      classId,
+      row.full_name,
+      row.class_name,
+      row.class_level_tag
+    );
+    const existing = student.months[monthKey];
+    if (
+      existing?.mark === '1' &&
+      ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'].includes(
+        String(existing.status || '').toLowerCase()
+      )
+    ) {
+      continue;
+    }
+    student.months[monthKey] = {
+      mark: '1',
+      label: 'pending enrollment',
+      status: 'pending_enrollment',
+      phase_number: matrixCellPhaseNumber(row.phase_number, existing?.phase_number),
+      calendar_pending_enrollment: true,
+      is_full_payment: false,
+    };
+    if (!student.first_enrolled_at && row.enrolled_at) {
+      student.first_enrolled_at = row.enrolled_at;
     }
     if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
       student.first_enrolled_month_key = monthKey;

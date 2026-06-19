@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { formatDateManila } from '../../utils/dateUtils';
+import { isCashPaymentMethod } from '../../constants/paymentFormLabels';
 import {
   formatArLinkedInvoiceArNumber,
   getArListLineTotal,
@@ -145,6 +146,8 @@ export default function ArFinanceVerifyModal({
   submitting,
   remarks = '',
   onRemarksChange,
+  referenceNumber = '',
+  onReferenceNumberChange,
   onClose,
   onConfirmVerify,
   onConfirmReturn,
@@ -160,8 +163,9 @@ export default function ArFinanceVerifyModal({
   const displayReceipt = downpayment || receipt;
   const studentName = displayReceipt.prospect_student_name || displayReceipt.student_name || 'N/A';
   const attachmentUrl = (displayReceipt.payment_attachment_url || phase1?.payment_attachment_url || '').trim();
-  const referenceNumber = (displayReceipt.reference_number || phase1?.reference_number || '').trim();
+  const recordedReferenceNumber = (displayReceipt.reference_number || phase1?.reference_number || '').trim();
   const creatorLabel = formatCreatorLabel(displayReceipt);
+  const isCashPayment = isCashPaymentMethod(displayReceipt.payment_method);
   const isReturnMode = mode === 'return';
   const isRejectMode = mode === 'reject';
   const isVerifyMode = mode === 'verify';
@@ -238,9 +242,9 @@ export default function ArFinanceVerifyModal({
                     </div>
                     <div>
                       <span className="block text-xs font-medium uppercase tracking-wide text-gray-500">
-                        Reference#
+                        Recorded reference#
                       </span>
-                      <p className="mt-0.5 break-all text-gray-900">{referenceNumber || '—'}</p>
+                      <p className="mt-0.5 break-all text-gray-900">{recordedReferenceNumber || '—'}</p>
                     </div>
                     <div className="sm:col-span-2">
                       <span className="block text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -335,6 +339,37 @@ export default function ArFinanceVerifyModal({
                   )}
                 </div>
               </div>
+
+              {isVerifyMode ? (
+                <div className="space-y-4">
+                  {isCashPayment ? (
+                    <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                      Cash payment — no reference number is required for verification. Review the
+                      attachment and amounts, then verify when ready.
+                    </p>
+                  ) : (
+                    <div>
+                      <label htmlFor="ar-finance-verify-reference" className="label-field text-xs">
+                        Reference number <span className="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="ar-finance-verify-reference"
+                        type="text"
+                        value={referenceNumber}
+                        onChange={(e) => onReferenceNumberChange?.(e.target.value)}
+                        className="input-field mt-1 text-sm"
+                        placeholder="Enter reference number from attachment"
+                        disabled={submitting || loading}
+                        autoComplete="off"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Enter the reference number shown on the attachment. It must match the
+                        reference recorded by the branch before you can verify.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
               {remarksRequired ? (
                 <div

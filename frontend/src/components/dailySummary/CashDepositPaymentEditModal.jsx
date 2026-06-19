@@ -5,7 +5,8 @@ import { formatDateManila } from '../../utils/dateUtils';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { appAlert } from '../../utils/appAlert';
 import { getInvoicePaymentBreakdown } from '../../utils/invoicePaymentBreakdown';
-import { getCashDepositPaymentMethodOptions } from '../../utils/cashDepositPaymentEdit';
+import { isPaymentMethodSelected, PAYMENT_METHOD_REQUIRED_MESSAGE } from '../../constants/paymentFormLabels';
+import PaymentMethodSelect from '../common/PaymentMethodSelect';
 import PaymentAttachmentViewerModal from '../paymentLogs/PaymentAttachmentViewerModal';
 
 /**
@@ -15,7 +16,7 @@ import PaymentAttachmentViewerModal from '../paymentLogs/PaymentAttachmentViewer
 export default function CashDepositPaymentEditModal({ payment, onClose, onSaved }) {
   const [ref, setRef] = useState('');
   const [attachment, setAttachment] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [paymentMethod, setPaymentMethod] = useState('');
   const [issueDate, setIssueDate] = useState('');
   const [paymentType, setPaymentType] = useState('');
   const [payableAmount, setPayableAmount] = useState('');
@@ -32,7 +33,7 @@ export default function CashDepositPaymentEditModal({ payment, onClose, onSaved 
     if (!p) return;
     setRef(String(p.reference_number || '').trim());
     setAttachment(p.payment_attachment_url || '');
-    setPaymentMethod(String(p.payment_method || 'Cash').trim() || 'Cash');
+    setPaymentMethod(String(p.payment_method || '').trim());
     setIssueDate(String(p.issue_date || '').slice(0, 10));
     setPaymentType(String(p.payment_type || '').trim() || '');
     const pa = p.payable_amount;
@@ -230,6 +231,11 @@ export default function CashDepositPaymentEditModal({ payment, onClose, onSaved 
       return;
     }
 
+    if (!isPaymentMethodSelected(paymentMethod)) {
+      appAlert(PAYMENT_METHOD_REQUIRED_MESSAGE);
+      return;
+    }
+
     if (paymentType === 'Partial Payment') {
       if (!invoiceSummary) {
         appAlert(
@@ -254,7 +260,7 @@ export default function CashDepositPaymentEditModal({ payment, onClose, onSaved 
     const payload = {
       reference_number: refTrim,
       attachment_url: attTrim,
-      payment_method: paymentMethod.trim() || undefined,
+      payment_method: paymentMethod.trim(),
       payment_type: paymentType.trim(),
       payable_amount: payableNum,
       tip_amount: tipNum,
@@ -383,19 +389,11 @@ export default function CashDepositPaymentEditModal({ payment, onClose, onSaved 
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       value={paymentMethod}
                       onChange={(e) => setPaymentMethod(e.target.value)}
                       disabled={saving || attachmentUploading}
-                      className="input-field text-sm"
-                      required
-                    >
-                      {getCashDepositPaymentMethodOptions(paymentMethod).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 </div>
 

@@ -190,6 +190,8 @@ function App() {
             }
           >
             <Route index element={<TeacherDashboard />} />
+            <Route path="daily-operational-dashboard" element={<Navigate to="/teacher" replace />} />
+            <Route path="monthly-operational-dashboard" element={<Navigate to="/teacher" replace />} />
             <Route path="calendar" element={<TeacherCalendar />} />
             <Route path="announcements" element={<TeacherAnnouncements />} />
             <Route path="classes" element={<TeacherClasses />} />

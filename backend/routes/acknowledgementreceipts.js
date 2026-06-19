@@ -19,6 +19,7 @@ import {
 import {
   ackReceiptHasPairedAckReceiptIdColumn,
   resolvePairedAckReceiptIds,
+  resolveDownpaymentPhase1AckPair,
 } from '../lib/ackReceiptPairedColumn.js';
 import {
   MERCH_RELEASE_SOURCE,
@@ -844,11 +845,17 @@ router.post(
       .isIn(ALLOWED_AR_PAYMENT_METHODS)
       .withMessage('payment_method must be Cash, Online Banking, Credit Card, or E-wallets'),
     body('reference_number')
-      .trim()
-      .notEmpty()
-      .withMessage('Reference number is required')
+      .optional({ nullable: true })
       .isString()
-      .withMessage('Reference number must be a string'),
+      .withMessage('Reference number must be a string')
+      .custom((value, { req }) => {
+        const method = String(req.body.payment_method || 'Cash').trim();
+        if (method === 'Cash') return true;
+        if (!value || !String(value).trim()) {
+          throw new Error('Reference number is required');
+        }
+        return true;
+      }),
     body('payment_attachment_url')
       .custom((value) => typeof value === 'string' && value.trim().length > 0)
       .withMessage('Attachment image is required'),
@@ -1107,17 +1114,16 @@ router.post(
       }
 
       const createdBy = req.user.userId || null;
-      // Business rule (Package AR):
-      //   All payment methods (including Cash) start as Submitted. Finance/Superfinance
-      //   verify via PUT /:id/verify (AR page or unapplied Payment Logs row) before
-      //   the receipt can be applied to enrollment.
-      // Merchandise AR: auto-paid flow below (status Paid + linked payment); Verified when
-      // Finance approves the payment in Payment Logs or via Cash Deposit verify.
-      const initialPackageStatus = 'Submitted';
+      const isCashPayment =
+        String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash';
+      // Package AR: cash → Verified on issue (admin can enroll immediately); Finance approves in Payment Logs later.
+      // Package AR: non-cash → Submitted until Finance verifies on AR page (then Payment Logs auto-approved).
+      // Merchandise AR: cash → Verified on issue below; non-cash → Paid until Finance verifies on AR page.
+      const initialPackageStatus = isCashPayment ? 'Verified' : 'Submitted';
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
 
-      const arVerifiedByOnCreate = null;
-      const arVerifiedAtOnCreate = null;
+      const arVerifiedByOnCreate = isCashPayment && !isMerchandise ? createdBy : null;
+      const arVerifiedAtOnCreate = isCashPayment && !isMerchandise ? new Date() : null;
 
       let ackReceipt;
       let pairedAckReceipt = null;
@@ -1418,16 +1424,45 @@ router.post(
               ]
             );
         const newPayment = paymentInsert.rows[0];
+        const isMerchandiseCash =
+          String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash';
 
         await client.query(
           `UPDATE invoicestbl SET status = 'Paid', amount = 0 WHERE invoice_id = $1`,
           [newInvoice.invoice_id]
         );
 
-        await client.query(
-          `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
-          [newPayment.payment_id, ackReceipt.ack_receipt_id]
-        );
+        if (isMerchandiseCash) {
+          if (hasVerifierCols) {
+            await client.query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Verified',
+                   payment_id = $1,
+                   verified_by_user_id = $2,
+                   verified_at = CURRENT_TIMESTAMP
+               WHERE ack_receipt_id = $3`,
+              [newPayment.payment_id, createdBy, ackReceipt.ack_receipt_id]
+            );
+            ackReceipt.verified_by_user_id = createdBy;
+          } else {
+            await client.query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Verified', payment_id = $1
+               WHERE ack_receipt_id = $2`,
+              [newPayment.payment_id, ackReceipt.ack_receipt_id]
+            );
+          }
+          ackReceipt.status = 'Verified';
+
+        } else {
+          await client.query(
+            `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
+            [newPayment.payment_id, ackReceipt.ack_receipt_id]
+          );
+          ackReceipt.status = 'Paid';
+        }
+
+        ackReceipt.payment_id = newPayment.payment_id;
 
         const merchArReleaseBatchId = buildMerchandiseArReleaseBatchId(ackReceipt.ack_receipt_id);
         for (const item of merchandiseItemsSnapshot) {
@@ -1450,9 +1485,6 @@ router.post(
             createdBy,
           });
         }
-
-        ackReceipt.status = 'Paid';
-        ackReceipt.payment_id = newPayment.payment_id;
       }
 
       await client.query('COMMIT');
@@ -1479,7 +1511,7 @@ router.post(
         });
       }
 
-      if (ackReceipt.status === 'Paid' || ackReceipt.status === 'Applied') {
+      if (ackReceipt.status === 'Paid' || ackReceipt.status === 'Applied' || ackReceipt.status === 'Verified') {
         (async () => {
           try {
             const emailClient = await getClient();
@@ -1515,13 +1547,23 @@ router.post(
                 ack_receipt_number: pairedAckReceipt.ack_receipt_number,
               },
               message:
-                'Two sequential AR numbers were issued (downpayment, then Phase 1). Both appear on the AR list as separate rows; verifying either marks both as Verified.',
+                isCashPayment
+                  ? 'Two sequential AR numbers were issued (downpayment, then Phase 1). Cash receipts are auto-verified; Finance approves in Payment Logs when applicable.'
+                  : 'Two sequential AR numbers were issued (downpayment, then Phase 1). Both appear on the AR list as separate rows; verifying either marks both as Verified.',
+            }
+          : {}),
+        ...(!isMerchandise && !pairedAckReceipt && isCashPayment
+          ? {
+              message:
+                'Package acknowledgement receipt created and auto-verified (cash). You can apply it to enrollment now. Finance will approve the payment in Payment Logs.',
             }
           : {}),
         ...(isMerchandise && ackReceipt.invoice_id && !pairedAckReceipt
           ? {
               message:
-                'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
+                String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash'
+                  ? 'Merchandise acknowledgement receipt created and auto-verified (cash). Invoice is Paid and stock updated. Finance approves the payment in Payment Logs.'
+                  : 'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated. Finance must verify non-cash merchandise on the AR page.',
             }
           : {}),
       });
@@ -1735,6 +1777,13 @@ router.post(
 
       let ack = ackResult.rows[0];
 
+      const pairCtx = await resolveDownpaymentPhase1AckPair(ack, (sql, params) =>
+        client.query(sql, params)
+      );
+      if (pairCtx.isDownpaymentPlusPhase1 && pairCtx.leaderAck) {
+        ack = pairCtx.leaderAck;
+      }
+
       const ackStatus = String(ack.status || '').trim();
       const ackStatusUpper = ackStatus.toUpperCase();
 
@@ -1752,12 +1801,12 @@ router.post(
       }
 
       const invoice = invoiceCheck.rows[0];
+      const attachAckId = Number(ack.ack_receipt_id);
       const targetAckOnInvoice =
         invoice.ack_receipt_id != null ? Number(invoice.ack_receipt_id) : null;
-      const ackIdNum = Number(id);
 
       if (
-        targetAckOnInvoice === ackIdNum &&
+        targetAckOnInvoice === attachAckId &&
         ack.invoice_id != null &&
         Number(ack.invoice_id) !== Number(invoice_id) &&
         !ack.payment_id &&
@@ -1765,7 +1814,7 @@ router.post(
       ) {
         await client.query(
           `UPDATE acknowledgement_receiptstbl SET invoice_id = $1 WHERE ack_receipt_id = $2`,
-          [invoice_id, id]
+          [invoice_id, attachAckId]
         );
         ack = { ...ack, invoice_id: Number(invoice_id) };
       }
@@ -1876,12 +1925,24 @@ router.post(
 
       const requestUserId = req.user.userId || req.user.user_id || null;
       const arVerifierUserId = ack.verified_by_user_id || requestUserId || null;
+      const attachPaymentMethod = String(ack.payment_method || 'Cash').trim() || 'Cash';
+      let verifierUserTypeForAttach = null;
+      if (ack.verified_by_user_id) {
+        const verifierTypeRes = await client.query(
+          'SELECT user_type FROM userstbl WHERE user_id = $1',
+          [ack.verified_by_user_id]
+        );
+        verifierUserTypeForAttach = verifierTypeRes.rows[0]?.user_type || null;
+      }
       const shouldAutoApproveFromVerifiedAr =
-        ack.ar_type === 'Package' && String(ackStatus || '').trim().toUpperCase() === 'VERIFIED' && !!arVerifierUserId;
+        !isCashAck &&
+        ack.ar_type === 'Package' &&
+        ackStatusUpper === 'VERIFIED' &&
+        shouldSyncPaymentLogApprovalOnArVerify(verifierUserTypeForAttach);
 
       // Create payment record from AR details — carry over reference_number and attachment from AR.
-      // For non-cash ARs, Finance/Superfinance verification already happened at AR level,
-      // so payment logs can be marked approved immediately after attachment.
+      // Non-cash package AR verified by Finance on the AR page: auto-approve payment on attach.
+      // Cash AR (any type): Payment Logs approval stays with Finance separately.
       const paymentResult = hasActionOwnerColAr
         ? await client.query(
             `INSERT INTO paymenttbl (
@@ -1900,12 +1961,13 @@ router.post(
            payment_attachment_url,
            action_owner_user_id
          )
-         VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, $6, 'Completed', $7, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7, 'Completed', $8, $9, $10, $11, $12)
          RETURNING *`,
             [
               invoice_id,
               student_id,
               branch_id,
+              attachPaymentMethod,
               paymentAmountForInvoice,
               ackTipAmount,
               ack.issue_date,
@@ -1934,12 +1996,13 @@ router.post(
            created_by,
            payment_attachment_url
          )
-         VALUES ($1, $2, $3, 'Cash', 'Full Payment', $4, $5, $6, 'Completed', $7, $8, $9, $10)
+         VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7, 'Completed', $8, $9, $10, $11)
          RETURNING *`,
             [
               invoice_id,
               student_id,
               branch_id,
+              attachPaymentMethod,
               paymentAmountForInvoice,
               ackTipAmount,
               ack.issue_date,
@@ -1956,13 +2019,14 @@ router.post(
 
       if (shouldAutoApproveFromVerifiedAr && newPayment?.payment_id) {
         try {
+          const financeApproverId = ack.verified_by_user_id || requestUserId;
           await client.query(
             `UPDATE paymenttbl
              SET approval_status = 'Approved',
                  approved_by = $1,
                  approved_at = CURRENT_TIMESTAMP
              WHERE payment_id = $2`,
-            [arVerifierUserId, newPayment.payment_id]
+            [financeApproverId, newPayment.payment_id]
           );
         } catch (autoApproveError) {
           // Do not fail enrollment/attachment when approval metadata update is unavailable.
@@ -2110,25 +2174,34 @@ router.post(
               const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
               console.log(`✅ AR downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
 
-              const isDownpaymentPlusPhase1 = isDownpaymentPlusPhase1Ack(ack);
+              const isDownpaymentPlusPhase1 = pairCtx.isDownpaymentPlusPhase1;
+              const phase1AckRow = pairCtx.phase1Ack;
 
-              let phaseAckId = null;
-              let phaseAckNum = null;
+              let phaseAckId = phase1AckRow?.ack_receipt_id ?? null;
+              let phaseAckNum = phase1AckRow?.ack_receipt_number ?? null;
               let phase1PayAmount = parseFloat(profile.amount) || 0;
-              if (isDownpaymentPlusPhase1 && ack.paired_ack_receipt_id) {
-                const phaseAckRes = await client.query(
-                  `SELECT ack_receipt_id, ack_receipt_number, payment_amount
-                   FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
-                  [ack.paired_ack_receipt_id]
-                );
-                if (phaseAckRes.rows.length > 0) {
-                  phaseAckId = phaseAckRes.rows[0].ack_receipt_id;
-                  phaseAckNum = phaseAckRes.rows[0].ack_receipt_number;
-                  const pairedAmt = parseFloat(phaseAckRes.rows[0].payment_amount);
-                  if (Number.isFinite(pairedAmt) && pairedAmt > 0) {
-                    phase1PayAmount = pairedAmt;
-                  }
+              if (phase1AckRow) {
+                const pairedAmt = parseFloat(phase1AckRow.payment_amount);
+                if (Number.isFinite(pairedAmt) && pairedAmt > 0) {
+                  phase1PayAmount = pairedAmt;
                 }
+              }
+
+              if (isDownpaymentPlusPhase1 && !phase1AckRow) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                  success: false,
+                  message:
+                    'Downpayment + Phase 1 acknowledgement receipt is missing its paired Phase 1 row. Recreate the AR pair before enrolling.',
+                });
+              }
+
+              if (phase1AckRow && String(phase1AckRow.status || '').trim() === 'Applied') {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                  success: false,
+                  message: 'The paired Phase 1 acknowledgement receipt has already been used.',
+                });
               }
 
               // Store for generation after COMMIT (Phase 1 auto-pay when Downpayment + Phase 1 AR)
@@ -2151,29 +2224,35 @@ router.post(
                 },
                 profileId: invoice.installmentinvoiceprofiles_id,
                 paymentIssueDateYmd: arDownpaymentIssueYmd,
-                autoPayPhase1: isDownpaymentPlusPhase1,
-                autoPayPhase1Data: isDownpaymentPlusPhase1
-                  ? {
-                      student_id,
-                      branch_id: profile.branch_id || invoice.branch_id || null,
-                      issue_date: ack.issue_date,
-                      created_by: req.user.userId || null,
-                      ar_verified_by_user_id: arVerifierUserId,
-                      class_id: profile.class_id,
-                      phase_1_amount: phase1PayAmount,
-                      profile_id: invoice.installmentinvoiceprofiles_id,
-                      reference_number: ack.reference_number || null,
-                      payment_attachment_url: ack.payment_attachment_url || null,
-                      enroll_phase: enrollPhase,
-                      phase_ack_receipt_id: phaseAckId,
-                      phase_ack_receipt_number: phaseAckNum,
-                      is_cash_ack: isCashAck,
-                    }
-                  : null,
+                autoPayPhase1: isDownpaymentPlusPhase1 && Boolean(phase1AckRow),
+                autoPayPhase1Data:
+                  isDownpaymentPlusPhase1 && phase1AckRow
+                    ? {
+                        student_id,
+                        branch_id: profile.branch_id || invoice.branch_id || null,
+                        issue_date: phase1AckRow.issue_date || ack.issue_date,
+                        created_by: req.user.userId || null,
+                        ar_verified_by_user_id: arVerifierUserId,
+                        class_id: profile.class_id,
+                        phase_1_amount: phase1PayAmount,
+                        profile_id: invoice.installmentinvoiceprofiles_id,
+                        reference_number:
+                          phase1AckRow.reference_number || ack.reference_number || null,
+                        payment_attachment_url:
+                          phase1AckRow.payment_attachment_url || ack.payment_attachment_url || null,
+                        enroll_phase: enrollPhase,
+                        phase_ack_receipt_id: phaseAckId,
+                        phase_ack_receipt_number: phaseAckNum,
+                        is_cash_ack: isCashAck,
+                        payment_method:
+                          String(phase1AckRow.payment_method || ack.payment_method || 'Cash').trim() ||
+                          'Cash',
+                      }
+                    : null,
               };
 
               const skipPendingEnrollment =
-                isDownpaymentPlusPhase1 && Boolean(ack.paired_ack_receipt_id);
+                isDownpaymentPlusPhase1 && Boolean(phase1AckRow);
               await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id, {
                 skip: skipPendingEnrollment,
               });
@@ -2302,7 +2381,7 @@ router.post(
         }
       }
 
-      // Link AR to invoice and payment
+      // Link AR to invoice and payment (always the downpayment leader for dual-row ARs)
       await client.query(
         `UPDATE acknowledgement_receiptstbl
          SET status = 'Applied',
@@ -2310,13 +2389,14 @@ router.post(
              invoice_id = $2,
              payment_id = $3
          WHERE ack_receipt_id = $4`,
-        [student_id, invoice_id, newPayment.payment_id, id]
+        [student_id, invoice_id, newPayment.payment_id, attachAckId]
       );
 
-      if (ack.paired_ack_receipt_id) {
+      const phase1AckForStudentLink = pairCtx.phase1Ack?.ack_receipt_id ?? ack.paired_ack_receipt_id;
+      if (phase1AckForStudentLink) {
         await client.query(
           `UPDATE acknowledgement_receiptstbl SET student_id = $1 WHERE ack_receipt_id = $2`,
-          [student_id, ack.paired_ack_receipt_id]
+          [student_id, phase1AckForStudentLink]
         );
       }
 
@@ -2344,7 +2424,7 @@ router.post(
           try {
             const emailClient = await getClient();
             try {
-              await sendArPaymentConfirmationByAckId(emailClient, id);
+              await sendArPaymentConfirmationByAckId(emailClient, attachAckId);
               await sendInvoicePaymentConfirmationByInvoiceId(emailClient, invoice_id);
             } finally {
               emailClient.release();
@@ -2808,6 +2888,10 @@ router.put(
       .isIn(['verify', 'return', 'reject', 'unverify'])
       .withMessage("action must be 'verify', 'return', 'reject', or 'unverify'"),
     body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
+    body('finance_verified_reference_number')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('finance_verified_reference_number must be a string'),
     handleValidationErrors,
   ],
   requireRole('Finance', 'Superfinance'),
@@ -2829,10 +2913,13 @@ router.put(
       }
 
       const remarks = String(req.body?.remarks || '').trim() || null;
+      const financeVerifiedReferenceNumber = String(
+        req.body?.finance_verified_reference_number || ''
+      ).trim();
 
       const ackResult = await query(
         `SELECT ack_receipt_id, branch_id, ar_type, status, payment_method, verified_by_user_id,
-                prospect_student_notes, created_by, prospect_student_name
+                prospect_student_notes, created_by, prospect_student_name, reference_number
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -2863,6 +2950,12 @@ router.put(
             message: 'Return and reject are not supported for Merchandise acknowledgement receipts',
           });
         }
+        if (String(ack.payment_method || '').trim().toLowerCase() === 'cash' && action === 'verify') {
+          return res.status(400).json({
+            success: false,
+            message: 'Cash merchandise acknowledgement receipts are auto-verified when issued',
+          });
+        }
         if (String(ack.status || '').trim() !== 'Paid') {
           return res.status(400).json({
             success: false,
@@ -2873,6 +2966,21 @@ router.put(
           return res.status(400).json({
             success: false,
             message: 'This merchandise acknowledgement receipt is already verified',
+          });
+        }
+      }
+
+      if (isPackageAr && action === 'verify') {
+        if (String(ack.payment_method || '').trim().toLowerCase() === 'cash') {
+          return res.status(400).json({
+            success: false,
+            message: 'Cash package acknowledgement receipts are auto-verified when created',
+          });
+        }
+        if (String(ack.status || '').trim() !== 'Submitted') {
+          return res.status(400).json({
+            success: false,
+            message: 'Package acknowledgement receipt must be Submitted before finance verification',
           });
         }
       }
@@ -2960,6 +3068,42 @@ router.put(
           ? await resolvePairedAckReceiptIds(id)
           : [Number(id)];
 
+      const isCashAck = String(ack.payment_method || '').trim().toLowerCase() === 'cash';
+
+      if (action === 'verify' && !isCashAck) {
+        if (!financeVerifiedReferenceNumber) {
+          return res.status(400).json({
+            success: false,
+            message: 'Finance reference number is required when verifying non-cash acknowledgement receipts',
+          });
+        }
+
+        const ackRefsRes = await query(
+          `SELECT ack_receipt_id, reference_number
+           FROM acknowledgement_receiptstbl
+           WHERE ack_receipt_id = ANY($1::int[])`,
+          [ackIdsToUpdate]
+        );
+
+        for (const row of ackRefsRes.rows) {
+          const issuedReferenceNumber = String(row.reference_number || '').trim();
+          if (!issuedReferenceNumber) {
+            return res.status(400).json({
+              success: false,
+              message:
+                'This acknowledgement receipt has no reference number on file. Return it to the branch and request correction before verification.',
+            });
+          }
+          if (financeVerifiedReferenceNumber !== issuedReferenceNumber) {
+            return res.status(400).json({
+              success: false,
+              message:
+                'Reference number mismatch. Verification is blocked. Please return this acknowledgement receipt to the branch for correction.',
+            });
+          }
+        }
+      }
+
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
       const updateRes = hasVerifierCols
         ? await query(
@@ -3029,10 +3173,15 @@ router.put(
             `UPDATE paymenttbl
              SET approval_status = 'Approved',
                  approved_by = $1,
-                 approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
+                 approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP),
+                 finance_verified_reference_number = $3
              WHERE payment_id = $2
                AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
-            [verifierUserId, linkedPaymentId]
+            [
+              verifierUserId,
+              linkedPaymentId,
+              isCashAck ? null : financeVerifiedReferenceNumber || null,
+            ]
           );
         }
       }

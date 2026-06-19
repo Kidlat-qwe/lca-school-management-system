@@ -25,6 +25,8 @@ import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL, MONTHLY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
+import OperationalAttendanceCard from './OperationalAttendanceCard';
+import { getClassesBasePath } from '../../utils/classAttendanceDeepLink';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -100,7 +102,7 @@ const MonthlyOperationalDashboardView = ({
   const [merchReleasedModalOpen, setMerchReleasedModalOpen] = useState(false);
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const isAdmin = userType === 'Admin';
-  const basePath = isAdmin ? '/admin' : '/superadmin';
+  const basePath = getClassesBasePath(userType);
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -153,12 +155,18 @@ const MonthlyOperationalDashboardView = ({
   );
   const enrollmentDashboard = data?.enrollment_dashboard || {};
   const totalPaymentsAmount = useMemo(() => {
-    // Keep this card aligned with Payment Logs monthly total:
-    // Completed payments only (verified + not-yet-verified), excluding returned/rejected.
+    const netFromApi = data?.totals?.net_payment_line_amount;
+    if (netFromApi != null && netFromApi !== undefined && !Number.isNaN(Number(netFromApi))) {
+      return Number(netFromApi);
+    }
     const verified = Number(data?.totals?.pay_verified_amount) || 0;
     const unverified = Number(data?.totals?.pay_unverified_amount) || 0;
     return verified + unverified;
-  }, [data?.totals?.pay_verified_amount, data?.totals?.pay_unverified_amount]);
+  }, [
+    data?.totals?.net_payment_line_amount,
+    data?.totals?.pay_verified_amount,
+    data?.totals?.pay_unverified_amount,
+  ]);
   const totals = data?.totals || {
     new_enrollees: 0,
     daily_sales_amount: 0,
@@ -366,10 +374,9 @@ const MonthlyOperationalDashboardView = ({
             tooltip={MONTHLY_OPERATIONAL.completedRetentionCombined}
           />
           <CombinedStatsCard
-            hideTitle
+            title="Re-enrollment Rate & Active Students"
             iconName="chartBar"
             accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-            metricsLayout="stacked"
             metrics={[
               {
                 label: 'Re-enrollment Rate',
@@ -391,7 +398,7 @@ const MonthlyOperationalDashboardView = ({
         <div className="space-y-3">
           <p className="text-sm font-medium text-gray-700">{MONTHLY_OPERATIONAL.financialSection}</p>
           <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
-            <div className="min-w-0 lg:col-span-1">
+            <div className="min-w-0">
               <CombinedStatsCard
                 title="Sales & Payments"
                 iconName="currency"
@@ -405,12 +412,21 @@ const MonthlyOperationalDashboardView = ({
                 tooltip={MONTHLY_OPERATIONAL.salesPaymentsCard}
               />
             </div>
-            <div className="min-w-0 lg:col-span-2">
+            <div className="min-w-0">
               <RecentInvoicePaymentsLog
                 payments={data?.recent_invoice_payments}
                 tooltip={MONTHLY_OPERATIONAL.recentInvoicePayments}
                 emptyMessage="No invoice payments in this month."
                 onViewAll={goPaymentLogsForPeriod}
+              />
+            </div>
+            <div className="min-w-0">
+              <OperationalAttendanceCard
+                mode="monthly"
+                summaryMonth={selectedMonth}
+                branchId={branchId}
+                branchName={selectedBranchName}
+                showBranchColumn={canFilterAcrossBranches && !branchId}
               />
             </div>
           </div>

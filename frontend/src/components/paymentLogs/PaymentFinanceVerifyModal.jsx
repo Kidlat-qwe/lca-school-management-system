@@ -6,6 +6,7 @@ import {
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
 import { isUnappliedArPaymentLogRow } from '../../utils/unappliedArPaymentLog';
+import { isCashPaymentMethod } from '../../constants/paymentFormLabels';
 
 const formatCurrency = (value) =>
   `₱${Number(value || 0).toLocaleString('en-US', {
@@ -82,6 +83,7 @@ export default function PaymentFinanceVerifyModal({
   const totalAmount = getPaymentLogTableTotalAmountColumn(payment);
   const approvalStatus = payment.approval_status || 'Pending';
   const verifyTitle = isUnappliedAr ? 'Verify Acknowledgement Receipt' : MODAL_TITLES.verify;
+  const isCashPayment = isCashPaymentMethod(payment?.payment_method);
 
   return createPortal(
     <div
@@ -195,25 +197,32 @@ export default function PaymentFinanceVerifyModal({
 
                 {isVerifyMode ? (
                   <div className="space-y-4">
-                    <div>
-                      <label htmlFor="payment-finance-verify-reference" className="label-field text-xs">
-                        Reference number
-                      </label>
-                      <input
-                        id="payment-finance-verify-reference"
-                        type="text"
-                        value={referenceNumber}
-                        onChange={(e) => onReferenceNumberChange?.(e.target.value)}
-                        className="input-field mt-1 text-sm"
-                        placeholder="Enter reference number from attachment"
-                        disabled={submitting}
-                        autoComplete="off"
-                      />
-                      <p className="mt-1 text-xs text-gray-500">
-                        Enter the reference number shown on the attachment. It must match the reference
-                        recorded by the branch before you can approve.
+                    {isCashPayment ? (
+                      <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                        Cash payment — no reference number is required for approval. Review the
+                        attachment and amounts, then verify when ready.
                       </p>
-                    </div>
+                    ) : (
+                      <div>
+                        <label htmlFor="payment-finance-verify-reference" className="label-field text-xs">
+                          Reference number
+                        </label>
+                        <input
+                          id="payment-finance-verify-reference"
+                          type="text"
+                          value={referenceNumber}
+                          onChange={(e) => onReferenceNumberChange?.(e.target.value)}
+                          className="input-field mt-1 text-sm"
+                          placeholder="Enter reference number from attachment"
+                          disabled={submitting}
+                          autoComplete="off"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Enter the reference number shown on the attachment. It must match the
+                          reference recorded by the branch before you can approve.
+                        </p>
+                      </div>
+                    )}
 
                     {!isUnappliedAr ? (
                       <div>

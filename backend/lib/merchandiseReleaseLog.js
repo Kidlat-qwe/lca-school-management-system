@@ -98,6 +98,95 @@ export function isPackageMerchTypeCovered(merchName, merchandiseToDeduct) {
 }
 
 /**
+ * Resolve a branch merchandise row with enough stock for enrollment/validation.
+ * Falls back to same name (and size/category when provided) when the configured id is out of stock.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {{
+ *   merchandiseId?: number|null,
+ *   merchandiseName?: string|null,
+ *   branchId: number,
+ *   quantityNeeded?: number,
+ *   size?: string|null,
+ *   category?: string|null,
+ * }} params
+ * @returns {Promise<object|null>}
+ */
+export async function resolveMerchandiseWithAvailableStock(
+  client,
+  {
+    merchandiseId,
+    merchandiseName,
+    branchId,
+    quantityNeeded = 1,
+    size = null,
+    category = null,
+  }
+) {
+  const needed = Math.max(1, parseInt(String(quantityNeeded), 10) || 1);
+
+  const rowHasStock = (row) => {
+    if (!row) return false;
+    if (Number(branchId) !== Number(row.branch_id)) return false;
+    if (row.quantity === null || row.quantity === undefined) return true;
+    return (parseInt(row.quantity, 10) || 0) >= needed;
+  };
+
+  if (merchandiseId) {
+    const byId = await client.query(
+      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+       FROM merchandisestbl WHERE merchandise_id = $1`,
+      [merchandiseId]
+    );
+    if (rowHasStock(byId.rows[0])) {
+      return byId.rows[0];
+    }
+  }
+
+  const name = String(merchandiseName || '').trim();
+  if (!name || !branchId) return null;
+
+  const isUniformTopBottom =
+    PACKAGE_UNIFORM_TYPE_NAMES.includes(name) &&
+    category &&
+    (category === 'Top' || category === 'Bottom');
+
+  let candidatesRes;
+  if (isUniformTopBottom && size) {
+    candidatesRes = await client.query(
+      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+       FROM merchandisestbl
+       WHERE merchandise_name = $1 AND branch_id = $2 AND size = $3
+         AND LOWER(COALESCE(type, '')) = LOWER($4)
+       ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
+      [name, branchId, size, category]
+    );
+  } else if (size) {
+    candidatesRes = await client.query(
+      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+       FROM merchandisestbl
+       WHERE merchandise_name = $1 AND branch_id = $2 AND size = $3
+       ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
+      [name, branchId, size]
+    );
+  } else {
+    candidatesRes = await client.query(
+      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+       FROM merchandisestbl
+       WHERE merchandise_name = $1 AND branch_id = $2
+       ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
+      [name, branchId]
+    );
+  }
+
+  for (const row of candidatesRes.rows) {
+    if (rowHasStock(row)) return row;
+  }
+
+  return null;
+}
+
+/**
  * Collapse duplicate package merchandise lines (placeholder SKUs + configured Top/Bottom).
  * @param {Array<{ merchandise_id: number, quantity?: number, size?: string|null, merchandise_name?: string|null, category?: string|null }>} lines
  */

@@ -1,11 +1,13 @@
 import { query, getClient } from '../config/database.js';
 import { insertInvoiceWithArNumberReuseOrAllocate } from './invoiceArNumber.js';
 import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila, coerceToManilaYmd } from './dateUtils.js';
-import { getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
+import { parseTargetPhase, getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
 import {
   buildPhaseInstallmentSchedule,
   getPhaseDueDateYmd,
   isPhaseInstallmentProfile,
+  resolveProfilePhaseStart,
+  shouldCatchUpRecurringOnFirstPhasePayment,
 } from './phaseInstallmentUtils.js';
 import { syncProgramPaymentStatusForInvoice } from './programPaymentStatusService.js';
 import { syncInstallmentGeneratedCountToNextUnbilled } from './installmentPhaseBillingSync.js';
@@ -222,20 +224,32 @@ export const generateInvoiceFromInstallment = async (
       enrollmentIssueForFirst = todayYmdManila();
     }
 
+    const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
+    const frequencyMonths = parseFrequency(frequency);
+    const generationAnchorYmd = coerceToManilaYmd(installmentInvoice.next_generation_date, {
+      fallbackToToday: false,
+    });
+
     const phaseSchedule = isPhaseInstallmentProfile(profile)
       ? await buildPhaseInstallmentSchedule({
           db: client,
-          profile,
+          profile: {
+            ...profile,
+            next_generation_date: generationAnchorYmd || profile.next_generation_date,
+          },
           generatedCountOverride: profile.generated_count || 0,
           issueDateOverride: enrollmentIssueForFirst,
+          generationAnchorYmd,
+          frequencyMonths,
         })
       : null;
 
     // Fixed cadence for non-phase auto-generated installment invoices (25th anchor).
-    const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
-    const generationAnchor = typeof installmentInvoice.next_generation_date === 'string'
-      ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
-      : new Date(installmentInvoice.next_generation_date || new Date());
+    const generationAnchor = generationAnchorYmd
+      ? parseYmdToLocalNoon(generationAnchorYmd)
+      : typeof installmentInvoice.next_generation_date === 'string'
+        ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
+        : new Date(installmentInvoice.next_generation_date || new Date());
     const cycle = buildFixedInstallmentCycleDates(generationAnchor, frequency);
     let issueDate = cycle.issueDate;
     let dueDate = cycle.dueDate;
@@ -433,18 +447,24 @@ export const generateInvoiceFromInstallment = async (
         })
       : null;
 
-    const isLastInvoice = nextPhaseSchedule
-      ? nextPhaseSchedule.is_last_phase
+    const justGeneratedFirstPhase = profileGeneratedCount === 0;
+    const queueSchedule =
+      justGeneratedFirstPhase && phaseSchedule?.next_generation_date
+        ? phaseSchedule
+        : nextPhaseSchedule;
+
+    const isLastInvoice = queueSchedule
+      ? queueSchedule.is_last_phase
       : (maxInvoices !== null && newCount >= maxInvoices);
 
-    // Phase installments: next bill is tied to the next phase's class session month, not monthly +1.
-    if (nextPhaseSchedule && !nextPhaseSchedule.is_last_phase) {
-      if (nextPhaseSchedule.current_generation_date) {
-        const ng = parseYmdToLocalNoon(nextPhaseSchedule.current_generation_date);
+    // Phase installments: next bill uses fixed 25th / 5th recurring schedule.
+    if (queueSchedule && !queueSchedule.is_last_phase) {
+      if (queueSchedule.next_generation_date) {
+        const ng = parseYmdToLocalNoon(queueSchedule.next_generation_date);
         if (ng) nextGenDate = ng;
       }
-      if (nextPhaseSchedule.current_invoice_month) {
-        const nim = parseYmdToLocalNoon(nextPhaseSchedule.current_invoice_month);
+      if (queueSchedule.next_invoice_month) {
+        const nim = parseYmdToLocalNoon(queueSchedule.next_invoice_month);
         if (nim) nextInvoiceMonth = nim;
       }
     }
@@ -502,8 +522,8 @@ export const generateInvoiceFromInstallment = async (
       phase_limit_reached: isLastInvoice,
       current_phase_number: phaseSchedule?.current_phase_number || null,
       current_due_date: phaseSchedule?.current_due_date || formatYmdLocal(dueDate),
-      next_phase_number: nextPhaseSchedule?.current_phase_number || null,
-      next_due_date: nextPhaseSchedule?.current_due_date || null,
+      next_phase_number: queueSchedule?.next_phase_number ?? nextPhaseSchedule?.current_phase_number ?? null,
+      next_due_date: queueSchedule?.next_due_date ?? nextPhaseSchedule?.current_due_date ?? null,
       next_generation_date: isLastInvoice
         ? null
         : formatYmdLocal(nextGenDate),
@@ -650,5 +670,127 @@ export const processDueInstallmentInvoices = async () => {
     console.error('Error processing due installment invoices:', error);
     throw error;
   }
+};
+
+/**
+ * Mid-enrollment catch-up: when the first phase is paid on/after the missed 25th
+ * in the same month, immediately generate the next recurring phase invoice.
+ */
+export async function tryGenerateCatchUpInstallmentAfterFirstPhasePayment({
+  profileId,
+  paidInvoiceId,
+  paymentIssueDateYmd,
+}) {
+  const profileRes = await query(
+    `SELECT ip.*, ii.installmentinvoicedtl_id, ii.next_generation_date, ii.next_invoice_month
+     FROM installmentinvoiceprofilestbl ip
+     LEFT JOIN installmentinvoicestbl ii
+       ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+     WHERE ip.installmentinvoiceprofiles_id = $1`,
+    [profileId]
+  );
+
+  if (!profileRes.rows.length) {
+    return { skipped: true, reason: 'profile not found' };
+  }
+
+  const profile = profileRes.rows[0];
+  if (!isPhaseInstallmentProfile(profile)) {
+    return { skipped: true, reason: 'not class-linked' };
+  }
+  if ((profile.generated_count || 0) !== 1) {
+    return { skipped: true, reason: 'not first phase slot' };
+  }
+
+  const invRes = await query(
+    `SELECT invoice_id,
+            TO_CHAR(issue_date, 'YYYY-MM-DD') AS issue_date,
+            TO_CHAR(due_date, 'YYYY-MM-DD') AS due_date,
+            remarks
+     FROM invoicestbl
+     WHERE invoice_id = $1`,
+    [paidInvoiceId]
+  );
+  const paidInv = invRes.rows[0];
+  if (!paidInv) {
+    return { skipped: true, reason: 'invoice not found' };
+  }
+
+  const phaseStartNum = resolveProfilePhaseStart(profile);
+  const phaseStartRes = await query(
+    `SELECT MIN(scheduled_date)::text AS phase_start
+     FROM classsessionstbl
+     WHERE class_id = $1 AND phase_number = $2`,
+    [profile.class_id, phaseStartNum]
+  );
+  const firstPhaseStartYmd = phaseStartRes.rows[0]?.phase_start
+    ? String(phaseStartRes.rows[0].phase_start).slice(0, 10)
+    : null;
+
+  const phaseStart = phaseStartNum;
+  const targetPhase = parseTargetPhase(paidInv.remarks);
+  if (targetPhase == null || targetPhase !== phaseStart) {
+    return { skipped: true, reason: 'not first enrolled phase invoice' };
+  }
+
+  const schedGen = coerceToManilaYmd(profile.next_generation_date, { fallbackToToday: false });
+  const payYmd = coerceToManilaYmd(paymentIssueDateYmd, { fallbackToToday: true });
+
+  if (
+    !shouldCatchUpRecurringOnFirstPhasePayment({
+      firstPhaseIssueYmd: paidInv.issue_date,
+      firstPhaseDueYmd: paidInv.due_date,
+      firstPhaseStartYmd,
+      paymentYmd: payYmd,
+      scheduledGenerationYmd: schedGen,
+    })
+  ) {
+    return { skipped: true, reason: 'catch-up not required' };
+  }
+
+  const nextPhase = phaseStart + 1;
+  const existingNext = await query(
+    `SELECT invoice_id
+     FROM invoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+       AND remarks ILIKE $2
+     LIMIT 1`,
+    [profileId, `%TARGET_PHASE:${nextPhase}%`]
+  );
+  if (existingNext.rows.length > 0) {
+    return { skipped: true, reason: 'next phase already generated' };
+  }
+
+  const iiRes = await query(
+    `SELECT *
+     FROM installmentinvoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+     ORDER BY installmentinvoicedtl_id ASC
+     LIMIT 1`,
+    [profileId]
+  );
+  if (!iiRes.rows.length) {
+    return { skipped: true, reason: 'installment schedule row missing' };
+  }
+
+  const installmentInvoice = iiRes.rows[0];
+  const generated = await generateInvoiceFromInstallment(
+    installmentInvoice,
+    {
+      student_id: profile.student_id,
+      branch_id: profile.branch_id,
+      package_id: profile.package_id,
+      amount: profile.amount,
+      frequency: profile.frequency || '1 month(s)',
+      description: profile.description,
+      generated_count: profile.generated_count || 0,
+      class_id: profile.class_id,
+      total_phases: profile.total_phases,
+      phase_start: profile.phase_start,
+    },
+    { enrollmentInvoiceIssueYmd: payYmd }
+  );
+
+  return { generated: true, invoice_id: generated.invoice_id };
 };
 

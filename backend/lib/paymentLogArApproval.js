@@ -1,9 +1,8 @@
 /**
  * Payment Logs approval for unapplied Acknowledgement Receipt rows (finance-unified).
  *
- * AR records stay Verified/Applied in acknowledgement_receiptstbl.
- * Payment Logs "Approved" applies only when Finance/Superfinance/Superadmin verified the AR —
- * not when user_type = Admin (those show Pending Approval on Payment Logs).
+ * AR records: cash Package/Merchandise → Verified on issue (Admin verifier → Payment Logs Pending).
+ * Non-cash Package/Merchandise → Finance verifies on AR page → Payment Logs Approved for Finance verifiers.
  */
 
 export function isAdminUserType(userType) {

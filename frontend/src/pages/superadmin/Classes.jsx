@@ -6,8 +6,15 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
+import {
+  calculateActivePhase,
+  getEnrollablePhaseNumbers,
+  getInstallmentEnrollmentFloorPhase,
+  isPhaseClosedForEnrollment,
+} from '../../utils/classActivePhase';
 import { appAlert, appPrompt, appConfirm } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
+import useClassAttendanceDeepLink from '../../hooks/useClassAttendanceDeepLink';
 import {
   getArListCombinedPackageAmount,
   getArListLineTotal,
@@ -15,6 +22,8 @@ import {
 } from '../../utils/acknowledgementReceiptDisplay';
 import { getEnrollmentAckReceiptLineTotal } from '../../utils/enrollmentAckReceiptList';
 import EnrollmentAckReceiptPickerTable from '../../components/enrollment/EnrollmentAckReceiptPickerTable';
+import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
+import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
 import {
   formatProgramEnrollmentStatus,
   pickGroupedProgramEnrollmentStatus,
@@ -25,6 +34,7 @@ import {
   isUniformTopBottomType,
   findUniformStockByNameSizeCategory,
 } from '../../utils/uniformMerchandise';
+import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock.js';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
 
 const Classes = () => {
@@ -115,6 +125,7 @@ const Classes = () => {
    // Tracks locally when a session's attendance has just been saved,
    // used together with backend status to lock editing.
   const [attendanceJustSaved, setAttendanceJustSaved] = useState(false);
+  const [phaseAttendanceSummary, setPhaseAttendanceSummary] = useState(null);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isAgendaModalOpen, setIsAgendaModalOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
@@ -122,6 +133,12 @@ const Classes = () => {
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
   const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'review'
   const [selectedClassForEnrollment, setSelectedClassForEnrollment] = useState(null);
+  const [enrollmentPhaseContext, setEnrollmentPhaseContext] = useState({
+    classId: null,
+    phaseSessions: [],
+    classSessions: [],
+    classMeta: {},
+  });
   const [selectedEnrollmentOption, setSelectedEnrollmentOption] = useState(null); // 'package', 'per-phase', 'reservation', 'ack-receipt'
   const [ackReceipts, setAckReceipts] = useState([]);
   const [ackReceiptsLoading, setAckReceiptsLoading] = useState(false);
@@ -327,11 +344,15 @@ const initializePackageMerchSelections = useCallback(
         
         // For items that don't require sizing, automatically include them without showing in configure section
         if (!requiresSizing) {
-          // Auto-select the first available item for non-uniform merchandise
+          const pick = pickFirstInStockMerchandiseItem(items);
+          if (!pick) {
+            updatedSelections[typeName] = [];
+            return;
+          }
           updatedSelections[typeName] = [
             {
-              merchandise_id: items[0].merchandise_id,
-              size: items[0].size || null,
+              merchandise_id: pick.merchandise_id,
+              size: pick.size || null,
             },
           ];
           return;
@@ -355,7 +376,6 @@ const initializePackageMerchSelections = useCallback(
 );
 
   const location = useLocation();
-  const autoOpenClassIdRef = useRef(null);
 
   useEffect(() => {
     fetchClasses();
@@ -368,27 +388,6 @@ const initializePackageMerchSelections = useCallback(
   useEffect(() => {
     fetchClasses();
   }, [debouncedNameSearchTerm, filterBranch, filterProgram]);
-
-  // Capture classId from query param to auto-open
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const classId = params.get('classId');
-    if (classId) {
-      autoOpenClassIdRef.current = classId;
-    }
-  }, [location.search]);
-
-  // Auto-open class when classes are loaded and target id exists
-  useEffect(() => {
-    if (autoOpenClassIdRef.current && classes.length > 0) {
-      const targetId = parseInt(autoOpenClassIdRef.current, 10);
-      const targetClass = classes.find((c) => c.class_id === targetId);
-      if (targetClass) {
-        handleViewClass(targetClass);
-        autoOpenClassIdRef.current = null;
-      }
-    }
-  }, [classes]);
 
   // Open conflict modal only after detail view is confirmed active
   useEffect(() => {
@@ -1009,148 +1008,69 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  // Calculate which phase is currently active based on today's date
-  const calculateActivePhase = (phaseSessions, classSessions, classDetails, daysOfWeek, sessionsPerPhase) => {
-    if (!phaseSessions || phaseSessions.length === 0 || !classDetails.start_date) {
-      return 1; // Default to Phase 1 if no data
+  const loadEnrollmentPhaseContext = async (classItem) => {
+    if (!classItem?.class_id) {
+      setEnrollmentPhaseContext({
+        classId: null,
+        phaseSessions: [],
+        classSessions: [],
+        classMeta: {},
+      });
+      return;
     }
 
-    const today = new Date();
-    today.setHours(12, 0, 0, 0); // Set to noon to avoid timezone issues
-    const todayStr = today.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+    const classId = classItem.class_id;
+    try {
+      const [phaseResponse, sessionsResponse] = await Promise.all([
+        apiRequest(`/classes/${classId}/phasesessions`),
+        apiRequest(`/classes/${classId}/sessions`).catch(() => ({ success: false, data: [] })),
+      ]);
+      setEnrollmentPhaseContext({
+        classId,
+        phaseSessions: phaseResponse.data?.phasesessions || [],
+        classSessions: sessionsResponse.success ? sessionsResponse.data || [] : [],
+        classMeta: phaseResponse.data?.class || {},
+      });
+    } catch (err) {
+      console.error('Failed to load phase context for enrollment:', err);
+      setEnrollmentPhaseContext({
+        classId,
+        phaseSessions: [],
+        classSessions: [],
+        classMeta: {},
+      });
+    }
+  };
 
-    // Group sessions by phase
-    const sessionsByPhase = phaseSessions.reduce((acc, session) => {
-      const phaseNum = session.phase_number;
-      if (!acc[phaseNum]) {
-        acc[phaseNum] = [];
-      }
-      acc[phaseNum].push(session);
-      return acc;
-    }, {});
-
-    // Find the active phase by checking which phase contains today's date
-    const sortedPhases = Object.keys(sessionsByPhase)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    for (const phaseNum of sortedPhases) {
-      const phaseSessions = sessionsByPhase[phaseNum].sort((a, b) => a.phase_session_number - b.phase_session_number);
-      
-      // Get first and last session dates for this phase
-      const firstSession = phaseSessions[0];
-      const lastSession = phaseSessions[phaseSessions.length - 1];
-
-      // Try to get dates from database sessions first
-      let firstSessionDate = classSessions.find(cs => 
-        cs.phase_number === firstSession.phase_number && 
-        cs.phase_session_number === firstSession.phase_session_number
-      )?.scheduled_date;
-
-      let lastSessionDate = classSessions.find(cs => 
-        cs.phase_number === lastSession.phase_number && 
-        cs.phase_session_number === lastSession.phase_session_number
-      )?.scheduled_date;
-
-      // If not in database, calculate dates
-      if (!firstSessionDate && classDetails.start_date && sessionsPerPhase) {
-        firstSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          firstSession.phase_number,
-          firstSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      if (!lastSessionDate && classDetails.start_date && sessionsPerPhase) {
-        lastSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          lastSession.phase_number,
-          lastSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      // Check if today falls within this phase's date range
-      if (firstSessionDate && lastSessionDate) {
-        if (todayStr >= firstSessionDate && todayStr <= lastSessionDate) {
-          return phaseNum;
-        }
-      } else if (firstSessionDate && todayStr >= firstSessionDate) {
-        // If we have first date but not last, check if today is after first
-        // This handles cases where we're in the middle of a phase
-        return phaseNum;
-      }
+  const resolveEnrollmentPhaseContext = (classItem) => {
+    if (!classItem?.class_id) {
+      return { phaseSessions: [], classSessions: [], classDetails: classItem };
     }
 
-    // If no active phase found, check if class hasn't started yet
-    const firstPhaseSessions = sessionsByPhase[sortedPhases[0]];
-    if (firstPhaseSessions && firstPhaseSessions.length > 0) {
-      const firstSession = firstPhaseSessions[0];
-      const firstSessionDate = classSessions.find(cs => 
-        cs.phase_number === firstSession.phase_number && 
-        cs.phase_session_number === firstSession.phase_session_number
-      )?.scheduled_date || (classDetails.start_date && sessionsPerPhase
-        ? calculateSessionDate(
-            classDetails.start_date,
-            daysOfWeek,
-            firstSession.phase_number,
-            firstSession.phase_session_number,
-            sessionsPerPhase,
-            classDetails.number_of_phase
-          )
-        : null);
+    const classId = classItem.class_id;
+    let phaseSessionsList = [];
+    let classSessionsList = [];
 
-      if (firstSessionDate && todayStr < firstSessionDate) {
-        return sortedPhases[0]; // Class hasn't started, show first phase
-      }
+    if (enrollmentPhaseContext.classId === classId) {
+      phaseSessionsList = enrollmentPhaseContext.phaseSessions;
+      classSessionsList = enrollmentPhaseContext.classSessions;
+    } else if (selectedClassForDetails?.class_id === classId) {
+      phaseSessionsList = phaseSessions;
+      classSessionsList = classSessions;
     }
 
-    // If today is past all phases' date ranges, find the first completed phase
-    // and return the next phase if it exists, otherwise return the last phase
-    // Loop forward to find the first phase that's completed
-    for (let i = 0; i < sortedPhases.length; i++) {
-      const phaseNum = sortedPhases[i];
-      const phaseSessions = sessionsByPhase[phaseNum].sort((a, b) => a.phase_session_number - b.phase_session_number);
-      const lastSession = phaseSessions[phaseSessions.length - 1];
-      
-      // Get last session date
-      let lastSessionDate = classSessions.find(cs => 
-        cs.phase_number === lastSession.phase_number && 
-        cs.phase_session_number === lastSession.phase_session_number
-      )?.scheduled_date;
-
-      // If not in database, calculate date
-      if (!lastSessionDate && classDetails.start_date && sessionsPerPhase) {
-        lastSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          lastSession.phase_number,
-          lastSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      // If this phase is completed (today > last session date), check for next phase
-      if (lastSessionDate && todayStr > lastSessionDate) {
-        // Check if there's a next phase
-        if (i < sortedPhases.length - 1) {
-          // This phase is completed, return the next phase
-          return sortedPhases[i + 1];
-        } else {
-          // This is the last phase and it's completed, return it
-          return phaseNum;
-        }
-      }
+    let classDetails = classItem;
+    if (selectedClassForDetails?.class_id === classId) {
+      classDetails = { ...classItem, ...selectedClassForDetails };
+    } else if (enrollmentPhaseContext.classId === classId) {
+      classDetails = { ...classItem, ...enrollmentPhaseContext.classMeta };
     }
 
-    // Default to last phase if class has ended, or Phase 1 if no match
-    return sortedPhases[sortedPhases.length - 1] || 1;
+    return {
+      phaseSessions: phaseSessionsList,
+      classSessions: classSessionsList,
+      classDetails,
+    };
   };
 
   const handleViewClass = async (classItem) => {
@@ -1297,6 +1217,16 @@ const initializePackageMerchSelections = useCallback(
       }
     }
   };
+
+  useClassAttendanceDeepLink({
+    classes,
+    viewMode,
+    selectedClassForDetails,
+    classSessions,
+    loadingClassSessions,
+    handleViewClass,
+    openAttendanceModal,
+  });
 
   const fetchAttendanceData = async (classsessionId) => {
     try {
@@ -1494,6 +1424,7 @@ const initializePackageMerchSelections = useCallback(
     setSelectedClassForDetails(null);
     setPhaseSessions([]);
     setClassSessions([]);
+    setPhaseAttendanceSummary(null);
   };
 
   // Helper function to format phases as ranges (e.g., "Phase 1-6" for consecutive phases)
@@ -2804,6 +2735,7 @@ const initializePackageMerchSelections = useCallback(
     });
     setIsReservedStudentsModalOpen(true);
     await mergeReservationClassDetailFromApi(classItem.class_id);
+    await loadEnrollmentPhaseContext(classItem);
     await fetchReservedStudents(classItem.class_id);
   };
 
@@ -3151,6 +3083,7 @@ const initializePackageMerchSelections = useCallback(
     setShowPackageDetails(false); // Reset package details visibility
     setSelectedEnrollmentOption(null);
     setIsEnrollModalOpen(true);
+    loadEnrollmentPhaseContext(classItem);
     
     // Fetch enrolled students and related reservations
     fetchEnrolledStudents(classItem.class_id);
@@ -3190,6 +3123,7 @@ const initializePackageMerchSelections = useCallback(
     setStudentSearchTerm('');
     setShowStudentDropdown(false);
     setIsEnrollModalOpen(true);
+    loadEnrollmentPhaseContext(classItem);
 
     fetchEnrolledStudents(classItem.class_id);
     fetchEnrollReservedStudents(classItem.class_id);
@@ -3214,6 +3148,7 @@ const initializePackageMerchSelections = useCallback(
     setShowPackageDetails(false);
     setSelectedEnrollmentOption(null);
     setIsEnrollModalOpen(true);
+    loadEnrollmentPhaseContext(classItem);
 
     fetchEnrolledStudents(classItem.class_id);
     fetchEnrollReservedStudents(classItem.class_id);
@@ -3245,8 +3180,9 @@ const initializePackageMerchSelections = useCallback(
     (packageItem.package_type === 'Installment' ||
       (packageItem.package_type === 'Phase' && packageItem.payment_option === 'Installment'));
 
-  const getInstallmentPhaseBounds = (packageItem) => {
-    const classMaxPhase = Number(selectedClassForEnrollment?.number_of_phase) || null;
+  const getInstallmentPhaseBounds = (packageItem, classOverride = null) => {
+    const classItem = classOverride || selectedClassForEnrollment;
+    const classMaxPhase = Number(classItem?.number_of_phase) || null;
     let minPhase = 1;
     let maxPhase = classMaxPhase || 1;
 
@@ -3262,11 +3198,26 @@ const initializePackageMerchSelections = useCallback(
       maxPhase = Math.min(maxPhase, classMaxPhase);
     }
 
+    const { phaseSessions: ps, classSessions: cs, classDetails } =
+      resolveEnrollmentPhaseContext(classItem);
+    const enrollmentFloor = getInstallmentEnrollmentFloorPhase(classDetails, ps, cs);
+    minPhase = Math.max(minPhase, enrollmentFloor);
+
     if (maxPhase < minPhase) {
       maxPhase = minPhase;
     }
 
-    return { minPhase, maxPhase };
+    return { minPhase, maxPhase, enrollmentFloor };
+  };
+
+  const getPerPhaseEnrollmentOptions = (classOverride = null) => {
+    const classItem = classOverride || selectedClassForEnrollment;
+    const { phaseSessions: ps, classSessions: cs, classDetails } =
+      resolveEnrollmentPhaseContext(classItem);
+    const maxPhase = Number(classItem?.number_of_phase) || 1;
+    const enrollmentFloor = getInstallmentEnrollmentFloorPhase(classDetails, ps, cs);
+    const phaseOptions = getEnrollablePhaseNumbers(classDetails, ps, cs, maxPhase);
+    return { enrollmentFloor, phaseOptions, maxPhase };
   };
 
   /** Curriculum / program phase count for the reserved class (list row may omit number_of_phase). */
@@ -3293,6 +3244,7 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const getUpgradeInstallmentPhaseBounds = (packageItem) => {
+    const classItem = selectedClassForReservations;
     const classMaxPhase = getResolvedClassMaxPhaseForReservations();
     let minPhase = 1;
     let maxPhase = classMaxPhase != null ? classMaxPhase : 1;
@@ -3309,11 +3261,16 @@ const initializePackageMerchSelections = useCallback(
       maxPhase = Math.min(maxPhase, classMaxPhase);
     }
 
+    const { phaseSessions: ps, classSessions: cs, classDetails } =
+      resolveEnrollmentPhaseContext(classItem);
+    const enrollmentFloor = getInstallmentEnrollmentFloorPhase(classDetails, ps, cs);
+    minPhase = Math.max(minPhase, enrollmentFloor);
+
     if (maxPhase < minPhase) {
       maxPhase = minPhase;
     }
 
-    return { minPhase, maxPhase };
+    return { minPhase, maxPhase, enrollmentFloor };
   };
 
   /** Shared package selection after user picks a package or an AR (upgrade reservation modal). */
@@ -3339,10 +3296,15 @@ const initializePackageMerchSelections = useCallback(
         }
         const requiresSizing = requiresSizingForMerchandise(typeName);
         if (!requiresSizing) {
+          const pick = pickFirstInStockMerchandiseItem(items);
+          if (!pick) {
+            updatedSelections[typeName] = [];
+            return;
+          }
           updatedSelections[typeName] = [
             {
-              merchandise_id: items[0].merchandise_id,
-              size: items[0].size || null,
+              merchandise_id: pick.merchandise_id,
+              size: pick.size || null,
             },
           ];
           return;
@@ -3551,6 +3513,16 @@ const initializePackageMerchSelections = useCallback(
     // - Use the Phase package as the selectedPackage (so manual per-phase fields stay hidden)
     // - Pre-fill phase and amount from the package
     if (selectedEnrollmentOption === 'per-phase' && packageItem.package_type === 'Phase') {
+      const { phaseSessions: ps, classSessions: cs, classDetails } =
+        resolveEnrollmentPhaseContext(selectedClassForEnrollment);
+      const pkgPhase = Number(packageItem.phase_start) || 1;
+      if (isPhaseClosedForEnrollment(pkgPhase, classDetails, ps, cs)) {
+        const floor = getInstallmentEnrollmentFloorPhase(classDetails, ps, cs);
+        appAlert(
+          `Phase ${pkgPhase} is no longer available for enrollment. This class schedule requires enrollment from Phase ${floor} onward (previous phase last session has passed).`
+        );
+        return;
+      }
       if (packageItem.package_price) {
         setPerPhaseAmount(packageItem.package_price.toString());
       }
@@ -4236,16 +4208,30 @@ const initializePackageMerchSelections = useCallback(
 
     // Validate per-phase enrollment
     if (selectedEnrollmentOption === 'per-phase') {
+      const { enrollmentFloor, phaseOptions } = getPerPhaseEnrollmentOptions();
       const isPackageDrivenPerPhase = Boolean(
         selectedPackage &&
         (selectedPackage.package_type === 'Phase' || selectedPackage.package_type === 'Installment')
       );
-      
+
+      if (phaseOptions.length === 0) {
+        appAlert(
+          `No phases are available for enrollment. Earlier phases are closed because the class schedule has moved past Phase ${Math.max(1, enrollmentFloor - 1)}.`
+        );
+        return;
+      }
+
       // When using Phase packages, phase and amount come from the package,
       // and included pricing/merchandise are defined by the package — no extra selections needed.
       if (!isPackageDrivenPerPhase) {
         if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
           appAlert('Please select a phase for per-phase enrollment');
+          return;
+        }
+        if (selectedPhaseNumber < enrollmentFloor) {
+          appAlert(
+            `Cannot enroll in Phase ${selectedPhaseNumber}. Enrollment is only available from Phase ${enrollmentFloor} onward based on the class schedule.`
+          );
           return;
         }
         if (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0) {
@@ -4256,6 +4242,15 @@ const initializePackageMerchSelections = useCallback(
           appAlert('Please select at least one pricing list or merchandise for per-phase enrollment');
           return;
         }
+      } else if (
+        selectedPackage?.package_type === 'Phase' &&
+        selectedPhaseNumber != null &&
+        selectedPhaseNumber < enrollmentFloor
+      ) {
+        appAlert(
+          `Cannot enroll in Phase ${selectedPhaseNumber}. Enrollment is only available from Phase ${enrollmentFloor} onward based on the class schedule.`
+        );
+        return;
       }
     }
 
@@ -6530,8 +6525,12 @@ const initializePackageMerchSelections = useCallback(
                     isActivePhase ? 'border-primary-500 shadow-md' : 'border-gray-200'
                   }`}>
                     {/* Phase Header - Collapsible */}
-                    <button
-                      onClick={() => {
+                    <ClassPhaseHeader
+                      phaseNumber={phaseNumber}
+                      isExpanded={isExpanded}
+                      isActivePhase={isActivePhase}
+                      sessionCount={mergedSessions.length}
+                      onToggleExpand={() => {
                         const newExpanded = new Set(expandedPhases);
                         if (isExpanded) {
                           newExpanded.delete(phaseNumber);
@@ -6540,50 +6539,10 @@ const initializePackageMerchSelections = useCallback(
                         }
                         setExpandedPhases(newExpanded);
                       }}
-                      className={`w-full px-6 py-4 flex items-center justify-between transition-colors ${
-                        isActivePhase 
-                          ? 'bg-primary-50 hover:bg-primary-100' 
-                          : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <svg
-                          className={`w-5 h-5 transition-transform ${
-                            isExpanded 
-                              ? 'transform rotate-90' 
-                              : ''
-                          } ${
-                            isActivePhase 
-                              ? 'text-primary-600' 
-                              : 'text-gray-500'
-                          }`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                        <h3 className={`text-lg font-semibold ${
-                          isActivePhase 
-                            ? 'text-primary-700' 
-                            : 'text-gray-900'
-                        }`}>
-                          Phase {phaseNumber}
-                          {isActivePhase && (
-                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
-                              Current
-                            </span>
-                          )}
-                        </h3>
-                        <span className={`text-sm ${
-                          isActivePhase 
-                            ? 'text-primary-600' 
-                            : 'text-gray-500'
-                        }`}>
-                          ({mergedSessions.length} session{mergedSessions.length !== 1 ? 's' : ''})
-                        </span>
-                      </div>
-                    </button>
+                      onViewAttendance={() =>
+                        setPhaseAttendanceSummary({ phaseNumber })
+                      }
+                    />
 
                     {/* Phase Sessions Table - Collapsible Content */}
                     {isExpanded && (
@@ -7310,6 +7269,20 @@ const initializePackageMerchSelections = useCallback(
           </div>,
           document.body
         )}
+
+        {/* Phase attendance summary */}
+        <ClassPhaseAttendanceSummaryModal
+          open={phaseAttendanceSummary != null}
+          onClose={() => setPhaseAttendanceSummary(null)}
+          classId={selectedClassForDetails?.class_id}
+          phaseNumber={phaseAttendanceSummary?.phaseNumber}
+          classTitle={[
+            selectedClassForDetails?.program_name,
+            selectedClassForDetails?.class_name || selectedClassForDetails?.level_tag,
+          ]
+            .filter(Boolean)
+            .join(' — ')}
+        />
 
         {/* Attendance Modal */}
         {isAttendanceModalOpen && createPortal(
@@ -10751,6 +10724,7 @@ const initializePackageMerchSelections = useCallback(
                     if (selectedEnrollmentOption === 'per-phase') {
                       const targetPhase = selectedPhaseNumber;
                       const classMaxPhase = selectedClassForEnrollment?.number_of_phase;
+                      const { enrollmentFloor } = getPerPhaseEnrollmentOptions();
                       
                       // Filter Phase packages based on phase range
                       filteredPackages = filteredPackages.filter(pkg => {
@@ -10758,6 +10732,15 @@ const initializePackageMerchSelections = useCallback(
                         
                         const phaseStart = pkg.phase_start;
                         const phaseEnd = pkg.phase_end;
+
+                        // Exclude packages for phases that are no longer enrollable
+                        const pkgMaxPhase = phaseEnd ?? phaseStart;
+                        if (pkgMaxPhase < enrollmentFloor) {
+                          return false;
+                        }
+                        if (phaseStart < enrollmentFloor) {
+                          return false;
+                        }
                         
                         // If targetPhase is selected, filter packages where targetPhase falls within the package's range
                         if (targetPhase !== null && targetPhase !== undefined) {
@@ -10914,7 +10897,7 @@ const initializePackageMerchSelections = useCallback(
                   </div>
 
                   {(() => {
-                    const { minPhase, maxPhase } = getInstallmentPhaseBounds(selectedPackage);
+                    const { minPhase, maxPhase, enrollmentFloor } = getInstallmentPhaseBounds(selectedPackage);
                     const selectedStudentHighestPhase =
                       selectedEnrollmentOption === 'per-phase' && selectedStudents.length > 0
                         ? Number(selectedStudents[0]?.highestPhase ?? selectedStudents[0]?.phase_number)
@@ -10931,6 +10914,11 @@ const initializePackageMerchSelections = useCallback(
 
                     return (
                       <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
+                        {enrollmentFloor > 1 ? (
+                          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                            This class is already in progress. Enrollment starts from Phase {enrollmentFloor}; earlier phases are closed because the previous phase&apos;s last session has passed.
+                          </div>
+                        ) : null}
                         {phaseOptions.length === 0 ? (
                           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                             No remaining phases are available for this student in the selected package range.
@@ -11848,33 +11836,44 @@ const initializePackageMerchSelections = useCallback(
                       <h3 className="text-sm font-bold text-gray-900">Select Items</h3>
                       
                       {/* Phase Selection - Only for per-phase enrollment */}
-                      {selectedEnrollmentOption === 'per-phase' && selectedClassForEnrollment?.number_of_phase && selectedClassForEnrollment.number_of_phase > 0 && (
+                      {selectedEnrollmentOption === 'per-phase' && selectedClassForEnrollment?.number_of_phase && selectedClassForEnrollment.number_of_phase > 0 && (() => {
+                        const { enrollmentFloor, phaseOptions } = getPerPhaseEnrollmentOptions();
+                        return (
                         <div>
                           <label htmlFor="phase_selection" className="label-field">
                             Select Phase <span className="text-red-500">*</span>
                           </label>
+                          {enrollmentFloor > 1 ? (
+                            <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                              Earlier phases are closed. Enrollment is available from Phase {enrollmentFloor} onward (based on the previous phase&apos;s last session date).
+                            </div>
+                          ) : null}
                           <select
                             id="phase_selection"
                             value={selectedPhaseNumber !== null ? selectedPhaseNumber : ''}
                             onChange={(e) => {
-                              const phaseValue = e.target.value === '' ? null : parseInt(e.target.value);
+                              const phaseValue = e.target.value === '' ? null : parseInt(e.target.value, 10);
                               setSelectedPhaseNumber(phaseValue);
                             }}
                             className="input-field"
                             required
+                            disabled={phaseOptions.length === 0}
                           >
                             <option value="">Choose a phase...</option>
-                            {Array.from({ length: selectedClassForEnrollment.number_of_phase }, (_, i) => i + 1).map((phaseNum) => (
+                            {phaseOptions.map((phaseNum) => (
                               <option key={phaseNum} value={phaseNum}>
                                 Phase {phaseNum}
                               </option>
                             ))}
                           </select>
                           <p className="mt-1 text-xs text-gray-500">
-                            Select which phase to enroll the student(s) in. This class has {selectedClassForEnrollment.number_of_phase} phase{selectedClassForEnrollment.number_of_phase !== 1 ? 's' : ''}.
+                            {phaseOptions.length === 0
+                              ? 'No phases are available for enrollment on this class schedule.'
+                              : `Select which phase to enroll the student(s) in. This class has ${selectedClassForEnrollment.number_of_phase} phase${selectedClassForEnrollment.number_of_phase !== 1 ? 's' : ''}.`}
                           </p>
                         </div>
-                      )}
+                        );
+                      })()}
                       
                       {/* Amount Input - Only for per-phase enrollment */}
                       {selectedEnrollmentOption === 'per-phase' && (
@@ -13179,12 +13178,25 @@ const initializePackageMerchSelections = useCallback(
                     
                     // Validate per-phase enrollment requirements
                     if (selectedEnrollmentOption === 'per-phase') {
+                      const { enrollmentFloor, phaseOptions } = getPerPhaseEnrollmentOptions();
                       const isPackageDrivenPerPhase = Boolean(
                         selectedPackage &&
                         (selectedPackage.package_type === 'Phase' || selectedPackage.package_type === 'Installment')
                       );
+                      if (phaseOptions.length === 0) {
+                        appAlert(
+                          `No phases are available for enrollment. Earlier phases are closed because the class schedule has moved past Phase ${Math.max(1, enrollmentFloor - 1)}.`
+                        );
+                        return;
+                      }
                       if (selectedPhaseNumber === null || selectedPhaseNumber === undefined) {
                         appAlert('Please select a phase for per-phase enrollment');
+                        return;
+                      }
+                      if (selectedPhaseNumber < enrollmentFloor) {
+                        appAlert(
+                          `Cannot enroll in Phase ${selectedPhaseNumber}. Enrollment is only available from Phase ${enrollmentFloor} onward based on the class schedule.`
+                        );
                         return;
                       }
                       if (!isPackageDrivenPerPhase && (!perPhaseAmount || parseFloat(perPhaseAmount) <= 0)) {
@@ -15607,7 +15619,7 @@ const initializePackageMerchSelections = useCallback(
                   </div>
 
                   {(() => {
-                    const { minPhase, maxPhase } = getUpgradeInstallmentPhaseBounds(upgradeSelectedPackage);
+                    const { minPhase, maxPhase, enrollmentFloor } = getUpgradeInstallmentPhaseBounds(upgradeSelectedPackage);
                     const phaseOptions = Array.from(
                       { length: Math.max(0, maxPhase - minPhase + 1) },
                       (_, idx) => minPhase + idx
@@ -15616,6 +15628,11 @@ const initializePackageMerchSelections = useCallback(
 
                     return (
                       <div className="rounded-lg border border-gray-200 bg-white p-4 md:p-5 space-y-4">
+                        {enrollmentFloor > 1 ? (
+                          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                            This class is already in progress. Enrollment starts from Phase {enrollmentFloor}; earlier phases are closed because the previous phase&apos;s last session has passed.
+                          </div>
+                        ) : null}
                         {phaseOptions.length === 0 ? (
                           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                             No valid phase range for this class package.
@@ -16285,9 +16302,14 @@ const initializePackageMerchSelections = useCallback(
                                   
                                   // For items that don't require sizing, auto-select first item
                                   if (!requiresSizing) {
+                                    const pick = pickFirstInStockMerchandiseItem(items);
+                                    if (!pick) {
+                                      updatedSelections[typeName] = [];
+                                      return;
+                                    }
                                     updatedSelections[typeName] = [{
-                                      merchandise_id: items[0].merchandise_id,
-                                      size: items[0].size || null,
+                                      merchandise_id: pick.merchandise_id,
+                                      size: pick.size || null,
                                     }];
                                     return;
                                   }

@@ -5,6 +5,19 @@
 
 export const DASHBOARD_DATE_NOTE = 'Dates use Philippine time (Asia/Manila).';
 
+export const OPERATIONAL_ATTENDANCE = {
+  dailyIntro:
+    'Uses the same class session row as Class Details (earliest scheduled date per phase/session). Attendance is completed only when that session status is Completed — matching the class attendance modal.',
+  monthlyIntro:
+    'Same rules as Class Details attendance: one session per phase/session slot, status Completed means attendance was saved. Summary counts cover the full selected month.',
+  dailySubtitle: (periodLabel, pendingCount, takenCount = 0, totalCount = 0) =>
+    `${pendingCount} need attendance · ${takenCount} already taken · ${totalCount} total for ${periodLabel}.`,
+  monthlySubtitle: (periodLabel, pendingCount, takenCount = 0, totalCount = 0) =>
+    `${pendingCount} need attendance · ${takenCount} already taken · ${totalCount} total in ${periodLabel}.`,
+  emptyDaily: (periodLabel) => `No class sessions scheduled for ${periodLabel}.`,
+  emptyMonthly: (periodLabel) => `No class sessions found for ${periodLabel}.`,
+};
+
 export const DAILY_OPERATIONAL = {
   pageIntro:
     'A snapshot of one day: new enrollments, drops, sales, merchandise, and finance checks for the date you pick.',
@@ -83,7 +96,7 @@ export const MONTHLY_OPERATIONAL = {
   merchandiseSection: 'Merchandise releases for the selected month',
   recentMerchandiseReleases:
     'Stock release log lines for this month (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
-  financialSection: 'Sales summary for the selected month',
+  financialSection: 'Sales and Attendance summary for the selected month',
   invoiceSales:
     'Completed invoice payments in this month (amount due + tips). Returned and rejected are excluded.',
   arSales: (receiptCount) =>
@@ -91,7 +104,7 @@ export const MONTHLY_OPERATIONAL = {
   combinedSales:
     'Invoice sales use payment issue date in the month. AR sales match the AR list for the same month.',
   totalPayments:
-    'Matches Payment Logs total for this month: completed payment lines only (verified + not verified yet), excluding returned and rejected.',
+    'Net completed invoice payment lines in this month (payment date, payable + tips). Returned and rejected lines in the month are deducted; settled payments count again when approved or re-recorded.',
   merchandise: (txnCount) =>
     `${txnCount} release event(s) this month (merchandise AR + package items on first payment). Re-enroll does not count again.`,
   enrollmentSnapshot:
@@ -99,7 +112,7 @@ export const MONTHLY_OPERATIONAL = {
   reEnrollmentSnapshot: (retained, prior) =>
     `Re-enrollment rate for this month: ${retained} (re-enrolled + completed in matrix column) ÷ ${prior} retention base (prior-month new + re-enrolled + rejoin + upsell) × 100 — matches the Month Re-enrollment matrix rate row.`,
   salesPaymentsCard:
-    'Invoice sales (completed payments in month), acknowledgement receipt sales for the month, and total payments (matches Payment Logs: verified + not verified yet).',
+    'Invoice sales (completed payments by payment date in month), acknowledgement receipt sales for the month, and total payments (same amount as Invoice month total).',
   recentInvoicePayments:
     'Completed invoice payments in this month (newest first), with package/item resolved the same way as Payment Logs. Shows three rows at a time; scroll for more. Same scope as invoice sales — excludes returned and rejected.',
   payVerified: (amount) => `${amount} — verified completed payments in this month`,
@@ -160,12 +173,12 @@ export const FINANCIAL_DASHBOARD = {
   branchesStudentsAdmin: (branchName) =>
     `Your assigned branch (${branchName}) and student count for that branch.`,
   totalPaymentsCount:
-    'Same count as Payment Logs (main tab) for the selected month — completed payment lines plus unapplied package acknowledgement receipts. Returned and rejected are excluded.',
+    'Net completed invoice payment lines for the selected month (payment date), after deducting returned and rejected lines in that period. Updates when a returned payment is resubmitted/approved or a new payment settles a rejection.',
   totalPaymentsAmount:
-    'Sum of payable amount plus tips for the same Payment Logs scope in the selected month.',
-  totalPaymentsTrend: (amount) => `${amount} from completed payments in the selected month (amount due + tips)`,
+    'Net payable + tips for the same scope. Returned and rejected payment lines with payment date in the month are deducted; settled payments count again when approved.',
+  totalPaymentsTrend: (amount) => `${amount} from completed invoice payments in the selected month (amount due + tips)`,
   paymentVerificationIntro:
-    'Matches Payment Logs finance-unified for the selected month (payment issue date). Verified = finance approved. Unverified = completed but not approved yet (not returned or rejected). Includes unapplied package AR rows shown on Payment Logs.',
+    'Payment issue date in the selected month. Verified = finance approved. Unverified = completed but not approved yet (not returned or rejected). Invoice payment lines only — unapplied package AR is on AR verification below.',
   arVerificationIntro:
     'Matches Acknowledgement Receipts for the selected month. Verified = Verified or Applied. Unverified = Submitted, Pending, or Paid.',
   chartEnrollment: 'New class enrollments over the last 6 months.',
@@ -206,7 +219,7 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
   matrixCohortYear: (year) =>
     `For ${year}: Retention base = sum of prior-phase enrolled counts from the rate header row (denominators only). Same total used in Total Re-enrollment Rate — not unique students; a track can count in multiple phases. Students = unique students in the matrix. Respects program/class filters.`,
   pageIntro: (year) =>
-    `Track student re-enrollment by program phase and retention for ${year}. Year KPI cards align with Month Re-enrollment.`,
+    `Track student re-enrollment by program phase and retention for ${year}.`,
   newReenrollYear: (year) =>
     `For ${year}: New enrollees = every green "new" cell in the phase matrix. Re-enrollment KPI = sum of rate-header numerators (re-enrolled and multi-phase completed cells; upsell and single-phase completed excluded).`,
   reservedUpsellYear: (year) =>
@@ -215,10 +228,6 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
     `For ${year}: Dropped = pink "dropped/unenrolled" cells; Rejoin = orange "rejoin" cells — summed from labeled cells in the phase matrix.`,
   reEnrollmentRate: (retainedSum, priorPhaseSum, scope) =>
     `Total re-enrollment rate (${scope}): ${retainedSum.toLocaleString()} ÷ ${priorPhaseSum.toLocaleString()} × 100. The numerator matches the Re-enrollment KPI card (sum of rate-header numerators). Denominator = sum of prior-phase enrolled counts where a fraction is shown. Phase 1 is N/A.`,
-  matrixLegend:
-    'Within each phase column, numbers count students with the same status top to bottom (1, 2, 3…); a different status starts its own sequence at 1. Applies to all statuses: new, re-enrolled, completed, rejoin, upsell, pending enrollment, reserved, and dropped/unenrolled. Dash = not enrolled.',
-  matrixRateTooltip:
-    'Re-enrollment rate row: Count of re-enrolled and completed cells in this phase column ÷ prior-phase cells labeled new, re-enrolled, rejoin, or upsell. Upsell is in the denominator only (not the numerator). Phase 1 has no prior phase (—). Hover "new" for Previous reserved when enrollment followed a paid reservation.',
 };
 
 export const MONTHLY_ENROLLMENT_DASHBOARD = {
@@ -243,11 +252,30 @@ export const MONTHLY_ENROLLMENT_DASHBOARD = {
     'Billing months follow payment timing (early or advance payments map to the correct future month).\n\n' +
     'Full-payment: Phase 1 aligns to the class start date; each following phase maps to the next calendar month. ' +
     'The last enrolled month shows as completed. Middle months show as re-enrolled.',
-  matrixLegend:
-    'Within each month column, numbers count students with the same status top to bottom (1, 2, 3…); a different status starts its own sequence at 1. Applies to all statuses: new, re-enrolled, completed, rejoin, upsell, pending enrollment, reserved, and dropped/unenrolled. Dash = not enrolled. Hover "new" for Previous reserved when applicable.',
 };
 
 export const PLACEHOLDER_DASHBOARD = {
   student: 'Your classes, schedule, and account details will appear here soon.',
   teacher: 'Your classes, students, and schedule tools will appear here soon.',
+};
+
+export const TEACHER_DASHBOARD = {
+  pageIntro:
+    'Your classes, today’s sessions, and attendance in one place. Take or view attendance without leaving the dashboard.',
+  branchHint: 'Only classes and sessions assigned to you are shown.',
+  myClassesStat: 'Active classes where you are the assigned teacher.',
+  sessionsStat: 'Class sessions scheduled on the selected date (same rules as Class Details attendance).',
+  pendingStat: 'Sessions on the selected date that still need attendance (status not Completed).',
+  takenStat: 'Sessions on the selected date where attendance was saved (status Completed).',
+  dailySectionTitle: (periodLabel) => `Class sessions — ${periodLabel}`,
+  dailySectionSubtitle: (pending, taken, total, upcoming) =>
+    `${pending} need attendance · ${taken} already taken · ${upcoming} upcoming · ${total} total.`,
+  myClassesSection: 'Classes where you are listed as teacher. Open Classes for schedules, sessions, and full details.',
+  myClassesSubtitle: (count) =>
+    count === 1 ? '1 class assigned to you.' : `${count} classes assigned to you.`,
+  noClasses: 'No classes assigned to you yet.',
+  monthlySection:
+    'Pending and completed attendance for your assigned classes in the selected month. Same data as Class Details.',
+  monthlySectionSubtitle: (monthLabel, pending, taken, total) =>
+    `${pending} need attendance · ${taken} already taken · ${total} total in ${monthLabel}.`,
 };

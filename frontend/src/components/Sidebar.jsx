@@ -79,16 +79,26 @@ const Sidebar = ({ isOpen, onClose }) => {
           name: 'Re-enrollment',
           children: [
             {
-              name: 'Phase Re-enrollment Dashboard',
-              path: `${basePath}/phase-enrollment-dashboard`,
-            },
-            {
               name: 'Month Re-enrollment',
               path: `${basePath}/monthly-enrollment-dashboard`,
+            },
+            {
+              name: 'Phase Re-enrollment Dashboard',
+              path: `${basePath}/phase-enrollment-dashboard`,
             },
           ],
         },
       ],
+    },
+    {
+      name: 'Dashboard',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+        </svg>
+      ),
+      roles: ['Teacher'],
+      path: '/teacher',
     },
     {
       name: 'Dashboard',
@@ -98,7 +108,7 @@ const Sidebar = ({ isOpen, onClose }) => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
         </svg>
       ),
-      roles: ['Teacher', 'Student'], // Single link for Teacher, Student
+      roles: ['Student'],
     },
     {
       name: 'Daily Summary Sales',
@@ -440,7 +450,7 @@ const Sidebar = ({ isOpen, onClose }) => {
       }
       // Handle Dashboard children paths for Superadmin, Admin, Finance/Superfinance
       let children = item.children;
-      if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance')) {
+      if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance' || basePath === '/teacher')) {
         const mapDashboardChild = (child) => {
           if (child.children?.length) {
             const nested = child.children

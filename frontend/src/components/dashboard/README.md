@@ -1,0 +1,44 @@
+# Dashboard components
+
+Shared UI for operational, enrollment, and financial dashboards.
+
+## Operational attendance shortcuts
+
+Superadmin and Admin operational dashboards use a compact **Take attendance** card in the Sales summary row (alongside Sales & Payments and Recent invoice payments).
+
+| Component | Role |
+|-----------|------|
+| `OperationalAttendanceCard.jsx` | Preview card (3 pending sessions) + **See all** button |
+| `OperationalAttendanceModal.jsx` | Full session list with filter tabs and accurate summary counts |
+| `OperationalAttendanceShortcuts.jsx` | Full table for Teacher dashboard (daily sessions on main dashboard) |
+| `TeacherDashboardView.jsx` | Unified teacher dashboard — stats, today’s sessions, assigned classes, monthly attendance card |
+
+**API:** `GET /dashboard/operational-attendance-sessions`
+
+Query params:
+
+| Param | Description |
+|-------|-------------|
+| `mode` | `daily` or `monthly` |
+| `summary_date` / `summary_month` | Period scope |
+| `branch_id` | Optional branch filter |
+| `attendance_filter` | `all`, `pending`, `taken`, or `upcoming` |
+| `list_limit` | Optional row cap for card preview (summary counts always use full period) |
+
+**Summary fields (full period, aligned with Class Details):**
+
+- One row per class + phase + session (earliest scheduled date — same as Classes detail `classSessions.find(...)`)
+- `pending_count` — due today or earlier, session status not `Completed`
+- `taken_count` — session status is `Completed` (attendance saved in class details)
+- `upcoming_count` — session date after today (Manila)
+- `total_count` — all canonical sessions in the period (excluding cancelled)
+
+**Modal filter tabs:** All · Needs attendance · Already taken · Upcoming
+
+**Take / View attendance:** Opens `ClassSessionAttendanceModal` in place (no navigation to Classes). Saves via `POST /attendance/session/:classsessionId` — same data as **Classes → View class details → Attendance**.
+
+**List columns:** Class, Branch (when multi-branch), Teacher, Session, Schedule, Attendance status, Action
+
+**Deep link params on `/classes`:** Still supported for direct links from other pages: `classId`, `sessionId`, `phaseNumber`, `phaseSessionNumber`, `scheduledDate`, `openAttendance=1`
+
+See also: `backend/lib/operationalAttendanceSessions.js`, `frontend/src/hooks/useOperationalAttendanceSessions.js`, `frontend/src/utils/operationalAttendanceDisplay.js`, `frontend/src/components/class/ClassSessionAttendanceModal.jsx`.

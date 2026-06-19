@@ -160,6 +160,7 @@ const INVOICE_ONLY_SELECT_SQL = `
     COALESCE(p.payable_amount, i.amount, 0) AS payment_amount,
     0::numeric AS tip_amount,
     p.issue_date AS payment_date,
+    enc.full_name AS prepared_by_name,
     'Package' AS ar_type,
     '${AR_INVOICE_ONLY_PACKAGE_LABEL}' AS package_name_snapshot,
     COALESCE(p.payable_amount, i.amount, 0) AS list_line_total_amount
@@ -174,13 +175,14 @@ const INVOICE_ONLY_SELECT_SQL = `
   ) inv_one ON TRUE
   LEFT JOIN userstbl u ON u.user_id = inv_one.student_id
   LEFT JOIN LATERAL (
-    SELECT payment_method, reference_number, payable_amount, issue_date
+    SELECT payment_method, reference_number, payable_amount, issue_date, created_by
     FROM paymenttbl
     WHERE invoice_id = i.invoice_id
       AND UPPER(TRIM(COALESCE(status, ''))) = 'COMPLETED'
     ORDER BY payment_id DESC
     LIMIT 1
   ) p ON TRUE
+  LEFT JOIN userstbl enc ON enc.user_id = p.created_by
 `;
 
 function resolveInvoiceOnlyWhere(filters = {}) {

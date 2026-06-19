@@ -6,9 +6,10 @@ import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
-import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
+import { addDaysToYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
+import { resolveInstallmentEnrollmentMinPhase } from '../utils/classActivePhase.js';
 import {
   alignInstallmentProfileForRejoinInvoice,
   determineEnrollmentStatus,
@@ -30,6 +31,7 @@ import {
   isPackageMerchTypeCovered,
   linesFromMerchandiseToDeduct,
   PACKAGE_UNIFORM_TYPE_NAMES,
+  resolveMerchandiseWithAvailableStock,
 } from '../lib/merchandiseReleaseLog.js';
 import {
   PACKAGE_CHANGE_TO_FULLPAYMENT,
@@ -4208,14 +4210,13 @@ router.post(
       }
 
       // Determine enrollment phase
-      // Priority: 1. User-provided phase_number (if valid), 2. Auto-determination based on class status
-      let enrollmentPhase = 1; // Default to Phase 1
-      
-      // If phase_number is provided, validate it
+      // Priority: 1. User-provided phase_number (if valid), 2. Schedule-based floor from session dates
+      const enrollableMinPhase = await resolveInstallmentEnrollmentMinPhase(client, classData);
+      let enrollmentPhase = enrollableMinPhase;
+
       if (phase_number !== undefined && phase_number !== null) {
-        const providedPhase = parseInt(phase_number);
-        
-        // Validate phase number is within valid range
+        const providedPhase = parseInt(phase_number, 10);
+
         if (classData.number_of_phase) {
           if (providedPhase < 1 || providedPhase > classData.number_of_phase) {
             await client.query('ROLLBACK');
@@ -4224,49 +4225,23 @@ router.post(
               message: `Invalid phase number. Must be between 1 and ${classData.number_of_phase} (curriculum has ${classData.number_of_phase} phase(s)).`,
             });
           }
-        } else {
-          // If no curriculum, still validate it's at least 1
-          if (providedPhase < 1) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-              success: false,
-              message: 'Phase number must be at least 1.',
-            });
-          }
+        } else if (providedPhase < 1) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Phase number must be at least 1.',
+          });
         }
-        
-        // Use provided phase number
+
         enrollmentPhase = providedPhase;
-      } else {
-        // Auto-determine phase based on class status
-        // Logic: If class hasn't started (start_date > today), enroll in Phase 1
-        //        If class is ongoing (start_date <= today), enroll in current phase
-        const enrollmentToday = new Date();
-        enrollmentToday.setHours(0, 0, 0, 0); // Reset time to start of day for comparison
-        
-        if (classData.start_date) {
-          // PostgreSQL returns dates as strings in 'YYYY-MM-DD' format
-          const startDateStr = classData.start_date;
-          const startDate = new Date(startDateStr);
-          startDate.setHours(0, 0, 0, 0);
-          
-          if (startDate > enrollmentToday) {
-            // Class hasn't started yet - enroll in Phase 1
-            enrollmentPhase = 1;
-          } else {
-            // Class is ongoing - enroll in current phase
-            // Use class.phase_number if available, otherwise default to 1
-            enrollmentPhase = classData.phase_number || 1;
-            
-            // Validate phase number doesn't exceed curriculum phases
-            if (classData.number_of_phase && enrollmentPhase > classData.number_of_phase) {
-              enrollmentPhase = classData.number_of_phase;
-            }
-          }
-        } else if (classData.phase_number) {
-          // If no start_date but phase_number exists, use it
-          enrollmentPhase = classData.phase_number;
-        }
+      }
+
+      if (enrollmentPhase < enrollableMinPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Cannot enroll for past phases. Minimum start phase is Phase ${enrollableMinPhase} based on the current class schedule (previous phase last session has passed).`,
+        });
       }
 
       // Initialize variables for tracking payment types
@@ -4641,6 +4616,15 @@ router.post(
             });
           }
 
+          const enrollableMinPhase = await resolveInstallmentEnrollmentMinPhase(client, classData);
+          if (requestedStart < enrollableMinPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Cannot enroll for past phases. Minimum start phase is Phase ${enrollableMinPhase} based on the current class schedule.`,
+            });
+          }
+
           installmentPhaseStart = requestedStart;
           installmentPhaseEnd = requestedEnd;
           phaseStartForRemarks = requestedStart;
@@ -4937,104 +4921,49 @@ router.post(
         }
       }
       
-      // Validate inventory for all merchandise
+      // Validate inventory for all merchandise (resolve in-stock SKU when placeholder id is OOS)
       console.log(`[Inventory Validation] Validating ${merchandiseToDeduct.size} merchandise items for branch ${branch_id}`);
-      
+
       for (const [key, merchInfo] of merchandiseToDeduct.entries()) {
-        const merchId = merchInfo.merchandise_id;
-        const merchSize = merchInfo.size;
-        const merchCategory = merchInfo.category;
         const quantityNeeded = merchInfo.count;
         const merchName = merchInfo.merchandise_name;
-        
-        console.log(`[Inventory Validation] Checking merchandise: ID=${merchId}, Name=${merchName}, Size=${merchSize}, Category=${merchCategory}, Needed=${quantityNeeded}`);
-        
-        // Find by merchandise_id (which should be correct from frontend)
-        // For uniforms with Top/Bottom, each has a different merchandise_id
-        // Also validate that merchandise belongs to the correct branch
-        const merchCheck = await client.query(
-          `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
-           FROM merchandisestbl 
-           WHERE merchandise_id = $1`,
-          [merchId]
+
+        const resolved = await resolveMerchandiseWithAvailableStock(client, {
+          merchandiseId: merchInfo.merchandise_id,
+          merchandiseName: merchName,
+          branchId: branch_id,
+          quantityNeeded,
+          size: merchInfo.size,
+          category: merchInfo.category,
+        });
+
+        if (!resolved) {
+          console.log(
+            `[Inventory Validation] No in-stock SKU for ${merchName || merchInfo.merchandise_id}, needed ${quantityNeeded}`
+          );
+          inventoryValidationErrors.push(
+            `Insufficient inventory for ${merchName || 'Merchandise'}${
+              merchInfo.size ? ` (${merchInfo.size})` : ''
+            }${merchInfo.category ? ` - ${merchInfo.category}` : ''}. ` +
+              `Available: 0, Needed: ${quantityNeeded}`
+          );
+          continue;
+        }
+
+        if (Number(resolved.merchandise_id) !== Number(merchInfo.merchandise_id)) {
+          merchandiseToDeduct.set(key, {
+            ...merchInfo,
+            merchandise_id: resolved.merchandise_id,
+            size: resolved.size || merchInfo.size,
+          });
+          console.log(
+            `[Inventory Validation] Resolved ${merchName} to in-stock merchandise_id ${resolved.merchandise_id}`
+          );
+        }
+
+        console.log(
+          `[Inventory Validation] ✓ Inventory check passed for merchandise ID ${resolved.merchandise_id}`
         );
-        
-        if (merchCheck.rows.length === 0) {
-          console.log(`[Inventory Validation] Merchandise ID ${merchId} not found in database`);
-          // Try to find by name and size if ID doesn't exist
-          let fallbackFound = false;
-          if (merchName && merchSize) {
-            const isUniformFallback =
-              PACKAGE_UNIFORM_TYPE_NAMES.includes(String(merchName).trim()) &&
-              (merchCategory === 'Top' || merchCategory === 'Bottom');
-            const fallbackCheck = isUniformFallback
-              ? await client.query(
-                  `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
-                   FROM merchandisestbl
-                   WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
-                     AND LOWER(COALESCE(type, '')) = LOWER($4)
-                   ORDER BY merchandise_id ASC
-                   LIMIT 1`,
-                  [merchName, merchSize, branch_id, merchCategory]
-                )
-              : await client.query(
-                  `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id
-                   FROM merchandisestbl
-                   WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
-                   LIMIT 1`,
-                  [merchName, merchSize, branch_id]
-                );
-            if (fallbackCheck.rows.length > 0) {
-              fallbackFound = true;
-              inventoryValidationErrors.push(
-                `Merchandise ID ${merchId} not found, but found matching item: ${merchName} (${merchSize}) with ID ${fallbackCheck.rows[0].merchandise_id}. Please use the correct merchandise ID.`
-              );
-            }
-          }
-          
-          if (!fallbackFound) {
-            inventoryValidationErrors.push(
-              `Merchandise ID ${merchId}${merchName ? ` (${merchName})` : ''}${merchSize ? ` (Size: ${merchSize})` : ''}${merchCategory ? ` (${merchCategory})` : ''} not found in database`
-            );
-          }
-          continue;
-        }
-        
-        const merch = merchCheck.rows[0];
-        console.log(`[Inventory Validation] Found merchandise: ID=${merch.merchandise_id}, Name=${merch.merchandise_name}, Size=${merch.size}, Branch=${merch.branch_id}, Quantity=${merch.quantity}`);
-        
-        // Verify merchandise belongs to the correct branch
-        if (merch.branch_id && branch_id && merch.branch_id !== branch_id) {
-          console.log(`[Inventory Validation] Branch mismatch: Expected ${branch_id}, Found ${merch.branch_id}`);
-          inventoryValidationErrors.push(
-            `Merchandise ID ${merchId} (${merch.merchandise_name || 'Merchandise'}${merch.size ? ` - ${merch.size}` : ''}) belongs to a different branch. Expected branch: ${branch_id}, Found: ${merch.branch_id}`
-          );
-          continue;
-        }
-        
-        // Verify size matches if specified
-        if (merchSize && merch.size !== merchSize) {
-          console.log(`[Inventory Validation] Size mismatch: Expected ${merchSize}, Found ${merch.size}`);
-          inventoryValidationErrors.push(
-            `Merchandise ID ${merchId} size mismatch. Expected: ${merchSize}, Found: ${merch.size || 'N/A'}`
-          );
-          continue;
-        }
-        
-        const availableQuantity = merch.quantity !== null && merch.quantity !== undefined ? parseInt(merch.quantity) : null;
-        console.log(`[Inventory Validation] Available quantity: ${availableQuantity}, Needed: ${quantityNeeded}`);
-        
-        // If quantity tracking is enabled, validate availability
-        if (availableQuantity !== null && availableQuantity < quantityNeeded) {
-          const categoryText = merchCategory ? ` - ${merchCategory}` : '';
-          console.log(`[Inventory Validation] Insufficient inventory: Available ${availableQuantity} < Needed ${quantityNeeded}`);
-          inventoryValidationErrors.push(
-            `Insufficient inventory for ${merch.merchandise_name || 'Merchandise'}${merch.size ? ` (${merch.size})` : ''}${categoryText}. ` +
-            `Available: ${availableQuantity}, Needed: ${quantityNeeded}`
-          );
-        } else {
-          console.log(`[Inventory Validation] ✓ Inventory check passed for merchandise ID ${merchId}`);
-        }
       }
       
       console.log(`[Inventory Validation] Validation complete. Errors found: ${inventoryValidationErrors.length}`);
@@ -5394,14 +5323,8 @@ router.post(
         downpaymentAmount = parseFloat(packageData.downpayment_amount) || 0;
         
         if (downpaymentAmount > 0 && installmentIncludeDownpayment) {
-          const downpaymentDueDate = isPhaseInstallmentPackage
-            ? (() => {
-                const enrolledDate = parseYmdToLocalNoon(issueDateStr) || new Date();
-                const dueDate = new Date(enrolledDate.getTime());
-                dueDate.setDate(dueDate.getDate() + 7);
-                return formatYmdLocal(dueDate);
-              })()
-            : (dueDateStr || issueDateStr);
+          // Downpayment is always due 1 week after enrollment — not the phase-1 installment due date.
+          const downpaymentDueDate = addDaysToYmd(issueDateStr, 7) || issueDateStr;
 
           let explicitPrepaidAr = null;
           let prepaidAckIdForRow = null;

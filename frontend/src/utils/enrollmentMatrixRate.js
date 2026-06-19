@@ -110,6 +110,145 @@ const matrixKpiTotalsFromApi = (apiTotals) => ({
 });
 
 /**
+ * Month keys from January through the current Manila month for the selected year.
+ * Past calendar years include all months in the matrix; future years include none past today.
+ */
+export function getYearToDateMonthKeys(matrix, displayYear, currentMonthKey) {
+  const months = matrix?.months ?? [];
+  const year = String(displayYear);
+  const currentYear = String(currentMonthKey).slice(0, 4);
+  const currentMonthNum = parseInt(String(currentMonthKey).slice(5, 7), 10);
+
+  return months
+    .filter((m) => {
+      if (!m.key?.startsWith(`${year}-`)) return false;
+      const monthNum = parseInt(m.key.slice(5, 7), 10);
+      if (year === currentYear) {
+        return monthNum <= currentMonthNum;
+      }
+      if (parseInt(year, 10) < parseInt(currentYear, 10)) {
+        return true;
+      }
+      return monthNum <= currentMonthNum;
+    })
+    .map((m) => m.key);
+}
+
+export function filterMonthStatsByKeys(statsRows = [], monthKeys = []) {
+  const keySet = new Set(monthKeys);
+  return (statsRows || []).filter((row) => keySet.has(row.month_key));
+}
+
+/** KPI totals summed across multiple billing-month columns. */
+export function aggregateMonthMatrixKpiTotalsForMonthKeys(matrix, monthKeys) {
+  if (!matrix || !monthKeys?.length) {
+    return emptyMatrixKpiTotals();
+  }
+  const totals = emptyMatrixKpiTotals();
+  for (const monthKey of monthKeys) {
+    const monthTotals = aggregateMonthMatrixKpiTotalsForMonth(matrix, monthKey);
+    totals.new_enrollees_count += monthTotals.new_enrollees_count;
+    totals.re_enrollment_count += monthTotals.re_enrollment_count;
+    totals.upsell_count += monthTotals.upsell_count;
+    totals.reserved_count += monthTotals.reserved_count;
+    totals.dropped_count += monthTotals.dropped_count;
+    totals.rejoin_count += monthTotals.rejoin_count;
+  }
+  return totals;
+}
+
+/** Distinct students with a labeled cell in any of the given billing months. */
+export function countUniqueMatrixStudentsForMonthKeys(matrix, monthKeys) {
+  if (!matrix || !monthKeys?.length) return 0;
+  const ids = new Set();
+  for (const monthKey of monthKeys) {
+    for (const student of matrix.students ?? []) {
+      if (student.months?.[monthKey]?.label) {
+        ids.add(student.student_id);
+      }
+    }
+  }
+  return ids.size;
+}
+
+/** Combined re-enrollment rate for a subset of billing months (rate-header sums). */
+export function reEnrollmentRateForMonthKeys(matrix, monthKeys) {
+  const statsRows = filterMonthStatsByKeys(matrix?.month_stats ?? [], monthKeys);
+  return reEnrollmentRateFromMatrixStats(statsRows, null);
+}
+
+/**
+ * KPI totals for a single billing month column (same labels as the matrix table).
+ */
+export function aggregateMonthMatrixKpiTotalsForMonth(matrix, monthKey) {
+  if (!matrix || !monthKey) {
+    return emptyMatrixKpiTotals();
+  }
+  const students = matrix?.students ?? [];
+  if (!students.length) {
+    return emptyMatrixKpiTotals();
+  }
+  const counts = countMonthMatrixStatusLabels(students, monthKey);
+  return {
+    new_enrollees_count: counts.newEnrolleesCount,
+    re_enrollment_count: counts.reEnrollmentCount,
+    upsell_count: counts.upsellCount,
+    reserved_count: counts.reservedCount,
+    dropped_count: counts.droppedCount,
+    rejoin_count: counts.rejoinCount,
+  };
+}
+
+/** Distinct students with any labeled cell in one billing month column. */
+export function countUniqueMatrixStudentsForMonth(matrix, monthKey) {
+  if (!matrix || !monthKey) return 0;
+  const ids = new Set();
+  for (const student of matrix.students ?? []) {
+    if (student.months?.[monthKey]?.label) {
+      ids.add(student.student_id);
+    }
+  }
+  return ids.size;
+}
+
+/**
+ * Re-enrollment rate for one billing month (matches matrix rate header row for that column).
+ */
+export function reEnrollmentRateForMonth(matrix, monthKey) {
+  if (!matrix || !monthKey) {
+    return {
+      reEnrolledCount: 0,
+      priorEnrolledCount: 0,
+      priorMonthEnrolledCount: 0,
+      reEnrollmentRate: 0,
+    };
+  }
+  const row = (matrix.month_stats ?? []).find((r) => r.month_key === monthKey);
+  if (!row) {
+    return {
+      reEnrolledCount: 0,
+      priorEnrolledCount: 0,
+      priorMonthEnrolledCount: 0,
+      reEnrollmentRate: 0,
+    };
+  }
+  const reEnrolledCount = Number(row.re_enrolled_count) || 0;
+  const priorEnrolledCount = Number(row.prior_month_enrolled_count) || 0;
+  const reEnrollmentRate =
+    priorEnrolledCount > 0
+      ? Number(((reEnrolledCount / priorEnrolledCount) * 100).toFixed(2))
+      : row.re_enrollment_rate != null
+        ? Number(row.re_enrollment_rate)
+        : 0;
+  return {
+    reEnrolledCount,
+    priorEnrolledCount,
+    priorMonthEnrolledCount: priorEnrolledCount,
+    reEnrollmentRate,
+  };
+}
+
+/**
  * KPI totals from visible month matrix cells (same labels shown in the table).
  * Always derived from matrix.students — not separate SQL snapshots.
  */

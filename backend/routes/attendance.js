@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { getPhaseAttendanceSummary } from '../utils/phaseAttendanceSummaryService.js';
 
 const router = express.Router();
 
@@ -277,6 +278,228 @@ router.post(
       next(error);
     } finally {
       client.release();
+    }
+  }
+);
+
+/**
+ * GET /api/v1/attendance/student/:studentId
+ * Attendance history for one student across eligible class sessions
+ * (same enrollment + phase rules as GET /attendance/session/:sessionId).
+ * Optional query: class_id — limit to one enrolled class.
+ * Access: All authenticated users (students: own record only).
+ */
+router.get(
+  '/student/:studentId',
+  [
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    queryValidator('class_id').optional().isInt().withMessage('class_id must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { studentId } = req.params;
+      const studentIdInt = parseInt(studentId, 10);
+      const classIdFilter = req.query.class_id != null ? parseInt(req.query.class_id, 10) : null;
+
+      if (req.user.userType === 'Student' && req.user.userId !== studentIdInt) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view your own attendance.',
+        });
+      }
+
+      const studentCheck = await query(
+        'SELECT user_id, branch_id FROM userstbl WHERE user_id = $1',
+        [studentIdInt]
+      );
+      if (studentCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Student not found',
+        });
+      }
+
+      const studentBranchId =
+        studentCheck.rows[0].branch_id != null ? Number(studentCheck.rows[0].branch_id) : null;
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const userBranchId =
+        req.user.branchId != null ? Number(req.user.branchId) : null;
+
+      if (!isSuperadmin && userBranchId != null && studentBranchId != null) {
+        if (studentBranchId !== userBranchId) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied for this student branch.',
+          });
+        }
+      }
+
+      const params = [studentIdInt];
+      let classFilterSql = '';
+      if (classIdFilter != null && Number.isFinite(classIdFilter)) {
+        params.push(classIdFilter);
+        classFilterSql = ` AND cs.class_id = $${params.length}`;
+      }
+
+      let branchFilterSql = '';
+      if (!isSuperadmin && userBranchId != null) {
+        params.push(userBranchId);
+        branchFilterSql = ` AND c.branch_id = $${params.length}`;
+      }
+
+      const rowsResult = await query(
+        `SELECT
+          a.attendance_id,
+          a.status,
+          a.notes,
+          TO_CHAR(a.marked_at, 'YYYY-MM-DD HH24:MI:SS') AS marked_at,
+          marker.full_name AS marked_by_name,
+          cs.classsession_id,
+          cs.class_id,
+          cs.phase_number,
+          cs.phase_session_number,
+          TO_CHAR(cs.scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+          cs.scheduled_start_time,
+          cs.scheduled_end_time,
+          cs.status AS session_status,
+          cs.class_code,
+          ps.topic,
+          ps.goal,
+          ps.agenda,
+          c.class_name,
+          c.level_tag,
+          p.program_name
+         FROM classsessionstbl cs
+         INNER JOIN classstudentstbl cs_enroll
+           ON cs_enroll.class_id = cs.class_id
+          AND cs_enroll.phase_number = cs.phase_number
+          AND cs_enroll.student_id = $1
+          AND cs_enroll.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+          AND cs_enroll.removed_at IS NULL
+         INNER JOIN classestbl c ON cs.class_id = c.class_id
+         LEFT JOIN programstbl p ON c.program_id = p.program_id
+         LEFT JOIN phasesessionstbl ps ON cs.phasesessiondetail_id = ps.phasesessiondetail_id
+         LEFT JOIN attendancetbl a
+           ON a.classsession_id = cs.classsession_id
+          AND a.student_id = $1
+         LEFT JOIN userstbl marker ON a.marked_by = marker.user_id
+         WHERE 1=1
+         ${classFilterSql}
+         ${branchFilterSql}
+         ORDER BY cs.scheduled_date DESC,
+                  cs.scheduled_start_time DESC NULLS LAST,
+                  cs.phase_number DESC,
+                  cs.phase_session_number DESC`,
+        params
+      );
+
+      const records = rowsResult.rows.map((row) => ({
+        attendance_id: row.attendance_id != null ? Number(row.attendance_id) : null,
+        status: row.status || null,
+        notes: row.notes || null,
+        marked_at: row.marked_at || null,
+        marked_by_name: row.marked_by_name || null,
+        session: {
+          classsession_id: Number(row.classsession_id),
+          class_id: Number(row.class_id),
+          phase_number: row.phase_number != null ? Number(row.phase_number) : null,
+          phase_session_number:
+            row.phase_session_number != null ? Number(row.phase_session_number) : null,
+          scheduled_date: row.scheduled_date || null,
+          scheduled_start_time: row.scheduled_start_time || null,
+          scheduled_end_time: row.scheduled_end_time || null,
+          session_status: row.session_status || null,
+          class_code: row.class_code || null,
+          topic: row.topic || null,
+          goal: row.goal || null,
+          agenda: row.agenda || null,
+          class_name: row.class_name || null,
+          level_tag: row.level_tag || null,
+          program_name: row.program_name || null,
+        },
+      }));
+
+      const statusCounts = {
+        Present: 0,
+        Absent: 0,
+        Late: 0,
+        Excused: 0,
+        'Leave Early': 0,
+      };
+      let marked = 0;
+      records.forEach((r) => {
+        if (r.status) {
+          marked += 1;
+          if (Object.prototype.hasOwnProperty.call(statusCounts, r.status)) {
+            statusCounts[r.status] += 1;
+          }
+        }
+      });
+
+      res.json({
+        success: true,
+        data: {
+          student_id: studentIdInt,
+          summary: {
+            total_sessions: records.length,
+            marked,
+            not_marked: Math.max(0, records.length - marked),
+            ...statusCounts,
+          },
+          records,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/attendance/class/:classId/phase/:phaseNumber/summary
+ * Attendance matrix for students enrolled in a class phase.
+ * Access: All authenticated users with branch access.
+ */
+router.get(
+  '/class/:classId/phase/:phaseNumber/summary',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    param('phaseNumber').isInt().withMessage('Phase number must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { classId, phaseNumber } = req.params;
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      const userBranchId =
+        req.user.branchId != null ? Number(req.user.branchId) : null;
+
+      const result = await getPhaseAttendanceSummary(classId, phaseNumber, {
+        isSuperadmin,
+        userBranchId,
+      });
+
+      if (result.notFound) {
+        return res.status(404).json({
+          success: false,
+          message: 'Class not found',
+        });
+      }
+
+      if (result.forbidden) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this class branch.',
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
     }
   }
 );

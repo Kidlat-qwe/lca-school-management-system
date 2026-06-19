@@ -15,7 +15,9 @@
     "list:firebase-users": "node scripts/listFirebaseUsers.js",
     "repair:ar-issue-date": "node scripts/repairArIssueDateFromAckNumber.js",
     "repair:phase-installment-issue-dates": "node scripts/repairPhaseInstallmentIssueDateMonotonic.js",
-    "repair:phase-invoice-863": "node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863"
+    "repair:phase-invoice-863": "node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863",
+    "repair:installment-generation-schedule": "node scripts/repairInstallmentGenerationSchedule.js --dry-run",
+    "repair:installment-generation-schedule:apply": "node scripts/repairInstallmentGenerationSchedule.js --apply"
   },
   "keywords": [
     "school",

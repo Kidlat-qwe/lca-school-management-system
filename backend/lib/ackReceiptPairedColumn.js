@@ -101,3 +101,49 @@ export function getAckReceiptCombinedLineTotal(row) {
   }
   return self;
 }
+
+/**
+ * Resolve Downpayment + Phase 1 dual-row AR context for attach/enrollment.
+ * Accepts either the downpayment leader or the Phase 1 follower row.
+ *
+ * @param {object} ackRow
+ * @param {typeof query} [runQuery]
+ * @returns {Promise<{ isDownpaymentPlusPhase1: boolean, leaderAck: object|null, phase1Ack: object|null }>}
+ */
+export async function resolveDownpaymentPhase1AckPair(ackRow, runQuery = query) {
+  if (!ackRow) {
+    return { isDownpaymentPlusPhase1: false, leaderAck: null, phase1Ack: null };
+  }
+
+  let leaderAck = ackRow;
+  let phase1Ack = null;
+
+  if (ackRow.paired_ack_receipt_id != null) {
+    const phaseRes = await runQuery(
+      `SELECT * FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
+      [ackRow.paired_ack_receipt_id]
+    );
+    phase1Ack = phaseRes.rows[0] || null;
+  } else {
+    const parentRes = await runQuery(
+      `SELECT * FROM acknowledgement_receiptstbl
+       WHERE paired_ack_receipt_id = $1
+       LIMIT 1`,
+      [ackRow.ack_receipt_id]
+    );
+    if (parentRes.rows[0]) {
+      leaderAck = parentRes.rows[0];
+      phase1Ack = ackRow;
+    }
+  }
+
+  const isDownpaymentPlusPhase1 =
+    String(leaderAck?.installment_option || '').trim().toLowerCase() === 'downpayment_plus_phase1' ||
+    (leaderAck?.paired_ack_receipt_id != null && phase1Ack != null);
+
+  return {
+    isDownpaymentPlusPhase1,
+    leaderAck: leaderAck || null,
+    phase1Ack: phase1Ack || null,
+  };
+}

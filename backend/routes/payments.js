@@ -20,6 +20,10 @@ import {
   syncArUnverifiedFromPaymentRevoke,
   syncArVerifiedFromPaymentApproval,
 } from '../lib/arPaymentVerificationSync.js';
+import {
+  computePaymentDateNetTotals,
+  formatPaymentDateNetTotalsSummary,
+} from '../lib/paymentDateNetTotals.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
@@ -239,11 +243,11 @@ const createFirstInstallmentRecordAfterDownpayment = async ({
     if (phaseSchedule?.current_due_date) {
       scheduledDateYmd = phaseSchedule.current_due_date;
     }
-    if (phaseSchedule?.current_generation_date) {
-      firstGenerationYmd = phaseSchedule.current_generation_date;
+    if (phaseSchedule?.next_generation_date) {
+      firstGenerationYmd = phaseSchedule.next_generation_date;
     }
-    if (phaseSchedule?.current_invoice_month) {
-      currentInvoiceMonthYmd = phaseSchedule.current_invoice_month;
+    if (phaseSchedule?.next_invoice_month) {
+      currentInvoiceMonthYmd = phaseSchedule.next_invoice_month;
     }
   } else if (profile.class_id) {
     const nonPhaseFirstDueYmd = await getPhaseDueDateYmd(client, profile.class_id, 1);
@@ -1460,12 +1464,54 @@ router.get(
         query(sumSqlDeduped, countParams),
       ]);
       const total = parseInt(countResult.rows[0].total, 10) || 0;
-      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
+      let filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
+      let filterTotalPaymentLineCount = total;
+      let returnedDeductionAmount = 0;
+      let returnedDeductionCount = 0;
+      let rejectedDeductionAmount = 0;
+      let rejectedDeductionCount = 0;
+
+      const excludeList = String(excludeApprovalStatus || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const isMainCompletedTab =
+        !isRejectedPaymentLogsTab &&
+        !myReturnQueue &&
+        !returnedByMe &&
+        String(status || '').trim() === 'Completed' &&
+        excludeList.some((s) => s === 'Returned' || s === 'Rejected');
+
+      if (isMainCompletedTab) {
+        const netBranchId =
+          req.user.userType !== 'Superadmin' && req.user.branchId
+            ? req.user.branchId
+            : branch_id
+              ? parseInt(branch_id, 10)
+              : null;
+        const netTotals = await computePaymentDateNetTotals(query, {
+          branchId: netBranchId,
+          dateFrom: payDateFrom || fromTrim || null,
+          dateTo: payDateTo || toTrim || null,
+        });
+        const summary = formatPaymentDateNetTotalsSummary(netTotals);
+        filterTotalLineAmount = summary.filterTotalLineAmount;
+        filterTotalPaymentLineCount = summary.filterTotalPaymentLineCount;
+        returnedDeductionAmount = summary.returnedDeductionAmount;
+        returnedDeductionCount = summary.returnedDeductionCount;
+        rejectedDeductionAmount = summary.rejectedDeductionAmount;
+        rejectedDeductionCount = summary.rejectedDeductionCount;
+      }
 
       res.json({
         success: true,
         data: payments,
         filterTotalLineAmount,
+        filterTotalPaymentLineCount,
+        returnedDeductionAmount,
+        returnedDeductionCount,
+        rejectedDeductionAmount,
+        rejectedDeductionCount,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -1914,16 +1960,44 @@ router.get(
       const total = merged.length;
       const pageData = merged.slice(offset, offset + limitNum).map(({ sort_id, ...rest }) => rest);
 
-      // List header total: payment rows only (unapplied AR rows are omitted; use AR dashboard cards for those).
-      const filterTotalLineAmount = paymentRows.reduce(
-        (s, r) => s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0),
-        0,
-      );
+      let paymentNetSummary;
+      if (!pendingOnly && approvalStatusFilter !== 'Approved') {
+        const netBranchId =
+          req.user.userType !== 'Superfinance' && req.user.branchId
+            ? req.user.branchId
+            : branch_id
+              ? parseInt(branch_id, 10)
+              : null;
+        const netTotals = await computePaymentDateNetTotals(query, {
+          branchId: netBranchId,
+          dateFrom: payDateFrom || fromTrim || null,
+          dateTo: payDateTo || toTrim || null,
+        });
+        paymentNetSummary = formatPaymentDateNetTotalsSummary(netTotals);
+      } else {
+        const netAmount = paymentRows.reduce(
+          (s, r) => s + (Number(r.payable_amount) || 0) + (Number(r.tip_amount) || 0),
+          0
+        );
+        paymentNetSummary = formatPaymentDateNetTotalsSummary({
+          netCount: paymentRows.length,
+          netAmount,
+          returnedCount: 0,
+          returnedAmount: 0,
+          rejectedCount: 0,
+          rejectedAmount: 0,
+        });
+      }
 
       return res.json({
         success: true,
         data: pageData,
-        filterTotalLineAmount,
+        filterTotalLineAmount: paymentNetSummary.filterTotalLineAmount,
+        filterTotalPaymentLineCount: paymentNetSummary.filterTotalPaymentLineCount,
+        returnedDeductionAmount: paymentNetSummary.returnedDeductionAmount,
+        returnedDeductionCount: paymentNetSummary.returnedDeductionCount,
+        rejectedDeductionAmount: paymentNetSummary.rejectedDeductionAmount,
+        rejectedDeductionCount: paymentNetSummary.rejectedDeductionCount,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -2323,7 +2397,17 @@ router.post(
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
     body('status').optional().isString().withMessage('Status must be a string'),
-    body('reference_number').notEmpty().trim().isString().withMessage('Reference number is required'),
+    body('reference_number')
+      .optional({ nullable: true })
+      .isString()
+      .custom((value, { req }) => {
+        const method = String(req.body.payment_method || '').trim();
+        if (method === 'Cash') return true;
+        if (!value || !String(value).trim()) {
+          throw new Error('Reference number is required');
+        }
+        return true;
+      }),
     body('remarks').optional().isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
   ],
@@ -2818,6 +2902,14 @@ router.post(
                     `✅ Package merchandise issued on installment payment (payment ${newPayment.payment_id})`
                   );
                 }
+
+                if (newInvoiceStatus === 'Paid' && Number(profile.generated_count || 0) === 1) {
+                  req._pendingCatchUpGeneration = {
+                    profileId: invoice.installmentinvoiceprofiles_id,
+                    paidInvoiceId: invoice_id,
+                    paymentIssueDateYmd: coerceToManilaYmd(issue_date, { fallbackToToday: true }),
+                  };
+                }
               }
             }
           }
@@ -3020,6 +3112,33 @@ router.post(
           }
         })();
         delete req._pendingInvoiceGeneration;
+      }
+
+      if (req._pendingCatchUpGeneration) {
+        const { profileId, paidInvoiceId, paymentIssueDateYmd } = req._pendingCatchUpGeneration;
+        (async () => {
+          try {
+            const { tryGenerateCatchUpInstallmentAfterFirstPhasePayment } = await import(
+              '../utils/installmentInvoiceGenerator.js'
+            );
+            const catchUpResult = await tryGenerateCatchUpInstallmentAfterFirstPhasePayment({
+              profileId,
+              paidInvoiceId,
+              paymentIssueDateYmd,
+            });
+            if (catchUpResult?.generated) {
+              console.log(
+                `✅ Catch-up recurring invoice ${catchUpResult.invoice_id} generated for profile ${profileId} after first phase payment`
+              );
+            }
+          } catch (catchUpErr) {
+            console.error(
+              `⚠️ Catch-up recurring invoice generation failed for profile ${profileId}:`,
+              catchUpErr
+            );
+          }
+        })();
+        delete req._pendingCatchUpGeneration;
       }
 
       // Fetch the complete payment with related data
@@ -3555,6 +3674,16 @@ router.put(
                       sourceLabel: 'System (Auto-enrolled via installment payment)',
                       invoice,
                     });
+
+                    if (newInvoiceStatus === 'Paid' && Number(profile.generated_count || 0) === 1) {
+                      req._pendingCatchUpGeneration = {
+                        profileId: invoice.installmentinvoiceprofiles_id,
+                        paidInvoiceId: payment.invoice_id,
+                        paymentIssueDateYmd: coerceToManilaYmd(effectiveIssueDateForLogic, {
+                          fallbackToToday: true,
+                        }),
+                      };
+                    }
                   }
                 }
               }
@@ -3605,6 +3734,33 @@ router.put(
           }
         })();
         delete req._pendingInvoiceGeneration;
+      }
+
+      if (req._pendingCatchUpGeneration) {
+        const { profileId, paidInvoiceId, paymentIssueDateYmd } = req._pendingCatchUpGeneration;
+        (async () => {
+          try {
+            const { tryGenerateCatchUpInstallmentAfterFirstPhasePayment } = await import(
+              '../utils/installmentInvoiceGenerator.js'
+            );
+            const catchUpResult = await tryGenerateCatchUpInstallmentAfterFirstPhasePayment({
+              profileId,
+              paidInvoiceId,
+              paymentIssueDateYmd,
+            });
+            if (catchUpResult?.generated) {
+              console.log(
+                `✅ Catch-up recurring invoice ${catchUpResult.invoice_id} generated for profile ${profileId} after first phase payment`
+              );
+            }
+          } catch (catchUpErr) {
+            console.error(
+              `⚠️ Catch-up recurring invoice generation failed for profile ${profileId}:`,
+              catchUpErr
+            );
+          }
+        })();
+        delete req._pendingCatchUpGeneration;
       }
 
       // Fetch updated payment
@@ -4039,7 +4195,7 @@ router.put(
 
       // Get payment details including branch
       const paymentCheck = await query(
-        `SELECT payment_id, invoice_id, branch_id, approval_status, reference_number
+        `SELECT payment_id, invoice_id, branch_id, approval_status, reference_number, payment_method
          FROM paymenttbl
          WHERE payment_id = $1`,
         [id]
@@ -4053,6 +4209,8 @@ router.put(
       }
 
       const payment = paymentCheck.rows[0];
+      const isCashPayment =
+        String(payment.payment_method || '').trim().toLowerCase() === 'cash';
       let invoiceCreatedBy = null;
       if (payment.invoice_id != null) {
         const invoiceOwnerRes = await query(
@@ -4077,14 +4235,14 @@ router.put(
         });
       }
 
-      if (approve && !financeVerifiedReferenceNumber) {
+      if (approve && !isCashPayment && !financeVerifiedReferenceNumber) {
         return res.status(400).json({
           success: false,
           message: 'Finance/Superfinance reference number is required when approving payment',
         });
       }
 
-      if (approve) {
+      if (approve && !isCashPayment) {
         const issuedReferenceNumber = String(payment.reference_number || '').trim();
         if (!issuedReferenceNumber) {
           return res.status(400).json({
@@ -4121,6 +4279,9 @@ router.put(
       // Update approval status. When approving, optionally also update issue_date
       // so the corrected payment date is reflected wherever payment_date is shown
       // (payment_date in queries is a SQL alias for paymenttbl.issue_date).
+      const verifiedRefForUpdate = isCashPayment
+        ? null
+        : financeVerifiedReferenceNumber || null;
       let updateSql;
       let updateParams;
       if (approve) {
@@ -4137,7 +4298,7 @@ router.put(
                        finance_verified_reference_number,
                        TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
                        TO_CHAR(issue_date, 'YYYY-MM-DD') as payment_date`;
-          updateParams = [userId, financeVerifiedReferenceNumber, paymentDateUpdate, id];
+          updateParams = [userId, verifiedRefForUpdate, paymentDateUpdate, id];
         } else {
           updateSql = `UPDATE paymenttbl
              SET approval_status = 'Approved',
@@ -4150,7 +4311,7 @@ router.put(
                        finance_verified_reference_number,
                        TO_CHAR(issue_date, 'YYYY-MM-DD') as issue_date,
                        TO_CHAR(issue_date, 'YYYY-MM-DD') as payment_date`;
-          updateParams = [userId, financeVerifiedReferenceNumber, id];
+          updateParams = [userId, verifiedRefForUpdate, id];
         }
       } else {
         updateSql = `UPDATE paymenttbl

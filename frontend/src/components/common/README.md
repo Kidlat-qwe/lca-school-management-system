@@ -19,6 +19,10 @@ Prefer importing `formatDateManila` / `formatDateTimeManila` from `src/utils/dat
 
 Shared **Tip/Payment Adjustment** and **Discount/Payment Adjustment** inputs for Record Payment modals (same layout as Invoice page).
 
+## `PaymentMethodSelect`
+
+Required **Payment Method** dropdown for payment modals. Defaults to **Select payment method** (empty value); options from `PAYMENT_METHOD_OPTIONS` in `constants/paymentFormLabels.js`.
+
 ```jsx
 import { PaymentTipField, PaymentDiscountField } from '../components/common/PaymentAdjustmentFields';
 
@@ -32,3 +36,5 @@ import { PaymentTipField, PaymentDiscountField } from '../components/common/Paym
 ```
 
 Labels and hints come from `src/constants/paymentFormLabels.js`.
+
+**Reference number (Cash):** New Cash payments do not require a reference. If a Cash payment already has a stored reference, `PaymentReferenceNumberField` shows it read-only. **Cash deposit** and **EOD** flows are unchanged.

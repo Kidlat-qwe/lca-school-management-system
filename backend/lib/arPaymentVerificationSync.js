@@ -1,12 +1,11 @@
 /**
  * Bidirectional sync between Payment Logs / Cash Deposit approval and cash AR verification.
  *
- * Merchandise cash AR: created as Paid with a linked payment_id → Verified when Finance
- * approves the payment (Payment Logs or Cash Deposit verify).
+ * Merchandise cash AR: Verified on issue; Payment Logs approval remains Pending until Finance approves.
+ * Merchandise non-cash AR: Paid until Finance verifies on AR page → linked payment auto-approved.
  *
- * Package cash AR: created as Submitted (no payment_id until applied) → Verified via AR page
- * or unapplied Payment Logs row. If a linked cash payment is later approved while AR is Paid,
- * this module promotes Paid → Verified as well.
+ * Package cash AR: Verified on issue (verified_by = Admin); Payment Logs Pending until Finance approves.
+ * Package non-cash AR: Submitted until Finance verifies on AR page → Payment Logs auto-approved (unapplied row or on attach).
  */
 
 /** Pool helper `query(text, params)` or transaction client `{ query(text, params) }`. */

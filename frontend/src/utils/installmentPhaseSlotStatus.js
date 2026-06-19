@@ -38,3 +38,13 @@ export const getInstallmentPhaseOutstanding = (phase) => {
   if (!phase?.is_generated || phase.amount == null) return 0;
   return Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0));
 };
+
+/** Billing column label for installment plan phase rows (Student History). */
+export const getInstallmentPhaseBillingLabel = (phase) => {
+  if (phase?.billing_kind === 'skipped_gap') return 'Skipped — no invoice';
+  if (phase?.billing_kind === 'advance') return 'Advance payment';
+  if (!phase?.is_generated) return '\u2014';
+  if (phase?.is_rejoin_invoice) return 'Rejoin';
+  if (phase?.is_auto_generated) return 'Auto-generated';
+  return 'Generated';
+};

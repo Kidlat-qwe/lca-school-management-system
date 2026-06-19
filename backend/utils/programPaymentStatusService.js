@@ -1,5 +1,6 @@
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
+import { isInstallmentPenaltyExemptInvoice } from './installmentPenaltyExempt.js';
 
 export const PROGRAM_PAYMENT_STATUS = Object.freeze({
   WAIT_FOR_PAYMENT: 'wait_for_payment',
@@ -117,8 +118,10 @@ const computeStatus = ({ invoiceStatus, dueDateYmd, graceUntilYmd, todayYmd }) =
 export function computeInstallmentPhaseDisplayStatus({
   invoiceStatus,
   dueDateYmd,
+  issueDateYmd,
   graceDays = 0,
   todayYmd,
+  penaltyExempt = false,
 }) {
   const raw = String(invoiceStatus || '').trim();
   const normalized = raw.toLowerCase();
@@ -126,6 +129,17 @@ export function computeInstallmentPhaseDisplayStatus({
   if (normalized === 'cancelled' || normalized === 'canceled') return 'Cancelled';
 
   const today = todayYmd || formatYmdLocal(new Date());
+
+  // First downpayment / first phase invoice: never show grace-period or overdue states.
+  if (penaltyExempt) {
+    return raw || 'Pending';
+  }
+
+  // Mid-class enrollment: first phase due can be before issue — never overdue/penalty.
+  if (issueDateYmd && dueDateYmd && String(dueDateYmd).slice(0, 10) < String(issueDateYmd).slice(0, 10)) {
+    return raw || 'Pending';
+  }
+
   if (!dueDateYmd || today <= dueDateYmd) return raw || 'Pending';
 
   const graceUntilYmd = addDaysYmd(dueDateYmd, graceDays);
@@ -147,6 +161,7 @@ export const syncProgramPaymentStatusForInvoice = async (client, invoiceId) => {
        i.invoice_chain_root_id,
        i.parent_invoice_id,
        TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_date,
+       TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
        ip.class_id AS installment_class_id
      FROM invoicestbl i
      LEFT JOIN installmentinvoiceprofilestbl ip
@@ -170,16 +185,28 @@ export const syncProgramPaymentStatusForInvoice = async (client, invoiceId) => {
   const branchId = invoice.branch_id != null ? Number(invoice.branch_id) : null;
   const graceDays = await resolveInstallmentGraceDays(client, branchId);
   const dueDateYmd = invoice.due_date || null;
+  const issueDateYmd = invoice.issue_date || null;
   const graceUntilYmd = dueDateYmd ? addDaysYmd(dueDateYmd, graceDays) : null;
   const todayYmd = formatYmdLocal(new Date());
   const paidAt = normalizedStatus === 'paid' ? await getPaidAt(client, invoiceId) : null;
   const classId = await resolveInvoiceClassId(client, invoice);
-  const status = computeStatus({
-    invoiceStatus: invoice.status,
-    dueDateYmd,
-    graceUntilYmd,
-    todayYmd,
-  });
+  const penaltyExempt =
+    invoice.installmentinvoiceprofiles_id != null
+      ? await isInstallmentPenaltyExemptInvoice(client, {
+          invoiceId: invoice.invoice_id,
+          profileId: invoice.installmentinvoiceprofiles_id,
+        })
+      : false;
+  const isMidEnrollmentFirstPhase =
+    issueDateYmd && dueDateYmd && String(dueDateYmd).slice(0, 10) < String(issueDateYmd).slice(0, 10);
+  const status = penaltyExempt || isMidEnrollmentFirstPhase
+    ? PROGRAM_PAYMENT_STATUS.WAIT_FOR_PAYMENT
+    : computeStatus({
+        invoiceStatus: invoice.status,
+        dueDateYmd,
+        graceUntilYmd,
+        todayYmd,
+      });
 
   let synced = 0;
   for (const studentId of studentIds) {

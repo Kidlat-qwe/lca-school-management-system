@@ -26,33 +26,31 @@ import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import PaymentFinanceVerifyModal from '../../components/paymentLogs/PaymentFinanceVerifyModal';
 import { PaymentLogPackageItemCell } from '../../components/paymentLogs/PaymentLogPackageItemCell';
 import { getPaymentLogPackageItemDisplayText } from '../../utils/paymentLogPackageItem';
 import UnappliedArPaymentLogStatus from '../../components/payments/UnappliedArPaymentLogStatus';
 import {
   isUnappliedArPaymentLogRow,
   verifyUnappliedArFromPaymentLog,
+  returnUnappliedArFromPaymentLog,
+  rejectUnappliedArFromPaymentLog,
 } from '../../utils/unappliedArPaymentLog';
 import StandardExportModal from '../../components/export/StandardExportModal';
+import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import {
+  buildPaymentApproveRequestBody,
+  isPaymentMethodSelected,
+  isPaymentReferenceNumberRequired,
+  normalizePaymentReferenceNumber,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+  validateFinancePaymentApproval,
+} from '../../constants/paymentFormLabels';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
-
-/** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
-const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
-  'Cash',
-  'Online Banking',
-  'Credit Card',
-  'E-wallets',
-];
-
-const getReturnFixPaymentMethodOptions = (currentValue) => {
-  const c = (currentValue || '').trim();
-  if (!c) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
-  if (RETURN_FIX_PAYMENT_METHOD_OPTIONS.includes(c)) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
-  return [c, ...RETURN_FIX_PAYMENT_METHOD_OPTIONS];
-};
 
 /** Same breakdown logic as Record Payment (adminInvoice.jsx) — for invoice summary + validation */
 const getInvoiceBreakdownForReturnFix = (invoice) => {
@@ -94,7 +92,7 @@ const PaymentLogs = () => {
   const [returnFixPayment, setReturnFixPayment] = useState(null);
   const [returnFixRef, setReturnFixRef] = useState('');
   const [returnFixAttachment, setReturnFixAttachment] = useState('');
-  const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('Cash');
+  const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('');
   const [returnFixIssueDate, setReturnFixIssueDate] = useState('');
   const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
   const [returnFixLoading, setReturnFixLoading] = useState(false);
@@ -144,15 +142,24 @@ const PaymentLogs = () => {
   const [approvalMenuPosition, setApprovalMenuPosition] = useState({ top: 0, left: 0 });
   const [approvalLoadingId, setApprovalLoadingId] = useState(null);
   const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [verifyModalMode, setVerifyModalMode] = useState('verify');
+  const [verifyModalRemarks, setVerifyModalRemarks] = useState('');
+  const [verifyModalReferenceInput, setVerifyModalReferenceInput] = useState('');
   const [selectedPaymentForReference, setSelectedPaymentForReference] = useState(null);
-  const [referenceModalInput, setReferenceModalInput] = useState('');
+  const [paymentDateInput, setPaymentDateInput] = useState('');
   const [referenceModalUpdating, setReferenceModalUpdating] = useState(false);
+  const [returnActionLoading, setReturnActionLoading] = useState(false);
   const [showAttachmentViewer, setShowAttachmentViewer] = useState(false);
   const [attachmentViewerUrl, setAttachmentViewerUrl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   /** Total Returned payments for current filters — Return tab badge */
   const [returnedPaymentLogCount, setReturnedPaymentLogCount] = useState(null);
   const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
+  const [filterTotalPaymentLineCount, setFilterTotalPaymentLineCount] = useState(null);
+  const [returnedDeductionAmount, setReturnedDeductionAmount] = useState(0);
+  const [returnedDeductionCount, setReturnedDeductionCount] = useState(0);
+  const [rejectedDeductionAmount, setRejectedDeductionAmount] = useState(0);
+  const [rejectedDeductionCount, setRejectedDeductionCount] = useState(0);
   const [listRefreshing, setListRefreshing] = useState(false);
   const initialDataLoadedRef = useRef(false);
   const latestFetchIdRef = useRef(0);
@@ -355,6 +362,15 @@ const PaymentLogs = () => {
       } else {
         setFilterTotalLineAmount(null);
       }
+      if (response.filterTotalPaymentLineCount != null && response.filterTotalPaymentLineCount !== undefined) {
+        setFilterTotalPaymentLineCount(Number(response.filterTotalPaymentLineCount));
+      } else {
+        setFilterTotalPaymentLineCount(null);
+      }
+      setReturnedDeductionAmount(Number(response.returnedDeductionAmount) || 0);
+      setReturnedDeductionCount(Number(response.returnedDeductionCount) || 0);
+      setRejectedDeductionAmount(Number(response.rejectedDeductionAmount) || 0);
+      setRejectedDeductionCount(Number(response.rejectedDeductionCount) || 0);
       if (response.pagination) {
         setPagination({
           page: response.pagination.page,
@@ -417,35 +433,114 @@ const PaymentLogs = () => {
 
   const openReferenceModal = (payment) => {
     setSelectedPaymentForReference(payment);
-    setReferenceModalInput(''); // Finance must retype the reference number from the image
+    setVerifyModalMode('verify');
+    setVerifyModalRemarks('');
+    setVerifyModalReferenceInput('');
+    const initialDate =
+      (payment?.payment_date || payment?.issue_date || '').toString().slice(0, 10);
+    setPaymentDateInput(initialDate);
     setShowReferenceModal(true);
   };
 
   const closeReferenceModal = () => {
+    if (referenceModalUpdating || returnActionLoading) return;
     setShowReferenceModal(false);
     setSelectedPaymentForReference(null);
-    setReferenceModalInput('');
+    setVerifyModalMode('verify');
+    setVerifyModalRemarks('');
+    setVerifyModalReferenceInput('');
+    setPaymentDateInput('');
   };
 
-  const handleUpdateReferenceNumber = async (e) => {
-    e.preventDefault();
+  const changeVerifyModalMode = (mode) => {
+    setVerifyModalMode(mode);
+    setVerifyModalRemarks('');
+  };
+
+  const handleReturnToBranch = async () => {
     if (!selectedPaymentForReference) return;
-    const enteredRef = referenceModalInput.trim();
+    const note = verifyModalRemarks.trim();
+    if (!note) {
+      appAlert('Please enter notes explaining why the payment is being returned.');
+      return;
+    }
+    setReturnActionLoading(true);
+    const isAr = isUnappliedArPaymentLogRow(selectedPaymentForReference);
+    try {
+      if (isAr) {
+        await returnUnappliedArFromPaymentLog(selectedPaymentForReference, note);
+      } else {
+        await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/return`, {
+          method: 'PUT',
+          body: JSON.stringify({ reason: note }),
+        });
+      }
+      closeReferenceModal();
+      await fetchPayments(pagination.page);
+      await fetchReturnedPaymentLogCount();
+      appAlert(
+        isAr
+          ? 'Acknowledgement receipt returned to branch for correction.'
+          : 'Payment returned to branch for correction.'
+      );
+    } catch (err) {
+      appAlert(err.message || 'Failed to return payment.');
+    } finally {
+      setReturnActionLoading(false);
+    }
+  };
+
+  const handleRejectPayment = async () => {
+    if (!selectedPaymentForReference) return;
+    const note = verifyModalRemarks.trim();
+    if (!note) {
+      appAlert('Please enter a reject reason before rejecting this payment.');
+      return;
+    }
+    setReturnActionLoading(true);
+    try {
+      const isAr = isUnappliedArPaymentLogRow(selectedPaymentForReference);
+      if (isAr) {
+        await rejectUnappliedArFromPaymentLog(selectedPaymentForReference, note);
+      } else {
+        await apiRequest(`/payments/${selectedPaymentForReference.payment_id}/reject`, {
+          method: 'PUT',
+          body: JSON.stringify({ reason: note }),
+        });
+      }
+      closeReferenceModal();
+      await fetchPayments(1);
+      await fetchReturnedPaymentLogCount();
+      appAlert(
+        isAr
+          ? 'Acknowledgement receipt rejected. The branch must create a new acknowledgement receipt.'
+          : 'Payment rejected. The invoice is now marked as Rejected for repayment.'
+      );
+    } catch (err) {
+      appAlert(err.message || 'Failed to reject payment.');
+    } finally {
+      setReturnActionLoading(false);
+    }
+  };
+
+  const handleVerifyPayment = async () => {
+    if (!selectedPaymentForReference) return;
+
+    const enteredRef = verifyModalReferenceInput.trim();
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
-
-    // Require both values
-    if (!originalRef) {
-      appAlert('This payment has no reference number recorded. Please ask the encoder to update it from the Record Payment modal.');
+    const approvalCheck = validateFinancePaymentApproval(
+      selectedPaymentForReference.payment_method,
+      enteredRef,
+      originalRef
+    );
+    if (!approvalCheck.ok) {
+      appAlert(approvalCheck.message);
       return;
     }
-    if (!enteredRef) {
-      appAlert('Please enter the reference number exactly as shown on the receipt image.');
-      return;
-    }
 
-    // Enforce match between encoded reference and verifier input
-    if (enteredRef !== originalRef) {
-      appAlert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and coordinate with the encoder before approving.');
+    const trimmedDate = (paymentDateInput || '').trim();
+    if (trimmedDate && !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      appAlert('Payment date must be a valid date (YYYY-MM-DD).');
       return;
     }
 
@@ -453,20 +548,34 @@ const PaymentLogs = () => {
     setReferenceModalUpdating(true);
     try {
       if (isUnappliedArPaymentLogRow(selectedPaymentForReference)) {
-        await verifyUnappliedArFromPaymentLog(selectedPaymentForReference);
+        await verifyUnappliedArFromPaymentLog(selectedPaymentForReference, enteredRef);
         closeReferenceModal();
         await fetchPayments(pagination.page);
         await fetchReturnedPaymentLogCount();
         return;
       }
 
+      const requestBody = buildPaymentApproveRequestBody(
+        selectedPaymentForReference.payment_method,
+        enteredRef
+      );
+      if (trimmedDate) requestBody.payment_date = trimmedDate;
+
       await apiRequest(`/payments/${paymentId}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({ approve: true }),
+        body: JSON.stringify(requestBody),
       });
       setPayments((prev) =>
         prev.map((p) =>
-          p.payment_id === paymentId ? { ...p, approval_status: 'Approved' } : p
+          p.payment_id === paymentId
+            ? {
+                ...p,
+                approval_status: 'Approved',
+                ...(trimmedDate
+                  ? { payment_date: trimmedDate, issue_date: trimmedDate }
+                  : {}),
+              }
+            : p
         )
       );
       closeReferenceModal();
@@ -483,7 +592,7 @@ const PaymentLogs = () => {
     setReturnFixPayment(payment);
     setReturnFixRef((payment.reference_number || '').trim());
     setReturnFixAttachment(payment.payment_attachment_url || '');
-    setReturnFixPaymentMethod((payment.payment_method || 'Cash').trim() || 'Cash');
+    setReturnFixPaymentMethod(String(payment.payment_method || '').trim());
     setReturnFixIssueDate((payment.issue_date || '').slice(0, 10));
     setReturnFixPaymentType((payment.payment_type || '').trim() || '');
     const pa = payment.payable_amount;
@@ -513,7 +622,7 @@ const PaymentLogs = () => {
     setReturnFixPayment(null);
     setReturnFixRef('');
     setReturnFixAttachment('');
-    setReturnFixPaymentMethod('Cash');
+    setReturnFixPaymentMethod('');
     setReturnFixIssueDate('');
     setReturnFixAttachmentUploading(false);
     setReturnFixInvoiceSummary(null);
@@ -673,6 +782,10 @@ const PaymentLogs = () => {
         appAlert('Please select a payment type.');
         return;
       }
+      if (!isPaymentMethodSelected(returnFixPaymentMethod)) {
+        appAlert(PAYMENT_METHOD_REQUIRED_MESSAGE);
+        return;
+      }
       const payableNum = parseFloat(returnFixPayableAmount);
       if (!returnFixPayableAmount || Number.isNaN(payableNum) || payableNum <= 0) {
         appAlert('Payable amount must be greater than 0.');
@@ -692,7 +805,7 @@ const PaymentLogs = () => {
         appAlert('Discount amount must be less than payable amount.');
         return;
       }
-      if (!refTrim) {
+      if (isPaymentReferenceNumberRequired(returnFixPaymentMethod) && !refTrim) {
         appAlert('Reference number is required.');
         return;
       }
@@ -721,9 +834,9 @@ const PaymentLogs = () => {
         }
       }
       const payload = {
-        reference_number: refTrim,
+        reference_number: normalizePaymentReferenceNumber(returnFixPaymentMethod, refTrim),
         attachment_url: attTrim,
-        payment_method: returnFixPaymentMethod.trim() || undefined,
+        payment_method: returnFixPaymentMethod.trim(),
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
@@ -874,7 +987,17 @@ const PaymentLogs = () => {
     return filteredPayments.reduce((s, p) => s + line(p), 0);
   }, [filteredPayments, filterTotalLineAmount]);
 
-  const summaryPaymentLogCount = Number(pagination.total) || 0;
+  const summaryPaymentLogCount =
+    filterTotalPaymentLineCount != null && !Number.isNaN(Number(filterTotalPaymentLineCount))
+      ? Number(filterTotalPaymentLineCount)
+      : Number(pagination.total) || 0;
+
+  const hasPaymentDeductions =
+    branchLogTab === 'main' &&
+    (returnedDeductionCount > 0 ||
+      returnedDeductionAmount > 0 ||
+      rejectedDeductionCount > 0 ||
+      rejectedDeductionAmount > 0);
 
   const handleSort = (key) => {
     setSortConfig((current) => toggleSortConfig(current, key));
@@ -1294,7 +1417,7 @@ const PaymentLogs = () => {
             {branchLogTab === 'rejected' || branchLogTab === 'return'
               ? 'Returned and Rejected tabs list all matching audit rows (no month filter). Use search or branch to narrow results.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
-              ? 'Month filter uses payment issue date (paymenttbl.issue_date), same field as the Superadmin Financial Dashboard month scope. Clear the month to show all dates.'
+              ? 'Month filter uses payment issue date (paymenttbl.issue_date), same as Invoice and Monthly Operational Dashboard. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
               : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}
@@ -1304,7 +1427,7 @@ const PaymentLogs = () => {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
         <span>
-          <span className="font-semibold text-gray-900">Total Payment Logs:</span>{' '}
+          <span className="font-semibold text-gray-900">Total payment lines:</span>{' '}
           <span className="font-medium text-gray-900">{summaryPaymentLogCount.toLocaleString('en-US')}</span>
         </span>
         <span className="text-gray-300">·</span>
@@ -1315,6 +1438,22 @@ const PaymentLogs = () => {
           </span>
         </span>
       </div>
+      {hasPaymentDeductions ? (
+        <p className="text-[11px] text-gray-500 leading-snug -mt-1">
+          Net total after deductions for this payment-date period:
+          {returnedDeductionCount > 0 || returnedDeductionAmount > 0
+            ? ` Returned −₱${returnedDeductionAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${returnedDeductionCount} line${returnedDeductionCount === 1 ? '' : 's'}).`
+            : ''}
+          {rejectedDeductionCount > 0 || rejectedDeductionAmount > 0
+            ? ` Rejected −₱${rejectedDeductionAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${rejectedDeductionCount} line${rejectedDeductionCount === 1 ? '' : 's'}).`
+            : ''}
+          {' '}Resubmit/approve a returned payment or record a new payment after rejection to update totals.
+        </p>
+      ) : (
+        <p className="text-[11px] text-gray-500 leading-snug -mt-1">
+          Total amount sums completed invoice payment lines only (payment date) — matches Invoice and Monthly Operational Dashboard. Unapplied package AR rows in the list are excluded from this total.
+        </p>
+      )}
 
       {/* Error Message */}
       {error && (
@@ -1506,11 +1645,11 @@ const PaymentLogs = () => {
                         ) : approvalLoadingId === payment.payment_id ? (
                           <span className="text-gray-400 text-xs">Updating...</span>
                         ) : (() => {
-                          const isUnappliedAr = payment.source_type === 'UNAPPLIED_AR';
+                          const isUnappliedAr = isUnappliedArPaymentLogRow(payment);
                           const isApproved = (payment.approval_status || 'Pending') === 'Approved';
                           const canApprove = canApprovePayment(payment);
                           const showDropdown = openApprovalMenuId === payment.payment_id;
-                          if (isUnappliedAr) {
+                          if (isUnappliedAr && !isApproved) {
                             return (
                               <UnappliedArPaymentLogStatus
                                 payment={payment}
@@ -1542,7 +1681,7 @@ const PaymentLogs = () => {
                                 className={`inline-flex items-center gap-1 max-w-full px-2 py-1 rounded-md text-xs font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 shrink-0 ${
                                   isApproved ? (canApprove ? 'hover:ring-2 hover:ring-primary-300' : 'cursor-default') : 'hover:ring-2 hover:ring-primary-300'
                                 } ${isApproved ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}
-                                title={isApproved ? (canApprove ? 'Click to change approval' : 'No permission') : 'Click to update reference number'}
+                                title={isApproved ? (canApprove ? 'Click to change approval' : 'No permission') : 'Click to verify payment'}
                               >
                                 <span className="truncate">{isApproved ? 'Approved' : 'Pending Approval'}</span>
                                 {(isApproved ? canApprove : true) && (
@@ -1704,86 +1843,27 @@ const PaymentLogs = () => {
         document.body
       )}
 
-      {/* Reference Number modal - for Pending payments (portaled so overlay covers header) */}
-      {showReferenceModal && selectedPaymentForReference && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
-          onClick={closeReferenceModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-gray-900">Payment Status info</h2>
-                <button
-                  type="button"
-                  onClick={closeReferenceModal}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <p className="text-sm text-gray-600 mb-4">
-                Payment INV-{selectedPaymentForReference.invoice_id} · {selectedPaymentForReference.student_name || 'N/A'}
-              </p>
-              {selectedPaymentForReference.payment_attachment_url && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Attached Image</label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachmentViewerUrl(selectedPaymentForReference.payment_attachment_url);
-                      setShowAttachmentViewer(true);
-                    }}
-                    className="block cursor-pointer text-left rounded-lg border border-gray-200 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1"
-                  >
-                    <img
-                      src={selectedPaymentForReference.payment_attachment_url}
-                      alt="Payment attachment"
-                      className="max-h-48 w-auto rounded-lg object-contain"
-                    />
-                  </button>
-                </div>
-              )}
-              <form onSubmit={handleUpdateReferenceNumber}>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference Number</label>
-                  <input
-                    type="text"
-                    value={referenceModalInput}
-                    onChange={(e) => setReferenceModalInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
-                    required
-                  />
-                </div>
-                <div className="flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={closeReferenceModal}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                    disabled={referenceModalUpdating}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={referenceModalUpdating}
-                  >
-                    {referenceModalUpdating ? 'Saving...' : 'Done'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <PaymentFinanceVerifyModal
+        open={showReferenceModal && Boolean(selectedPaymentForReference)}
+        mode={verifyModalMode}
+        payment={selectedPaymentForReference}
+        paymentDate={paymentDateInput}
+        onPaymentDateChange={setPaymentDateInput}
+        referenceNumber={verifyModalReferenceInput}
+        onReferenceNumberChange={setVerifyModalReferenceInput}
+        remarks={verifyModalRemarks}
+        onRemarksChange={setVerifyModalRemarks}
+        submitting={referenceModalUpdating || returnActionLoading}
+        onClose={closeReferenceModal}
+        onConfirmVerify={handleVerifyPayment}
+        onConfirmReturn={handleReturnToBranch}
+        onConfirmReject={handleRejectPayment}
+        onModeChange={changeVerifyModalMode}
+        onViewAttachment={(url) => {
+          setAttachmentViewerUrl(url);
+          setShowAttachmentViewer(true);
+        }}
+      />
 
       {/* Returned payment: fix fields & resubmit — layout aligned with Record Payment modal */}
       {returnFixPayment && createPortal(
@@ -1862,20 +1942,12 @@ const PaymentLogs = () => {
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       id="return_fix_payment_method"
                       value={returnFixPaymentMethod}
                       onChange={(e) => setReturnFixPaymentMethod(e.target.value)}
                       disabled={returnFixLoading || returnFixAttachmentUploading}
-                      className="input-field text-sm"
-                      required
-                    >
-                      {getReturnFixPaymentMethodOptions(returnFixPaymentMethod).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 </div>
 
@@ -2026,19 +2098,12 @@ const PaymentLogs = () => {
                   )}
                 </div>
 
-                <div>
-                  <label className="label-field text-xs">
-                    Reference Number <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={returnFixRef}
-                    onChange={(e) => setReturnFixRef(e.target.value)}
-                    disabled={returnFixLoading || returnFixAttachmentUploading}
-                    className="input-field text-sm"
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
-                  />
-                </div>
+                <PaymentReferenceNumberField
+                  paymentMethod={returnFixPaymentMethod}
+                  value={returnFixRef}
+                  onChange={(e) => setReturnFixRef(e.target.value)}
+                  disabled={returnFixLoading || returnFixAttachmentUploading}
+                />
 
                 <div>
                   <label className="label-field text-xs">Remarks</label>

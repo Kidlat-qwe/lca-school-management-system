@@ -25,6 +25,8 @@ import RecentMerchandiseReleasesLog from './RecentMerchandiseReleasesLog';
 import MatrixInfoTooltip from './MatrixInfoTooltip';
 import { DAILY_OPERATIONAL } from '../../constants/dashboardDescriptions';
 import MerchandiseReleasedDetailModal from './MerchandiseReleasedDetailModal';
+import OperationalAttendanceCard from './OperationalAttendanceCard';
+import { getClassesBasePath } from '../../utils/classAttendanceDeepLink';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#DC2626'];
 
@@ -100,7 +102,7 @@ const DailyOperationalDashboardView = ({
   const [merchReleasedModalOpen, setMerchReleasedModalOpen] = useState(false);
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const isAdmin = userType === 'Admin';
-  const basePath = isAdmin ? '/admin' : '/superadmin';
+  const basePath = getClassesBasePath(userType);
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -337,7 +339,7 @@ const DailyOperationalDashboardView = ({
         <div className="space-y-3">
           <p className="text-sm font-medium text-gray-700">{DAILY_OPERATIONAL.financialSection}</p>
           <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
-            <div className="min-w-0 lg:col-span-1">
+            <div className="min-w-0">
               <CombinedStatsCard
                 title="Sales & Payments"
                 iconName="currency"
@@ -351,12 +353,21 @@ const DailyOperationalDashboardView = ({
                 tooltip={DAILY_OPERATIONAL.salesPaymentsCard}
               />
             </div>
-            <div className="min-w-0 lg:col-span-2">
+            <div className="min-w-0">
               <RecentInvoicePaymentsLog
                 payments={data?.recent_invoice_payments}
                 tooltip={DAILY_OPERATIONAL.recentInvoicePayments}
                 emptyMessage="No invoice payments on this date."
                 onViewAll={goPaymentLogsForPeriod}
+              />
+            </div>
+            <div className="min-w-0">
+              <OperationalAttendanceCard
+                mode="daily"
+                summaryDate={selectedDate}
+                branchId={branchId}
+                branchName={selectedBranchName}
+                showBranchColumn={canFilterAcrossBranches && !branchId}
               />
             </div>
           </div>

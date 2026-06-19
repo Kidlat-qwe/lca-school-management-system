@@ -24,6 +24,10 @@ import {
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
 import { DEFAULT_PDF_CONTACT_EMAIL } from '../utils/pdfBranding.js';
+import {
+  computePaymentDateNetTotals,
+  formatPaymentDateNetTotalsSummary,
+} from '../lib/paymentDateNetTotals.js';
 
 const router = express.Router();
 
@@ -279,7 +283,8 @@ function applyInvoiceListTextSearch(clause, { search = '', studentSearch = '' } 
 /**
  * Header totals for paginated invoice list (matches active status + date filters).
  * Payment-date scope: sum completed payment lines in range for invoices in scope.
- * All statuses: includes rejected-approval payment lines. Issue-date scope: per-invoice billed + tips.
+ * Default (all statuses): excludes Returned/Rejected approval — same as Payment Logs main tab.
+ * Issue-date scope: per-invoice billed + tips (excludes Returned/Rejected approval payments).
  */
 async function computeInvoiceFilterSummary({
   listWhereFiltered,
@@ -290,7 +295,6 @@ async function computeInvoiceFilterSummary({
   const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
   const allStatuses = statusesList.length === 0;
   const onlyRejected = statusesList.length === 1 && statusesList[0] === 'Rejected';
-  const wantsRejected = allStatuses || statusesList.includes('Rejected');
   const baseStatuses = statusesList.filter((status) => status !== 'Rejected');
 
   if (usePaymentRange) {
@@ -307,24 +311,23 @@ async function computeInvoiceFilterSummary({
     let approvalSql = '';
     if (onlyRejected) {
       approvalSql = ` AND COALESCE(p.approval_status, 'Pending') = 'Rejected'`;
-    } else if (!wantsRejected) {
-      approvalSql = ` AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`;
     }
 
-    const payDateParts = [];
-    if (paymentDateFrom) {
-      paramCount += 1;
-      payDateParts.push(`p.issue_date >= $${paramCount}::date`);
-      params.push(paymentDateFrom);
-    }
-    if (paymentDateTo) {
-      paramCount += 1;
-      payDateParts.push(`p.issue_date <= $${paramCount}::date`);
-      params.push(paymentDateTo);
-    }
-    const payDateSql = payDateParts.length > 0 ? payDateParts.join(' AND ') : 'TRUE';
+    if (onlyRejected) {
+      const payDateParts = [];
+      if (paymentDateFrom) {
+        paramCount += 1;
+        payDateParts.push(`p.issue_date >= $${paramCount}::date`);
+        params.push(paymentDateFrom);
+      }
+      if (paymentDateTo) {
+        paramCount += 1;
+        payDateParts.push(`p.issue_date <= $${paramCount}::date`);
+        params.push(paymentDateTo);
+      }
+      const payDateSql = payDateParts.length > 0 ? payDateParts.join(' AND ') : 'TRUE';
 
-    const paymentInner = `
+      const paymentInner = `
       SELECT p.payment_id,
              MAX(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)) AS line_amt
       FROM paymenttbl p
@@ -340,16 +343,47 @@ async function computeInvoiceFilterSummary({
         )
       GROUP BY p.payment_id`;
 
-    const sumResult = await query(
-      `SELECT COUNT(*)::int AS line_count,
-              COALESCE(SUM(line_amt), 0)::numeric AS line_total
-       FROM (${paymentInner}) s`,
-      params
-    );
+      const sumResult = await query(
+        `SELECT COUNT(*)::int AS line_count,
+                COALESCE(SUM(line_amt), 0)::numeric AS line_total
+         FROM (${paymentInner}) s`,
+        params
+      );
+
+      return {
+        totalAmount: parseFloat(sumResult.rows[0]?.line_total ?? 0) || 0,
+        paymentLineCount: Number(sumResult.rows[0]?.line_count ?? 0) || 0,
+        returnedDeductionAmount: 0,
+        returnedDeductionCount: 0,
+        rejectedDeductionAmount: 0,
+        rejectedDeductionCount: 0,
+      };
+    }
+
+    const invoiceScopeSql = `
+      AND EXISTS (
+        SELECT 1
+        ${INVOICE_LIST_FROM_SQL}
+        ${listWhereFiltered.whereSql}
+        ${invoiceStatusSql}
+        AND i.invoice_id = p.invoice_id
+      )`;
+
+    const netTotals = await computePaymentDateNetTotals(query, {
+      dateFrom: paymentDateFrom,
+      dateTo: paymentDateTo,
+      extraWhereSql: invoiceScopeSql,
+      extraParams: params,
+    });
+    const summary = formatPaymentDateNetTotalsSummary(netTotals);
 
     return {
-      totalAmount: parseFloat(sumResult.rows[0]?.line_total ?? 0) || 0,
-      paymentLineCount: Number(sumResult.rows[0]?.line_count ?? 0) || 0,
+      totalAmount: summary.filterTotalLineAmount,
+      paymentLineCount: summary.filterTotalPaymentLineCount,
+      returnedDeductionAmount: summary.returnedDeductionAmount,
+      returnedDeductionCount: summary.returnedDeductionCount,
+      rejectedDeductionAmount: summary.rejectedDeductionAmount,
+      rejectedDeductionCount: summary.rejectedDeductionCount,
     };
   }
 
@@ -361,14 +395,14 @@ async function computeInvoiceFilterSummary({
         FROM paymenttbl px
         WHERE px.invoice_id = i.invoice_id
           AND px.status = 'Completed'
-          AND COALESCE(px.approval_status, 'Pending') <> 'Rejected'
+          AND COALESCE(px.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
       ), 0)
       + COALESCE((
         SELECT SUM(COALESCE(px.tip_amount, 0))
         FROM paymenttbl px
         WHERE px.invoice_id = i.invoice_id
           AND px.status = 'Completed'
-          AND COALESCE(px.approval_status, 'Pending') <> 'Rejected'
+          AND COALESCE(px.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
       ), 0)
     ), 0)::numeric AS invoice_total
     ${INVOICE_LIST_FROM_SQL}
@@ -618,6 +652,16 @@ router.get(
                            AND p.status = 'Completed'
                            AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                        ) AS last_payment_date,
+                       (
+                         SELECT enc.full_name
+                         FROM paymenttbl p
+                         LEFT JOIN userstbl enc ON enc.user_id = p.created_by
+                         WHERE p.invoice_id = i.invoice_id
+                           AND p.status = 'Completed'
+                           AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+                         ORDER BY p.issue_date DESC NULLS LAST, p.payment_id DESC
+                         LIMIT 1
+                       ) AS payment_recorded_by_name,
                         i.created_by,
                         i.installmentinvoiceprofiles_id,
                         i.parent_invoice_id, i.balance_invoice_id, i.invoice_chain_root_id,

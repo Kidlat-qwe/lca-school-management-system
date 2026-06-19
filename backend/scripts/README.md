@@ -287,6 +287,39 @@ node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --issu
 
 Rows where the required floor would be **after** `due_date` are skipped and logged as a conflict.
 
+### `repairInstallmentGenerationSchedule.js`
+
+Batch scan/repair for **all class-linked installment plans** whose auto-generation queue (`installmentinvoicestbl`) has the wrong **25th / 5th-next-month** cycle or is stuck with `status = 'Generated'` while more phases remain.
+
+Uses `buildPhaseInstallmentSchedule` (same rules as live billing) to compute the correct `next_generation_date` and `next_invoice_month`, then resets `status` to `NULL` so the scheduler can run again.
+
+**Usage:**
+
+```bash
+# From repo root — preview ALL active students (safe, no writes)
+node backend/scripts/repairInstallmentGenerationSchedule.js --dry-run
+
+# Apply fixes for ALL active class-linked students
+node backend/scripts/repairInstallmentGenerationSchedule.js --apply
+
+# Single profile (e.g. Matthew Sabino)
+node backend/scripts/repairInstallmentGenerationSchedule.js 154 --dry-run
+node backend/scripts/repairInstallmentGenerationSchedule.js 154 --apply
+
+# npm shortcuts (from backend/)
+npm run repair:installment-generation-schedule
+npm run repair:installment-generation-schedule:apply
+```
+
+**Options:**
+- `--dry-run` (default): List mismatches only.
+- `--apply`: Commit queue fixes.
+- `--include-inactive`: Also scan inactive profiles that still have a queue row.
+- `--verbose`: Log profiles that are already correct.
+- `<profileId>`: Limit to one `installmentinvoiceprofiles_id`.
+
+Does **not** change existing invoice amounts, payments, or `generated_count` — only the **next auto-generation** queue row.
+
 ### `repairInstallmentQueueExplicitNextDates.js`
 
 Sets **`installmentinvoicestbl.next_generation_date`** and **`next_invoice_month`** for a single open queue row. The Generate Invoice modal and the **Next generation** / **Next month** list columns use these values (with the frontend deriving issue/due/month from the generation anchor).

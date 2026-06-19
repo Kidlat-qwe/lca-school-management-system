@@ -32,6 +32,10 @@ import {
   merchandiseReleaseDashboardCteMonthly,
 } from './merchandiseReleaseLog.js';
 import { loadRecentInvoicePaymentsForOperationalDashboard } from './operationalDashboardRecentPayments.js';
+import {
+  computePaymentDateNetTotals,
+  formatPaymentDateNetTotalsSummary,
+} from './paymentDateNetTotals.js';
 
 const buildMonthSequence = (monthsBack = 6, anchorDateInput = new Date()) => {
   const today = anchorDateInput instanceof Date ? anchorDateInput : new Date(anchorDateInput);
@@ -346,6 +350,20 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
       active_branches: 0,
     }
   );
+
+  const paymentNetTotals = await computePaymentDateNetTotals(runQuery, {
+    branchId: branchFilter,
+    dateFrom: monthStart,
+    dateTo: monthEndExclusive,
+    dateEndExclusive: true,
+  });
+  const paymentNetSummary = formatPaymentDateNetTotalsSummary(paymentNetTotals);
+  totals.returned_deduction_count = paymentNetSummary.returnedDeductionCount;
+  totals.returned_deduction_amount = paymentNetSummary.returnedDeductionAmount;
+  totals.rejected_deduction_count = paymentNetSummary.rejectedDeductionCount;
+  totals.rejected_deduction_amount = paymentNetSummary.rejectedDeductionAmount;
+  totals.net_payment_line_count = paymentNetSummary.filterTotalPaymentLineCount;
+  totals.net_payment_line_amount = paymentNetSummary.filterTotalLineAmount;
 
   const salesTrendMap = salesTrendResult.rows.reduce((acc, row) => {
     acc[String(row.ym)] = parseFloat(row.total_amount) || 0;

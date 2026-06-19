@@ -1,12 +1,9 @@
+import { resolvePaymentMethodOptions } from '../constants/paymentFormLabels';
 import { isFinanceReturnedSummaryStatus } from './dailySummaryPaymentsParse';
 
-const PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
-
+/** @deprecated Use resolvePaymentMethodOptions from paymentFormLabels */
 export function getCashDepositPaymentMethodOptions(currentValue) {
-  const c = String(currentValue || '').trim();
-  if (!c) return PAYMENT_METHOD_OPTIONS;
-  if (PAYMENT_METHOD_OPTIONS.includes(c)) return PAYMENT_METHOD_OPTIONS;
-  return [c, ...PAYMENT_METHOD_OPTIONS];
+  return resolvePaymentMethodOptions(currentValue);
 }
 
 /** Branch Admin / Superadmin may fix payment lines while a cash deposit is returned. */

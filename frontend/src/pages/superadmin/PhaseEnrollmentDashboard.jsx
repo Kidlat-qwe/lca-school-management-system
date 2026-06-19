@@ -3,23 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import {
-  EnrollmentCombinedStatsCard,
-  EnrollmentStatsCard,
-} from '../../components/dashboard/EnrollmentDashboardKpiCards';
 import EnrollmentRatePhaseVerifyModal from '../../components/dashboard/EnrollmentRatePhaseVerifyModal';
 import StudentPhaseEnrollmentMatrixChart from '../../components/dashboard/StudentPhaseEnrollmentMatrixChart';
-import {
-  ENROLLMENT_DASHBOARD,
-  MONTHLY_ENROLLMENT_DASHBOARD,
-  PHASE_ENROLLMENT_DASHBOARD,
-} from '../../constants/dashboardDescriptions';
-import {
-  aggregateMonthMatrixKpiTotals,
-  matrixCohortStats,
-  reEnrollmentRateFromMatrixStats,
-  sumMonthStatsReEnrolledNumerators,
-} from '../../utils/enrollmentMatrixRate';
+import { ENROLLMENT_DASHBOARD, PHASE_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { issueDateRangeFromManilaYear } from '../../utils/dateUtils';
 
 const CURRENT_YEAR = parseInt(
@@ -127,8 +113,6 @@ const PhaseEnrollmentDashboard = () => {
   }, [data?.year_range, yearRange.minYear, yearRange.maxYear]);
 
   const studentPhaseMatrix = useMemo(() => data?.student_phase_enrollment_matrix ?? null, [data]);
-  /** Year KPI cards use the month billing matrix (same as Month Re-enrollment dashboard). */
-  const studentMonthMatrix = useMemo(() => data?.student_month_enrollment_matrix ?? null, [data]);
   const programs = useMemo(() => data?.programs ?? [], [data]);
   const classes = useMemo(() => data?.classes ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
@@ -176,28 +160,6 @@ const PhaseEnrollmentDashboard = () => {
     return parts.filter(Boolean).join(' · ');
   }, [selectedBranchName, displayYear]);
 
-  const matrixKpiTotals = useMemo(
-    () => aggregateMonthMatrixKpiTotals(studentMonthMatrix),
-    [studentMonthMatrix]
-  );
-
-  const matrixCohort = useMemo(() => matrixCohortStats(studentMonthMatrix), [studentMonthMatrix]);
-
-  const reEnrollmentFromRateNumerators = useMemo(
-    () => sumMonthStatsReEnrolledNumerators(studentMonthMatrix?.month_stats ?? []),
-    [studentMonthMatrix?.month_stats]
-  );
-
-  const totalReEnrollmentRate = useMemo(
-    () =>
-      reEnrollmentRateFromMatrixStats(studentMonthMatrix?.month_stats ?? [], {
-        total_re_enrolled_count: studentMonthMatrix?.total_re_enrolled_count,
-        total_prior_month_enrolled_count: studentMonthMatrix?.total_prior_month_enrolled_count,
-        total_re_enrollment_rate: studentMonthMatrix?.total_re_enrollment_rate,
-      }),
-    [studentMonthMatrix]
-  );
-
   if (loading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -214,23 +176,12 @@ const PhaseEnrollmentDashboard = () => {
     );
   }
 
-  const newEnrolleesCount = matrixKpiTotals.new_enrollees_count;
-  /** Sum of month-matrix rate-header numerators — matches Month Re-enrollment dashboard. */
-  const reEnrollmentCount = reEnrollmentFromRateNumerators;
-  const droppedCount = matrixKpiTotals.dropped_count;
-  const rejoinCount = matrixKpiTotals.rejoin_count;
-  const upsellCount = matrixKpiTotals.upsell_count;
-  const reservedStudents = matrixKpiTotals.reserved_count;
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Phase Re-enrollment</h1>
           <p className="mt-1 text-sm text-gray-500">{PHASE_ENROLLMENT_DASHBOARD.pageIntro(displayYear)}</p>
-          {selectedYear ? (
-            <p className="mt-1 text-xs font-medium text-amber-700">{ENROLLMENT_DASHBOARD.yearFilterNote}</p>
-          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <label className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700">
@@ -265,64 +216,6 @@ const PhaseEnrollmentDashboard = () => {
           Viewing: <span className="font-semibold">{selectedBranchName}</span>
         </div>
       )}
-
-      <div className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-        {PHASE_ENROLLMENT_DASHBOARD.kpiCardsAlignWithMonthYear(displayYear)}
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <EnrollmentCombinedStatsCard
-          title="Matrix Cohort"
-          iconName="users"
-          accent="bg-gradient-to-br from-emerald-400 to-slate-500"
-          metrics={[
-            { label: 'Retention base', value: totalReEnrollmentRate.priorEnrolledCount },
-            { label: 'Students', value: matrixCohort.uniqueStudentCount },
-          ]}
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.matrixCohortYear(displayYear)}
-        />
-        <EnrollmentCombinedStatsCard
-          title="New Enrollees / Re-enrollment"
-          iconName="users"
-          accent="bg-gradient-to-br from-teal-400 to-cyan-500"
-          metrics={[
-            { label: 'New enrollees', value: newEnrolleesCount },
-            { label: 'Re-enrollment', value: reEnrollmentCount },
-          ]}
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.newReenrollYear(displayYear)}
-        />
-        <EnrollmentCombinedStatsCard
-          title="Dropped / Rejoin"
-          iconName="userMinus"
-          accent="bg-gradient-to-br from-rose-500 to-orange-500"
-          metrics={[
-            { label: 'Dropped', value: droppedCount },
-            { label: 'Rejoin', value: rejoinCount },
-          ]}
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.droppedRejoinYear(displayYear)}
-        />
-        <EnrollmentCombinedStatsCard
-          title="Reserved / Upsell"
-          iconName="clipboardList"
-          accent="bg-gradient-to-br from-indigo-400 to-violet-500"
-          metrics={[
-            { label: 'Reserved', value: reservedStudents },
-            { label: 'Upsell', value: upsellCount },
-          ]}
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reservedUpsellYear(displayYear)}
-        />
-        <EnrollmentStatsCard
-          title="Total Re-enrollment Rate"
-          value={`${totalReEnrollmentRate.reEnrollmentRate.toFixed(2)}%`}
-          iconName="chartBar"
-          accent="bg-gradient-to-br from-blue-400 to-cyan-500"
-          tooltip={MONTHLY_ENROLLMENT_DASHBOARD.reEnrollmentRate(
-            totalReEnrollmentRate.reEnrolledCount,
-            totalReEnrollmentRate.priorEnrolledCount,
-            displayYear
-          )}
-        />
-      </div>
 
       <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

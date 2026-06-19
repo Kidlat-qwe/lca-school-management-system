@@ -6,7 +6,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import { appAlert } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
+import useClassAttendanceDeepLink from '../../hooks/useClassAttendanceDeepLink';
 import { formatDateManila } from '../../utils/dateUtils';
+import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
+import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
 
 const TeacherClasses = () => {
   const ITEMS_PER_PAGE = 10;
@@ -41,6 +44,7 @@ const TeacherClasses = () => {
   const [attendanceNotes, setAttendanceNotes] = useState('');
   const [attendanceAgenda, setAttendanceAgenda] = useState('');
   const [attendanceJustSaved, setAttendanceJustSaved] = useState(false);
+  const [phaseAttendanceSummary, setPhaseAttendanceSummary] = useState(null);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isAgendaModalOpen, setIsAgendaModalOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
@@ -646,11 +650,22 @@ const TeacherClasses = () => {
     }
   };
 
+  useClassAttendanceDeepLink({
+    classes,
+    viewMode,
+    selectedClassForDetails,
+    classSessions,
+    loadingClassSessions,
+    handleViewClass,
+    openAttendanceModal,
+  });
+
   const handleBackToList = () => {
     setViewMode('list');
     setSelectedClassForDetails(null);
     setPhaseSessions([]);
     setClassSessions([]);
+    setPhaseAttendanceSummary(null);
   };
 
   const openViewStudentsModal = (classItem) => {
@@ -968,8 +983,12 @@ const TeacherClasses = () => {
                   <div key={phaseNumber} className={`bg-white rounded-lg shadow border-2 transition-colors ${
                     isActivePhase ? 'border-primary-500 shadow-md' : 'border-gray-200'
                   }`}>
-                    <button
-                      onClick={() => {
+                    <ClassPhaseHeader
+                      phaseNumber={phaseNumber}
+                      isExpanded={isExpanded}
+                      isActivePhase={isActivePhase}
+                      sessionCount={sessions.length}
+                      onToggleExpand={() => {
                         const newExpanded = new Set(expandedPhases);
                         if (isExpanded) {
                           newExpanded.delete(phaseNumber);
@@ -978,42 +997,10 @@ const TeacherClasses = () => {
                         }
                         setExpandedPhases(newExpanded);
                       }}
-                      className={`w-full px-6 py-4 flex items-center justify-between transition-colors ${
-                        isActivePhase 
-                          ? 'bg-primary-50 hover:bg-primary-100' 
-                          : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <svg
-                          className={`w-5 h-5 transition-transform ${
-                            isExpanded ? 'transform rotate-90' : ''
-                          } ${
-                            isActivePhase ? 'text-primary-600' : 'text-gray-500'
-                          }`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                        <h3 className={`text-lg font-semibold ${
-                          isActivePhase ? 'text-primary-700' : 'text-gray-900'
-                        }`}>
-                          Phase {phaseNumber}
-                          {isActivePhase && (
-                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
-                              Current
-                            </span>
-                          )}
-                        </h3>
-                        <span className={`text-sm ${
-                          isActivePhase ? 'text-primary-600' : 'text-gray-500'
-                        }`}>
-                          ({sessions.length} session{sessions.length !== 1 ? 's' : ''})
-                        </span>
-                      </div>
-                    </button>
+                      onViewAttendance={() =>
+                        setPhaseAttendanceSummary({ phaseNumber })
+                      }
+                    />
 
                     {isExpanded && (
                       <div className="border-t border-gray-200">
@@ -1299,6 +1286,19 @@ const TeacherClasses = () => {
             </>
           );
         })()}
+
+        <ClassPhaseAttendanceSummaryModal
+          open={phaseAttendanceSummary != null}
+          onClose={() => setPhaseAttendanceSummary(null)}
+          classId={selectedClassForDetails?.class_id}
+          phaseNumber={phaseAttendanceSummary?.phaseNumber}
+          classTitle={[
+            selectedClassForDetails?.program_name,
+            selectedClassForDetails?.class_name || selectedClassForDetails?.level_tag,
+          ]
+            .filter(Boolean)
+            .join(' — ')}
+        />
 
         {/* Attendance Modal */}
         {isAttendanceModalOpen && createPortal(

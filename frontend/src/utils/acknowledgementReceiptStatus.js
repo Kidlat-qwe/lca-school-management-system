@@ -16,7 +16,7 @@ export const AR_STATUS_LEGEND_ITEMS = [
     label: 'Submitted',
     tone: 'bg-yellow-100 text-yellow-800',
     description:
-      'Package receipt (cash or non-cash) awaiting Finance/Superfinance verification before it can be applied to enrollment.',
+      'Package receipt awaiting Finance/Superfinance verification before enrollment (non-cash). Cash package AR is auto-verified on issue.',
   },
   {
     key: 'Verified',
@@ -37,7 +37,7 @@ export const AR_STATUS_LEGEND_ITEMS = [
     label: 'Paid',
     tone: 'bg-yellow-100 text-yellow-800',
     description:
-      'Merchandise sale paid at the branch; awaiting Finance confirmation in Payment Logs or Cash Deposit (then becomes Verified).',
+      'Non-cash merchandise sale paid at the branch; awaiting Finance verification on the AR page. Cash merchandise is auto-verified on issue (Payment Logs approval is separate).',
   },
   {
     key: 'Enrolled',

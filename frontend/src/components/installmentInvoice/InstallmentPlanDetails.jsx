@@ -5,6 +5,7 @@ import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import {
+  getInstallmentPhaseBillingLabel,
   getInstallmentPhaseOutstanding,
   isDroppedEnrollmentPhase,
   isInstallmentPlanSlotAddressed,
@@ -12,9 +13,13 @@ import {
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
+import PaymentMethodSelect from '../common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../common/PaymentReferenceNumberField';
 import {
   PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
   PAYMENT_TIP_ADJUSTMENT_LABEL,
+  isPaymentReferenceNumberRequired,
+  normalizePaymentReferenceNumber,
 } from '../../constants/paymentFormLabels';
 
 /**
@@ -77,8 +82,7 @@ const statusBadgeClass = (status) => {
   }
 };
 
-// Keep this list in sync with the Invoice payment modal (Invoice.jsx).
-const PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
+// Keep payment methods in sync with PaymentMethodSelect / paymentFormLabels.js.
 
 const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = false, className = '' }) => {
   const [loading, setLoading] = useState(false);
@@ -88,7 +92,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   /** @type {null | { mode: 'invoice'|'advance', phase_number: number, absolute: number, amount: number|null, outstanding?: number, invoice_id?: number }} */
   const [paymentModal, setPaymentModal] = useState(null);
   const [apForm, setApForm] = useState({
-    payment_method: 'Cash',
+    payment_method: '',
+    payment_type: '',
+    payable_amount: '',
     tip_amount: '',
     discount_amount: '',
     issue_date: '',
@@ -146,9 +152,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       }
     }
 
+    const invoiceOutstanding =
+      payload.mode === 'invoice'
+        ? Number(payload.outstanding ?? payload.amount ?? 0)
+        : Number(payload.amount ?? 0);
+
     setPaymentModal(payload);
     setApForm({
-      payment_method: 'Cash',
+      payment_method: '',
+      payment_type: payload.mode === 'invoice' ? 'Full Payment' : 'Advance Payment',
+      payable_amount:
+        invoiceOutstanding > 0 ? invoiceOutstanding.toFixed(2) : '',
       tip_amount: '',
       discount_amount: '',
       issue_date: todayManilaYMD(),
@@ -167,9 +181,47 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
   const handleApInput = useCallback((e) => {
     const { name, value } = e.target;
-    setApForm((prev) => ({ ...prev, [name]: value }));
+    setApForm((prev) => {
+      if (!paymentModal) {
+        return { ...prev, [name]: value };
+      }
+
+      const capAmount =
+        paymentModal.mode === 'invoice'
+          ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+          : Number(paymentModal.amount ?? 0);
+      const fullPaymentType =
+        paymentModal.mode === 'invoice' ? 'Full Payment' : 'Advance Payment';
+      let nextValue = value;
+
+      if (
+        name === 'payable_amount' &&
+        prev.payment_type === 'Partial Payment' &&
+        capAmount > 0 &&
+        Number(value) >= capAmount
+      ) {
+        nextValue = prev.payable_amount;
+      }
+
+      if (name === 'payment_type' && value === 'Partial Payment') {
+        const currentAmount = parseFloat(prev.payable_amount || 0);
+        if (capAmount > 0 && currentAmount >= capAmount) {
+          return { ...prev, payment_type: value, payable_amount: '' };
+        }
+      }
+
+      if (name === 'payment_type' && value === fullPaymentType) {
+        return {
+          ...prev,
+          payment_type: value,
+          payable_amount: capAmount > 0 ? capAmount.toFixed(2) : prev.payable_amount,
+        };
+      }
+
+      return { ...prev, [name]: nextValue };
+    });
     setApFormErrors((prev) => ({ ...prev, [name]: undefined }));
-  }, []);
+  }, [paymentModal]);
 
   const handleApAttachmentChange = useCallback(async (e) => {
     const file = e.target?.files?.[0];
@@ -281,16 +333,53 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     const errors = {};
     if (!apForm.payment_method) errors.payment_method = 'Payment method is required.';
     if (!apForm.issue_date) errors.issue_date = 'Payment date is required.';
-    if (!apForm.reference_number || !apForm.reference_number.trim())
+    if (
+      isPaymentReferenceNumberRequired(apForm.payment_method) &&
+      !(apForm.reference_number || '').trim()
+    ) {
       errors.reference_number = 'Reference number is required.';
+    }
     if (!apForm.attachment_url) errors.attachment_url = 'Attachment is required.';
     if (apForm.tip_amount && Number.isNaN(parseFloat(apForm.tip_amount)))
       errors.tip_amount = 'Must be a valid number.';
 
-    const grossPayable =
+    const invoiceOutstanding =
       paymentModal.mode === 'invoice'
         ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
-        : Number(paymentModal.amount ?? 0);
+        : 0;
+    const phasePayableAmount = Number(paymentModal.amount ?? 0);
+    const grossPayable =
+      paymentModal.mode === 'invoice'
+        ? parseFloat(apForm.payable_amount) || 0
+        : apForm.payment_type === 'Partial Payment'
+          ? parseFloat(apForm.payable_amount) || 0
+          : phasePayableAmount;
+
+    if (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') {
+      if (!apForm.payment_type) {
+        errors.payment_type = 'Payment type is required.';
+      }
+      if (!apForm.payable_amount || grossPayable <= 0) {
+        errors.payable_amount = 'Payable amount must be greater than 0';
+      } else if (
+        apForm.payment_type === 'Partial Payment' &&
+        paymentModal.mode === 'invoice' &&
+        invoiceOutstanding > 0 &&
+        grossPayable >= invoiceOutstanding
+      ) {
+        errors.payable_amount =
+          'For partial payment, amount must be less than the remaining invoice amount.';
+      } else if (
+        apForm.payment_type === 'Partial Payment' &&
+        paymentModal.mode === 'advance' &&
+        phasePayableAmount > 0 &&
+        grossPayable >= phasePayableAmount
+      ) {
+        errors.payable_amount =
+          'For partial payment, amount must be less than the phase payable amount.';
+      }
+    }
+
     const discountAmountParsed = apForm.discount_amount === ''
       ? 0
       : parseFloat(apForm.discount_amount);
@@ -327,8 +416,20 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
           discount_amount: discountApplied,
           tip_amount: tipVal,
           issue_date: apForm.issue_date,
-          reference_number: (apForm.reference_number || '').trim(),
+          reference_number: normalizePaymentReferenceNumber(
+            apForm.payment_method,
+            apForm.reference_number,
+          ),
         };
+
+        const userRemarks = (apForm.remarks || '').trim();
+        const remarkParts = [];
+        if (userRemarks) remarkParts.push(userRemarks);
+        if (discountApplied > 0) {
+          remarkParts.push(
+            `Discount applied at payment: ₱${discountApplied.toFixed(2)} (Original payable: ₱${grossPayable.toFixed(2)})`,
+          );
+        }
 
         await apiRequest('/payments', {
           method: 'POST',
@@ -336,13 +437,15 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
             invoice_id: paidInvoiceId,
             student_id: Number(studentId),
             payment_method: apForm.payment_method,
-            payment_type: 'Full',
+            payment_type: apForm.payment_type,
             payable_amount: netPayable,
             discount_amount: discountApplied,
             tip_amount: tipVal,
             issue_date: apForm.issue_date || undefined,
-            reference_number: apForm.reference_number.trim() || undefined,
-            remarks: apForm.remarks.trim() || undefined,
+            reference_number:
+              normalizePaymentReferenceNumber(apForm.payment_method, apForm.reference_number) ||
+              undefined,
+            remarks: remarkParts.length > 0 ? remarkParts.join(' | ') : undefined,
             attachment_url: apForm.attachment_url || undefined,
           }),
         });
@@ -361,7 +464,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
           body: JSON.stringify({
             phase_index: modalSnap.phase_number,
             payment_method: apForm.payment_method,
-            reference_number: apForm.reference_number.trim() || undefined,
+            payment_type: apForm.payment_type,
+            ...(apForm.payment_type === 'Partial Payment'
+              ? { payable_amount: grossPayable }
+              : {}),
+            reference_number:
+              normalizePaymentReferenceNumber(apForm.payment_method, apForm.reference_number) ||
+              undefined,
             payment_date: apForm.issue_date || undefined,
             remarks: apForm.remarks.trim() || undefined,
             attachment_url: apForm.attachment_url || undefined,
@@ -389,7 +498,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
             appAlert('Advance payment recorded, but the receipt preview could not be loaded. Refresh the page if needed.');
           }
         } else {
-          appAlert(`Advance payment for Phase ${modalSnap.absolute} recorded successfully.`);
+          appAlert(
+            apForm.payment_type === 'Partial Payment'
+              ? `Partial advance payment for Phase ${modalSnap.absolute} recorded successfully.`
+              : `Advance payment for Phase ${modalSnap.absolute} recorded successfully.`,
+          );
         }
       }
     } catch (err) {
@@ -754,18 +867,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
                       const isDroppedEnrollment = isDroppedEnrollmentPhase(phase);
                       const isNotGenerated = phase.status === 'Not Generated';
-                      const billingLabel =
-                        phase.billing_kind === 'skipped_gap'
-                          ? 'Skipped — no invoice'
-                          : phase.billing_kind === 'advance'
-                            ? 'Advance payment'
-                            : !phase.is_generated
-                              ? '\u2014'
-                              : phase.is_rejoin_invoice
-                                ? 'Rejoin'
-                                : Number(phase.phase_number) === 1
-                                  ? 'Auto-generated'
-                                  : 'Generated';
+                      const billingLabel = getInstallmentPhaseBillingLabel(phase);
                       const outstanding = getInstallmentPhaseOutstanding(phase);
                       const isPayRow =
                         firstPayAction &&
@@ -952,30 +1054,44 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 {/* Payment Type + Payment Method */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="label-field text-xs">Payment Type</label>
-                    <input
-                      type="text"
-                      value={paymentModal.mode === 'invoice' ? 'Full payment (invoice)' : 'Advance Payment'}
-                      readOnly
-                      className="input-field text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
-                    />
+                    <label className="label-field text-xs">
+                      Payment Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="payment_type"
+                      value={apForm.payment_type}
+                      onChange={handleApInput}
+                      disabled={apSubmitting}
+                      className={`input-field text-sm ${apFormErrors.payment_type ? 'border-red-500' : ''}`}
+                      required
+                    >
+                      {paymentModal.mode === 'invoice' ? (
+                        <>
+                          <option value="Full Payment">Full Payment</option>
+                          <option value="Partial Payment">Partial Payment</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="Advance Payment">Advance Payment</option>
+                          <option value="Partial Payment">Partial Payment</option>
+                        </>
+                      )}
+                    </select>
+                    {apFormErrors.payment_type && (
+                      <p className="text-xs text-red-500 mt-1">{apFormErrors.payment_type}</p>
+                    )}
                   </div>
                   <div>
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       name="payment_method"
                       value={apForm.payment_method}
                       onChange={handleApInput}
                       disabled={apSubmitting}
-                      className={`input-field text-sm ${apFormErrors.payment_method ? 'border-red-500' : ''}`}
-                      required
-                    >
-                      {PAYMENT_METHODS.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
+                      error={apFormErrors.payment_method}
+                    />
                     {apFormErrors.payment_method && (
                       <p className="text-xs text-red-500 mt-1">{apFormErrors.payment_method}</p>
                     )}
@@ -985,22 +1101,63 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 {/* Payable Amount + Tip */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="label-field text-xs">Payable Amount</label>
+                    <label className="label-field text-xs">
+                      Payable Amount <span className="text-red-500">*</span>
+                    </label>
                     <input
-                      type="text"
-                      value={formatCurrency(
-                        paymentModal.mode === 'invoice'
-                          ? (paymentModal.outstanding ?? 0)
-                          : (paymentModal.amount || 0),
-                      )}
-                      readOnly
-                      className="input-field text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      max={
+                        apForm.payment_type === 'Partial Payment'
+                          ? Math.max(
+                              0,
+                              (paymentModal.mode === 'invoice'
+                                ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                                : Number(paymentModal.amount ?? 0)) - 0.01,
+                            ).toFixed(2)
+                          : undefined
+                      }
+                      name="payable_amount"
+                      value={apForm.payable_amount}
+                      onChange={handleApInput}
+                      disabled={
+                        apSubmitting ||
+                        apForm.payment_type === 'Full Payment' ||
+                        apForm.payment_type === 'Advance Payment'
+                      }
+                      className={`input-field text-sm ${
+                        apForm.payment_type === 'Full Payment' ||
+                        apForm.payment_type === 'Advance Payment'
+                          ? 'bg-gray-100 text-gray-600 cursor-not-allowed'
+                          : ''
+                      } ${apFormErrors.payable_amount ? 'border-red-500' : ''}`}
+                      placeholder="0.00"
+                      required
                     />
-                    <p className="text-xs text-gray-500 mt-1">
-                      {paymentModal.mode === 'invoice'
-                        ? 'Remaining balance on this invoice — fixed.'
-                        : 'Full phase amount — fixed.'}
-                    </p>
+                    {apFormErrors.payable_amount && (
+                      <p className="text-xs text-red-500 mt-1">{apFormErrors.payable_amount}</p>
+                    )}
+                    {apForm.payment_type === 'Partial Payment' && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Partial payment must be lower than{' '}
+                        {paymentModal.mode === 'invoice' ? 'remaining amount' : 'phase amount'} (
+                        {formatCurrency(
+                          paymentModal.mode === 'invoice'
+                            ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                            : (paymentModal.amount || 0),
+                        )}
+                        ).
+                      </p>
+                    )}
+                    {(apForm.payment_type === 'Full Payment' ||
+                      apForm.payment_type === 'Advance Payment') && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {paymentModal.mode === 'invoice'
+                          ? 'Remaining balance on this invoice — fixed.'
+                          : 'Full phase amount — fixed.'}
+                      </p>
+                    )}
                   </div>
                   <PaymentTipField
                     value={apForm.tip_amount}
@@ -1016,8 +1173,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   error={apFormErrors.discount_amount}
                   disabled={apSubmitting}
                   payableAmount={
-                    paymentModal.mode === 'invoice'
-                      ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                    paymentModal.mode === 'invoice' || apForm.payment_type === 'Partial Payment'
+                      ? parseFloat(apForm.payable_amount) ||
+                        (paymentModal.mode === 'invoice'
+                          ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                          : Number(paymentModal.amount ?? 0))
                       : Number(paymentModal.amount ?? 0)
                   }
                 />
@@ -1095,25 +1255,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   )}
                 </div>
 
-                {/* Reference Number */}
-                <div>
-                  <label className="label-field text-xs">
-                    Reference Number <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="reference_number"
-                    value={apForm.reference_number}
-                    onChange={handleApInput}
-                    disabled={apSubmitting}
-                    className={`input-field text-sm ${apFormErrors.reference_number ? 'border-red-500' : ''}`}
-                    placeholder="Enter reference number (e.g. cash voucher, GCash ref, bank receipt no.)"
-                    required
-                  />
-                  {apFormErrors.reference_number && (
-                    <p className="text-xs text-red-500 mt-1">{apFormErrors.reference_number}</p>
-                  )}
-                </div>
+                <PaymentReferenceNumberField
+                  paymentMethod={apForm.payment_method}
+                  name="reference_number"
+                  value={apForm.reference_number}
+                  onChange={handleApInput}
+                  disabled={apSubmitting}
+                  error={apFormErrors.reference_number}
+                />
 
                 {/* Remarks */}
                 <div>

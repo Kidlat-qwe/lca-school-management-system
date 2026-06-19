@@ -1,5 +1,6 @@
 import { getClient, query } from '../config/database.js';
 import { sendOverduePaymentReminderEmail } from './emailService.js';
+import { isInstallmentPenaltyExemptInvoice } from './installmentPenaltyExempt.js';
 
 const MANILA_TZ = 'Asia/Manila';
 
@@ -79,6 +80,7 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
         AND invs.overdue_email_first_sent_at IS NULL
         AND COALESCE(i.status, '') <> 'Paid'
         AND (i.due_date::date < (NOW() AT TIME ZONE '${MANILA_TZ}')::date)
+        AND (i.issue_date IS NULL OR i.due_date::date >= i.issue_date::date)
       ORDER BY i.due_date ASC, invs.invoice_student_id ASC
       LIMIT $1
       `,
@@ -110,6 +112,23 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
     let errors = 0;
 
     for (const [invoiceId, rows] of byInvoice.entries()) {
+      const profileRes = await client.query(
+        `SELECT installmentinvoiceprofiles_id
+         FROM invoicestbl
+         WHERE invoice_id = $1`,
+        [invoiceId]
+      );
+      const profileId = profileRes.rows[0]?.installmentinvoiceprofiles_id;
+      if (profileId != null) {
+        const penaltyExempt = await isInstallmentPenaltyExemptInvoice(client, {
+          invoiceId,
+          profileId,
+        });
+        if (penaltyExempt) {
+          continue;
+        }
+      }
+
       // Compute outstanding balance (same logic as manual endpoint).
       const itemsResult = await client.query('SELECT * FROM invoiceitemstbl WHERE invoice_id = $1', [invoiceId]);
       const totals = (itemsResult.rows || []).reduce(

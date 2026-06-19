@@ -52,12 +52,53 @@ export async function runArAttachInstallmentFollowUp(pending) {
       ...(paymentIssueDateYmd ? { enrollmentInvoiceIssueYmd: paymentIssueDateYmd } : {}),
     };
 
-    const generatedInvoice = await generateInvoiceFromInstallment(
-      firstInvoiceRecord,
-      genProfile,
-      Object.keys(enrollmentAckReuse).length > 0 ? enrollmentAckReuse : null
-    );
-    result.phase1_invoice_id = generatedInvoice.invoice_id;
+    const enrollPhase =
+      autoPayPhase1Data?.enroll_phase != null
+        ? parseInt(autoPayPhase1Data.enroll_phase, 10)
+        : 1;
+
+    let phase1InvoiceId = null;
+    let generatedInvoice = null;
+
+    if (autoPayPhase1 && profileId) {
+      const existingPhaseRes = await query(
+        `SELECT invoice_id, status
+         FROM invoicestbl
+         WHERE installmentinvoiceprofiles_id = $1
+           AND remarks ILIKE $2
+         ORDER BY invoice_id ASC
+         LIMIT 1`,
+        [profileId, `%TARGET_PHASE:${enrollPhase}%`]
+      );
+      if (existingPhaseRes.rows.length > 0) {
+        const existing = existingPhaseRes.rows[0];
+        phase1InvoiceId = existing.invoice_id;
+        if (String(existing.status || '').trim() === 'Paid') {
+          result.phase1_invoice_id = phase1InvoiceId;
+          result.phase1_auto_paid = true;
+          if (autoPayPhase1Data?.phase_ack_receipt_id) {
+            await query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Applied', student_id = COALESCE(student_id, $1)
+               WHERE ack_receipt_id = $2 AND status <> 'Applied'`,
+              [autoPayPhase1Data.student_id, autoPayPhase1Data.phase_ack_receipt_id]
+            );
+          }
+          return result;
+        }
+      }
+    }
+
+    if (!phase1InvoiceId) {
+      generatedInvoice = await generateInvoiceFromInstallment(
+        firstInvoiceRecord,
+        genProfile,
+        Object.keys(enrollmentAckReuse).length > 0 ? enrollmentAckReuse : null
+      );
+      phase1InvoiceId = generatedInvoice.invoice_id;
+    }
+
+    result.phase1_invoice_id = phase1InvoiceId;
 
     if (!autoPayPhase1 || !autoPayPhase1Data) {
       return result;
@@ -72,15 +113,28 @@ export async function runArAttachInstallmentFollowUp(pending) {
       phase_1_amount,
       profile_id,
       is_cash_ack,
+      payment_method: phasePaymentMethod,
     } = autoPayPhase1Data;
 
+    const phasePayMethod = String(phasePaymentMethod || (is_cash_ack ? 'Cash' : 'Online Banking')).trim() || 'Cash';
+
     const phaseApproverUserId = ar_verified_by_user_id || createdBy || null;
-    const phase1InvoiceId = generatedInvoice.invoice_id;
     const phase1InvRow = await query('SELECT created_by FROM invoicestbl WHERE invoice_id = $1', [
       phase1InvoiceId,
     ]);
     const phase1ActionOwner =
       phase1InvRow.rows[0]?.created_by != null ? phase1InvRow.rows[0].created_by : createdBy;
+
+    const phaseAckNumTrim = String(autoPayPhase1Data.phase_ack_receipt_number || '').trim();
+    if (phaseAckNumTrim) {
+      await query(
+        `UPDATE invoicestbl
+         SET invoice_ar_number = $1,
+             ack_receipt_id = COALESCE(ack_receipt_id, $2)
+         WHERE invoice_id = $3`,
+        [phaseAckNumTrim, autoPayPhase1Data.phase_ack_receipt_id, phase1InvoiceId]
+      );
+    }
 
     const approvalStatus = is_cash_ack ? 'Pending' : 'Approved';
     const approvedBy = is_cash_ack ? null : phaseApproverUserId;
@@ -106,18 +160,18 @@ export async function runArAttachInstallmentFollowUp(pending) {
       const payRes = await query(
         `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, issue_date, status, approval_status, approved_by, approved_at, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id)
-         VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', $6, $7, ${approvedAtSql}, $8, $9, $10, $11, $12)
+         VALUES ($1, $2, $3, $4, 'Installment', $5, $6, 'Completed', $7, $8, ${approvedAtSql}, $9, $10, $11, $12, $13)
          RETURNING payment_id`,
-        [...paymentParams, phase1ActionOwner]
+        [...paymentParams.slice(0, 3), phasePayMethod, ...paymentParams.slice(3), phase1ActionOwner]
       );
       phase1PaymentId = payRes.rows[0]?.payment_id ?? null;
     } else {
       const payRes = await query(
         `INSERT INTO paymenttbl (invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, issue_date, status, approval_status, approved_by, approved_at, reference_number, remarks, created_by, payment_attachment_url)
-         VALUES ($1, $2, $3, 'Cash', 'Installment', $4, $5, 'Completed', $6, $7, ${approvedAtSql}, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, 'Installment', $5, $6, 'Completed', $7, $8, ${approvedAtSql}, $9, $10, $11, $12)
          RETURNING payment_id`,
-        paymentParams
+        [phase1InvoiceId, sid, bid, phasePayMethod, phase_1_amount, ackDate, approvalStatus, approvedBy, autoPayPhase1Data.reference_number || null, 'Phase 1 auto-paid via acknowledgement receipt (Downpayment + Phase 1 option)', createdBy, autoPayPhase1Data.payment_attachment_url || null]
       );
       phase1PaymentId = payRes.rows[0]?.payment_id ?? null;
     }
@@ -159,11 +213,11 @@ export async function runArAttachInstallmentFollowUp(pending) {
       [profile_id]
     );
 
-    if (nextInstallmentRecord.rows.length > 0) {
+    if (nextInstallmentRecord.rows.length > 0 && !autoPayPhase1) {
       const nextRecord = nextInstallmentRecord.rows[0];
       const phase2Invoice = await generateInvoiceFromInstallment(nextRecord, {
         ...genProfile,
-        generated_count: generatedInvoice.generated_count || 1,
+        generated_count: generatedInvoice?.generated_count || 1,
       });
       result.phase2_invoice_id = phase2Invoice.invoice_id;
 
@@ -207,5 +261,13 @@ export async function runArAttachInstallmentFollowUp(pending) {
   return result;
 }
 
-export const isDownpaymentPlusPhase1Ack = (ack) =>
-  String(ack?.installment_option || '').trim().toLowerCase() === 'downpayment_plus_phase1';
+export const isDownpaymentPlusPhase1Ack = (ack) => {
+  if (!ack) return false;
+  if (String(ack.installment_option || '').trim().toLowerCase() === 'downpayment_plus_phase1') {
+    return true;
+  }
+  return (
+    ack.paired_ack_receipt_id != null &&
+    String(ack.ar_type || '').trim().toLowerCase() === 'package'
+  );
+};

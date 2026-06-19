@@ -57,6 +57,15 @@ export const parseYmdToLocalNoon = (ymd) => {
   return new Date(y, m - 1, d, 12, 0, 0, 0);
 };
 
+/** Add calendar days to a YYYY-MM-DD string; returns YYYY-MM-DD or null. */
+export const addDaysToYmd = (ymd, days) => {
+  const base = parseYmdToLocalNoon(ymd);
+  if (!base || !Number.isFinite(days)) return null;
+  const result = new Date(base.getTime());
+  result.setDate(result.getDate() + days);
+  return formatYmdLocal(result);
+};
+
 /**
  * Parse date input for display (YYYY-MM-DD safe).
  * @param {string|Date|null|undefined} dateInput

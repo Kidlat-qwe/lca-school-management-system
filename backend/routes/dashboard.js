@@ -4,6 +4,8 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
+import { loadOperationalAttendanceSessions } from '../lib/operationalAttendanceSessions.js';
+import { todayYmdManila } from '../utils/dateUtils.js';
 import {
   loadEnrollmentDashboardMetrics,
   loadEnrollmentRatePhaseStudents,
@@ -312,8 +314,8 @@ router.get(
         : (monthStartDate ? [monthStartDate, monthEndDate] : []);
       const invoiceStatusResult = await query(invoiceStatusQuery, invoiceStatusParams);
 
-      // Payment + AR verification — aligned with Payment Logs (finance-unified) and
-      // Acknowledgement Receipts list drill-down (inclusive month on issue_date).
+      // Payment + AR verification — payment totals align with Invoice (payment date) and
+      // Monthly Operational invoice sales; AR cards match Acknowledgement Receipts drill-down.
       const verificationMonthKey = selectedMonth || getCurrentManilaMonthKey();
       const verificationDateRange = parseManilaMonthInclusiveRange(verificationMonthKey);
       const verificationScope = {
@@ -460,6 +462,12 @@ router.get(
             verified_amount: parseFloat(pvRow.verified_amount) || 0,
             unverified_count: parseInt(pvRow.unverified_count, 10) || 0,
             unverified_amount: parseFloat(pvRow.unverified_amount) || 0,
+            net_count: parseInt(pvRow.net_count, 10) || 0,
+            net_amount: parseFloat(pvRow.net_amount) || 0,
+            returned_deduction_count: parseInt(pvRow.returned_deduction_count, 10) || 0,
+            returned_deduction_amount: parseFloat(pvRow.returned_deduction_amount) || 0,
+            rejected_deduction_count: parseInt(pvRow.rejected_deduction_count, 10) || 0,
+            rejected_deduction_amount: parseFloat(pvRow.rejected_deduction_amount) || 0,
           },
           ar_verification: {
             verified_count: parseInt(arvRow.verified_count, 10) || 0,
@@ -2008,6 +2016,66 @@ router.get(
       });
     } catch (error) {
       console.error('Error fetching operational summary:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/operational-attendance-sessions
+ * Class sessions for attendance shortcuts on operational dashboards.
+ */
+router.get(
+  '/operational-attendance-sessions',
+  [
+    queryValidator('mode').optional().isIn(['daily', 'monthly']).withMessage('mode must be daily or monthly'),
+    queryValidator('summary_date').optional().isISO8601({ strict: true }).withMessage('summary_date must be YYYY-MM-DD'),
+    queryValidator('summary_month')
+      .optional()
+      .matches(/^\d{4}-\d{2}$/)
+      .withMessage('summary_month must be YYYY-MM'),
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('attendance_filter')
+      .optional()
+      .isIn(['all', 'pending', 'taken', 'upcoming'])
+      .withMessage('attendance_filter must be all, pending, taken, or upcoming'),
+    queryValidator('list_limit')
+      .optional()
+      .isInt({ min: 1, max: 5000 })
+      .withMessage('list_limit must be between 1 and 5000'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Teacher'),
+  async (req, res, next) => {
+    try {
+      const userType = req.user.userType;
+      const mode = req.query.mode === 'monthly' ? 'monthly' : 'daily';
+      const todayManila = todayYmdManila();
+
+      let branchFilter = null;
+      if (userType === 'Admin' || userType === 'Teacher') {
+        branchFilter = req.user.branchId || null;
+      } else if (req.query.branch_id) {
+        branchFilter = parseInt(req.query.branch_id, 10);
+      }
+
+      const payload = await loadOperationalAttendanceSessions(query, {
+        mode,
+        summaryDate: req.query.summary_date || todayManila,
+        summaryMonth: req.query.summary_month || todayManila.slice(0, 7),
+        branchId: branchFilter,
+        teacherId: userType === 'Teacher' ? req.user.userId : null,
+        userType,
+        attendanceFilter: req.query.attendance_filter || 'all',
+        listLimit: req.query.list_limit ? parseInt(req.query.list_limit, 10) : null,
+      });
+
+      res.json({
+        success: true,
+        data: payload,
+      });
+    } catch (error) {
+      console.error('Error fetching operational attendance sessions:', error);
       next(error);
     }
   }

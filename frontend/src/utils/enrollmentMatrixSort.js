@@ -113,6 +113,81 @@ export const sortPhaseMatrixStudentsByStatus = (students, phases) => {
   );
 };
 
+/**
+ * Normalize legend filter to a unique list of status keys (empty = show all).
+ * @param {string|string[]|null|undefined} statusFilters
+ * @returns {string[]}
+ */
+export const normalizeMatrixStatusFilters = (statusFilters) => {
+  if (!statusFilters) return [];
+  const list = Array.isArray(statusFilters) ? statusFilters : [statusFilters];
+  return [...new Set(list.map((k) => String(k || '').trim()).filter(Boolean))];
+};
+
+export const hasMatrixStatusFilters = (statusFilters) =>
+  normalizeMatrixStatusFilters(statusFilters).length > 0;
+
+/** @param {object|undefined|null} cell @param {string|string[]|null|undefined} statusFilters */
+export const matrixCellMatchesStatusFilters = (cell, statusFilters) => {
+  const keys = normalizeMatrixStatusFilters(statusFilters);
+  if (!keys.length) return true;
+  return keys.includes(matrixCellStatusSortKey(cell));
+};
+
+/**
+ * When legend filter(s) are active, return the cell only if it matches; otherwise null (empty cell).
+ * @param {object|undefined|null} cell
+ * @param {string|string[]|null|undefined} statusFilters
+ */
+export const resolveMatrixCellForStatusFilter = (cell, statusFilters) => {
+  if (!hasMatrixStatusFilters(statusFilters)) return cell;
+  return matrixCellMatchesStatusFilters(cell, statusFilters) ? cell : null;
+};
+
+/**
+ * Keep rows that have at least one cell matching any active filter in any visible column.
+ * @param {object[]} students
+ * @param {Array<string|number>} periodKeys
+ * @param {(student: object, periodKey: string|number) => object|undefined} getCell
+ * @param {string|string[]|null|undefined} statusFilters
+ */
+export const filterMatrixStudentsWithAnyMatchingStatus = (
+  students,
+  periodKeys,
+  getCell,
+  statusFilters
+) => {
+  const keys = normalizeMatrixStatusFilters(statusFilters);
+  if (!keys.length) return students;
+  const periodKeyList = periodKeys || [];
+  if (!periodKeyList.length) return students;
+  return students.filter((student) =>
+    periodKeyList.some((key) => keys.includes(matrixCellStatusSortKey(getCell(student, key))))
+  );
+};
+
+/** @param {object[]} students @param {{ key: string }[]} months @param {string|string[]|null} [statusFilters] */
+export const filterMonthMatrixStudentsByStatus = (students, months, statusFilters) => {
+  const periodKeys = (months || []).map((m) => m.key);
+  return filterMatrixStudentsWithAnyMatchingStatus(
+    students,
+    periodKeys,
+    (student, monthKey) => student.months?.[monthKey],
+    statusFilters
+  );
+};
+
+/** @param {object[]} students @param {{ key: string|number }[]} phases @param {string|string[]|null} [statusFilters] */
+export const filterPhaseMatrixStudentsByStatus = (students, phases, statusFilters) => {
+  const periodKeys = (phases || []).map((p) => p.key);
+  return filterMatrixStudentsWithAnyMatchingStatus(
+    students,
+    periodKeys,
+    (student, phaseKey) => student.phases?.[phaseKey],
+    statusFilters
+  );
+};
+
 /** Label shown in matrix student column (includes class when enrolled in multiple classes). */
 export const matrixTrackDisplayName = (track) =>
   track?.display_name || track?.full_name || '';

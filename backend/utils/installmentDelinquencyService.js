@@ -5,8 +5,10 @@ import {
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from './programPaymentStatusService.js';
-import { parseAbsolutePhaseFromInvoice } from './installmentPhaseRowMapping.js';
-import { resolveProfilePhaseStart } from './phaseInstallmentUtils.js';
+import {
+  isInstallmentPenaltyExemptInvoice,
+  resolveLocalPhaseForInstallmentInvoice,
+} from './installmentPenaltyExempt.js';
 
 const getDefaultBillingSettings = () => ({
   installment_penalty_rate: { value: SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue, scope: 'default' },
@@ -82,42 +84,6 @@ const computeInvoiceTotals = async (client, invoiceId) => {
 };
 
 /**
- * Profile-local phase slot (classstudentstbl.phase_number) for an overdue installment invoice.
- */
-const resolveLocalPhaseForInstallmentInvoice = async (client, { invoiceId, profileId }) => {
-  const invRes = await client.query(
-    `SELECT invoice_id, remarks, invoice_description, issue_date
-     FROM invoicestbl
-     WHERE invoice_id = $1`,
-    [invoiceId]
-  );
-  if (!invRes.rows.length) return null;
-
-  const inv = invRes.rows[0];
-  const absolute = parseAbsolutePhaseFromInvoice(inv);
-  if (absolute != null && Number.isFinite(absolute)) {
-    const profileRes = await client.query(
-      `SELECT phase_start FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1`,
-      [profileId]
-    );
-    const phaseStart = resolveProfilePhaseStart(profileRes.rows[0]);
-    const local = absolute - phaseStart + 1;
-    return local >= 1 ? local : null;
-  }
-
-  const listRes = await client.query(
-    `SELECT invoice_id
-     FROM invoicestbl
-     WHERE installmentinvoiceprofiles_id = $1
-       AND COALESCE(invoice_description, '') NOT ILIKE '%downpayment%'
-     ORDER BY issue_date ASC NULLS LAST, invoice_id ASC`,
-    [profileId]
-  );
-  const idx = listRes.rows.findIndex((r) => r.invoice_id === invoiceId);
-  return idx >= 0 ? idx + 1 : null;
-};
-
-/**
  * Process delinquent installment invoices:
  * - Apply one-time penalty after due_date + grace_days (based on remaining balance)
  * - Remove student from class if overdue by >= final_dropoff_days
@@ -142,6 +108,7 @@ export const processInstallmentDelinquencies = async () => {
         i.invoice_id,
         i.status,
         i.due_date,
+        TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
         i.installmentinvoiceprofiles_id,
         i.late_penalty_applied_for_due_date,
         ip.student_id,
@@ -153,7 +120,8 @@ export const processInstallmentDelinquencies = async () => {
        WHERE i.installmentinvoiceprofiles_id IS NOT NULL
          AND i.status NOT IN ('Paid', 'Cancelled')
          AND i.due_date IS NOT NULL
-         AND i.due_date < CURRENT_DATE`
+         AND i.due_date < CURRENT_DATE
+         AND (i.issue_date IS NULL OR i.due_date >= i.issue_date)`
     );
 
     result.scanned = candidates.rows.length;
@@ -222,12 +190,17 @@ export const processInstallmentDelinquencies = async () => {
         const dropoffThreshold = addDaysLocalNoon(dueDate, finalDropoffDays);
         const isRemovalEligible = dropoffThreshold ? isOnOrAfterDate(today, dropoffThreshold) : false;
 
-        // 1) One-time penalty (guarded by due_date)
+        const penaltyExempt = await isInstallmentPenaltyExemptInvoice(client, {
+          invoiceId,
+          profileId: row.installmentinvoiceprofiles_id,
+        });
+
+        // 1) One-time penalty (guarded by due_date; skipped for first downpayment / first phase invoice)
         const alreadyAppliedForDueDate =
           invoice.late_penalty_applied_for_due_date &&
           formatYmdLocal(invoice.late_penalty_applied_for_due_date) === formatYmdLocal(dueDate);
 
-        if (!alreadyAppliedForDueDate && isPenaltyEligible) {
+        if (!penaltyExempt && !alreadyAppliedForDueDate && isPenaltyEligible) {
           const safeRate = Number.isFinite(penaltyRate)
             ? penaltyRate
             : SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue;

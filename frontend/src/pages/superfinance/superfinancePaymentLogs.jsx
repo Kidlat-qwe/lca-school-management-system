@@ -38,6 +38,10 @@ import {
   setPaymentLogApproval,
   canApprovePaymentLog,
 } from '../../utils/unappliedArPaymentLog';
+import {
+  buildPaymentApproveRequestBody,
+  validateFinancePaymentApproval,
+} from '../../constants/paymentFormLabels';
 import StandardExportModal from '../../components/export/StandardExportModal';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
@@ -429,20 +433,13 @@ const SuperfinancePaymentLogs = () => {
 
     const enteredRef = verifyModalReferenceInput.trim();
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
-    if (!enteredRef) {
-      appAlert('Please enter the reference number before approval.');
-      return;
-    }
-    if (!originalRef) {
-      appAlert(
-        'This payment has no reference number on file. Use Return to branch and ask the encoder to fix it first.'
-      );
-      return;
-    }
-    if (enteredRef !== originalRef) {
-      appAlert(
-        'Reference number does not match the recorded reference. You cannot approve this payment.\n\nPlease use Return to branch.'
-      );
+    const approvalCheck = validateFinancePaymentApproval(
+      selectedPaymentForReference.payment_method,
+      enteredRef,
+      originalRef
+    );
+    if (!approvalCheck.ok) {
+      appAlert(approvalCheck.message);
       return;
     }
 
@@ -456,16 +453,16 @@ const SuperfinancePaymentLogs = () => {
     setReferenceModalUpdating(true);
     try {
       if (isUnappliedArPaymentLogRow(selectedPaymentForReference)) {
-        await verifyUnappliedArFromPaymentLog(selectedPaymentForReference);
+        await verifyUnappliedArFromPaymentLog(selectedPaymentForReference, enteredRef);
         closeReferenceModal();
         await fetchPayments(pagination.page);
         return;
       }
 
-      const requestBody = {
-        approve: true,
-        finance_verified_reference_number: enteredRef,
-      };
+      const requestBody = buildPaymentApproveRequestBody(
+        selectedPaymentForReference.payment_method,
+        enteredRef
+      );
       if (trimmedDate) requestBody.payment_date = trimmedDate;
 
       await apiRequest(`/payments/${paymentId}/approve`, {

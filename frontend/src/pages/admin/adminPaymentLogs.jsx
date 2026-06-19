@@ -28,25 +28,21 @@ import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAt
 import { PaymentLogPackageItemCell } from '../../components/paymentLogs/PaymentLogPackageItemCell';
 import { getPaymentLogPackageItemDisplayText } from '../../utils/paymentLogPackageItem';
 import StandardExportModal from '../../components/export/StandardExportModal';
+import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import {
+  isPaymentMethodSelected,
+  isPaymentReferenceNumberRequired,
+  isCashPaymentMethod,
+  normalizePaymentReferenceNumber,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+  buildPaymentApproveRequestBody,
+  validateFinancePaymentApproval,
+} from '../../constants/paymentFormLabels';
 import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExportDateRange';
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
-
-/** Same options as Record Payment on Invoice page (see Invoice.jsx payment_method select) */
-const RETURN_FIX_PAYMENT_METHOD_OPTIONS = [
-  'Cash',
-  'Online Banking',
-  'Credit Card',
-  'E-wallets',
-];
-
-const getReturnFixPaymentMethodOptions = (currentValue) => {
-  const c = (currentValue || '').trim();
-  if (!c) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
-  if (RETURN_FIX_PAYMENT_METHOD_OPTIONS.includes(c)) return RETURN_FIX_PAYMENT_METHOD_OPTIONS;
-  return [c, ...RETURN_FIX_PAYMENT_METHOD_OPTIONS];
-};
 
 /** Same breakdown logic as Record Payment (adminInvoice.jsx) — for invoice summary + validation */
 const getInvoiceBreakdownForReturnFix = (invoice) => {
@@ -104,7 +100,7 @@ const AdminPaymentLogs = () => {
   const [returnFixPayment, setReturnFixPayment] = useState(null);
   const [returnFixRef, setReturnFixRef] = useState('');
   const [returnFixAttachment, setReturnFixAttachment] = useState('');
-  const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('Cash');
+  const [returnFixPaymentMethod, setReturnFixPaymentMethod] = useState('');
   const [returnFixIssueDate, setReturnFixIssueDate] = useState('');
   const [returnFixAttachmentUploading, setReturnFixAttachmentUploading] = useState(false);
   const [returnFixLoading, setReturnFixLoading] = useState(false);
@@ -776,18 +772,13 @@ const AdminPaymentLogs = () => {
     if (!selectedPaymentForReference) return;
     const enteredRef = referenceModalInput.trim();
     const originalRef = (selectedPaymentForReference.reference_number || '').trim();
-
-    if (!originalRef) {
-      appAlert('This payment has no reference number recorded yet. Please update it from the Record Payment modal.');
-      return;
-    }
-    if (!enteredRef) {
-      appAlert('Please enter the reference number exactly as shown on the receipt image.');
-      return;
-    }
-
-    if (enteredRef !== originalRef) {
-      appAlert('Reference number does not match the one originally recorded for this payment.\n\nPlease double-check the receipt and correct it before saving.');
+    const approvalCheck = validateFinancePaymentApproval(
+      selectedPaymentForReference.payment_method,
+      enteredRef,
+      originalRef
+    );
+    if (!approvalCheck.ok) {
+      appAlert(approvalCheck.message);
       return;
     }
 
@@ -796,10 +787,12 @@ const AdminPaymentLogs = () => {
     try {
       await apiRequest(`/payments/${paymentId}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({
-          approve: true,
-          finance_verified_reference_number: enteredRef,
-        }),
+        body: JSON.stringify(
+          buildPaymentApproveRequestBody(
+            selectedPaymentForReference.payment_method,
+            enteredRef
+          )
+        ),
       });
       setPayments((prev) =>
         prev.map((p) =>
@@ -837,7 +830,7 @@ const AdminPaymentLogs = () => {
     setReturnFixPayment(payment);
     setReturnFixRef((payment.reference_number || '').trim());
     setReturnFixAttachment(payment.payment_attachment_url || '');
-    setReturnFixPaymentMethod((payment.payment_method || 'Cash').trim() || 'Cash');
+    setReturnFixPaymentMethod(String(payment.payment_method || '').trim());
     setReturnFixIssueDate((payment.issue_date || '').slice(0, 10));
     setReturnFixPaymentType((payment.payment_type || '').trim() || '');
     const pa = payment.payable_amount;
@@ -867,7 +860,7 @@ const AdminPaymentLogs = () => {
     setReturnFixPayment(null);
     setReturnFixRef('');
     setReturnFixAttachment('');
-    setReturnFixPaymentMethod('Cash');
+    setReturnFixPaymentMethod('');
     setReturnFixIssueDate('');
     setReturnFixAttachmentUploading(false);
     setReturnFixInvoiceSummary(null);
@@ -1026,6 +1019,10 @@ const AdminPaymentLogs = () => {
         appAlert('Please select a payment type.');
         return;
       }
+      if (!isPaymentMethodSelected(returnFixPaymentMethod)) {
+        appAlert(PAYMENT_METHOD_REQUIRED_MESSAGE);
+        return;
+      }
       const payableNum = parseFloat(returnFixPayableAmount);
       if (!returnFixPayableAmount || Number.isNaN(payableNum) || payableNum <= 0) {
         appAlert('Payable amount must be greater than 0.');
@@ -1045,7 +1042,7 @@ const AdminPaymentLogs = () => {
         appAlert('Discount amount must be less than payable amount.');
         return;
       }
-      if (!refTrim) {
+      if (isPaymentReferenceNumberRequired(returnFixPaymentMethod) && !refTrim) {
         appAlert('Reference number is required.');
         return;
       }
@@ -1074,9 +1071,9 @@ const AdminPaymentLogs = () => {
         }
       }
       const payload = {
-        reference_number: refTrim,
+        reference_number: normalizePaymentReferenceNumber(returnFixPaymentMethod, refTrim),
         attachment_url: attTrim,
-        payment_method: returnFixPaymentMethod.trim() || undefined,
+        payment_method: returnFixPaymentMethod.trim(),
         payment_type: returnFixPaymentType.trim(),
         payable_amount: payableNum,
         tip_amount: tipNum,
@@ -2900,17 +2897,26 @@ const AdminPaymentLogs = () => {
                 </div>
               )}
               <form onSubmit={handleUpdateReferenceNumber}>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Reference Number</label>
-                  <input
-                    type="text"
-                    value={referenceModalInput}
-                    onChange={(e) => setReferenceModalInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
-                    required
-                  />
-                </div>
+                {isCashPaymentMethod(selectedPaymentForReference.payment_method) ? (
+                  <p className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                    Cash payment — no reference number is required. Review the attachment, then
+                    approve when ready.
+                  </p>
+                ) : (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Reference Number
+                    </label>
+                    <input
+                      type="text"
+                      value={referenceModalInput}
+                      onChange={(e) => setReferenceModalInput(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="Enter reference number (e.g. GCash ref, receipt no.)"
+                      required
+                    />
+                  </div>
+                )}
                 <div className="flex justify-end gap-3">
                   <button
                     type="button"
@@ -3011,20 +3017,12 @@ const AdminPaymentLogs = () => {
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       id="admin_return_fix_payment_method"
                       value={returnFixPaymentMethod}
                       onChange={(e) => setReturnFixPaymentMethod(e.target.value)}
                       disabled={returnFixLoading || returnFixAttachmentUploading}
-                      className="input-field text-sm"
-                      required
-                    >
-                      {getReturnFixPaymentMethodOptions(returnFixPaymentMethod).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 </div>
 
@@ -3179,19 +3177,12 @@ const AdminPaymentLogs = () => {
                   )}
                 </div>
 
-                <div>
-                  <label className="label-field text-xs">
-                    Reference Number <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={returnFixRef}
-                    onChange={(e) => setReturnFixRef(e.target.value)}
-                    disabled={returnFixLoading || returnFixAttachmentUploading}
-                    className="input-field text-sm"
-                    placeholder="Enter reference number (e.g. cash voucher, receipt no.)"
-                  />
-                </div>
+                <PaymentReferenceNumberField
+                  paymentMethod={returnFixPaymentMethod}
+                  value={returnFixRef}
+                  onChange={(e) => setReturnFixRef(e.target.value)}
+                  disabled={returnFixLoading || returnFixAttachmentUploading}
+                />
 
                 <div>
                   <label className="label-field text-xs">Remarks</label>

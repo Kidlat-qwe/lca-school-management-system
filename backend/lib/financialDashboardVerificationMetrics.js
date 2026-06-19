@@ -1,10 +1,13 @@
 /**
  * Financial dashboard payment / AR verification counts aligned with drill-down grids:
- * - Payment Logs main tab (GET /payments/finance-unified)
+ * - Payment Logs / Invoice / Monthly Operational (completed invoice payments by payment date)
  * - Acknowledgement Receipts list (GET /acknowledgement-receipts)
  */
 
-import { paymentLogApprovalFromArVerification } from './paymentLogArApproval.js';
+import {
+  computePaymentDateNetTotals,
+  formatPaymentDateNetTotalsSummary,
+} from './paymentDateNetTotals.js';
 
 /** Inclusive calendar range for YYYY-MM (matches Payment Logs month mode / issueDateRangeFromManilaMonth). */
 export function parseManilaMonthInclusiveRange(monthKey) {
@@ -43,8 +46,10 @@ const lineAmount = (row, paymentField = 'line_amount') =>
   parseFloat(row?.[paymentField]) || 0;
 
 /**
- * Payment verification totals — same rows as Payment Logs finance-unified main tab:
- * completed payments (not Returned/Rejected) + unapplied package AR rows.
+ * Payment verification totals — same completed invoice payment lines as:
+ * - Invoice list payment-date summary (computeInvoiceFilterSummary)
+ * - Monthly Operational Dashboard invoice sales / total payments (paymenttbl.issue_date)
+ * Excludes Returned/Rejected approval. Unapplied package AR is tracked on AR verification cards only.
  */
 export async function loadFinancialDashboardPaymentVerification(runQuery, options = {}) {
   const { branchId = null, dateFrom = null, dateTo = null } = options;
@@ -63,29 +68,6 @@ export async function loadFinancialDashboardPaymentVerification(runQuery, option
         ${payScopeSql}
     `,
     payParams
-  );
-
-  const arParams = [];
-  const arScopeSql = buildBranchDateSql(branchId, dateFrom, dateTo, 'ar', arParams);
-
-  const arRes = await runQuery(
-    `
-      SELECT
-        ar.payment_amount,
-        ar.tip_amount,
-        ar.verified_by_user_id,
-        ar.verified_at,
-        verifier.full_name AS verified_by_name,
-        verifier.user_type AS verifier_user_type
-      FROM acknowledgement_receiptstbl ar
-      LEFT JOIN userstbl verifier ON ar.verified_by_user_id = verifier.user_id
-      WHERE ar.ar_type = 'Package'
-        AND ar.status IN ('Submitted', 'Verified')
-        AND ar.payment_id IS NULL
-        AND ar.invoice_id IS NULL
-        ${arScopeSql}
-    `,
-    arParams
   );
 
   let verified_count = 0;
@@ -108,18 +90,25 @@ export async function loadFinancialDashboardPaymentVerification(runQuery, option
     addRow(isApproved, lineAmount(row));
   }
 
-  for (const row of arRes.rows || []) {
-    const approval = paymentLogApprovalFromArVerification(row);
-    const amount =
-      (parseFloat(row.payment_amount) || 0) + (parseFloat(row.tip_amount) || 0);
-    addRow(approval.approval_status === 'Approved', amount);
-  }
+  const netTotals = await computePaymentDateNetTotals(runQuery, {
+    branchId,
+    dateFrom,
+    dateTo,
+    dateEndExclusive: false,
+  });
+  const netSummary = formatPaymentDateNetTotalsSummary(netTotals);
 
   return {
     verified_count,
     verified_amount,
     unverified_count,
     unverified_amount,
+    net_count: netSummary.filterTotalPaymentLineCount,
+    net_amount: netSummary.filterTotalLineAmount,
+    returned_deduction_count: netSummary.returnedDeductionCount,
+    returned_deduction_amount: netSummary.returnedDeductionAmount,
+    rejected_deduction_count: netSummary.rejectedDeductionCount,
+    rejected_deduction_amount: netSummary.rejectedDeductionAmount,
   };
 }
 

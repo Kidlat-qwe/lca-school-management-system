@@ -66,13 +66,16 @@
 
   - `GET /api/sms/installment-invoices/profiles/:id/phases` — profile,
     downpayment, phases, totals (see below).
-  - `POST /api/sms/payments` — record full payment on an existing installment
-    phase invoice (Finance / Admin / Superadmin / Superfinance). On success the
+  - `POST /api/sms/payments` — record full or partial payment on an existing installment
+    phase invoice (Finance / Admin / Superadmin / Superfinance). Partial payment
+    creates a balance continuation invoice, same as the Invoice page. On success the
     UI loads `GET /invoices/:id` and opens **PaymentRecordedInvoiceSummaryModal**
     (same as Invoice page: AR preview + PDF).
   - `POST /api/sms/installment-invoices/profiles/:id/advance-pay` — pay ahead
-    for a phase that has not been generated yet; then the same receipt summary
-    opens for the new paid invoice.
+    for a phase that has not been generated yet (full or partial). Partial advance
+    creates the phase invoice, records a partial payment, and opens a balance
+    continuation invoice for the remainder; then the same receipt summary opens
+    for the new paid invoice.
 
   ### Role wiring
 

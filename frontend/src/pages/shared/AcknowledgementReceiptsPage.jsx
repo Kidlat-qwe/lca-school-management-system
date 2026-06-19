@@ -38,6 +38,16 @@ import ArFinanceVerifyModal from '../../components/receipts/ArFinanceVerifyModal
 import ArPairedReceiptSummaryBlocks from '../../components/receipts/ArPairedReceiptSummaryBlocks';
 import { resolveAckReceiptLeaderPair } from '../../utils/enrollmentAckReceiptList';
 import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
+import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import {
+  isPaymentMethodSelected,
+  PAYMENT_METHOD_OPTIONS,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+  validateFinancePaymentApproval,
+  buildArVerifyRequestBody,
+} from '../../constants/paymentFormLabels';
+import { getArIssuedByLabel } from '../../utils/issuedByDisplay';
 import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
 import {
   getArStatusBadgeClass,
@@ -45,13 +55,19 @@ import {
 } from '../../utils/acknowledgementReceiptStatus';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
-const AR_PAYMENT_METHOD_OPTIONS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
 
-/** Merchandise AR (cash or non-cash): branch records payment (Paid); Finance/Superfinance must verify. */
+/** Non-cash merchandise AR (Paid): Finance/Superfinance must verify on AR page. Cash is auto-verified on issue. */
 const financeCanVerifyMerchandiseAr = (receipt) =>
   receipt?.ar_type === 'Merchandise' &&
   String(receipt?.status || '').trim() === 'Paid' &&
+  String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash' &&
   (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
+
+/** Non-cash package AR (Submitted): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
+const financeCanVerifyPackageAr = (receipt) =>
+  receipt?.ar_type === 'Package' &&
+  String(receipt?.status || '').trim() === 'Submitted' &&
+  String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash';
 
 const financeHasPackageActionMenu = (receipt) => receipt?.ar_type === 'Package';
 
@@ -209,7 +225,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     prospect_student_notes: '',
     level_tag: '',
     reference_number: '',
-    payment_method: 'Cash',
+    payment_method: '',
     issue_date: todayManilaYMD(),
     tip_amount: '',
     discount_amount: '',
@@ -223,7 +239,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [branchModalStep, setBranchModalStep] = useState(1);
-  const [arType, setArType] = useState('Package');
+  const [arType, setArType] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [merchandiseSelections, setMerchandiseSelections] = useState([]);
   const [createFormData, setCreateFormData] = useState({
@@ -236,7 +252,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     payment_amount: '',
     tip_amount: '',
     discount_amount: '',
-    payment_method: 'Cash',
+    payment_method: '',
     level_tag: '',
     reference_number: '',
     payment_attachment_url: '',
@@ -260,6 +276,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     loading: false,
     mode: 'verify',
     remarks: '',
+    referenceNumber: '',
   });
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -283,7 +300,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     prospect_student_notes: '',
     level_tag: '',
     reference_number: '',
-    payment_method: 'Cash',
+    payment_method: '',
     issue_date: todayManilaYMD(),
     tip_amount: '',
     payment_attachment_url: '',
@@ -649,7 +666,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   }, [viewReceipt]);
 
   const resetCreateForm = () => {
-    setArType('Package');
+    setArType('');
     setSelectedPackage(null);
     setMerchandiseSelections([]);
     setCreateFormData({
@@ -662,7 +679,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       payment_amount: '',
       tip_amount: '',
       discount_amount: '',
-      payment_method: 'Cash',
+      payment_method: '',
       level_tag: '',
       reference_number: '',
       payment_attachment_url: '',
@@ -903,6 +920,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         'Reference Number': r.reference_number || '-',
         'Issue Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
         'Payment Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
+        'Issued by': getArIssuedByLabel(r),
       }));
       const rangeTag =
         issueDateFrom || issueDateTo
@@ -968,6 +986,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleArTypeChange = (newType) => {
     setArType(newType);
+    if (!newType) return;
     setSelectedPackage(null);
     setMerchandiseSelections([]);
     setCreateFormData((prev) => ({
@@ -1398,8 +1417,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       appAlert('Package is required.');
       return;
     }
-    if (!AR_PAYMENT_METHOD_OPTIONS.includes(viewFormData.payment_method || '')) {
-      appAlert('Invalid payment method on this receipt.');
+    if (!isPaymentMethodSelected(viewFormData.payment_method)) {
+      appAlert(PAYMENT_METHOD_REQUIRED_MESSAGE);
       return;
     }
     const fromReceipt =
@@ -1448,7 +1467,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         prospect_student_notes: (viewFormData.prospect_student_notes || '').trim() || null,
         level_tag: (viewFormData.level_tag || '').trim() || null,
         reference_number: (viewFormData.reference_number || '').trim() || null,
-        payment_method: viewFormData.payment_method || 'Cash',
+        payment_method: viewFormData.payment_method,
         tip_amount: tipNum,
         discount_amount: discountNum > 0 ? discountNum : 0,
         payment_attachment_url: attach,
@@ -1483,6 +1502,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
     const isMerch = arType === 'Merchandise';
+
+    if (!arType) {
+      errors.ar_type = 'Issue type is required';
+    }
     const arEmail = (createFormData.prospect_student_email || '').trim();
 
     if (!name) {
@@ -1512,7 +1535,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       if (!levelTag) {
         errors.level_tag = 'Level tag is required';
       }
-    } else {
+    } else if (arType === 'Package') {
       if (!createFormData.package_id) {
         errors.package_id = 'Package is required';
       }
@@ -1549,8 +1572,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     } else if (createFormData.discount_amount !== '' && grossPayable > 0 && discountParsed >= grossPayable) {
       errors.discount_amount = 'Discount amount must be less than payable amount';
     }
-    if (!AR_PAYMENT_METHOD_OPTIONS.includes(createFormData.payment_method || '')) {
-      errors.payment_method = 'Payment method is required';
+    if (!isPaymentMethodSelected(createFormData.payment_method)) {
+      errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
     }
     if (!(createFormData.payment_attachment_url || '').trim()) {
       errors.payment_attachment_url = 'Attachment image is required';
@@ -1597,7 +1620,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             createFormData.discount_amount === ''
               ? undefined
               : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
-          payment_method: createFormData.payment_method || 'Cash',
+          payment_method: createFormData.payment_method,
           issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           branch_id: branchId,
         };
@@ -1625,7 +1648,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             createFormData.discount_amount === ''
               ? undefined
               : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
-          payment_method: createFormData.payment_method || 'Cash',
+          payment_method: createFormData.payment_method,
           issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
           installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
           level_tag: (createFormData.level_tag || '').trim() || undefined,
@@ -1704,6 +1727,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       loading: true,
       mode,
       remarks: '',
+      referenceNumber: '',
     });
     try {
       const response = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`);
@@ -1716,6 +1740,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         loading: false,
         mode,
         remarks: '',
+        referenceNumber: '',
       }));
     } catch (err) {
       console.error('Failed to load AR details for finance action:', err);
@@ -1727,6 +1752,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         loading: false,
         mode,
         remarks: '',
+        referenceNumber: '',
       }));
     }
   };
@@ -1740,6 +1766,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       loading: false,
       mode: 'verify',
       remarks: '',
+      referenceNumber: '',
     });
   };
 
@@ -1748,11 +1775,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       ...prev,
       mode,
       remarks: '',
+      referenceNumber: '',
     }));
   };
 
   const setFinanceVerifyModalRemarks = (remarks) => {
     setFinanceVerifyModal((prev) => ({ ...prev, remarks }));
+  };
+
+  const setFinanceVerifyModalReferenceNumber = (referenceNumber) => {
+    setFinanceVerifyModal((prev) => ({ ...prev, referenceNumber }));
   };
 
   const handleVerifyModalArNumberClick = (targetReceipt) => {
@@ -1765,6 +1797,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       loading: false,
       mode: 'verify',
       remarks: '',
+      referenceNumber: '',
     });
     focusAckReceiptRow(ackId);
   };
@@ -1777,13 +1810,30 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const submitFinanceVerify = async () => {
-    const receipt = financeVerifyModal.receipt;
+    const { receipt, pairedReceipt, referenceNumber } = financeVerifyModal;
     if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+
+    const { leader } = resolveAckReceiptLeaderPair(receipt, pairedReceipt);
+    const displayReceipt = leader || receipt;
+    const enteredRef = String(referenceNumber || '').trim();
+    const originalRef = String(displayReceipt.reference_number || '').trim();
+    const approvalCheck = validateFinancePaymentApproval(
+      displayReceipt.payment_method,
+      enteredRef,
+      originalRef
+    );
+    if (!approvalCheck.ok) {
+      appAlert(approvalCheck.message);
+      return;
+    }
+
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
       const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
-        body: JSON.stringify({ action: 'verify' }),
+        body: JSON.stringify(
+          buildArVerifyRequestBody(displayReceipt.payment_method, enteredRef)
+        ),
       });
       appAlert(result.message || 'Acknowledgement receipt verified.');
       closeFinanceVerifyModal();
@@ -1880,7 +1930,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_notes: leader.prospect_student_notes || '',
       level_tag: leader.level_tag || '',
       reference_number: leader.reference_number || phase1?.reference_number || '',
-      payment_method: leader.payment_method || 'Cash',
+      payment_method: leader.payment_method || '',
       issue_date:
         leader.issue_date != null && String(leader.issue_date).trim() !== ''
           ? String(leader.issue_date).slice(0, 10)
@@ -1942,7 +1992,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_notes: receipt.prospect_student_notes || '',
       level_tag: receipt.level_tag || '',
       reference_number: receipt.reference_number || '',
-      payment_method: receipt.payment_method || 'Cash',
+      payment_method: receipt.payment_method || '',
       issue_date:
         receipt.issue_date != null && String(receipt.issue_date).trim() !== ''
           ? String(receipt.issue_date).slice(0, 10)
@@ -1983,7 +2033,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       prospect_student_notes: '',
       level_tag: '',
       reference_number: '',
-      payment_method: 'Cash',
+      payment_method: '',
       issue_date: todayManilaYMD(),
       tip_amount: '',
       discount_amount: '',
@@ -2044,8 +2094,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       errors.prospect_student_phone =
         'A valid Philippine mobile number is required for SMS payment confirmation';
     }
-    if (!AR_PAYMENT_METHOD_OPTIONS.includes(editFormData.payment_method || '')) {
-      errors.payment_method = 'Payment method is required';
+    if (!isPaymentMethodSelected(editFormData.payment_method)) {
+      errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
     }
     if (!isAckIssueDateLocked(editingReceiptMeta) && !(editFormData.issue_date || '').trim()) {
       errors.issue_date = 'Issue date is required';
@@ -2075,7 +2125,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         prospect_student_notes: (editFormData.prospect_student_notes || '').trim() || null,
         level_tag: (editFormData.level_tag || '').trim() || null,
         reference_number: (editFormData.reference_number || '').trim() || null,
-        payment_method: editFormData.payment_method || 'Cash',
+        payment_method: editFormData.payment_method,
         tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
         payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
       };
@@ -2313,7 +2363,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             >
               <option value="">All</option>
-              {AR_PAYMENT_METHOD_OPTIONS.map((m) => (
+              {PAYMENT_METHOD_OPTIONS.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
@@ -2512,7 +2562,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               >
               <table
                 className="min-w-full divide-y divide-gray-200 text-sm"
-                style={{ width: '100%', minWidth: '1780px' }}
+                style={{ width: '100%', minWidth: '1920px' }}
               >
                 <thead className="bg-gray-50 table-header-stable">
                   <tr>
@@ -2550,6 +2600,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
                     <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
                     <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                      Issued by
+                    </th>
                     {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                       <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
                     )}
@@ -2558,7 +2611,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 16 : 15} className="px-6 py-12 text-center">
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 17 : 16} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No acknowledgement receipts found.</p>
                       </td>
                     </tr>
@@ -2736,6 +2789,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <td className="px-4 py-3 text-gray-900">
                         {r.issue_date ? formatDateManila(r.issue_date) : '-'}
                       </td>
+                      <td className="px-4 py-3 text-gray-900" style={{ maxWidth: '160px' }}>
+                        <div
+                          className="truncate"
+                          title={getArIssuedByLabel(r) === '—' ? undefined : getArIssuedByLabel(r)}
+                        >
+                          {getArIssuedByLabel(r)}
+                        </div>
+                      </td>
                       {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
                         <td className="px-4 py-3">
                           {(() => {
@@ -2751,7 +2812,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             }
                             const financeHasActionMenu =
                               isFinanceOrSuperfinance &&
-                              (financeHasPackageActionMenu(r) || financeCanVerifyMerchandiseAr(r));
+                              (financeCanVerifyPackageAr(r) ||
+                                financeCanVerifyMerchandiseAr(r) ||
+                                (financeHasPackageActionMenu(r) &&
+                                  String(r?.status || '').trim() === 'Submitted'));
                             const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
                             if (!showEllipsis) {
                               return <span className="text-xs text-gray-400">-</span>;
@@ -2805,6 +2869,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           pairedReceipt={financeVerifyModal.pairedReceipt}
           loading={financeVerifyModal.loading}
           remarks={financeVerifyModal.remarks}
+          referenceNumber={financeVerifyModal.referenceNumber}
+          onReferenceNumberChange={setFinanceVerifyModalReferenceNumber}
           onRemarksChange={setFinanceVerifyModalRemarks}
           submitting={Boolean(
             financeVerifyModal.receipt?.ack_receipt_id &&
@@ -2826,16 +2892,18 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 const h = typeof window !== 'undefined' ? window.innerHeight : 800;
                 const isMerchandiseVerifyRow =
                   isFinanceOrSuperfinance && financeCanVerifyMerchandiseAr(actionMenuReceipt);
-                const financeHasPackageMenuOnRow =
-                  isFinanceOrSuperfinance && financeHasPackageActionMenu(actionMenuReceipt);
-                const financeHasActionMenuOnRow = financeHasPackageMenuOnRow || isMerchandiseVerifyRow;
-                const financeCanActOnRow =
-                  isMerchandiseVerifyRow ||
-                  (financeHasPackageMenuOnRow &&
-                    (actionMenuReceipt.status === 'Submitted' || actionMenuReceipt.status === 'Paid'));
-                const verifyDisabledForStatus = !financeCanActOnRow;
+                const isPackageVerifyRow =
+                  isFinanceOrSuperfinance && financeCanVerifyPackageAr(actionMenuReceipt);
+                const financeCanPackageReturnReject =
+                  isFinanceOrSuperfinance &&
+                  financeHasPackageActionMenu(actionMenuReceipt) &&
+                  String(actionMenuReceipt?.status || '').trim() === 'Submitted';
+                const financeHasActionMenuOnRow =
+                  isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject;
+                const verifyDisabledForStatus = !(isMerchandiseVerifyRow || isPackageVerifyRow);
+                const returnRejectDisabledForStatus = !financeCanPackageReturnReject;
                 const itemCount = isFinanceOrSuperfinance
-                  ? (isMerchandiseVerifyRow ? 1 : financeHasPackageMenuOnRow ? 3 : 0)
+                  ? (isMerchandiseVerifyRow ? 1 : isPackageVerifyRow || financeCanPackageReturnReject ? 3 : 0)
                   : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
@@ -2889,12 +2957,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             type="button"
                             role="menuitem"
                             onClick={() => {
-                              if (verifyDisabledForStatus) return;
+                              if (returnRejectDisabledForStatus) return;
                               setOpenActionMenuId(null);
                               setActionMenuRect(null);
                               handleVerifyReceipt(actionMenuReceipt, false);
                             }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || returnRejectDisabledForStatus}
                             className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
                             Return
@@ -2903,12 +2971,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             type="button"
                             role="menuitem"
                             onClick={() => {
-                              if (verifyDisabledForStatus) return;
+                              if (returnRejectDisabledForStatus) return;
                               setOpenActionMenuId(null);
                               setActionMenuRect(null);
                               handleRejectReceipt(actionMenuReceipt);
                             }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || returnRejectDisabledForStatus}
                             className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
                             Reject
@@ -3047,6 +3115,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       onChange={(e) => setArType(e.target.value)}
                       className="input-field text-sm"
                     >
+                      <option value="">Select type...</option>
                       <option value="Package">Package</option>
                       <option value="Merchandise">Merchandise</option>
                     </select>
@@ -3076,6 +3145,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         }
                         setBranchModalStep(2);
                       } else {
+                        if (!arType) {
+                          appAlert('Please select an issue type.');
+                          return;
+                        }
                         const branchId = parseInt(selectedBranchId, 10);
                         fetchPackages(branchId);
                         if (arType === 'Merchandise') {
@@ -3111,7 +3184,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 <div>
                   <h2 className="text-xl font-semibold text-gray-900">Create Acknowledgement Receipt</h2>
                   <p className="text-xs text-gray-500 mt-1">
-                    Record a payment for a package without creating the full student record yet.
+                    {arType === 'Merchandise'
+                      ? 'Record a merchandise payment without creating the full student record yet.'
+                      : arType === 'Package'
+                        ? 'Record a payment for a package without creating the full student record yet.'
+                        : 'Select an issue type to continue.'}
                   </p>
                 </div>
                 <button
@@ -3182,14 +3259,22 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <select
                       value={arType}
                       onChange={(e) => handleArTypeChange(e.target.value)}
-                      className="input-field text-sm"
+                      className={`input-field text-sm ${createFormErrors.ar_type ? 'border-red-500' : ''}`}
                     >
+                      <option value="">Select type...</option>
                       <option value="Package">Package</option>
                       {isAdminOrSuperadmin && <option value="Merchandise">Merchandise</option>}
                     </select>
+                    {createFormErrors.ar_type && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.ar_type}</p>
+                    )}
                   </div>
                 )}
-                {arType === 'Merchandise' ? (
+                {!arType ? (
+                  <p className="text-sm text-gray-500 py-2">
+                    Choose Package or Merchandise above to continue filling out this form.
+                  </p>
+                ) : arType === 'Merchandise' ? (
                   <>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
@@ -3470,32 +3555,34 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <label className="label-field text-xs">
                         Payment Method <span className="text-red-500">*</span>
                       </label>
-                      <select
+                      <PaymentMethodSelect
                         name="payment_method"
                         value={createFormData.payment_method}
                         onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
-                      >
-                        {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
-                          <option key={method} value={method}>{method}</option>
-                        ))}
-                      </select>
+                        error={createFormErrors.payment_method}
+                        disabled={creating}
+                      />
                       {createFormErrors.payment_method && (
                         <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
                       )}
+                      {createFormData.payment_method === 'Cash' ? (
+                        <p className="text-xs text-emerald-600 mt-1">
+                          Cash merchandise is auto-verified on the AR page when issued. Finance still approves the payment in Payment Logs.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Non-cash merchandise must be verified by Finance/Superfinance on the AR page; Payment Logs auto-approve when Finance verifies.
+                        </p>
+                      )}
                     </div>
-                    <div>
-                      <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
-                      <input
-                        type="text"
-                        name="reference_number"
-                        value={createFormData.reference_number}
-                        onChange={handleCreateInputChange}
-                        placeholder="e.g. GCash transaction ID, bank ref"
-                        className="input-field text-sm"
-                        required
-                      />
-                    </div>
+                    <PaymentReferenceNumberField
+                      paymentMethod={createFormData.payment_method}
+                      name="reference_number"
+                      value={createFormData.reference_number}
+                      onChange={handleCreateInputChange}
+                      disabled={creating}
+                      placeholder="e.g. GCash transaction ID, bank ref"
+                    />
                     <div>
                       <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
                   <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 50 MB)</p>
@@ -3769,7 +3856,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                                 Amount: ₱{(downpayment + monthly).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                                 &nbsp;(₱{downpayment.toLocaleString('en-PH', { minimumFractionDigits: 2 })} downpayment
                                 &nbsp;+ ₱{monthly.toLocaleString('en-PH', { minimumFractionDigits: 2 })} Phase 1)
-                                &nbsp;&mdash; Phase 2 will be auto-generated.
                               </span>
                             </span>
                           </label>
@@ -3784,26 +3870,23 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
                     </label>
-                    <select
+                    <PaymentMethodSelect
                       name="payment_method"
                       value={createFormData.payment_method}
                       onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${createFormErrors.payment_method ? 'border-red-500' : ''}`}
-                    >
-                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
-                        <option key={method} value={method}>{method}</option>
-                      ))}
-                    </select>
+                      error={createFormErrors.payment_method}
+                      disabled={creating}
+                    />
                     {createFormErrors.payment_method && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
                     )}
                     {createFormData.payment_method === 'Cash' ? (
                       <p className="text-xs text-emerald-600 mt-1">
-                        Cash acknowledgement receipts are auto-verified and can be used immediately for enrollment &mdash; no Finance/Superfinance verification needed.
+                        Cash package AR is auto-verified for enrollment use. Finance approves the payment in Payment Logs (unapplied AR row until attached, or payment row after enrollment).
                       </p>
                     ) : (
                       <p className="text-xs text-amber-600 mt-1">
-                        Non-cash acknowledgement receipts must be verified by Finance/Superfinance before they can be applied to enrollment.
+                        Non-cash package AR must be verified by Finance/Superfinance on the AR page before enrollment. Payment Logs auto-approve when Finance verifies.
                       </p>
                     )}
                   </div>
@@ -3830,19 +3913,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
                 )}
 
-                <div>
-                  <label className="label-field text-xs">Reference Number <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    name="reference_number"
-                    value={createFormData.reference_number}
-                    onChange={handleCreateInputChange}
-                    placeholder="e.g. GCash transaction ID, bank ref, etc."
-                    className="input-field text-sm"
-                    required
-                    disabled={creating}
-                  />
-                </div>
+                <PaymentReferenceNumberField
+                  paymentMethod={createFormData.payment_method}
+                  name="reference_number"
+                  value={createFormData.reference_number}
+                  onChange={handleCreateInputChange}
+                  disabled={creating}
+                  placeholder="e.g. GCash transaction ID, bank ref, etc."
+                />
 
                 <div>
                   <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
@@ -3907,6 +3985,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     disabled={
                       creating ||
                       attachmentUploading ||
+                      !arType ||
                       !(createFormData.payment_attachment_url || '').trim() ||
                       (arType === 'Package' &&
                         (!createFormData.package_id ||
@@ -4453,18 +4532,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
 
                   <div>
-                    <label className="label-field text-xs">Payment Method</label>
-                    <select
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <PaymentMethodSelect
                       name="payment_method"
                       value={editFormData.payment_method}
                       onChange={handleEditInputChange}
-                      className={`input-field text-sm ${editFormErrors.payment_method ? 'border-red-500' : ''}`}
+                      error={editFormErrors.payment_method}
                       disabled={editSaving}
-                    >
-                      {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
-                        <option key={method} value={method}>{method}</option>
-                      ))}
-                    </select>
+                    />
+                    {editFormErrors.payment_method && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.payment_method}</p>
+                    )}
                   </div>
 
                   <div>
@@ -4482,17 +4562,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     {editFormErrors.tip_amount && <p className="mt-1 text-xs text-red-500">{editFormErrors.tip_amount}</p>}
                   </div>
 
-                  <div>
-                    <label className="label-field text-xs">Reference Number</label>
-                    <input
-                      type="text"
-                      name="reference_number"
-                      value={editFormData.reference_number}
-                      onChange={handleEditInputChange}
-                      className="input-field text-sm"
-                      disabled={editSaving}
-                    />
-                  </div>
+                  <PaymentReferenceNumberField
+                    paymentMethod={editFormData.payment_method}
+                    name="reference_number"
+                    value={editFormData.reference_number}
+                    onChange={handleEditInputChange}
+                    disabled={editSaving}
+                    requiredMark={false}
+                  />
 
                   <div className="sm:col-span-2">
                     <label className="label-field text-xs">Attachment <span className="text-red-600">*</span></label>
@@ -4890,32 +4967,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     ) : null}
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
-                        <label className="label-field text-xs">Payment Method</label>
-                        <select
+                        <label className="label-field text-xs">
+                          Payment Method <span className="text-red-500">*</span>
+                        </label>
+                        <PaymentMethodSelect
                           name="payment_method"
                           value={viewFormData.payment_method}
                           onChange={handleViewInputChange}
                           disabled={viewResubmitSaving}
-                          className="input-field text-sm"
-                        >
-                          {AR_PAYMENT_METHOD_OPTIONS.map((method) => (
-                            <option key={method} value={method}>
-                              {method}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="label-field text-xs">Reference Number</label>
-                        <input
-                          type="text"
-                          name="reference_number"
-                          className="input-field text-sm"
-                          value={viewFormData.reference_number}
-                          onChange={handleViewInputChange}
-                          disabled={viewResubmitSaving}
                         />
                       </div>
+                      <PaymentReferenceNumberField
+                        paymentMethod={viewFormData.payment_method}
+                        name="reference_number"
+                        value={viewFormData.reference_number}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                        requiredMark={false}
+                      />
                     </div>
                   </div>
                 )}

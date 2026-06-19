@@ -20,14 +20,17 @@ export function parseUnappliedArAckReceiptId(payment) {
  * Finance/Superfinance approval on Payment Logs for unapplied package AR rows.
  * Verifies the acknowledgement receipt (same as AR page Verify).
  */
-export async function verifyUnappliedArFromPaymentLog(payment) {
+export async function verifyUnappliedArFromPaymentLog(payment, financeVerifiedReferenceNumber) {
   const ackReceiptId = parseUnappliedArAckReceiptId(payment);
   if (!ackReceiptId) {
     throw new Error('Invalid acknowledgement receipt row.');
   }
+  const body = { action: 'verify' };
+  const ref = String(financeVerifiedReferenceNumber || '').trim();
+  if (ref) body.finance_verified_reference_number = ref;
   return apiRequest(`/acknowledgement-receipts/${ackReceiptId}/verify`, {
     method: 'PUT',
-    body: JSON.stringify({ action: 'verify' }),
+    body: JSON.stringify(body),
   });
 }
 

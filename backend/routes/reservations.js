@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { getClient, query } from '../config/database.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
 import { ensureReservedEnrollmentOnReservationUpgrade } from '../utils/enrollmentStatus.js';
+import { resolveInstallmentEnrollmentMinPhase } from '../utils/classActivePhase.js';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 
@@ -1018,6 +1019,15 @@ router.put(
             return res.status(400).json({
               success: false,
               message: `Installment phase scope exceeds class phase limit (max phase ${classMaxPhase}).`,
+            });
+          }
+
+          const enrollableMinPhase = await resolveInstallmentEnrollmentMinPhase(client, classData);
+          if (requestedStart < enrollableMinPhase) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Cannot enroll for past phases. Minimum start phase is Phase ${enrollableMinPhase} based on the current class schedule.`,
             });
           }
 

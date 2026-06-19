@@ -31,6 +31,14 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
+// Neon pooler uses an empty search_path on some databases (e.g. freshly restored test_psms_db).
+// Startup option search_path is blocked on pooler, so set it per acquired client instead.
+async function acquireClient() {
+  const client = await pool.connect();
+  await client.query('SET search_path TO public');
+  return client;
+}
+
 // Log database connection info (without sensitive data)
 console.log('📊 Database Configuration:', {
   host: dbHost,
@@ -53,22 +61,22 @@ pool.on('error', (err) => {
 // Query helper function
 export const query = async (text, params) => {
   const start = Date.now();
+  const client = await acquireClient();
   try {
-    const res = await pool.query(text, params);
+    const res = await client.query(text, params);
     const duration = Date.now() - start;
     console.log('Executed query', { text, duration, rows: res.rowCount });
     return res;
   } catch (error) {
     console.error('Database query error:', error);
     throw error;
+  } finally {
+    client.release();
   }
 };
 
 // Get a client from the pool for transactions
-export const getClient = async () => {
-  const client = await pool.connect();
-  return client;
-};
+export const getClient = acquireClient;
 
 export default pool;
 

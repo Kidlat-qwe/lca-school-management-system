@@ -6,6 +6,16 @@ const resolveBottomAccent = (accent = '') => {
   return match ? `bg-${match[1]}` : 'bg-gray-300';
 };
 
+/** Aligns dual-metric KPI rows across cards in the same grid row. */
+const INLINE_METRICS_TWO_ROW_MIN_HEIGHT = 'min-h-[3.375rem]';
+
+const inlineMetricValueClass = (isFinancial, metricCount) => {
+  if (isFinancial || metricCount > 2) {
+    return 'text-lg font-bold tabular-nums text-gray-900 shrink-0';
+  }
+  return 'text-2xl font-bold tabular-nums tracking-tight text-gray-900 shrink-0';
+};
+
 /**
  * Single card showing multiple metrics (e.g. New + Re-enrollment, or Invoice + AR sales).
  * @param {'inline'|'stacked'} metricsLayout - inline: label left, value right; stacked: label then amount on separate lines
@@ -68,7 +78,13 @@ const CombinedStatsCard = ({
             </div>
           </div>
         ) : null}
-        <div className={`${showHeader || iconName ? 'mt-3' : ''} ${metricsLayout === 'stacked' ? 'space-y-4' : 'space-y-2'}`}>
+        <div
+          className={`${showHeader || iconName ? 'mt-3' : ''} ${
+            metricsLayout === 'stacked'
+              ? 'space-y-4'
+              : `space-y-1.5 ${metrics.length >= 2 ? INLINE_METRICS_TWO_ROW_MIN_HEIGHT : ''}`
+          }`}
+        >
           {metrics.map((row, index) =>
             metricsLayout === 'stacked' ? (
               <div
@@ -90,9 +106,14 @@ const CombinedStatsCard = ({
                 </p>
               </div>
             ) : (
-              <div key={row.label} className="flex items-baseline justify-between gap-2">
-                <span className="text-xs font-medium text-gray-600">{row.label}</span>
-                <span className="text-lg font-bold tabular-nums text-gray-900">{row.value}</span>
+              <div key={row.label} className="flex items-baseline justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-0.5 text-xs font-medium text-gray-500">
+                  <span className="leading-snug">{row.label}</span>
+                  {row.tooltip ? (
+                    <MatrixInfoTooltip label={`About ${row.label}`}>{row.tooltip}</MatrixInfoTooltip>
+                  ) : null}
+                </span>
+                <span className={inlineMetricValueClass(isFinancial, metrics.length)}>{row.value}</span>
               </div>
             )
           )}
