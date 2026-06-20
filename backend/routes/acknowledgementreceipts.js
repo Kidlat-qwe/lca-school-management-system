@@ -2528,7 +2528,14 @@ router.put(
         });
       }
 
-      if (ack.status === 'Applied' || ack.invoice_id || ack.payment_id) {
+      if (ack.status === 'Applied') {
+        return res.status(400).json({
+          success: false,
+          message: 'Applied acknowledgement receipts cannot be edited',
+        });
+      }
+      const isReturnedForCorrection = String(ack.status || '').trim() === 'Returned';
+      if (!isReturnedForCorrection && (ack.invoice_id || ack.payment_id)) {
         return res.status(400).json({
           success: false,
           message: 'Applied acknowledgement receipts cannot be edited',
@@ -2944,29 +2951,40 @@ router.put(
       }
 
       if (isMerchandiseAr) {
-        if (action !== 'verify' && action !== 'unverify') {
-          return res.status(400).json({
-            success: false,
-            message: 'Return and reject are not supported for Merchandise acknowledgement receipts',
-          });
-        }
-        if (String(ack.payment_method || '').trim().toLowerCase() === 'cash' && action === 'verify') {
+        if (action === 'unverify') {
+          // handled below in unverify block
+        } else if (String(ack.payment_method || '').trim().toLowerCase() === 'cash' && action === 'verify') {
           return res.status(400).json({
             success: false,
             message: 'Cash merchandise acknowledgement receipts are auto-verified when issued',
           });
-        }
-        if (String(ack.status || '').trim() !== 'Paid') {
-          return res.status(400).json({
-            success: false,
-            message: 'Merchandise acknowledgement receipt must be Paid before finance verification',
-          });
-        }
-        if (ack.verified_by_user_id != null) {
-          return res.status(400).json({
-            success: false,
-            message: 'This merchandise acknowledgement receipt is already verified',
-          });
+        } else if (action === 'verify') {
+          if (String(ack.status || '').trim() !== 'Paid') {
+            return res.status(400).json({
+              success: false,
+              message: 'Merchandise acknowledgement receipt must be Paid before finance verification',
+            });
+          }
+          if (ack.verified_by_user_id != null) {
+            return res.status(400).json({
+              success: false,
+              message: 'This merchandise acknowledgement receipt is already verified',
+            });
+          }
+        } else if (action === 'return' || action === 'reject') {
+          if (String(ack.status || '').trim() !== 'Paid') {
+            return res.status(400).json({
+              success: false,
+              message:
+                'Merchandise acknowledgement receipt must be Paid before it can be returned or rejected',
+            });
+          }
+          if (ack.verified_by_user_id != null) {
+            return res.status(400).json({
+              success: false,
+              message: 'Verified merchandise acknowledgement receipts cannot be returned or rejected',
+            });
+          }
         }
       }
 
@@ -3201,6 +3219,66 @@ router.put(
         }
       }
 
+      const returnedByUserId = req.user.userId || req.user.user_id || null;
+
+      if (isMerchandiseAr && (action === 'return' || action === 'reject')) {
+        for (const linkedPaymentId of linkedPaymentIds) {
+          if (action === 'reject') {
+            const payRow = await query(
+              `SELECT payment_id, invoice_id, payable_amount, discount_amount
+               FROM paymenttbl WHERE payment_id = $1`,
+              [linkedPaymentId]
+            );
+            const payment = payRow.rows[0];
+            await query(
+              `UPDATE paymenttbl
+               SET status = 'Rejected',
+                   approval_status = 'Rejected',
+                   reject_reason = $1,
+                   rejected_by = $2,
+                   rejected_at = CURRENT_TIMESTAMP,
+                   return_reason = NULL,
+                   returned_by = NULL,
+                   returned_at = NULL,
+                   approved_by = NULL,
+                   approved_at = NULL,
+                   finance_verified_reference_number = NULL
+               WHERE payment_id = $3`,
+              [remarks, returnedByUserId, linkedPaymentId]
+            );
+            if (payment?.invoice_id != null) {
+              await query(
+                `UPDATE invoicestbl
+                 SET status = 'Rejected',
+                     amount = COALESCE(amount, 0) + COALESCE($1::numeric, 0)
+                 WHERE invoice_id = $2`,
+                [
+                  Number(payment.payable_amount || 0) + Number(payment.discount_amount || 0),
+                  payment.invoice_id,
+                ]
+              );
+            }
+          } else {
+            await query(
+              `UPDATE paymenttbl
+               SET approval_status = 'Returned',
+                   return_reason = $1,
+                   returned_by = $2,
+                   returned_at = CURRENT_TIMESTAMP,
+                   reject_reason = NULL,
+                   rejected_by = NULL,
+                   rejected_at = NULL,
+                   approved_by = NULL,
+                   approved_at = NULL,
+                   finance_verified_reference_number = NULL
+               WHERE payment_id = $3
+                 AND COALESCE(approval_status, 'Pending') NOT IN ('Rejected')`,
+              [remarks, returnedByUserId, linkedPaymentId]
+            );
+          }
+        }
+      }
+
       const pairedUpdateCount =
         isPackageAr && ackIdsToUpdate.length > 1 ? ackIdsToUpdate.length : 0;
 
@@ -3235,7 +3313,7 @@ router.put(
 
 /**
  * PUT /api/sms/acknowledgement-receipts/:id/resubmit
- * Resubmit a returned package acknowledgement receipt.
+ * Resubmit a returned Package (→ Submitted) or Merchandise (→ Paid) acknowledgement receipt.
  * Access: Superadmin, Admin, Finance, Superfinance
  */
 router.put(
@@ -3251,7 +3329,8 @@ router.put(
       const { id } = req.params;
       const remarks = String(req.body?.remarks || '').trim() || null;
       const ackResult = await query(
-        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by
+        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by, payment_id,
+                reference_number, payment_method, payment_attachment_url
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = $1`,
         [id]
@@ -3264,21 +3343,34 @@ router.put(
       }
 
       const ack = ackResult.rows[0];
-      const pairedIds = await resolvePairedAckReceiptIds(id);
+      const isMerchandiseAr = ack.ar_type === 'Merchandise';
+      const isPackageAr = ack.ar_type === 'Package';
+      if (!isMerchandiseAr && !isPackageAr) {
+        return res.status(400).json({
+          success: false,
+          message: 'Only Package or Merchandise acknowledgement receipts can be resubmitted in this flow',
+        });
+      }
+
+      const pairedIds =
+        isPackageAr && (await ackReceiptHasPairedAckReceiptIdColumn())
+          ? await resolvePairedAckReceiptIds(id)
+          : [Number(id)];
       const rowsToResubmit = await query(
-        `SELECT ack_receipt_id, ar_type, status, branch_id, created_by, prospect_student_notes
+        `SELECT ack_receipt_id, ar_type, status, branch_id, created_by, prospect_student_notes, payment_id,
+                reference_number, payment_method, payment_attachment_url
          FROM acknowledgement_receiptstbl
          WHERE ack_receipt_id = ANY($1::int[])`,
         [pairedIds]
       );
       for (const row of rowsToResubmit.rows) {
-        if (row.ar_type !== 'Package') {
+        if (row.ar_type !== ack.ar_type) {
           return res.status(400).json({
             success: false,
-            message: 'Only Package acknowledgement receipts can be resubmitted in this flow',
+            message: 'Paired acknowledgement receipts must share the same type before resubmitting',
           });
         }
-        if (row.status !== 'Returned') {
+        if (String(row.status || '').trim() !== 'Returned') {
           return res.status(400).json({
             success: false,
             message:
@@ -3289,13 +3381,7 @@ router.put(
         }
       }
 
-      if (ack.ar_type !== 'Package') {
-        return res.status(400).json({
-          success: false,
-          message: 'Only Package acknowledgement receipts can be resubmitted in this flow',
-        });
-      }
-      if (ack.status !== 'Returned') {
+      if (String(ack.status || '').trim() !== 'Returned') {
         return res.status(400).json({
           success: false,
           message: 'Only returned acknowledgement receipts can be resubmitted',
@@ -3317,6 +3403,7 @@ router.put(
         });
       }
 
+      const nextStatus = isMerchandiseAr ? 'Paid' : 'Submitted';
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
       const updatedRows = [];
       for (const row of rowsToResubmit.rows) {
@@ -3326,21 +3413,21 @@ router.put(
         const rowUpdate = hasVerifierCols
           ? await query(
               `UPDATE acknowledgement_receiptstbl
-               SET status = 'Submitted',
-                   prospect_student_notes = $1,
+               SET status = $1,
+                   prospect_student_notes = $2,
                    verified_by_user_id = NULL,
                    verified_at = NULL
-               WHERE ack_receipt_id = $2
+               WHERE ack_receipt_id = $3
                RETURNING *`,
-              [rowNotes, row.ack_receipt_id]
+              [nextStatus, rowNotes, row.ack_receipt_id]
             )
           : await query(
               `UPDATE acknowledgement_receiptstbl
-               SET status = 'Submitted',
-                   prospect_student_notes = $1
-               WHERE ack_receipt_id = $2
+               SET status = $1,
+                   prospect_student_notes = $2
+               WHERE ack_receipt_id = $3
                RETURNING *`,
-              [rowNotes, row.ack_receipt_id]
+              [nextStatus, rowNotes, row.ack_receipt_id]
             );
         if (rowUpdate.rows[0]) updatedRows.push(rowUpdate.rows[0]);
       }
@@ -3349,10 +3436,35 @@ router.put(
         updatedRows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
         updatedRows[0];
 
+      if (isMerchandiseAr && primaryUpdatedRow?.payment_id) {
+        await query(
+          `UPDATE paymenttbl
+           SET approval_status = 'Pending',
+               return_reason = NULL,
+               returned_by = NULL,
+               returned_at = NULL,
+               approved_by = NULL,
+               approved_at = NULL,
+               finance_verified_reference_number = NULL,
+               reference_number = $2,
+               payment_method = $3,
+               payment_attachment_url = $4
+           WHERE payment_id = $1
+             AND COALESCE(approval_status, 'Pending') = 'Returned'`,
+          [
+            primaryUpdatedRow.payment_id,
+            String(primaryUpdatedRow.reference_number || '').trim() || null,
+            primaryUpdatedRow.payment_method || null,
+            String(primaryUpdatedRow.payment_attachment_url || '').trim() || null,
+          ]
+        );
+      }
+
       return res.json({
         success: true,
-        message:
-          pairedIds.length > 1
+        message: isMerchandiseAr
+          ? 'Merchandise acknowledgement receipt resubmitted successfully. Finance will verify it again on the AR page.'
+          : pairedIds.length > 1
             ? 'Downpayment and Phase 1 acknowledgement receipts resubmitted successfully'
             : 'Acknowledgement receipt resubmitted successfully',
         data: formatArListApiRow(primaryUpdatedRow),

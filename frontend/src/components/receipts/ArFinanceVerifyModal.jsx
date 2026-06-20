@@ -410,7 +410,7 @@ export default function ArFinanceVerifyModal({
         </div>
 
         <div className="flex flex-col gap-2 border-t border-gray-200 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-6 sm:py-4">
-          {isVerifyMode && receipt.ar_type === 'Package' ? (
+          {isVerifyMode && (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise') ? (
             <>
               <button
                 type="button"

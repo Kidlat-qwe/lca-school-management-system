@@ -56,12 +56,20 @@ import {
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 
-/** Non-cash merchandise AR (Paid): Finance/Superfinance must verify on AR page. Cash is auto-verified on issue. */
-const financeCanVerifyMerchandiseAr = (receipt) =>
+/** Non-cash merchandise AR (Paid): Finance/Superfinance verify / return / reject on AR page. */
+const financeCanActOnMerchandiseAr = (receipt) =>
   receipt?.ar_type === 'Merchandise' &&
   String(receipt?.status || '').trim() === 'Paid' &&
   String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash' &&
   (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
+
+const financeCanVerifyMerchandiseAr = financeCanActOnMerchandiseAr;
+
+/** Branch admin may resubmit Package or Merchandise AR after Finance returns it. */
+const canBranchResubmitReturnedAr = (receipt) =>
+  receipt &&
+  (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise') &&
+  String(receipt.status || '').trim() === 'Returned';
 
 /** Non-cash package AR (Submitted): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
 const financeCanVerifyPackageAr = (receipt) =>
@@ -1365,10 +1373,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const clearViewModalAttachment = () => setViewModalAttachmentUrl('');
 
-  const canResubmitViewReceipt =
-    viewReceipt &&
-    viewReceipt.ar_type === 'Package' &&
-    viewReceipt.status === 'Returned';
+  const canResubmitViewReceipt = canBranchResubmitReturnedAr(viewReceipt);
 
   const handleViewInputChange = (e) => {
     const { name, value } = e.target;
@@ -1389,6 +1394,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleViewModalResubmit = async () => {
     if (!viewReceipt?.ack_receipt_id || !canResubmitViewReceipt) return;
+    const isMerchViewResubmit = viewReceipt.ar_type === 'Merchandise';
     const attach = (viewModalAttachmentUrl || '').trim();
     if (!attach) {
       appAlert('Please upload an attachment image before resubmitting.');
@@ -1413,7 +1419,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       appAlert('Guardian name is required.');
       return;
     }
-    if (!(viewFormData.package_id || '').trim()) {
+    if (!isMerchViewResubmit && !(viewFormData.package_id || '').trim()) {
       appAlert('Package is required.');
       return;
     }
@@ -1442,17 +1448,26 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       viewFormData.discount_amount == null || viewFormData.discount_amount === ''
         ? 0
         : parseFloat(String(viewFormData.discount_amount));
-    if (viewFormData.discount_amount !== '' && (Number.isNaN(discountNum) || discountNum < 0)) {
+    if (
+      !isMerchViewResubmit &&
+      viewFormData.discount_amount !== '' &&
+      (Number.isNaN(discountNum) || discountNum < 0)
+    ) {
       appAlert('Discount amount must be 0 or greater.');
       return;
     }
     const grossResubmit = Number(viewPayableAmount) || 0;
-    if (viewFormData.discount_amount !== '' && grossResubmit > 0 && discountNum >= grossResubmit) {
+    if (
+      !isMerchViewResubmit &&
+      viewFormData.discount_amount !== '' &&
+      grossResubmit > 0 &&
+      discountNum >= grossResubmit
+    ) {
       appAlert('Discount amount must be less than the payment amount.');
       return;
     }
     let pkgId = viewFormData.package_id ? parseInt(viewFormData.package_id, 10) : NaN;
-    if (!Number.isFinite(pkgId)) {
+    if (!isMerchViewResubmit && !Number.isFinite(pkgId)) {
       appAlert('Package is missing on this receipt. Please choose a package, then resubmit.');
       return;
     }
@@ -1468,11 +1483,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         level_tag: (viewFormData.level_tag || '').trim() || null,
         reference_number: (viewFormData.reference_number || '').trim() || null,
         payment_method: viewFormData.payment_method,
-        tip_amount: tipNum,
-        discount_amount: discountNum > 0 ? discountNum : 0,
         payment_attachment_url: attach,
-        package_id: pkgId,
       };
+      if (!isMerchViewResubmit) {
+        payload.tip_amount = tipNum;
+        payload.discount_amount = discountNum > 0 ? discountNum : 0;
+        payload.package_id = pkgId;
+      }
       if (!isAckIssueDateLocked(viewReceipt)) {
         payload.issue_date = issueYmd;
       }
@@ -2189,9 +2206,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const actionMenuReceipt = receipts.find((x) => x.ack_receipt_id === openActionMenuId);
   const canResubmitFromActionMenu =
-    actionMenuReceipt &&
-    actionMenuReceipt.ar_type === 'Package' &&
-    actionMenuReceipt.status === 'Returned' &&
+    canBranchResubmitReturnedAr(actionMenuReceipt) &&
     (arAdminTab === 'return' ||
       (currentUserId != null && Number(actionMenuReceipt.created_by) === Number(currentUserId)));
   const actionMenuWidthPx = 176;
@@ -2813,7 +2828,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             const financeHasActionMenu =
                               isFinanceOrSuperfinance &&
                               (financeCanVerifyPackageAr(r) ||
-                                financeCanVerifyMerchandiseAr(r) ||
+                                financeCanActOnMerchandiseAr(r) ||
                                 (financeHasPackageActionMenu(r) &&
                                   String(r?.status || '').trim() === 'Submitted'));
                             const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
@@ -2891,19 +2906,25 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
                 const h = typeof window !== 'undefined' ? window.innerHeight : 800;
                 const isMerchandiseVerifyRow =
-                  isFinanceOrSuperfinance && financeCanVerifyMerchandiseAr(actionMenuReceipt);
+                  isFinanceOrSuperfinance && financeCanActOnMerchandiseAr(actionMenuReceipt);
                 const isPackageVerifyRow =
                   isFinanceOrSuperfinance && financeCanVerifyPackageAr(actionMenuReceipt);
                 const financeCanPackageReturnReject =
                   isFinanceOrSuperfinance &&
                   financeHasPackageActionMenu(actionMenuReceipt) &&
                   String(actionMenuReceipt?.status || '').trim() === 'Submitted';
+                const financeCanReturnReject =
+                  isMerchandiseVerifyRow || financeCanPackageReturnReject;
                 const financeHasActionMenuOnRow =
                   isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject;
                 const verifyDisabledForStatus = !(isMerchandiseVerifyRow || isPackageVerifyRow);
-                const returnRejectDisabledForStatus = !financeCanPackageReturnReject;
+                const returnRejectDisabledForStatus = !financeCanReturnReject;
                 const itemCount = isFinanceOrSuperfinance
-                  ? (isMerchandiseVerifyRow ? 1 : isPackageVerifyRow || financeCanPackageReturnReject ? 3 : 0)
+                  ? financeHasActionMenuOnRow
+                    ? isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject
+                      ? 3
+                      : 0
+                    : 0
                   : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
@@ -2922,22 +2943,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   >
                     {isFinanceOrSuperfinance ? (
                       financeHasActionMenuOnRow ? (
-                        isMerchandiseVerifyRow ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              if (verifyDisabledForStatus) return;
-                              setOpenActionMenuId(null);
-                              setActionMenuRect(null);
-                              handleVerifyReceipt(actionMenuReceipt, true);
-                            }}
-                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
-                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
-                          >
-                            Verify
-                          </button>
-                        ) : (
                         <>
                           <button
                             type="button"
@@ -2982,7 +2987,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             Reject
                           </button>
                         </>
-                        )
                       ) : (
                         <span className="block px-3 py-2 text-xs text-gray-400">No actions available</span>
                       )
@@ -4747,18 +4751,26 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         <label className="label-field text-xs">Student Name</label>
                         <input
                           type="text"
-                          readOnly
-                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                          value={viewReceipt.prospect_student_name || ''}
+                          name="prospect_student_name"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_name : viewReceipt.prospect_student_name || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
                         />
                       </div>
                       <div>
-                        <label className="label-field text-xs">Guardian Name</label>
+                        <label className="label-field text-xs">
+                          Guardian Name {canResubmitViewReceipt ? <span className="text-red-500">*</span> : null}
+                        </label>
                         <input
                           type="text"
-                          readOnly
-                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                          value={viewReceipt.prospect_student_contact || ''}
+                          name="prospect_student_contact"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_contact : viewReceipt.prospect_student_contact || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
                         />
                       </div>
                     </div>
@@ -4767,30 +4779,86 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         <label className="label-field text-xs">Client Email (for paid confirmation)</label>
                         <input
                           type="email"
-                          readOnly
-                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                          value={viewReceipt.prospect_student_email || ''}
+                          name="prospect_student_email"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_email : viewReceipt.prospect_student_email || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
                         />
                       </div>
                       <div>
-                        <label className="label-field text-xs">Mobile Number (SMS)</label>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) {canResubmitViewReceipt ? <span className="text-red-500">*</span> : null}
+                        </label>
                         <input
                           type="tel"
-                          readOnly
-                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                          value={viewReceipt.prospect_student_phone || ''}
+                          name="prospect_student_phone"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_phone : viewReceipt.prospect_student_phone || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          placeholder={canResubmitViewReceipt ? '09171234567' : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
                         />
                       </div>
                     </div>
                     <div>
                       <label className="label-field text-xs">Notes</label>
                       <textarea
-                        readOnly
+                        name="prospect_student_notes"
                         rows={3}
-                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                        value={viewReceipt.prospect_student_notes || ''}
+                        readOnly={!canResubmitViewReceipt}
+                        className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                        value={canResubmitViewReceipt ? viewFormData.prospect_student_notes : viewReceipt.prospect_student_notes || ''}
+                        onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                        disabled={viewResubmitSaving || !canResubmitViewReceipt}
                       />
                     </div>
+                    {canResubmitViewReceipt ? (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="label-field text-xs">
+                            Payment Method <span className="text-red-500">*</span>
+                          </label>
+                          <PaymentMethodSelect
+                            name="payment_method"
+                            value={viewFormData.payment_method}
+                            onChange={handleViewInputChange}
+                            disabled={viewResubmitSaving}
+                          />
+                        </div>
+                        <PaymentReferenceNumberField
+                          paymentMethod={viewFormData.payment_method}
+                          name="reference_number"
+                          value={viewFormData.reference_number}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                          requiredMark={false}
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="label-field text-xs">Payment Method</label>
+                          <input
+                            type="text"
+                            readOnly
+                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                            value={viewReceipt.payment_method || ''}
+                          />
+                        </div>
+                        <div>
+                          <label className="label-field text-xs">Reference #</label>
+                          <input
+                            type="text"
+                            readOnly
+                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                            value={viewReceipt.reference_number || ''}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -4991,17 +5059,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
                 <div className="sm:col-span-2">
                   <label className="label-field text-xs">
-                    Attachment (image) <span className="text-red-600">*</span>
+                    Attachment (image) {canResubmitViewReceipt ? <span className="text-red-600">*</span> : null}
                   </label>
-                  <p className="mb-1 text-xs text-gray-500">
-                    Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 50 MB).
-                  </p>
+                  {canResubmitViewReceipt ? (
+                    <p className="mb-1 text-xs text-gray-500">
+                      Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 50 MB).
+                    </p>
+                  ) : null}
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     onChange={handleViewModalAttachmentChange}
-                    disabled={viewResubmitSaving || viewModalAttachmentUploading}
-                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200"
+                    disabled={!canResubmitViewReceipt || viewResubmitSaving || viewModalAttachmentUploading}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200 disabled:opacity-60"
                   />
                   {viewModalAttachmentUploading ? (
                     <p className="mt-1 text-xs text-amber-600">Uploading…</p>
@@ -5048,14 +5118,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
               </div>
 
               <div className="flex border-t border-gray-200 px-5 py-4 sm:justify-end">
-                <button
-                  type="button"
-                  onClick={handleViewModalResubmit}
-                  disabled={!canResubmitViewReceipt || viewResubmitSaving || viewModalAttachmentUploading || !viewModalAttachmentUrl?.trim()}
-                  className="w-full rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 sm:w-auto"
-                >
-                  {viewResubmitSaving ? 'Resubmitting…' : 'Resubmit'}
-                </button>
+                {canResubmitViewReceipt ? (
+                  <button
+                    type="button"
+                    onClick={handleViewModalResubmit}
+                    disabled={viewResubmitSaving || viewModalAttachmentUploading || !viewModalAttachmentUrl?.trim()}
+                    className="w-full rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 sm:w-auto"
+                  >
+                    {viewResubmitSaving ? 'Resubmitting…' : 'Resubmit'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={closeViewReceiptModal}
+                    className="w-full rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
+                  >
+                    Close
+                  </button>
+                )}
               </div>
             </div>
           </div>,

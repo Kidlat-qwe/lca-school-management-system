@@ -4,6 +4,10 @@
  * What it removes (target students only):
  * - classstudentstbl rows (hard delete; bypasses unenroll flow)
  * - paymenttbl rows tied to target invoices or target students
+ * - acknowledgement_receiptstbl rows linked to target invoices/payments/students
+ * - program_payment_statustbl rows for target profiles/invoices/students
+ * - promousagetbl rows for target invoices/students (promo discount usage)
+ * - reservedstudentstbl rows for target students/invoices
  * - installmentinvoicestbl rows for target installment profiles
  * - invoicestudentstbl rows for target invoices
  * - invoiceitemstbl rows for target invoices
@@ -34,8 +38,7 @@ import { getClient } from '../config/database.js';
 const isDryRun = process.argv.includes('--dry-run');
 
 const TARGET_STUDENT_EMAILS = [
-  'slake@gmail.com',
-  ,
+  'jhec292000@yahoo.com',
 ];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -314,6 +317,41 @@ async function main() {
       [studentIds]
     );
 
+    if (!isDryRun && invoiceIds.length > 0) {
+      await client.query(
+        `UPDATE invoicestbl SET balance_invoice_id = NULL
+         WHERE balance_invoice_id = ANY($1::int[])
+           AND invoice_id <> ALL($1::int[])`,
+        [invoiceIds]
+      );
+      await client.query(
+        `UPDATE invoicestbl SET parent_invoice_id = NULL
+         WHERE parent_invoice_id = ANY($1::int[])
+           AND invoice_id <> ALL($1::int[])`,
+        [invoiceIds]
+      );
+    }
+
+    const programPaymentStatusDelete = await client.query(
+      `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM program_payment_statustbl' : 'DELETE FROM program_payment_statustbl'}
+       WHERE student_id = ANY($1::int[])
+          OR installmentinvoiceprofiles_id = ANY(COALESCE($2::int[], ARRAY[]::int[]))
+          OR invoice_id = ANY(COALESCE($3::int[], ARRAY[]::int[]))`,
+      [studentIds, profileIds, invoiceIds]
+    );
+
+    const ackReceiptsDelete = await client.query(
+      `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM acknowledgement_receiptstbl' : 'DELETE FROM acknowledgement_receiptstbl'}
+       WHERE student_id = ANY($1::int[])
+          OR invoice_id = ANY(COALESCE($2::int[], ARRAY[]::int[]))
+          OR payment_id IN (
+            SELECT payment_id FROM paymenttbl
+            WHERE student_id = ANY($1::int[])
+               OR invoice_id = ANY(COALESCE($2::int[], ARRAY[]::int[]))
+          )`,
+      [studentIds, invoiceIds]
+    );
+
     const paymentDelete = await client.query(
       `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM paymenttbl' : 'DELETE FROM paymenttbl'}
        WHERE student_id = ANY($1::int[])
@@ -350,6 +388,29 @@ async function main() {
       [invoiceIds]
     );
 
+    const promoUsageDelete = await client.query(
+      `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM promousagetbl' : 'DELETE FROM promousagetbl'}
+       WHERE student_id = ANY($1::int[])
+          OR invoice_id = ANY(COALESCE($2::int[], ARRAY[]::int[]))`,
+      [studentIds, invoiceIds]
+    );
+
+    const reservedStudentsDelete = await client.query(
+      `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM reservedstudentstbl' : 'DELETE FROM reservedstudentstbl'}
+       WHERE student_id = ANY($1::int[])
+          OR invoice_id = ANY(COALESCE($2::int[], ARRAY[]::int[]))`,
+      [studentIds, invoiceIds]
+    );
+
+    if (!isDryRun && invoiceIds.length > 0) {
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET downpayment_invoice_id = NULL
+         WHERE downpayment_invoice_id = ANY($1::int[])`,
+        [invoiceIds]
+      );
+    }
+
     const invoicesDelete = await client.query(
       `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM invoicestbl' : 'DELETE FROM invoicestbl'}
        WHERE invoice_id = ANY(COALESCE($1::int[], ARRAY[]::int[]))`,
@@ -370,10 +431,14 @@ async function main() {
       await client.query('ROLLBACK');
       console.log('DRY RUN ONLY (no data changed).');
       console.log(`- classstudentstbl would delete: ${getAffected(classDelete)}`);
+      console.log(`- program_payment_statustbl would delete: ${getAffected(programPaymentStatusDelete)}`);
+      console.log(`- acknowledgement_receiptstbl would delete: ${getAffected(ackReceiptsDelete)}`);
       console.log(`- paymenttbl would delete: ${getAffected(paymentDelete)}`);
       console.log(`- installmentinvoicestbl would delete: ${getAffected(installmentInvoicesDelete)}`);
       console.log(`- invoicestudentstbl would delete: ${getAffected(invoiceStudentsDelete)}`);
       console.log(`- invoiceitemstbl would delete: ${getAffected(invoiceItemsDelete)}`);
+      console.log(`- promousagetbl would delete: ${getAffected(promoUsageDelete)}`);
+      console.log(`- reservedstudentstbl would delete: ${getAffected(reservedStudentsDelete)}`);
       console.log(`- invoicestbl would delete: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl would delete: ${getAffected(profileDelete)}`);
       console.log(
@@ -386,10 +451,14 @@ async function main() {
       await client.query('COMMIT');
       console.log('Hard delete completed successfully.');
       console.log(`- classstudentstbl deleted: ${getAffected(classDelete)}`);
+      console.log(`- program_payment_statustbl deleted: ${getAffected(programPaymentStatusDelete)}`);
+      console.log(`- acknowledgement_receiptstbl deleted: ${getAffected(ackReceiptsDelete)}`);
       console.log(`- paymenttbl deleted: ${getAffected(paymentDelete)}`);
       console.log(`- installmentinvoicestbl deleted: ${getAffected(installmentInvoicesDelete)}`);
       console.log(`- invoicestudentstbl deleted: ${getAffected(invoiceStudentsDelete)}`);
       console.log(`- invoiceitemstbl deleted: ${getAffected(invoiceItemsDelete)}`);
+      console.log(`- promousagetbl deleted: ${getAffected(promoUsageDelete)}`);
+      console.log(`- reservedstudentstbl deleted: ${getAffected(reservedStudentsDelete)}`);
       console.log(`- invoicestbl deleted: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl deleted: ${getAffected(profileDelete)}`);
       console.log(
