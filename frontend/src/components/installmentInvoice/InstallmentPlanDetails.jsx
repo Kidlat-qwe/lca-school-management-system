@@ -5,6 +5,7 @@ import { formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import {
+  computeInstallmentPlanDisplayProgress,
   getInstallmentPhaseBillingLabel,
   getInstallmentPhaseOutstanding,
   isDroppedEnrollmentPhase,
@@ -542,62 +543,52 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   );
 
   const phaseProgress = useMemo(() => {
+    const display = computeInstallmentPlanDisplayProgress({
+      phases,
+      profile,
+      downpayment,
+      totals,
+    });
     const total = profile?.total_phases != null ? Number(profile.total_phases) : null;
-    const generated = phases.filter((p) => p.is_generated).length;
-    const paid = phases.filter((p) => {
+    const paidInstallment = display.visiblePhases.filter((p) => {
       const st = String(p.status || '').toLowerCase();
       return st === 'paid' || st === 'paid all';
     }).length;
-    const reference = total != null && total > 0 ? total : Math.max(generated, paid, 1);
-    // Display phase progress in absolute terms (e.g. "6 / 10" for a plan
-    // covering phases 6..10) instead of profile-local numbers ("1 / 5").
-    // For profiles starting at phase 1 the display is unchanged.
-    const denominator =
-      total != null && total > 0 ? total + phaseStartOffset : reference + phaseStartOffset;
-    const paidDisplay = paid + phaseStartOffset;
-    const generatedDisplay = generated + phaseStartOffset;
-    const percent = Math.min(100, Math.max(0, Math.round((paid / reference) * 100)));
-    const denomPlan =
-      totals?.plan_slots_total != null && totals.plan_slots_total > 0
-        ? Number(totals.plan_slots_total)
-        : total != null && total > 0
-          ? total
-          : phases.length || 0;
-    const addressed =
-      totals?.plan_slots_addressed != null
-        ? Number(totals.plan_slots_addressed)
-        : phases.filter((p) => isInstallmentPlanSlotAddressed(p)).length;
-    const planComplete =
-      totals?.plan_complete === true ||
-      (denomPlan > 0 && addressed >= denomPlan);
-    const planPercent =
-      denomPlan > 0 ? Math.min(100, Math.round((addressed / denomPlan) * 100)) : 0;
-    const complete = planComplete;
+    const reference =
+      display.denomPlan > 0 ? display.denomPlan : Math.max(display.generated, paidInstallment, 1);
+    const percent = Math.min(
+      100,
+      Math.max(0, Math.round((paidInstallment / reference) * 100))
+    );
     return {
       total,
-      generated,
-      paid,
-      paidDisplay,
-      generatedDisplay,
+      generated: display.generated,
+      paid: paidInstallment,
+      paidDisplay: display.paidDisplay,
+      generatedDisplay: display.generatedDisplay,
       percent,
-      planPercent,
-      addressed,
-      denomPlan,
-      planComplete,
-      complete,
-      denominator,
+      planPercent: display.planPercent,
+      addressed: display.addressed,
+      denomPlan: display.denomPlan,
+      planComplete: display.planComplete,
+      complete: display.planComplete,
+      denominator: display.paidDenominator,
+      generatedDenominator: display.generatedDenominator,
+      visiblePhases: display.visiblePhases,
     };
-  }, [profile, phases, phaseStartOffset, totals]);
+  }, [profile, phases, downpayment, totals]);
+
+  const visiblePhases = phaseProgress.visiblePhases ?? phases;
 
   /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
   const firstPayAction = useMemo(() => {
     if (profile?.upgraded_to_full_payment) return null;
 
     const priorPlanSlotsOk = (upToIndex) =>
-      phases.slice(0, upToIndex).every((prev) => isInstallmentPlanSlotAddressed(prev));
+      visiblePhases.slice(0, upToIndex).every((prev) => isInstallmentPlanSlotAddressed(prev));
 
-    for (let i = 0; i < phases.length; i += 1) {
-      const p = phases[i];
+    for (let i = 0; i < visiblePhases.length; i += 1) {
+      const p = visiblePhases[i];
       if (isDroppedEnrollmentPhase(p) || isLateStartGapPhase(p)) continue;
       const out = getInstallmentPhaseOutstanding(p);
       const st = String(p.status || '').toLowerCase();
@@ -614,7 +605,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       }
     }
     return null;
-  }, [phases, profile?.upgraded_to_full_payment]);
+  }, [visiblePhases, profile?.upgraded_to_full_payment]);
 
   return (
     <div className={`space-y-4 sm:space-y-6 ${className}`}>
@@ -714,7 +705,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       {phaseProgress.generatedDisplay}
                     </span>
                     {' / '}
-                    {phaseProgress.denominator} generated
+                    {phaseProgress.generatedDenominator ?? phaseProgress.denominator} generated
                   </span>
                   {phaseProgress.planComplete && (
                     <span className="text-xs font-semibold text-green-700">
@@ -822,7 +813,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
             <div className="px-4 sm:px-5 py-3 border-b border-gray-200 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900">Phases</h3>
               <span className="text-xs text-gray-500">
-                {phases.length} {phases.length === 1 ? 'phase' : 'phases'}
+                {visiblePhases.length} {visiblePhases.length === 1 ? 'phase' : 'phases'}
               </span>
             </div>
 
@@ -858,14 +849,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
-                  {phases.length === 0 ? (
+                  {visiblePhases.length === 0 ? (
                     <tr>
                       <td colSpan={13} className="px-3 py-8 text-center text-sm text-gray-500">
                         No phase records found.
                       </td>
                     </tr>
                   ) : (
-                    phases.map((phase, idx) => {
+                    visiblePhases.map((phase, idx) => {
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
                       const isInactiveSlot = isInactiveInstallmentPlanSlot(phase);
                       const isNotGenerated = phase.status === 'Not Generated';

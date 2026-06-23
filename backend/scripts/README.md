@@ -461,6 +461,23 @@ node scripts/repairKirstenMahinayRestoreTargetPhases.js --dry-run
 node scripts/repairKirstenMahinayRestoreTargetPhases.js --apply
 ```
 
+### `diagnoseKirstenMahinayInstallmentProgress.js`
+
+Read-only check for **Kirsten Celesse J. Mahinay** installment progress after late-start enrollment (class phase 2). Compares DB `generated_count`, list-page `paid_phases` / `generated_phases`, and Student History phase progress (complete / paid / generated).
+
+```bash
+node scripts/diagnoseKirstenMahinayInstallmentProgress.js
+```
+
+### `repairKirstenMahinayInstallmentProgressDisplay.js`
+
+Ensures Kirsten's DB rows support **late-start** modal display: hide plan slot 1, progress **2/9 complete** and **3/10 paid** (downpayment + 2 paid phases). Pairs with phases API + `InstallmentPlanDetails` late_start_gap UI.
+
+```bash
+node scripts/repairKirstenMahinayInstallmentProgressDisplay.js --dry-run
+node scripts/repairKirstenMahinayInstallmentProgressDisplay.js --apply
+```
+
 ### `repairKirstenMahinayPhase34IssueDueDates.js`
 
 Earlier date-only fix (Phase 3 issue/due). Superseded for enrollment/payment work by `repairKirstenMahinayPhaseEnrollmentAndPayments.js` above once Phase 3 dates are already correct.

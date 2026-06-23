@@ -728,6 +728,30 @@ router.get(
         ? planSlotsTotal
         : normalizedPhases.filter((p) => p.plan_slot_addressed === true).length;
 
+      const lateStartGapCount = normalizedPhases.filter(
+        (p) => String(p.billing_kind || '').toLowerCase() === 'late_start_gap'
+      ).length;
+      const planSlotsTotalDisplay = Math.max(0, planSlotsTotal - lateStartGapCount);
+      const planSlotsAddressedDisplay = normalizedPhases.filter(
+        (p) =>
+          p.plan_slot_addressed === true &&
+          String(p.billing_kind || '').toLowerCase() !== 'late_start_gap'
+      ).length;
+      const paidInstallmentSlotCount = normalizedPhases.filter((p) => {
+        const st = String(p.status || '').toLowerCase();
+        return (
+          (st === 'paid' || st === 'paid all') &&
+          String(p.billing_kind || '').toLowerCase() !== 'late_start_gap'
+        );
+      }).length;
+      const downpaymentCountsForProgress =
+        profile.downpayment_paid === true ||
+        (downpayment != null &&
+          ['paid', 'paid all'].includes(String(downpayment.status || '').toLowerCase()));
+      const displayPaidNumerator =
+        paidInstallmentSlotCount + (downpaymentCountsForProgress ? 1 : 0);
+      const displayGeneratedNumerator = normalizedPhases.filter((p) => p.is_generated).length;
+
       res.json({
         success: true,
         data: {
@@ -769,6 +793,13 @@ router.get(
             plan_slots_total: planSlotsTotal,
             plan_slots_addressed: planSlotsAddressed,
             plan_complete: fullPaymentConversion?.upgraded === true,
+            display_plan_slots_total: planSlotsTotalDisplay,
+            display_plan_slots_addressed: planSlotsAddressedDisplay,
+            display_paid_numerator: displayPaidNumerator,
+            display_paid_denominator: planSlotsTotal,
+            display_generated_numerator: displayGeneratedNumerator,
+            display_generated_denominator: planSlotsTotal,
+            late_start_gap_count: lateStartGapCount,
           },
         },
       });

@@ -48,6 +48,80 @@ export const getInstallmentPhaseOutstanding = (phase) => {
   return Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0));
 };
 
+/** Plan table rows — omit late-start gaps (student enrolled on a later class phase). */
+export const filterVisibleInstallmentPlanPhases = (phases) =>
+  (phases || []).filter((phase) => !isLateStartGapPhase(phase));
+
+/**
+ * Progress labels for Student History / Installment Plan modal when early plan
+ * slots are late_start_gap (hidden from the table).
+ */
+export const computeInstallmentPlanDisplayProgress = ({
+  phases = [],
+  profile = null,
+  downpayment = null,
+  totals = null,
+} = {}) => {
+  const total =
+    profile?.total_phases != null ? Number(profile.total_phases) : phases.length || 0;
+  const visiblePhases = filterVisibleInstallmentPlanPhases(phases);
+  const lateStartGapCount = phases.length - visiblePhases.length;
+
+  const paidInstallmentCount = visiblePhases.filter((p) => {
+    const st = String(p.status || '').toLowerCase();
+    return st === 'paid' || st === 'paid all';
+  }).length;
+
+  const downpaymentPaid =
+    profile?.downpayment_paid === true ||
+    ['paid', 'paid all'].includes(String(downpayment?.status || '').toLowerCase());
+
+  const generated = visiblePhases.filter((p) => p.is_generated).length;
+
+  const addressedVisible =
+    totals?.display_plan_slots_addressed != null
+      ? Number(totals.display_plan_slots_addressed)
+      : visiblePhases.filter(
+          (p) => isInstallmentPlanSlotAddressed(p) && !isLateStartGapPhase(p)
+        ).length;
+
+  const denomPlanVisible =
+    totals?.display_plan_slots_total != null
+      ? Number(totals.display_plan_slots_total)
+      : Math.max(0, total - lateStartGapCount);
+
+  const paidNumerator =
+    totals?.display_paid_numerator != null
+      ? Number(totals.display_paid_numerator)
+      : paidInstallmentCount + (downpaymentPaid ? 1 : 0);
+
+  const paidDenominator =
+    totals?.display_paid_denominator != null ? Number(totals.display_paid_denominator) : total;
+
+  const generatedDisplay = generated + Math.max(0, (Number(profile?.phase_start) || 1) - 1);
+
+  return {
+    visiblePhases,
+    lateStartGapCount,
+    addressed: addressedVisible,
+    denomPlan: denomPlanVisible,
+    paidDisplay: paidNumerator,
+    paidDenominator,
+    generated,
+    generatedDisplay: totals?.display_generated_numerator != null
+      ? Number(totals.display_generated_numerator)
+      : generated + Math.max(0, (Number(profile?.phase_start) || 1) - 1),
+    generatedDenominator: total,
+    planComplete:
+      totals?.plan_complete === true ||
+      (denomPlanVisible > 0 && addressedVisible >= denomPlanVisible),
+    planPercent:
+      denomPlanVisible > 0
+        ? Math.min(100, Math.round((addressedVisible / denomPlanVisible) * 100))
+        : 0,
+  };
+};
+
 /** Billing column label for installment plan phase rows (Student History). */
 export const getInstallmentPhaseBillingLabel = (phase) => {
   if (isLateStartGapPhase(phase)) return '\u2014';
