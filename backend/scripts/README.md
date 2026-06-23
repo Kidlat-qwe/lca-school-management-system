@@ -421,6 +421,55 @@ node scripts/repairEnrollmentAuditFindings.js --apply
 node scripts/repairEnrollmentAuditFindings.js --apply --student-id=336
 ```
 
+**Options:** `--dry-run`, `--apply`, `--student-id`, `--help`
+
+### `repairKirstenMahinayPhaseEnrollmentAndPayments.js`
+
+One-off repair for **Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`). **Cascades** earlier invoice + AR onto later phase slots (payments stay on the same physical invoice rows):
+
+| Phase slot | Invoice | AR | Payment | Issued | Due | Enrollment |
+|------------|---------|-----|---------|--------|-----|------------|
+| 1 | — | — | — | — | — | Not enrolled |
+| 2 | **311** (was ph.1) | — | PAY-209 | 2026-03-25 | 2026-04-05 | New (paid) |
+| 3 | **571** (was ph.2) | **260224** | PAY-681 | 2026-04-25 | 2026-05-05 | Re-enrolled (paid) |
+| 4 | **1012** (was ph.3) | **260674** | — | 2026-05-25 | 2026-06-05 | Generated, unpaid |
+
+INV-**1511** (old phase 4) is **Cancelled** and **detached** from the profile (`installmentinvoiceprofiles_id = NULL`) so it cannot appear on phase slot 1. Sets `TARGET_PHASE` on 311/571/1012 for correct Student History mapping.
+
+**Attendance:** `attendancetbl` rows on class **curriculum** phase 1 sessions move to matching phase 2 sessions (same `phase_session_number`), then phase 2 → phase 3. Together with enrollment on phases 2 and 3, Student History and class attendance show those marks under the correct billing phases.
+
+```bash
+node scripts/repairKirstenMahinayPhaseEnrollmentAndPayments.js --dry-run
+node scripts/repairKirstenMahinayPhaseEnrollmentAndPayments.js --apply
+```
+
+### `repairKirstenMahinayDetachOrphanInvoice1511.js`
+
+Supplemental one-off if INV-**1511** was cancelled but still linked to profile **123** (Student History showed cancelled data on phase 1). Detaches the orphan and strips `TARGET_PHASE` from its remarks.
+
+```bash
+node scripts/repairKirstenMahinayDetachOrphanInvoice1511.js --dry-run
+node scripts/repairKirstenMahinayDetachOrphanInvoice1511.js --apply
+```
+
+### `repairKirstenMahinayRestoreTargetPhases.js`
+
+If Student History shows invoices shifted one slot early (phase 1 has INV-311, phase 4 empty), the phases API auto-repair may have rewritten `TARGET_PHASE` to 1/2/3. This script restores **2/3/4** on INV-311/571/1012. Requires the enrollment-aware gap fix in `installmentPhaseBillingSync.js` so the API does not re-shift on the next load.
+
+```bash
+node scripts/repairKirstenMahinayRestoreTargetPhases.js --dry-run
+node scripts/repairKirstenMahinayRestoreTargetPhases.js --apply
+```
+
+### `repairKirstenMahinayPhase34IssueDueDates.js`
+
+Earlier date-only fix (Phase 3 issue/due). Superseded for enrollment/payment work by `repairKirstenMahinayPhaseEnrollmentAndPayments.js` above once Phase 3 dates are already correct.
+
+```bash
+node scripts/repairKirstenMahinayPhase34IssueDueDates.js --dry-run
+node scripts/repairKirstenMahinayPhase34IssueDueDates.js --apply
+```
+
 When adding new scripts to this directory:
 
 1. Follow the ES module syntax (import/export)

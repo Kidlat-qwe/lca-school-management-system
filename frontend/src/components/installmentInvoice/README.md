@@ -8,7 +8,7 @@
 
   | File | Purpose |
   | ---- | ------- |
-  | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments`, or advance pay via `POST .../advance-pay`. Before opening payment, calls `GET /invoices/:id` and blocks with an alert if an earlier phase has unsettled partial-payment balance (`prior_partial_balance_block`). Reused inline by other dialogs. |
+  | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments`, or advance pay via `POST .../advance-pay`. Empty slots before the student's first enrollment (`billing_kind: late_start_gap`) render as all em-dashes and are skipped for advance pay. Before opening payment, calls `GET /invoices/:id` and blocks with an alert if an earlier phase has unsettled partial-payment balance (`prior_partial_balance_block`). Reused inline by other dialogs. |
   | `InstallmentInvoicePhasesModal.jsx`  | Modal shell around `InstallmentPlanDetails` for the "View Details" action on the Installment Invoice Logs pages. |
 
   ## `InstallmentPlanDetails`

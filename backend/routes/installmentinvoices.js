@@ -42,6 +42,7 @@ import {
   generatedCountForNextLocalPhase,
   hasUnintentionalPhaseGap,
   isAdvancePaymentRemarks,
+  loadActiveEnrollmentAbsolutePhases,
   loadDroppedAbsolutePhasesForProfile,
   repairProfileTargetPhaseAlignment,
   syncInstallmentGeneratedCountToNextUnbilled,
@@ -473,13 +474,30 @@ router.get(
         profile.class_id
       );
 
+      const activeEnrollmentAbsolutePhases =
+        profile.student_id != null && profile.class_id != null
+          ? await loadActiveEnrollmentAbsolutePhases(
+              pool,
+              Number(profile.student_id),
+              Number(profile.class_id)
+            )
+          : new Set();
+
       let targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
-      if (hasUnintentionalPhaseGap(targetMapped, profile, droppedAbsolutePhases)) {
+      if (
+        hasUnintentionalPhaseGap(
+          targetMapped,
+          profile,
+          droppedAbsolutePhases,
+          activeEnrollmentAbsolutePhases
+        )
+      ) {
         const repairClient = await getClient();
         try {
           await repairProfileTargetPhaseAlignment(repairClient, profile, phaseChains, {
             dryRun: false,
             droppedAbsolutePhases,
+            activeEnrollmentAbsolutePhases,
           });
         } finally {
           repairClient.release();
@@ -511,10 +529,28 @@ router.get(
 
       const phaseStart = resolveProfilePhaseStart(profile);
 
+      const hasLaterAbsoluteBilling = (absolutePhase) => {
+        for (const local of chainByLocalPhase.keys()) {
+          if (phaseStart + Number(local) - 1 > absolutePhase) return true;
+        }
+        return false;
+      };
+
+      const hasLaterAbsoluteEnrollment = (absolutePhase) => {
+        for (const abs of activeEnrollmentAbsolutePhases) {
+          if (abs > absolutePhase) return true;
+        }
+        return false;
+      };
+
       const buildPhaseRow = (phaseNumber, chain) => {
         if (!chain) {
           const absoluteGap = phaseStart + phaseNumber - 1;
           const isSkippedGap = droppedAbsolutePhases.has(absoluteGap);
+          const isLateStartGap =
+            !isSkippedGap &&
+            !activeEnrollmentAbsolutePhases.has(absoluteGap) &&
+            (hasLaterAbsoluteBilling(absoluteGap) || hasLaterAbsoluteEnrollment(absoluteGap));
           return {
             phase_number: phaseNumber,
             invoice_id: null,
@@ -523,11 +559,11 @@ router.get(
             issue_date: null,
             due_date: null,
             payment_date: null,
-            amount: profile.amount != null ? Number(profile.amount) : null,
-            paid_amount: 0,
-            status: 'Not Generated',
+            amount: isLateStartGap ? null : profile.amount != null ? Number(profile.amount) : null,
+            paid_amount: isLateStartGap ? null : 0,
+            status: isLateStartGap ? null : 'Not Generated',
             is_generated: false,
-            billing_kind: isSkippedGap ? 'skipped_gap' : null,
+            billing_kind: isSkippedGap ? 'skipped_gap' : isLateStartGap ? 'late_start_gap' : null,
           };
         }
         const rep = chain.representative;
@@ -644,9 +680,14 @@ router.get(
       // Include the downpayment when present.
       const profilePhaseAmount =
         profile.amount != null ? Number(profile.amount) : 0;
+      const isLateStartGapRow = (p) =>
+        String(p?.billing_kind || '').toLowerCase() === 'late_start_gap';
       const totalBilledPhases = normalizedPhases.reduce((sum, p) => {
         if (p.is_generated && p.amount != null) return sum + Number(p.amount);
-        if (!p.is_generated) return sum + profilePhaseAmount;
+        if (!p.is_generated) {
+          if (isLateStartGapRow(p)) return sum;
+          return sum + profilePhaseAmount;
+        }
         return sum;
       }, 0);
       const totalBilled =
@@ -661,7 +702,8 @@ router.get(
         return sum + Math.max(0, Number(p.amount) - Number(p.paid_amount || 0));
       }, 0);
       const outstandingNotGenerated = normalizedPhases.reduce(
-        (sum, p) => sum + (p.is_generated ? 0 : profilePhaseAmount),
+        (sum, p) =>
+          sum + (p.is_generated || isLateStartGapRow(p) ? 0 : profilePhaseAmount),
         0
       );
       const outstandingDownpayment =

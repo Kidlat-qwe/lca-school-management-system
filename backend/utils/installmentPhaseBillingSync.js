@@ -51,10 +51,38 @@ export function generatedCountForNextLocalPhase(nextLocalPhase) {
 }
 
 /**
- * True when a later phase slot has an invoice but an earlier slot does not,
- * and the empty slot is not an intentional drop/rejoin skip.
+ * Absolute class phases where the student has an active (non-removed) enrollment row.
  */
-export function hasUnintentionalPhaseGap(chainByLocalPhase, profile, droppedAbsolutePhases = new Set()) {
+export async function loadActiveEnrollmentAbsolutePhases(db, studentId, classId) {
+  if (!studentId || !classId) return new Set();
+
+  const result = await db.query(
+    `SELECT DISTINCT phase_number
+     FROM classstudentstbl
+     WHERE student_id = $1
+       AND class_id = $2
+       AND phase_number IS NOT NULL
+       AND removed_at IS NULL`,
+    [studentId, classId]
+  );
+
+  return new Set(
+    result.rows
+      .map((r) => parseInt(r.phase_number, 10))
+      .filter((n) => Number.isFinite(n) && n > 0)
+  );
+}
+
+/**
+ * True when a later phase slot has an invoice but an earlier slot does not,
+ * and the empty slot is not an intentional drop/rejoin skip or late-enrollment start.
+ */
+export function hasUnintentionalPhaseGap(
+  chainByLocalPhase,
+  profile,
+  droppedAbsolutePhases = new Set(),
+  activeEnrollmentAbsolutePhases = null
+) {
   if (!chainByLocalPhase?.size) return false;
 
   const phaseStart = resolveProfilePhaseStart(profile);
@@ -69,6 +97,14 @@ export function hasUnintentionalPhaseGap(chainByLocalPhase, profile, droppedAbso
     if (chainByLocalPhase.has(local)) continue;
     const absolute = phaseStart + local - 1;
     if (droppedAbsolutePhases.has(absolute)) continue;
+
+    // Student never enrolled this class phase (e.g. billing starts on phase 2).
+    if (
+      activeEnrollmentAbsolutePhases instanceof Set &&
+      !activeEnrollmentAbsolutePhases.has(absolute)
+    ) {
+      continue;
+    }
 
     for (let later = local + 1; later <= maxLocal; later += 1) {
       if (!chainByLocalPhase.has(later)) continue;
@@ -103,10 +139,17 @@ export function mapPhaseChainsToSequentialSlots(phaseChains, profile) {
 export function resolvePhaseChainByLocalSlot(
   phaseChains,
   profile,
-  { droppedAbsolutePhases = new Set() } = {}
+  { droppedAbsolutePhases = new Set(), activeEnrollmentAbsolutePhases = null } = {}
 ) {
   const targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
-  if (!hasUnintentionalPhaseGap(targetMapped, profile, droppedAbsolutePhases)) {
+  if (
+    !hasUnintentionalPhaseGap(
+      targetMapped,
+      profile,
+      droppedAbsolutePhases,
+      activeEnrollmentAbsolutePhases
+    )
+  ) {
     return { chainByLocalPhase: targetMapped, mapping_mode: 'target_phase' };
   }
   return {
@@ -140,11 +183,22 @@ export function rewriteTargetPhaseInRemarks(remarks, absolutePhase) {
  * @returns {Promise<{ updated: number, details: object[] }>}
  */
 export async function repairProfileTargetPhaseAlignment(client, profile, phaseChains, options = {}) {
-  const { dryRun = false, droppedAbsolutePhases = new Set() } = options;
+  const {
+    dryRun = false,
+    droppedAbsolutePhases = new Set(),
+    activeEnrollmentAbsolutePhases = null,
+  } = options;
   const phaseStart = resolveProfilePhaseStart(profile);
   const targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
 
-  if (!hasUnintentionalPhaseGap(targetMapped, profile, droppedAbsolutePhases)) {
+  if (
+    !hasUnintentionalPhaseGap(
+      targetMapped,
+      profile,
+      droppedAbsolutePhases,
+      activeEnrollmentAbsolutePhases
+    )
+  ) {
     return { updated: 0, details: [] };
   }
 

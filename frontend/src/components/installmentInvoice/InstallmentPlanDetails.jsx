@@ -8,7 +8,9 @@ import {
   getInstallmentPhaseBillingLabel,
   getInstallmentPhaseOutstanding,
   isDroppedEnrollmentPhase,
+  isInactiveInstallmentPlanSlot,
   isInstallmentPlanSlotAddressed,
+  isLateStartGapPhase,
 } from '../../utils/installmentPhaseSlotStatus';
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
@@ -596,7 +598,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
     for (let i = 0; i < phases.length; i += 1) {
       const p = phases[i];
-      if (isDroppedEnrollmentPhase(p)) continue;
+      if (isDroppedEnrollmentPhase(p) || isLateStartGapPhase(p)) continue;
       const out = getInstallmentPhaseOutstanding(p);
       const st = String(p.status || '').toLowerCase();
       const cancelled = st === 'cancelled' || st === 'canceled';
@@ -865,7 +867,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   ) : (
                     phases.map((phase, idx) => {
                       const absolutePhase = Number(phase.phase_number) + phaseStartOffset;
-                      const isDroppedEnrollment = isDroppedEnrollmentPhase(phase);
+                      const isInactiveSlot = isInactiveInstallmentPlanSlot(phase);
                       const isNotGenerated = phase.status === 'Not Generated';
                       const billingLabel = getInstallmentPhaseBillingLabel(phase);
                       const outstanding = getInstallmentPhaseOutstanding(phase);
@@ -886,9 +888,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                             Phase {absolutePhase}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 max-w-[140px]">
-                            {phase.program_enrollment_status
-                              ? formatInstallmentPlanPhaseEnrollment(phase.program_enrollment_status)
-                              : '\u2014'}
+                            {isInactiveSlot
+                              ? '\u2014'
+                              : phase.program_enrollment_status
+                                ? formatInstallmentPlanPhaseEnrollment(phase.program_enrollment_status)
+                                : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 text-xs text-gray-600 whitespace-nowrap" title="Installment invoice slot">
                             {billingLabel}
@@ -909,13 +913,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                             {phase.payment_date ? formatDateManila(phase.payment_date) : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-900 font-medium text-right whitespace-nowrap">
-                            {phase.amount != null ? formatCurrency(phase.amount) : '\u2014'}
+                            {isInactiveSlot
+                              ? '\u2014'
+                              : phase.amount != null
+                                ? formatCurrency(phase.amount)
+                                : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-emerald-700 font-medium text-right whitespace-nowrap">
-                            {formatCurrency(phase.paid_amount || 0)}
+                            {isInactiveSlot ? '\u2014' : formatCurrency(phase.paid_amount || 0)}
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
-                            {isDroppedEnrollment ? (
+                            {isInactiveSlot ? (
                               '\u2014'
                             ) : (
                               <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass(phase.status)}`}>
@@ -929,7 +937,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                             ) : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
-                            {isDroppedEnrollment ? (
+                            {isInactiveSlot ? (
                               '\u2014'
                             ) : isPayRow ? (
                               <button
