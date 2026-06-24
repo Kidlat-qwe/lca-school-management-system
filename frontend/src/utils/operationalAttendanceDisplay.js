@@ -98,7 +98,7 @@ export const getOperationalAttendanceActionMeta = (session) => {
 
   if (session.attendance_status === 'pending') {
     return {
-      actionLabel: 'Take',
+      actionLabel: 'Update',
       actionClass: 'text-[#b89200] hover:text-[#967800] font-semibold',
     };
   }

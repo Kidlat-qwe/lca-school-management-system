@@ -115,3 +115,7 @@ export const PAYMENT_DISCOUNT_ADJUSTMENT_HINT_PAYMENT_LOGS =
 
 export const PAYMENT_DISCOUNT_ADJUSTMENT_HINT_AR =
   'When provided, this is deducted from the payment amount collected (e.g. promo, scholarship). The discount is not counted as revenue.';
+
+/** Installment phase invoices: partial payment enrolls for the phase; next phase stays blocked until balance is settled. */
+export const INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT =
+  'The student will be enrolled for this phase. Settle the remaining balance before recording payment on the next phase.';

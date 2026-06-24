@@ -2686,7 +2686,7 @@ router.post(
       if (newInvoiceStatus === 'Paid' && invoice.ack_receipt_id) {
         try {
           const ackResult = await client.query(
-            `SELECT ar_type, merchandise_items_snapshot FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
+            `SELECT ar_type, merchandise_items_snapshot, payment_method FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1`,
             [invoice.ack_receipt_id]
           );
           if (ackResult.rows.length > 0) {
@@ -2704,9 +2704,12 @@ router.post(
                   console.log(`✅ Merchandise AR payment: deducted ${qty} from merchandise_id ${merchId}`);
                 }
               }
+              const isMerchandiseCash =
+                String(ackRow.payment_method || '').trim().toLowerCase() === 'cash';
+              const nextArStatus = isMerchandiseCash ? 'Verified' : 'Unverified';
               await client.query(
-                `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
-                [newPayment.payment_id, invoice.ack_receipt_id]
+                `UPDATE acknowledgement_receiptstbl SET status = $1, payment_id = $2 WHERE ack_receipt_id = $3`,
+                [nextArStatus, newPayment.payment_id, invoice.ack_receipt_id]
               );
             } else {
               // Package ARs become Applied once converted into an actual invoice payment.
@@ -2751,7 +2754,10 @@ router.post(
 
       // Check if this is a downpayment invoice payment
       // If yes, mark downpayment as paid and create first installment invoice record
-      if (newInvoiceStatus === 'Paid' && invoice.installmentinvoiceprofiles_id) {
+      if (
+        (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+        invoice.installmentinvoiceprofiles_id
+      ) {
         try {
           if (isRejoinClassInvoice(invoice.remarks)) {
             let rejoinClassId = null;
@@ -2794,8 +2800,10 @@ router.post(
             // (e.g. reservation flow) and this is the first payment - then backfill and proceed
             const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(invoice_id);
             const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+            const isPendingDownpayment =
+              (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
             
-            if ((isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid) {
+            if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
               // Backfill downpayment_invoice_id if profile never had it set (e.g. from reservation upgrade)
               if (!profile.downpayment_invoice_id) {
                 await client.query(
@@ -2875,9 +2883,8 @@ router.post(
                 // Store for processing after commit
                 req._pendingInvoiceGeneration = invoiceGenData;
               }
-            } else {
-              // This is a regular installment invoice payment (not downpayment)
-              // Continue with existing logic
+            } else if (!isPendingDownpayment) {
+              // Regular installment phase payment (full or partial — partial enrolls for this phase)
               
               // Only proceed if we have class_id and student_id matches
               if (profile.class_id && profile.student_id === student_id) {
@@ -2920,7 +2927,10 @@ router.post(
         }
       }
 
-      if (newInvoiceStatus === 'Paid' && !invoice.installmentinvoiceprofiles_id) {
+      if (
+        (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+        !invoice.installmentinvoiceprofiles_id
+      ) {
         try {
           await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
             studentId: student_id,
@@ -3551,7 +3561,10 @@ router.put(
           
           // Check if this invoice is from an installment invoice profile and is now fully paid
           // If yes, check if it's a downpayment invoice or regular installment invoice
-          if (newInvoiceStatus === 'Paid' && invoice.installmentinvoiceprofiles_id) {
+          if (
+            (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+            invoice.installmentinvoiceprofiles_id
+          ) {
             try {
               if (isRejoinClassInvoice(invoice.remarks)) {
                 let rejoinClassId = null;
@@ -3593,8 +3606,10 @@ router.put(
                 // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
                 const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(payment.invoice_id);
                 const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+                const isPendingDownpayment =
+                  (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
                 
-                if ((isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid) {
+                if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
                   if (!profile.downpayment_invoice_id) {
                     await client.query(
                       `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
@@ -3660,9 +3675,8 @@ router.put(
                     // Store for processing after commit
                     req._pendingInvoiceGeneration = invoiceGenData;
                   }
-                } else {
-                  // This is a regular installment invoice payment (not downpayment)
-                  // Continue with existing logic
+                } else if (!isPendingDownpayment) {
+                  // Regular installment phase payment (full or partial — partial enrolls for this phase)
                   
                   // Only proceed if we have class_id and student_id matches
                   if (profile.class_id && profile.student_id === payment.student_id) {
@@ -3694,7 +3708,10 @@ router.put(
             }
           }
 
-          if (newInvoiceStatus === 'Paid' && !invoice.installmentinvoiceprofiles_id) {
+          if (
+        (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+        !invoice.installmentinvoiceprofiles_id
+      ) {
             try {
               await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
                 studentId: payment.student_id,

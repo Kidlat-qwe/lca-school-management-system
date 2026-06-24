@@ -8,6 +8,10 @@ import {
   computePaymentDateNetTotals,
   formatPaymentDateNetTotalsSummary,
 } from './paymentDateNetTotals.js';
+import {
+  AR_LIST_STATUS_FILTER,
+} from '../utils/acknowledgementReceiptStatus.js';
+import { loadArSalesAggregateTotals } from './arSalesAggregate.js';
 
 /** Inclusive calendar range for YYYY-MM (matches Payment Logs month mode / issueDateRangeFromManilaMonth). */
 export function parseManilaMonthInclusiveRange(monthKey) {
@@ -113,43 +117,37 @@ export async function loadFinancialDashboardPaymentVerification(runQuery, option
 }
 
 /**
- * AR verification totals — same filters as Financial Dashboard → Acknowledgement Receipts drill-down.
- * Uses payment_date_* on ar.issue_date (Acknowledgement Receipts Month / Payment date modes).
+ * AR verification totals — Superadmin / Admin buckets aligned with Acknowledgement Receipts:
+ * All (Verified+Applied + Unverified + Rejected), Verified (Applied), Unverified, Rejected.
+ * Month scope on ar.issue_date.
  */
 export async function loadFinancialDashboardArVerification(runQuery, options = {}) {
   const { branchId = null, dateFrom = null, dateTo = null } = options;
 
-  const countForStatuses = async (statuses) => {
-    const params = [statuses];
-    const scopeSql = buildBranchDateSql(branchId, dateFrom, dateTo, 'ar', params);
-    const res = await runQuery(
-      `
-        SELECT
-          COUNT(*)::bigint AS count,
-          COALESCE(
-            SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)),
-            0
-          ) AS amount
-        FROM acknowledgement_receiptstbl ar
-        WHERE ar.status = ANY($1::text[])
-          ${scopeSql}
-      `,
-      params
-    );
-    const row = res.rows[0] || {};
-    return {
-      count: parseInt(row.count, 10) || 0,
-      amount: parseFloat(row.amount) || 0,
-    };
-  };
+  const countForStatusFilter = (statusFilterToken) =>
+    loadArSalesAggregateTotals(runQuery, {
+      branchId,
+      dateFrom,
+      dateTo,
+      dateEndExclusive: false,
+      statusFilterToken,
+    });
 
-  const verified = await countForStatuses(['Verified', 'Applied']);
-  const unverified = await countForStatuses(['Submitted', 'Pending', 'Paid']);
+  const [allBucket, verifiedApplied, unverified, rejected] = await Promise.all([
+    countForStatusFilter(AR_LIST_STATUS_FILTER.ALL),
+    countForStatusFilter(AR_LIST_STATUS_FILTER.VERIFIED_APPLIED),
+    countForStatusFilter(AR_LIST_STATUS_FILTER.UNVERIFIED),
+    countForStatusFilter(AR_LIST_STATUS_FILTER.REJECTED),
+  ]);
 
   return {
-    verified_count: verified.count,
-    verified_amount: verified.amount,
+    all_count: allBucket.count,
+    all_amount: allBucket.amount,
+    verified_count: verifiedApplied.count,
+    verified_amount: verifiedApplied.amount,
     unverified_count: unverified.count,
     unverified_amount: unverified.amount,
+    rejected_count: rejected.count,
+    rejected_amount: rejected.amount,
   };
 }

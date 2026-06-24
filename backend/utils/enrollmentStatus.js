@@ -374,7 +374,13 @@ export async function promotePendingEnrollmentIfPhaseInvoicePaid(
   { studentId, invoice, sourceLabel = 'System (Auto-enrolled via installment payment)' }
 ) {
   const sid = Number(studentId);
-  if (!sid || Number.isNaN(sid) || !invoice || String(invoice.status || '') !== 'Paid') {
+  const invoiceStatus = String(invoice?.status || '').trim();
+  if (
+    !sid ||
+    Number.isNaN(sid) ||
+    !invoice ||
+    !['Paid', 'Partially Paid'].includes(invoiceStatus)
+  ) {
     return false;
   }
   if (!isInstallmentPhaseInvoiceRow(invoice)) {

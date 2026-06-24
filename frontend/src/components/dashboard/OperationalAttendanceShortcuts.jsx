@@ -176,12 +176,12 @@ const OperationalAttendanceShortcuts = ({
                           onClick={() => handleOpenSession(session)}
                           disabled={!session.classsession_id}
                           className={`inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                            actionMeta.actionLabel === 'Take'
+                            actionMeta.actionLabel === 'Update'
                               ? 'bg-[#F7C844] text-gray-900 hover:bg-[#e5b83d]'
                               : 'bg-white text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50'
                           }`}
                         >
-                          {actionMeta.actionLabel === 'Take' ? 'Take attendance' : 'View attendance'}
+                          {actionMeta.actionLabel === 'Update' ? 'Update attendance' : 'View attendance'}
                         </button>
                       </td>
                     </tr>

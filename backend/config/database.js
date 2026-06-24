@@ -29,12 +29,20 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
+  keepAlive: true,
 });
+
+const attachClientErrorHandler = (client) => {
+  client.on('error', (err) => {
+    console.error('❌ Database client connection error (will be discarded from pool):', err.message);
+  });
+  return client;
+};
 
 // Neon pooler uses an empty search_path on some databases (e.g. freshly restored test_psms_db).
 // Startup option search_path is blocked on pooler, so set it per acquired client instead.
 async function acquireClient() {
-  const client = await pool.connect();
+  const client = attachClientErrorHandler(await pool.connect());
   await client.query('SET search_path TO public');
   return client;
 }
@@ -54,24 +62,53 @@ pool.on('connect', () => {
 });
 
 pool.on('error', (err) => {
-  console.error('❌ Unexpected error on idle client', err);
-  process.exit(-1);
+  // Log only — do not exit. Cloud DBs (e.g. Neon) may drop idle connections; the pool recreates them.
+  console.error('❌ Unexpected error on idle pool client:', err.message);
 });
+
+const isRetriableConnectionError = (error) => {
+  const msg = String(error?.message || '').toLowerCase();
+  return (
+    msg.includes('connection terminated') ||
+    msg.includes('connection terminated unexpectedly') ||
+    msg.includes('econnreset') ||
+    msg.includes('econnrefused') ||
+    msg.includes('socket hang up')
+  );
+};
 
 // Query helper function
 export const query = async (text, params) => {
   const start = Date.now();
-  const client = await acquireClient();
+  let client;
   try {
+    client = await acquireClient();
     const res = await client.query(text, params);
     const duration = Date.now() - start;
     console.log('Executed query', { text, duration, rows: res.rowCount });
     return res;
   } catch (error) {
+    if (client && isRetriableConnectionError(error)) {
+      try {
+        client.release(true);
+      } catch {
+        /* ignore release errors on dead client */
+      }
+      client = null;
+      const retryClient = await acquireClient();
+      try {
+        const res = await retryClient.query(text, params);
+        const duration = Date.now() - start;
+        console.log('Executed query (retry)', { text, duration, rows: res.rowCount });
+        return res;
+      } finally {
+        retryClient.release();
+      }
+    }
     console.error('Database query error:', error);
     throw error;
   } finally {
-    client.release();
+    if (client) client.release();
   }
 };
 

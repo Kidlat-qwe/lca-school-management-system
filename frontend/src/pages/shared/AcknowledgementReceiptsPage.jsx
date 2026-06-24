@@ -51,15 +51,23 @@ import { getArIssuedByLabel } from '../../utils/issuedByDisplay';
 import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
 import {
   getArStatusBadgeClass,
+  getArStatusDisplayLabel,
   getArStatusLegend,
+  isArReturnedForCorrection,
+  isArUnverifiedStatus,
+  isArRejectedStatus,
+  AR_STATUS_FILTER,
 } from '../../utils/acknowledgementReceiptStatus';
+import { appendArListStatusExcludeParams } from '../../utils/fetchArVerificationBucketTotals';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 
-/** Non-cash merchandise AR (Paid): Finance/Superfinance verify / return / reject on AR page. */
+/** Non-cash merchandise AR (Unverified): Finance/Superfinance verify / return / reject on AR page. */
 const financeCanActOnMerchandiseAr = (receipt) =>
   receipt?.ar_type === 'Merchandise' &&
-  String(receipt?.status || '').trim() === 'Paid' &&
+  isArUnverifiedStatus(receipt) &&
+  !isArReturnedForCorrection(receipt) &&
+  !isArRejectedStatus(receipt?.status) &&
   String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash' &&
   (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
 
@@ -69,12 +77,14 @@ const financeCanVerifyMerchandiseAr = financeCanActOnMerchandiseAr;
 const canBranchResubmitReturnedAr = (receipt) =>
   receipt &&
   (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise') &&
-  String(receipt.status || '').trim() === 'Returned';
+  isArReturnedForCorrection(receipt);
 
-/** Non-cash package AR (Submitted): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
+/** Non-cash package AR (Unverified): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
 const financeCanVerifyPackageAr = (receipt) =>
   receipt?.ar_type === 'Package' &&
-  String(receipt?.status || '').trim() === 'Submitted' &&
+  isArUnverifiedStatus(receipt) &&
+  !isArReturnedForCorrection(receipt) &&
+  !isArRejectedStatus(receipt?.status) &&
   String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash';
 
 const financeHasPackageActionMenu = (receipt) => receipt?.ar_type === 'Package';
@@ -115,15 +125,21 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     userType === 'Superadmin' || userType === 'Superfinance' || isGlobalBranchFinance;
   const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
   const isFinanceOrSuperfinance = userType === 'Finance' || userType === 'Superfinance';
+  const hasArReturnedTab = isAdminOrSuperadmin || isFinanceOrSuperfinance;
+  const usesStandardArStatusBuckets = isFinanceOrSuperfinance || isAdminOrSuperadmin;
   const currentUserId = Number(userInfo?.user_id || userInfo?.userId || 0) || null;
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialStatus = searchParams.get('status') || '';
+  const initialArAdminTab =
+    hasArReturnedTab && searchParams.get('tab') === 'return' ? 'return' : 'main';
+  const initialStatusRaw = searchParams.get('status');
+  const initialStatus =
+    initialStatusRaw != null && String(initialStatusRaw).trim() !== ''
+      ? initialStatusRaw
+      : usesStandardArStatusBuckets && initialArAdminTab !== 'return'
+        ? AR_STATUS_FILTER.ALL
+        : '';
   const initialSearch = getInitialArSearchFromParams(searchParams);
   const initialPaymentMethod = searchParams.get('payment_method') || '';
-  const initialArAdminTab =
-    (userType === 'Superadmin' || userType === 'Admin') && searchParams.get('tab') === 'return'
-      ? 'return'
-      : 'main';
   const initialPageRaw = parseInt(searchParams.get('page') || '1', 10);
   const initialPage = Number.isFinite(initialPageRaw) && initialPageRaw > 0 ? initialPageRaw : 1;
   const initialLimitRaw = parseInt(searchParams.get('limit') || '10', 10);
@@ -220,7 +236,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerUrl, setViewerUrl] = useState('');
 
-  /** Returned-queue count (Finance/Superfinance returns) — Admin/Superadmin tabs badge */
+  /** Returned-queue count — badge on Return tab (Admin, Finance, Superfinance). */
   const [returnedArCount, setReturnedArCount] = useState(null);
   const [actionMenuRect, setActionMenuRect] = useState(null);
   const [viewReceipt, setViewReceipt] = useState(null);
@@ -329,11 +345,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     return latest;
   };
 
-  /** Finance return adds "[Returned]" to notes; issue_date must stay fixed for EOD (including after resubmit to Submitted). */
+  /** Finance return adds "[Returned]" to notes; issue_date must stay fixed for EOD (including after resubmit). */
   const isAckIssueDateLocked = (receipt) =>
-    !!receipt &&
-    (String(receipt.status || '') === 'Returned' ||
-      String(receipt.prospect_student_notes || '').includes('[Returned]'));
+    !!receipt && isArReturnedForCorrection(receipt);
 
   useEffect(() => {
     if (suppressAutoListFetchRef.current) return;
@@ -414,7 +428,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       }
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
-        if (isAdminOrSuperadmin && arAdminTab === 'return') {
+        if (hasArReturnedTab && arAdminTab === 'return') {
           next.delete('status');
           next.set('tab', 'return');
         } else {
@@ -607,7 +621,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   }, [paymentMethodFilter]);
 
   useEffect(() => {
-    if (!isAdminOrSuperadmin) return;
+    if (!hasArReturnedTab) return;
     if (!arAdminTabHydratedRef.current) {
       arAdminTabHydratedRef.current = true;
       return;
@@ -615,7 +629,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (shouldSkipAutoArListFetch()) return;
     fetchReceipts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arAdminTab, isAdminOrSuperadmin]);
+  }, [arAdminTab, hasArReturnedTab]);
 
   useEffect(() => {
     if (!arListDateFilterHydratedRef.current) {
@@ -635,9 +649,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   ]);
 
   const fetchReturnedCount = async () => {
-    if (!isAdminOrSuperadmin) return;
+    if (!hasArReturnedTab) return;
     try {
-      const params = new URLSearchParams({ page: '1', limit: '1', status: 'Returned' });
+      const params = new URLSearchParams({ page: '1', limit: '1', returned_only: '1' });
       if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
       if (canApplyGlobalBranchFilter && selectedBranchId) params.set('branch_id', selectedBranchId);
       const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
@@ -651,10 +665,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   useEffect(() => {
-    if (!isAdminOrSuperadmin) return;
+    if (!hasArReturnedTab) return;
     fetchReturnedCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminOrSuperadmin, selectedBranchId, paymentMethodFilter]);
+  }, [hasArReturnedTab, selectedBranchId, paymentMethodFilter]);
 
   useEffect(() => {
     if (!openActionMenuId) return;
@@ -731,12 +745,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(limit));
-    if (isAdminOrSuperadmin && arAdminTab === 'return') {
-      params.set('status', 'Returned');
+    if (hasArReturnedTab && arAdminTab === 'return') {
+      params.set('returned_only', '1');
     } else {
       if (statusFilter) params.set('status', statusFilter);
-      if (isAdminOrSuperadmin && arAdminTab === 'main') {
-        params.set('exclude_status', 'Returned');
+
+      const usesMainTabBuckets =
+        (isFinanceOrSuperfinance && arAdminTab === 'main') ||
+        (isAdminOrSuperadmin && arAdminTab === 'main');
+      if (usesMainTabBuckets) {
+        appendArListStatusExcludeParams(params, statusFilter || AR_STATUS_FILTER.ALL);
       }
     }
     if (searchOverride !== undefined) {
@@ -898,7 +916,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       const rowsForExport = requireExportDateRange
         ? rows.filter((r) => {
             if (r.ar_type !== 'Package') return false;
-            const status = r.status || 'Submitted';
+            const status = r.status || 'Unverified';
             return status !== 'Rejected' && status !== 'Cancelled';
           })
         : rows;
@@ -1506,7 +1524,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       setViewReceipt(null);
       setViewModalAttachmentUrl('');
       await fetchReceipts(pagination.page || 1);
-      if (isAdminOrSuperadmin) await fetchReturnedCount();
+      if (hasArReturnedTab) await fetchReturnedCount();
+      if (arAdminTab === 'return') {
+        setArAdminTab('main');
+        setStatusFilter(AR_STATUS_FILTER.UNVERIFIED);
+      }
     } catch (err) {
       console.error('AR view resubmit error:', err);
       appAlert(err?.message || 'Failed to resubmit acknowledgement receipt.');
@@ -1869,13 +1891,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
-      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
         body: JSON.stringify({ action: 'return', remarks: remarksTrimmed }),
       });
-      appAlert('Acknowledgement receipt returned.');
+      appAlert(
+        result.message ||
+          'Returned to branch for correction. This receipt was removed from your verification queue.'
+      );
       closeFinanceVerifyModal();
       await fetchReceipts(pagination.page || 1);
+      if (hasArReturnedTab) await fetchReturnedCount();
     } catch (err) {
       console.error('AR return error:', err);
       appAlert(err?.message || 'Failed to return acknowledgement receipt.');
@@ -1890,11 +1916,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
     setVerifyLoadingId(receipt.ack_receipt_id);
     try {
-      await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
         method: 'PUT',
         body: JSON.stringify({ action: 'reject', remarks: remarksTrimmed }),
       });
-      appAlert('Acknowledgement receipt rejected. The branch admin must create a new one.');
+      appAlert(
+        result.message ||
+          'Acknowledgement receipt rejected and removed from your queue. The branch admin must create a new receipt.'
+      );
       closeFinanceVerifyModal();
       await fetchReceipts(pagination.page || 1);
     } catch (err) {
@@ -2174,7 +2203,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       }
       closeEditModal();
       await fetchReceipts(pagination.page || 1);
-      if (isAdminOrSuperadmin) await fetchReturnedCount();
+      if (hasArReturnedTab) await fetchReturnedCount();
+      if (isResubmitFlow && arAdminTab === 'return') {
+        setArAdminTab('main');
+        setStatusFilter(AR_STATUS_FILTER.UNVERIFIED);
+      }
     } catch (err) {
       console.error('AR update error:', err);
       appAlert(err?.message || 'Failed to update acknowledgement receipt.');
@@ -2183,19 +2216,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
   };
 
-  const uniqueStatuses = () => {
-    const set = new Set();
-    receipts.forEach((r) => {
-      if (r.status) set.add(r.status);
-    });
-    return Array.from(set);
-  };
 
   const sortedReceipts = sortRows(receipts, sortConfig, {
     invoice: { accessor: (r) => formatArLinkedInvoiceLabel(r) || '', type: 'string' },
     ar_number: { accessor: (r) => formatArLinkedInvoiceArNumber(r) || '', type: 'string' },
     branch: { accessor: 'branch_name', type: 'string' },
-    status: { accessor: 'status', type: 'string' },
+    status: { accessor: (r) => getArStatusDisplayLabel(r), type: 'string' },
     issue_date: { accessor: 'issue_date', type: 'date' },
     payment_date: { accessor: 'issue_date', type: 'date' },
   });
@@ -2254,7 +2280,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         description={
           <>
             Select branches, then an <span className="font-medium">issue date</span> range (Manila). Exports Package Acknowledgement Receipt
-            rows aligned with Acknowledgement Receipt Sales on the financial dashboard. Rejected and Cancelled are excluded.
+            rows aligned with Acknowledgement Receipt Sales on the financial dashboard. Rejected rows are excluded.
           </>
         }
         maxWidthClass="max-w-lg"
@@ -2331,13 +2357,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </div>
       </StandardExportModal>
 
-      {isAdminOrSuperadmin ? (
+      {hasArReturnedTab ? (
         <div className="w-full">
           <BranchPaymentLogTabs
             value={arAdminTab}
             onChange={(v) => {
               setArAdminTab(v);
-              setStatusFilter('');
+              setStatusFilter(v === 'return' ? '' : AR_STATUS_FILTER.ALL);
             }}
             mainLabel="Acknowledgement receipts"
             returnLabel="Return"
@@ -2387,7 +2413,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           </div>
           <div>
             <label htmlFor="ar-status-filter" className="mb-1 block text-xs font-medium text-gray-700">Status</label>
-            {isAdminOrSuperadmin && arAdminTab === 'return' ? (
+            {hasArReturnedTab && arAdminTab === 'return' ? (
               <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">Returned only</div>
             ) : (
               <select
@@ -2396,14 +2422,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               >
-                <option value="">All</option>
-                <option value="Verified,Applied">Verified (Verified + Applied)</option>
-                <option value="Submitted,Pending,Paid">Unverified (Submitted + Pending + Paid)</option>
-                {uniqueStatuses().map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
+                <option value={AR_STATUS_FILTER.ALL}>All</option>
+                <option value={AR_STATUS_FILTER.VERIFIED_APPLIED}>Verified (Applied)</option>
+                <option value={AR_STATUS_FILTER.UNVERIFIED}>Unverified</option>
+                <option value={AR_STATUS_FILTER.REJECTED}>Rejected</option>
               </select>
             )}
           </div>
@@ -2522,10 +2544,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         </span>
       </div>
 
-      {isAdminOrSuperadmin && arAdminTab === 'return' ? (
+      {hasArReturnedTab && arAdminTab === 'return' ? (
         <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
-          These package acknowledgement receipts were <span className="font-semibold">returned by Finance or Superfinance</span> for
-          correction. Use <span className="font-semibold">Resubmit</span> after you fix details.
+          {isFinanceOrSuperfinance ? (
+            <>
+              Acknowledgement receipts you <span className="font-semibold">returned to the branch</span> for correction.
+              They are removed from this tab after the branch admin <span className="font-semibold">resubmits</span>.
+            </>
+          ) : (
+            <>
+              These acknowledgement receipts were <span className="font-semibold">returned by Finance or Superfinance</span> for
+              correction. After you <span className="font-semibold">Resubmit</span>, they leave this tab and reappear on the main list
+              as <span className="font-semibold">Unverified</span> (non-cash) or <span className="font-semibold">Verified</span> (cash).
+            </>
+          )}
         </p>
       ) : null}
 
@@ -2533,7 +2565,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      <AcknowledgementReceiptStatusLegend className="shadow-sm" />
+      <AcknowledgementReceiptStatusLegend className="shadow-sm" showFinanceActions={isFinanceOrSuperfinance || isAdminOrSuperadmin} />
+
+      {isFinanceOrSuperfinance && arAdminTab === 'main' ? (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm">
+          <p className="font-semibold">Finance verification queue</p>
+          <ul className="mt-1.5 list-inside list-disc space-y-1 text-xs sm:text-sm text-blue-800">
+            <li>
+              <strong>Unverified</strong> — review and choose <strong>Verify</strong>, <strong>Return</strong> (send back to branch for correction), or <strong>Reject</strong> (close permanently).
+            </li>
+            <li>
+              After <strong>Return</strong>, the receipt moves to the <strong>Return</strong> tab until the branch admin resubmits. After <strong>Reject</strong>, use the <strong>Rejected</strong> status filter on the main tab.
+            </li>
+            <li>
+              Only <strong>Verified</strong> receipts can be used for student enrollment.
+            </li>
+          </ul>
+        </div>
+      ) : null}
 
       <div className="relative bg-white rounded-lg shadow">
         {loading && !initialDataLoadedRef.current ? (
@@ -2648,9 +2697,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       className={
                         isFocusedFromCrossLink
                           ? 'bg-primary-50 ring-2 ring-inset ring-primary-300'
-                          : r.status === 'Returned'
+                          : isArReturnedForCorrection(r)
                             ? 'bg-red-50/70'
-                            : ''
+                            : isArRejectedStatus(r.status)
+                              ? 'bg-rose-50/60'
+                              : ''
                       }
                     >
                       <td className="px-4 py-3">
@@ -2745,16 +2796,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <td className="px-4 py-3">
                         <div className="inline-flex items-center gap-1.5">
                           <span
-                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getArStatusBadgeClass(r.status)}`}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getArStatusBadgeClass(r)}`}
                           >
-                            {r.status}
+                            {getArStatusDisplayLabel(r)}
                           </span>
                           <span className="relative group inline-flex">
                             <button
                               type="button"
                               tabIndex={-1}
-                              aria-label={`Status info: ${r.status || 'Unknown'}`}
-                              title={`${r.status || 'Unknown'}: ${getArStatusLegend(r.status)}`}
+                              aria-label={`Status info: ${getArStatusDisplayLabel(r)}`}
+                              title={`${getArStatusDisplayLabel(r)}: ${getArStatusLegend(r)}`}
                               className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             >
                               i
@@ -2763,9 +2814,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                               role="tooltip"
                               className="pointer-events-none invisible absolute left-1/2 top-full z-50 mt-1.5 w-56 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-2 text-[11px] leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
                             >
-                              <span className="block font-semibold mb-0.5">{r.status || 'Unknown'}</span>
+                              <span className="block font-semibold mb-0.5">{getArStatusDisplayLabel(r)}</span>
                               <span className="block text-gray-200">
-                                {getArStatusLegend(r.status)}
+                                {getArStatusLegend(r)}
                               </span>
                             </span>
                           </span>
@@ -2827,10 +2878,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             }
                             const financeHasActionMenu =
                               isFinanceOrSuperfinance &&
-                              (financeCanVerifyPackageAr(r) ||
+                              (arAdminTab === 'return' ||
+                                financeCanVerifyPackageAr(r) ||
                                 financeCanActOnMerchandiseAr(r) ||
                                 (financeHasPackageActionMenu(r) &&
-                                  String(r?.status || '').trim() === 'Submitted'));
+                                  isArUnverifiedStatus(r) &&
+                                  !isArReturnedForCorrection(r)));
                             const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
                             if (!showEllipsis) {
                               return <span className="text-xs text-gray-400">-</span>;
@@ -2912,7 +2965,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 const financeCanPackageReturnReject =
                   isFinanceOrSuperfinance &&
                   financeHasPackageActionMenu(actionMenuReceipt) &&
-                  String(actionMenuReceipt?.status || '').trim() === 'Submitted';
+                  isArUnverifiedStatus(actionMenuReceipt) &&
+                  !isArReturnedForCorrection(actionMenuReceipt) &&
+                  !isArRejectedStatus(actionMenuReceipt?.status);
                 const financeCanReturnReject =
                   isMerchandiseVerifyRow || financeCanPackageReturnReject;
                 const financeHasActionMenuOnRow =
@@ -2920,11 +2975,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 const verifyDisabledForStatus = !(isMerchandiseVerifyRow || isPackageVerifyRow);
                 const returnRejectDisabledForStatus = !financeCanReturnReject;
                 const itemCount = isFinanceOrSuperfinance
-                  ? financeHasActionMenuOnRow
-                    ? isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject
-                      ? 3
+                  ? arAdminTab === 'return'
+                    ? 1
+                    : financeHasActionMenuOnRow
+                      ? isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject
+                        ? 3
+                        : 0
                       : 0
-                    : 0
                   : arAdminTab === 'return'
                     ? 1 + (canResubmitFromActionMenu ? 1 : 0)
                     : 2 + (canResubmitFromActionMenu ? 1 : 0);
@@ -2942,7 +2999,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     role="menu"
                   >
                     {isFinanceOrSuperfinance ? (
-                      financeHasActionMenuOnRow ? (
+                      arAdminTab === 'return' ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenActionMenuId(null);
+                            setActionMenuRect(null);
+                            openViewReceiptModal(actionMenuReceipt);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          View
+                        </button>
+                      ) : financeHasActionMenuOnRow ? (
                         <>
                           <button
                             type="button"
@@ -2970,7 +3040,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || returnRejectDisabledForStatus}
                             className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
                           >
-                            Return
+                            Return to branch
                           </button>
                           <button
                             type="button"

@@ -21,6 +21,7 @@ import {
   resolvePairedAckReceiptIds,
   resolveDownpaymentPhase1AckPair,
 } from '../lib/ackReceiptPairedColumn.js';
+import { resolveArSalesLineAggregateFragments } from '../lib/arSalesAggregate.js';
 import {
   MERCH_RELEASE_SOURCE,
   buildMerchandiseArReleaseBatchId,
@@ -36,6 +37,16 @@ import {
   isDownpaymentPlusPhase1Ack,
   runArAttachInstallmentFollowUp,
 } from '../lib/arAttachInstallmentFollowUp.js';
+import {
+  AR_STATUS,
+  AR_UNVERIFIED_STATUSES,
+  expandArStatusFilterValues,
+  buildArListStatusFilterSql,
+  isArReturnedForCorrection,
+  isArUnverifiedStatus,
+  buildArReturnedOnlySql,
+  buildArExcludeReturnedSql,
+} from '../utils/acknowledgementReceiptStatus.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -484,6 +495,10 @@ router.get(
       .isIn(['0', '1', 'true', 'false'])
       .withMessage('only_unused must be 0, 1, true, or false'),
     queryValidator('exclude_status').optional().isString().withMessage('exclude_status must be a string'),
+    queryValidator('returned_only')
+      .optional()
+      .isIn(['0', '1', 'true', 'false'])
+      .withMessage('returned_only must be 0, 1, true, or false'),
     queryValidator('invoice_id').optional().isInt({ min: 1 }).withMessage('invoice_id must be a positive integer'),
     handleValidationErrors,
   ],
@@ -499,6 +514,7 @@ router.get(
         limit = 20,
         only_unused,
         exclude_status,
+        returned_only,
         invoice_id: invoiceIdFilter,
         payment_date_from: paymentDateFrom,
         payment_date_to: paymentDateTo,
@@ -538,6 +554,8 @@ router.get(
       const offset = (pageNum - 1) * limitNum;
 
       const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
+      const { lineSumExpr: arListLineSumExpr, pairedLeaderExcludeSql } =
+        await resolveArSalesLineAggregateFragments(query);
 
       // Downpayment + Phase 1 creates two AR rows (sequential numbers). Each list row
       // shows its own line amount — downpayment on the leader, Phase 1 on the paired row.
@@ -611,12 +629,29 @@ router.get(
       }
 
       if (status) {
-        const statuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
-        if (statuses.length > 0) {
-          paramCount += 1;
-          sql += ` AND ar.status = ANY($${paramCount}::text[])`;
-          params.push(statuses);
+        const rawStatuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+        const isReturnedFilter =
+          rawStatuses.length === 1 && rawStatuses[0].toLowerCase() === 'returned';
+        if (isReturnedFilter) {
+          const returnedClause = buildArReturnedOnlySql('ar', paramCount + 1);
+          sql += returnedClause.sql;
+          params.push(...returnedClause.params);
+          paramCount = returnedClause.nextParamIndex - 1;
+        } else {
+          const statusClause = buildArListStatusFilterSql('ar', status, paramCount + 1);
+          sql += statusClause.sql;
+          params.push(...statusClause.params);
+          paramCount = statusClause.nextParamIndex - 1;
         }
+      }
+
+      const returnedOnly =
+        returned_only === '1' || returned_only === 'true' || returned_only === true;
+      if (returnedOnly && !status) {
+        const returnedClause = buildArReturnedOnlySql('ar', paramCount + 1);
+        sql += returnedClause.sql;
+        params.push(...returnedClause.params);
+        paramCount = returnedClause.nextParamIndex - 1;
       }
 
       if (exclude_status) {
@@ -624,10 +659,18 @@ router.get(
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-        if (excluded.length > 0) {
+        const excludesReturned = excluded.some((s) => s.toLowerCase() === 'returned');
+        const otherExcluded = excluded.filter((s) => s.toLowerCase() !== 'returned');
+        if (excludesReturned) {
+          const excludeReturnedClause = buildArExcludeReturnedSql('ar', paramCount + 1);
+          sql += excludeReturnedClause.sql;
+          params.push(...excludeReturnedClause.params);
+          paramCount = excludeReturnedClause.nextParamIndex - 1;
+        }
+        if (otherExcluded.length > 0) {
           paramCount += 1;
           sql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${paramCount}::text[])))`;
-          params.push(excluded);
+          params.push(expandArStatusFilterValues(otherExcluded));
         }
       }
 
@@ -710,12 +753,27 @@ router.get(
       }
 
       if (status) {
-        const statuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
-        if (statuses.length > 0) {
-          countParamCount += 1;
-          countSql += ` AND ar.status = ANY($${countParamCount}::text[])`;
-          countParams.push(statuses);
+        const rawStatuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+        const isReturnedFilter =
+          rawStatuses.length === 1 && rawStatuses[0].toLowerCase() === 'returned';
+        if (isReturnedFilter) {
+          const returnedClause = buildArReturnedOnlySql('ar', countParamCount + 1);
+          countSql += returnedClause.sql;
+          countParams.push(...returnedClause.params);
+          countParamCount = returnedClause.nextParamIndex - 1;
+        } else {
+          const statusClause = buildArListStatusFilterSql('ar', status, countParamCount + 1);
+          countSql += statusClause.sql;
+          countParams.push(...statusClause.params);
+          countParamCount = statusClause.nextParamIndex - 1;
         }
+      }
+
+      if (returnedOnly && !status) {
+        const returnedClause = buildArReturnedOnlySql('ar', countParamCount + 1);
+        countSql += returnedClause.sql;
+        countParams.push(...returnedClause.params);
+        countParamCount = returnedClause.nextParamIndex - 1;
       }
 
       if (exclude_status) {
@@ -723,10 +781,18 @@ router.get(
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-        if (excluded.length > 0) {
+        const excludesReturned = excluded.some((s) => s.toLowerCase() === 'returned');
+        const otherExcluded = excluded.filter((s) => s.toLowerCase() !== 'returned');
+        if (excludesReturned) {
+          const excludeReturnedClause = buildArExcludeReturnedSql('ar', countParamCount + 1);
+          countSql += excludeReturnedClause.sql;
+          countParams.push(...excludeReturnedClause.params);
+          countParamCount = excludeReturnedClause.nextParamIndex - 1;
+        }
+        if (otherExcluded.length > 0) {
           countParamCount += 1;
           countSql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${countParamCount}::text[])))`;
-          countParams.push(excluded);
+          countParams.push(expandArStatusFilterValues(otherExcluded));
         }
       }
 
@@ -787,12 +853,15 @@ router.get(
         countParams.push(createdTo);
       }
 
+      if (pairedLeaderExcludeSql) {
+        countSql += pairedLeaderExcludeSql;
+      }
+
       const countResult = await query(countSql, countParams);
       const total = parseInt(countResult.rows[0].total, 10) || 0;
-      const sumLineExpr = `COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)`;
       const sumSql = countSql.replace(
         /SELECT COUNT\(\*\) AS total/i,
-        `SELECT COALESCE(SUM(${sumLineExpr}), 0)::numeric AS total_line_amount`
+        `SELECT COALESCE(SUM(${arListLineSumExpr}), 0)::numeric AS total_line_amount`
       );
       const sumResult = await query(sumSql, countParams);
       const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
@@ -1117,9 +1186,9 @@ router.post(
       const isCashPayment =
         String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash';
       // Package AR: cash → Verified on issue (admin can enroll immediately); Finance approves in Payment Logs later.
-      // Package AR: non-cash → Submitted until Finance verifies on AR page (then Payment Logs auto-approved).
-      // Merchandise AR: cash → Verified on issue below; non-cash → Paid until Finance verifies on AR page.
-      const initialPackageStatus = isCashPayment ? 'Verified' : 'Submitted';
+      // Package AR: non-cash → Unverified until Finance verifies on AR page (then Payment Logs auto-approved).
+      // Merchandise AR: cash → Verified on issue below; non-cash → Unverified until Finance verifies on AR page.
+      const initialPackageStatus = isCashPayment ? AR_STATUS.VERIFIED : AR_STATUS.UNVERIFIED;
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
 
       const arVerifiedByOnCreate = isCashPayment && !isMerchandise ? createdBy : null;
@@ -1294,7 +1363,7 @@ router.post(
         const ackNumber = await allocateNextArStyleNumber(client);
         ackReceipt = await insertAcknowledgementRow({
           ackNum: ackNumber,
-          statusVal: isMerchandise ? 'Pending' : initialPackageStatus,
+          statusVal: isMerchandise ? AR_STATUS.UNVERIFIED : initialPackageStatus,
           arTypeVal: isMerchandise ? 'Merchandise' : 'Package',
           payAmt: Math.max(0, totalPaymentAmount - discountValue),
           tipAmt: tip_amount || 0,
@@ -1456,10 +1525,10 @@ router.post(
 
         } else {
           await client.query(
-            `UPDATE acknowledgement_receiptstbl SET status = 'Paid', payment_id = $1 WHERE ack_receipt_id = $2`,
-            [newPayment.payment_id, ackReceipt.ack_receipt_id]
+            `UPDATE acknowledgement_receiptstbl SET status = $1, payment_id = $2 WHERE ack_receipt_id = $3`,
+            [AR_STATUS.UNVERIFIED, newPayment.payment_id, ackReceipt.ack_receipt_id]
           );
-          ackReceipt.status = 'Paid';
+          ackReceipt.status = AR_STATUS.UNVERIFIED;
         }
 
         ackReceipt.payment_id = newPayment.payment_id;
@@ -1511,7 +1580,11 @@ router.post(
         });
       }
 
-      if (ackReceipt.status === 'Paid' || ackReceipt.status === 'Applied' || ackReceipt.status === 'Verified') {
+      if (
+        ackReceipt.status === AR_STATUS.UNVERIFIED ||
+        ackReceipt.status === AR_STATUS.APPLIED ||
+        ackReceipt.status === AR_STATUS.VERIFIED
+      ) {
         (async () => {
           try {
             const emailClient = await getClient();
@@ -1837,12 +1910,13 @@ router.post(
         });
       }
 
-      const isRejectedOrCancelled = ['Rejected', 'Cancelled', 'Returned'].includes(ackStatus);
+      const isRejectedOrCancelled = ['Rejected', 'Cancelled'].includes(ackStatus);
+      const isReturnedForAttach = isArReturnedForCorrection(ack.status, ack.prospect_student_notes);
       const ackPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
       const isCashAck = ackPaymentMethod === 'cash';
       const isVerifiedForAttach = ackStatusUpper === 'VERIFIED';
       const canAttachAck =
-        !isRejectedOrCancelled && (isVerifiedForAttach || isCashAck);
+        !isRejectedOrCancelled && !isReturnedForAttach && (isVerifiedForAttach || isCashAck);
 
       if (!canAttachAck) {
         await client.query('ROLLBACK');
@@ -2101,7 +2175,10 @@ router.post(
       //   • Create the first installment invoice record
       //   • Generate the first installment invoice (async, after COMMIT)
       let _pendingInvoiceGeneration = null;
-      if (newInvoiceStatus === 'Paid' && invoice.installmentinvoiceprofiles_id) {
+      if (
+        (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+        invoice.installmentinvoiceprofiles_id
+      ) {
         try {
           const profileResult = await client.query(
             `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
@@ -2119,8 +2196,10 @@ router.post(
             // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
             const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(invoice_id);
             const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+            const isPendingDownpayment =
+              (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
 
-            if ((isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid) {
+            if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
               if (!profile.downpayment_invoice_id) {
                 await client.query(
                   `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
@@ -2259,9 +2338,9 @@ router.post(
               // NOTE: If downpayment_only, student row is pending_enrollment until Phase 1 is paid.
               // If downpayment_plus_phase1, Phase 1 is auto-paid after COMMIT and student is enrolled then.
             } else if (
+              !isPendingDownpayment &&
               profile.class_id &&
-              Number(profile.student_id) === Number(student_id) &&
-              !isDownpaymentInvoice
+              Number(profile.student_id) === Number(student_id)
             ) {
               await syncInstallmentEnrollmentForPaidInvoice({
                 client,
@@ -2279,7 +2358,7 @@ router.post(
         }
       }
 
-      if (newInvoiceStatus === 'Paid') {
+      if (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') {
         try {
           await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
             studentId: student_id,
@@ -2534,7 +2613,7 @@ router.put(
           message: 'Applied acknowledgement receipts cannot be edited',
         });
       }
-      const isReturnedForCorrection = String(ack.status || '').trim() === 'Returned';
+      const isReturnedForCorrection = isArReturnedForCorrection(ack.status, ack.prospect_student_notes);
       if (!isReturnedForCorrection && (ack.invoice_id || ack.payment_id)) {
         return res.status(400).json({
           success: false,
@@ -2622,7 +2701,8 @@ router.put(
       // Preserve issue_date after Finance has returned this AR (sale / EOD attribution must stay fixed).
       // While status is Returned, or notes still contain the "[Returned]" tag (after resubmit to Submitted),
       // ignore client issue_date — edits + resubmit must not move the AR to another calendar day.
-      const issueDateLocked = ack.status === 'Returned' || notesText.includes('[Returned]');
+      const issueDateLocked =
+        isReturnedForCorrection || notesText.includes('[Returned]');
       if (Object.prototype.hasOwnProperty.call(raw, 'issue_date') && !issueDateLocked) {
         pushUpdate('issue_date', raw.issue_date || null);
       }
@@ -2882,7 +2962,7 @@ router.delete(
 
 /**
  * PUT /api/sms/acknowledgement-receipts/:id/verify
- * Verify or return a package acknowledgement receipt, or verify non-cash merchandise AR (Paid → Verified).
+ * Verify or return a package acknowledgement receipt, or verify non-cash merchandise AR (Unverified → Verified).
  * Access: Finance, Superfinance
  */
 router.put(
@@ -2959,10 +3039,10 @@ router.put(
             message: 'Cash merchandise acknowledgement receipts are auto-verified when issued',
           });
         } else if (action === 'verify') {
-          if (String(ack.status || '').trim() !== 'Paid') {
+          if (!isArUnverifiedStatus(ack.status)) {
             return res.status(400).json({
               success: false,
-              message: 'Merchandise acknowledgement receipt must be Paid before finance verification',
+              message: 'Merchandise acknowledgement receipt must be Unverified before finance verification',
             });
           }
           if (ack.verified_by_user_id != null) {
@@ -2972,11 +3052,11 @@ router.put(
             });
           }
         } else if (action === 'return' || action === 'reject') {
-          if (String(ack.status || '').trim() !== 'Paid') {
+          if (!isArUnverifiedStatus(ack.status)) {
             return res.status(400).json({
               success: false,
               message:
-                'Merchandise acknowledgement receipt must be Paid before it can be returned or rejected',
+                'Merchandise acknowledgement receipt must be Unverified before it can be returned or rejected',
             });
           }
           if (ack.verified_by_user_id != null) {
@@ -2995,10 +3075,10 @@ router.put(
             message: 'Cash package acknowledgement receipts are auto-verified when created',
           });
         }
-        if (String(ack.status || '').trim() !== 'Submitted') {
+        if (!isArUnverifiedStatus(ack.status)) {
           return res.status(400).json({
             success: false,
-            message: 'Package acknowledgement receipt must be Submitted before finance verification',
+            message: 'Package acknowledgement receipt must be Unverified before finance verification',
           });
         }
       }
@@ -3031,7 +3111,7 @@ router.put(
         });
       }
 
-      if (action === 'return' && ack.status === 'Returned') {
+      if (action === 'return' && isArReturnedForCorrection(ack.status, ack.prospect_student_notes)) {
         return res.status(400).json({
           success: false,
           message: 'This acknowledgement receipt is already returned',
@@ -3067,14 +3147,25 @@ router.put(
 
       let nextStatus;
       if (action === 'unverify') {
-        nextStatus = isMerchandiseAr ? 'Paid' : 'Submitted';
+        nextStatus = AR_STATUS.UNVERIFIED;
+      } else if (action === 'verify') {
+        nextStatus = AR_STATUS.VERIFIED;
+      } else if (action === 'reject') {
+        nextStatus = AR_STATUS.REJECTED;
       } else {
-        nextStatus =
-          action === 'verify' ? 'Verified' : action === 'reject' ? 'Rejected' : 'Returned';
+        nextStatus = AR_STATUS.UNVERIFIED;
       }
 
+      const noteTag =
+        action === 'return'
+          ? 'Returned'
+          : action === 'reject'
+            ? 'Rejected'
+            : action === 'verify'
+              ? 'Verified'
+              : nextStatus;
       const updatedNotes = remarks
-        ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${nextStatus}] ${remarks}`
+        ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${noteTag}] ${remarks}`
         : ack.prospect_student_notes;
 
       const verifierUserId = req.user.userId || req.user.user_id || null;
@@ -3293,11 +3384,11 @@ router.put(
               : 'Acknowledgement receipt verified successfully'
             : action === 'reject'
               ? pairedUpdateCount > 0
-                ? 'Acknowledgement receipt pair rejected. The branch admin must create new acknowledgement receipts.'
-                : 'Acknowledgement receipt rejected. The branch admin must create a new acknowledgement receipt.'
+                ? 'Acknowledgement receipt pair rejected and removed from your queue. The branch must create new receipts.'
+                : 'Acknowledgement receipt rejected and removed from your queue. The branch must create a new receipt.'
               : pairedUpdateCount > 0
-                ? 'Acknowledgement receipt pair returned successfully'
-                : 'Acknowledgement receipt returned successfully';
+                ? 'Returned to branch for correction. Both AR rows leave your verification queue until resubmitted.'
+                : 'Returned to branch for correction. This receipt leaves your verification queue until resubmitted.';
 
       return res.json({
         success: true,
@@ -3313,7 +3404,7 @@ router.put(
 
 /**
  * PUT /api/sms/acknowledgement-receipts/:id/resubmit
- * Resubmit a returned Package (→ Submitted) or Merchandise (→ Paid) acknowledgement receipt.
+ * Resubmit a returned Package or Merchandise acknowledgement receipt (→ Unverified).
  * Access: Superadmin, Admin, Finance, Superfinance
  */
 router.put(
@@ -3370,18 +3461,18 @@ router.put(
             message: 'Paired acknowledgement receipts must share the same type before resubmitting',
           });
         }
-        if (String(row.status || '').trim() !== 'Returned') {
+        if (!isArReturnedForCorrection(row.status, row.prospect_student_notes)) {
           return res.status(400).json({
             success: false,
             message:
               pairedIds.length > 1
-                ? 'All Downpayment + Phase 1 acknowledgement receipts must be Returned before resubmitting'
+                ? 'All Downpayment + Phase 1 acknowledgement receipts must be returned before resubmitting'
                 : 'Only returned acknowledgement receipts can be resubmitted',
           });
         }
       }
 
-      if (String(ack.status || '').trim() !== 'Returned') {
+      if (!isArReturnedForCorrection(ack.status, ack.prospect_student_notes)) {
         return res.status(400).json({
           success: false,
           message: 'Only returned acknowledgement receipts can be resubmitted',
@@ -3403,23 +3494,26 @@ router.put(
         });
       }
 
-      const nextStatus = isMerchandiseAr ? 'Paid' : 'Submitted';
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
       const updatedRows = [];
       for (const row of rowsToResubmit.rows) {
-        const rowNotes = remarks
-          ? `${row.prospect_student_notes ? `${row.prospect_student_notes}\n` : ''}[Resubmitted] ${remarks}`
-          : row.prospect_student_notes;
+        const rowNotes = `${row.prospect_student_notes ? `${row.prospect_student_notes}\n` : ''}[Resubmitted]${remarks ? ` ${remarks}` : ''}`;
+        const isCashResubmit =
+          String(row.payment_method || '').trim().toLowerCase() === 'cash';
+        const rowNextStatus = isCashResubmit ? AR_STATUS.VERIFIED : AR_STATUS.UNVERIFIED;
+        const resubmitVerifiedBy =
+          isCashResubmit && hasVerifierCols ? Number(row.created_by) || actorId : null;
+        const resubmitVerifiedAt = resubmitVerifiedBy ? new Date() : null;
         const rowUpdate = hasVerifierCols
           ? await query(
               `UPDATE acknowledgement_receiptstbl
                SET status = $1,
                    prospect_student_notes = $2,
-                   verified_by_user_id = NULL,
-                   verified_at = NULL
-               WHERE ack_receipt_id = $3
+                   verified_by_user_id = $3,
+                   verified_at = $4
+               WHERE ack_receipt_id = $5
                RETURNING *`,
-              [nextStatus, rowNotes, row.ack_receipt_id]
+              [rowNextStatus, rowNotes, resubmitVerifiedBy, resubmitVerifiedAt, row.ack_receipt_id]
             )
           : await query(
               `UPDATE acknowledgement_receiptstbl
@@ -3427,7 +3521,7 @@ router.put(
                    prospect_student_notes = $2
                WHERE ack_receipt_id = $3
                RETURNING *`,
-              [nextStatus, rowNotes, row.ack_receipt_id]
+              [rowNextStatus, rowNotes, row.ack_receipt_id]
             );
         if (rowUpdate.rows[0]) updatedRows.push(rowUpdate.rows[0]);
       }

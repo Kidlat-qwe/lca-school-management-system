@@ -54,6 +54,16 @@ Shared **net payment totals** by payment date (`paymenttbl.issue_date`) for Paym
 
 When a returned payment is **resubmitted and approved**, or a **new payment** records after rejection, approval/status changes and net totals refresh automatically.
 
+## `arSalesAggregate.js`
+
+Shared Acknowledgement Receipt sales totals for **Financial Dashboard All AR**, **Monthly/Daily Operational Dashboard AR sales**, and AR list header sums.
+
+| Rule | Detail |
+|------|--------|
+| Status scope | Admin **All** bucket: Verified+Applied, Unverified, Rejected (`buildArAdminStatusFilterSql`) |
+| Returned queue | Excluded (status + `[Returned]` notes marker) |
+| Paired package AR | Leader row hidden; follower row sums downpayment + Phase 1 amounts |
+
 ## `financialDashboardVerificationMetrics.js`
 
 Superadmin **Financial Dashboard** payment / AR verification cards (`GET /dashboard` → `payment_verification`, `ar_verification`):
@@ -62,8 +72,10 @@ Superadmin **Financial Dashboard** payment / AR verification cards (`GET /dashbo
 |------|-------------------|
 | Total Payments | Completed invoice payment lines by payment date — matches Invoice month total and Monthly Operational invoice sales / total payments |
 | Verified / Unverified payments | Same payment lines with `approval_status=Approved` or pending (not Returned/Rejected) |
-| Verified AR | Acknowledgement Receipts — `status=Verified,Applied`, Month filter on `ar.issue_date` |
-| Unverified AR | Acknowledgement Receipts — `status=Submitted,Pending,Paid`, same month scope |
+| All AR | Acknowledgement Receipts `status=all` — same as Monthly Operational **AR sales** |
+| Verified (Applied) AR | `status=Verified,Applied` (excludes Returned + Rejected) |
+| Unverified AR | `status=Unverified` (expands to Unverified/Submitted/Pending/Paid; excludes Returned + Rejected) |
+| Rejected AR | `status=Rejected` (excludes Returned queue only) |
 
 **Payment Logs** `filterTotalLineAmount` on `GET /payments/finance-unified` sums the same completed invoice payment lines (payment date). Unapplied package AR may appear in the list but is excluded from the header total. **Invoice** payment-date summary (`computeInvoiceFilterSummary`) uses the same payment-line rules.
 
@@ -81,6 +93,7 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 - **Phase Re-enrollment** dashboard KPI cards use the same **month** matrix totals as Month Re-enrollment when a year is selected (`kpi_card_source: month_matrix`); the phase matrix table remains for phase-by-phase drill-down.
 - **New** cells that follow a paid reservation on the same class track include `from_previous_reserved: true`; the UI tooltip shows **Previous reserved**.
 - **Upsell** (e.g. Pre-K → KG): month matrix merges the higher program onto the lower-program **same row**. First month after the lower program’s last enrolled (or completed) month shows **upsell**; each later higher-program billing phase maps to the following month columns (re-enrolled, then completed on the terminal phase). The higher-class row is hidden. Phase indexing uses full billing metadata so **later calendar years** show continuation on that same row (e.g. Jan–Mar 2027). Requires a higher `level_tag` on the sibling class track.
+- **Installment delinquency drop → pay again**: after a **dropped** billing month, the first empty comeback month shows **rejoin** and the next active month shows **re-enrolled** (e.g. Mar=new, Apr=dropped, May=rejoin, Jun=re-enrolled). Dropped cells use label `dropped`.
 
 ## `operationalDashboardRecentPayments.js`
 

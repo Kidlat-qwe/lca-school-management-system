@@ -2,7 +2,8 @@
  * Bidirectional sync between Payment Logs / Cash Deposit approval and cash AR verification.
  *
  * Merchandise cash AR: Verified on issue; Payment Logs approval remains Pending until Finance approves.
- * Merchandise non-cash AR: Paid until Finance verifies on AR page → linked payment auto-approved.
+ * Merchandise non-cash AR: Unverified until Finance verifies on AR page → linked payment auto-approved.
+ * Legacy rows may still have status Paid — non-cash Paid is treated as Unverified; cash Paid as Verified.
  *
  * Package cash AR: Verified on issue (verified_by = Admin); Payment Logs Pending until Finance approves.
  * Package non-cash AR: Submitted until Finance verifies on AR page → Payment Logs auto-approved (unapplied row or on attach).

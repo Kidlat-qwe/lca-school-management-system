@@ -8,9 +8,8 @@ export const isDroppedEnrollmentPhase = (phase) =>
 export const isLateStartGapPhase = (phase) =>
   String(phase?.billing_kind || '').toLowerCase() === 'late_start_gap';
 
-/** Rows that show all em-dashes (no billing / enrollment / pay action). */
-export const isInactiveInstallmentPlanSlot = (phase) =>
-  isDroppedEnrollmentPhase(phase) || isLateStartGapPhase(phase);
+/** Late-start gap rows only — dropped phases still show enrollment and billing history. */
+export const isInactiveInstallmentPlanSlot = (phase) => isLateStartGapPhase(phase);
 
 /**
  * True when an installment phase row has no remaining balance and earlier
@@ -34,6 +33,11 @@ export const isInstallmentPlanSlotAddressed = (phase) => {
     return false;
   }
 
+  if (phase.remaining_balance != null || phase.balance != null) {
+    const remaining = Number(phase.remaining_balance ?? phase.balance ?? 0);
+    return remaining <= PHASE_OUTSTANDING_EPSILON;
+  }
+
   const amount = phase.amount != null ? Number(phase.amount) : null;
   const paid = Number(phase.paid_amount || 0);
   if (amount != null) {
@@ -44,8 +48,29 @@ export const isInstallmentPlanSlotAddressed = (phase) => {
 };
 
 export const getInstallmentPhaseOutstanding = (phase) => {
-  if (!phase?.is_generated || phase.amount == null) return 0;
+  if (!phase?.is_generated) return 0;
+  if (phase.remaining_balance != null || phase.balance != null) {
+    return Math.max(0, Number(phase.remaining_balance ?? phase.balance ?? 0));
+  }
+  if (phase.amount == null) return 0;
   return Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0));
+};
+
+/** Phase has payment recorded but an unsettled remainder (blocks later phases). */
+export const hasOpenPartialPhaseBalance = (phase) => {
+  if (!phase?.is_generated || isInactiveInstallmentPlanSlot(phase)) return false;
+  const balance = getInstallmentPhaseOutstanding(phase);
+  const paid = Number(phase.paid_amount || 0);
+  return paid > PHASE_OUTSTANDING_EPSILON && balance > PHASE_OUTSTANDING_EPSILON;
+};
+
+/** True when an earlier phase still has an open partial-payment balance. */
+export const isPhaseLockedByPriorPartialBalance = (phases, phaseIndex) => {
+  if (!Array.isArray(phases) || phaseIndex <= 0) return false;
+  for (let i = 0; i < phaseIndex; i += 1) {
+    if (hasOpenPartialPhaseBalance(phases[i])) return true;
+  }
+  return false;
 };
 
 /** Plan table rows — omit late-start gaps (student enrolled on a later class phase). */

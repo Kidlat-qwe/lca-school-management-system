@@ -103,16 +103,16 @@ const OperationalAttendanceCard = ({
           </p>
         ) : (
           <div
-            className="min-h-0 flex-1 overflow-y-auto rounded-lg"
+            className="overflow-x-auto overflow-y-auto rounded-lg"
             style={{
-              maxHeight: SCROLL_MAX_HEIGHT,
+              height: SCROLL_MAX_HEIGHT,
               scrollbarWidth: 'thin',
               scrollbarColor: '#cbd5e0 #f7fafc',
               WebkitOverflowScrolling: 'touch',
             }}
             aria-label={hasScroll ? 'Scroll for more attendance sessions' : undefined}
           >
-            <table style={{ width: '100%' }} className="border-collapse text-sm">
+            <table style={{ width: '100%', minWidth: '420px' }} className="border-collapse text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-white text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   <th className="sticky top-0 z-10 bg-white px-2 py-2 shadow-[inset_0_-1px_0_#f3f4f6]">

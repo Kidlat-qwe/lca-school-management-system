@@ -1,3 +1,8 @@
+import {
+  MATRIX_CELL_LABEL,
+  normalizeMatrixCellLabel,
+} from './enrollmentMatrixLabels';
+
 const countMonthMatrixStatusLabels = (students, monthKey) => {
   let newEnrolleesCount = 0;
   let reEnrollmentCount = 0;
@@ -10,11 +15,11 @@ const countMonthMatrixStatusLabels = (students, monthKey) => {
     const cell = student.months?.[monthKey];
     if (!cell?.label) continue;
 
-    switch (cell.label) {
-      case 'new':
+    switch (normalizeMatrixCellLabel(cell.label)) {
+      case MATRIX_CELL_LABEL.NEW:
         newEnrolleesCount += 1;
         break;
-      case 're-enrolled':
+      case MATRIX_CELL_LABEL.RE_ENROLLED:
         reEnrollmentCount += 1;
         break;
       case 'upsell':
@@ -23,10 +28,10 @@ const countMonthMatrixStatusLabels = (students, monthKey) => {
       case 'reserved':
         reservedCount += 1;
         break;
-      case 'dropped/unenrolled':
+      case MATRIX_CELL_LABEL.DROPPED:
         droppedCount += 1;
         break;
-      case 'rejoin':
+      case MATRIX_CELL_LABEL.REJOIN:
         rejoinCount += 1;
         break;
       default:
@@ -49,11 +54,11 @@ const countPhaseMatrixStatusLabels = (students, phaseKey) => {
     const cell = student.phases?.[phaseKey];
     if (!cell?.label) continue;
 
-    switch (cell.label) {
-      case 'new':
+    switch (normalizeMatrixCellLabel(cell.label)) {
+      case MATRIX_CELL_LABEL.NEW:
         newEnrolleesCount += 1;
         break;
-      case 're-enrolled':
+      case MATRIX_CELL_LABEL.RE_ENROLLED:
         reEnrollmentCount += 1;
         break;
       case 'upsell':
@@ -62,10 +67,10 @@ const countPhaseMatrixStatusLabels = (students, phaseKey) => {
       case 'reserved':
         reservedCount += 1;
         break;
-      case 'dropped/unenrolled':
+      case MATRIX_CELL_LABEL.DROPPED:
         droppedCount += 1;
         break;
-      case 'rejoin':
+      case MATRIX_CELL_LABEL.REJOIN:
         rejoinCount += 1;
         break;
       default:

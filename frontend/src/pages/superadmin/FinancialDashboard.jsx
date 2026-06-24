@@ -24,6 +24,7 @@ import {
   appendFinancialDashboardArMonthParams,
   appendFinancialDashboardPaymentMonthParams,
 } from '../../utils/financialDashboardMonthRange';
+import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
 const CURRENT_MONTH = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }).slice(0, 7);
@@ -127,10 +128,14 @@ const FinancialDashboard = () => {
   const arVerification = useMemo(
     () =>
       metrics?.ar_verification || {
+        all_count: 0,
+        all_amount: 0,
         verified_count: 0,
         verified_amount: 0,
         unverified_count: 0,
         unverified_amount: 0,
+        rejected_count: 0,
+        rejected_amount: 0,
       },
     [metrics]
   );
@@ -185,10 +190,14 @@ const FinancialDashboard = () => {
   const openArByVerification = (type) => {
     const params = new URLSearchParams();
     params.set('page', '1');
-    if (type === 'verified') {
-      params.set('status', 'Verified,Applied');
+    if (type === 'all') {
+      params.set('status', AR_STATUS_FILTER.ALL);
+    } else if (type === 'verified') {
+      params.set('status', AR_STATUS_FILTER.VERIFIED_APPLIED);
+    } else if (type === 'rejected') {
+      params.set('status', AR_STATUS_FILTER.REJECTED);
     } else {
-      params.set('status', 'Submitted,Pending,Paid');
+      params.set('status', AR_STATUS_FILTER.UNVERIFIED);
     }
     addArMonthRangeParams(params);
     navigate(`/superadmin/acknowledgement-receipts?${params.toString()}`);
@@ -332,7 +341,7 @@ const FinancialDashboard = () => {
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <StatsCard
-              title="Verified Acknowledgement Receipt"
+              title="Verified (Applied)"
               value={arVerification.verified_count}
               trend={`${formatPeso(arVerification.verified_amount)} total (payment + tips)`}
               accent="bg-gradient-to-br from-emerald-400 to-emerald-600"

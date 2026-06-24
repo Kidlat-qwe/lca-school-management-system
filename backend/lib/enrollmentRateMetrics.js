@@ -15,6 +15,22 @@ const MATRIX_BILLING_ANCHOR_ACTIVE_WHERE = `
   AND removed_at IS NULL
 `;
 
+/**
+ * Installment phase billing month from anchor phase + enrolled_at month, floored at class
+ * start month. Early first payment (e.g. June) before class start (July) → phase 1 in July.
+ */
+const INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL = `
+  (
+    GREATEST(
+      a.base_month,
+      CASE
+        WHEN sr.class_start_date IS NOT NULL THEN
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date
+        ELSE a.base_month
+      END
+    ) + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month')
+  )::date`;
+
 /** Dropped rows below installment package phase_start are orphan repair artifacts — omit from matrix. */
 const MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL = `
   AND NOT (
@@ -188,6 +204,9 @@ const toManilaMonthKey = (dateValue) => {
 /** Earliest month that should display as "new" (billing anchor vs first enrolled_at). */
 const resolveCanonicalFirstNewMonthKey = (firstBillingKey, firstEverMonthKey) => {
   if (firstBillingKey && firstEverMonthKey) {
+    if (firstBillingKey > firstEverMonthKey) {
+      return firstBillingKey;
+    }
     return firstBillingKey <= firstEverMonthKey ? firstBillingKey : firstEverMonthKey;
   }
   return firstBillingKey || firstEverMonthKey || null;
@@ -262,6 +281,97 @@ const findLastCompletedMonthKey = (track) => {
   const lfp = track.last_full_pay_month_key;
   if (lfp && cells[lfp]?.mark === '1') return lfp;
   return null;
+};
+
+const isDroppedMonthMatrixCell = (cell) =>
+  String(cell?.status || '').toLowerCase() === 'dropped' ||
+  cell?.label === 'dropped/unenrolled' ||
+  cell?.label === 'dropped' ||
+  cell?.calendar_dropped === true;
+
+const isActiveMonthMatrixCell = (cell) =>
+  cell?.mark === '1' &&
+  ENROLLED_STATUSES_LIST.includes(String(cell?.status || '').toLowerCase());
+
+/**
+ * Installment delinquency drop → pay on a later phase:
+ * dropped billing month, then rejoin on the next comeback month, then re-enrolled.
+ * Fills empty gap months (e.g. May rejoin when April dropped and June has active enrollment).
+ */
+const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
+  const monthKeys = displayMonths.map((m) => m.key);
+
+  for (const student of students) {
+    if (!student.months) continue;
+
+    for (const key of monthKeys) {
+      const cell = student.months[key];
+      if (isDroppedMonthMatrixCell(cell)) {
+        cell.label = 'dropped';
+        cell.status = 'dropped';
+      }
+    }
+
+    for (let i = 0; i < monthKeys.length; i += 1) {
+      const dropKey = monthKeys[i];
+      const dropCell = student.months[dropKey];
+      if (!isDroppedMonthMatrixCell(dropCell)) continue;
+
+      let comebackIdx = -1;
+      for (let j = i + 1; j < monthKeys.length; j += 1) {
+        const cell = student.months[monthKeys[j]];
+        if (isActiveMonthMatrixCell(cell)) {
+          comebackIdx = j;
+          break;
+        }
+        if (isDroppedMonthMatrixCell(cell)) break;
+      }
+      if (comebackIdx < 0) continue;
+
+      const gapStart = i + 1;
+      const gapEnd = comebackIdx - 1;
+
+      if (gapStart <= gapEnd) {
+        const rejoinKey = monthKeys[gapStart];
+        const inferPhase =
+          dropCell.phase_number != null ? Number(dropCell.phase_number) + 1 : null;
+        student.months[rejoinKey] = {
+          mark: '1',
+          label: 'rejoin',
+          status: 'rejoin',
+          phase_number: matrixCellPhaseNumber(
+            student.months[rejoinKey]?.phase_number,
+            inferPhase
+          ),
+          matrix_drop_rejoin_gap: true,
+          is_full_payment: Boolean(dropCell?.is_full_payment),
+        };
+
+        const comebackCell = student.months[monthKeys[comebackIdx]];
+        if (
+          comebackCell?.status === 'rejoin' ||
+          comebackCell?.calendar_rejoin ||
+          comebackCell?.label === 'rejoin'
+        ) {
+          comebackCell.label = 're-enrolled';
+          comebackCell.status = 're_enrolled';
+          comebackCell.matrix_rejoin_shifted = true;
+        }
+      } else if (comebackIdx === i + 1) {
+        const comebackCell = student.months[monthKeys[comebackIdx]];
+        if (
+          comebackCell &&
+          comebackCell.label !== 'rejoin' &&
+          comebackCell.status !== 'rejoin' &&
+          (comebackCell.status === 're_enrolled' || comebackCell.label === 're-enrolled')
+        ) {
+          comebackCell.label = 'rejoin';
+          comebackCell.status = 'rejoin';
+          comebackCell.matrix_after_drop_rejoin = true;
+        }
+      }
+    }
+  }
 };
 
 /** Inclusive consecutive YYYY-MM keys from first through last. */
@@ -2456,7 +2566,7 @@ const loadUpsellSiblingTracksForMonthMatrix = async (
                 + ((sr.phase_number - 1)::int * INTERVAL '1 month')
               )::date
             WHEN a.base_month IS NOT NULL THEN
-              (a.base_month + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month'))::date
+              ${INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL}
             ELSE NULL
           END AS billing_month
         FROM scoped_rows sr
@@ -2671,7 +2781,7 @@ const loadUpsellSiblingTracksForMonthMatrix = async (
                   + ((sr.phase_number - 1)::int * INTERVAL '1 month')
                 )::date
               WHEN a.base_month IS NOT NULL THEN
-                (a.base_month + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month'))::date
+                ${INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL}
               ELSE NULL
             END AS billing_month
           FROM scoped_rows sr
@@ -2947,7 +3057,10 @@ const loadUpsellSiblingTracksForPhaseMatrix = async (
  *
  *   Installment (has installmentinvoiceprofilestbl for student+class):
  *     1. ANCHOR = earliest phase + enrolled_at month of that phase.
- *     2. billing_month = anchor_month + (phase_number − anchor_phase) months
+ *     2. billing_month = max(anchor_month, class.start_date month)
+ *        + (phase_number − anchor_phase) months
+ *     Early first payment before class start (e.g. pay June, class starts July) →
+ *     phase 1 "new" displays in July, not the payment month.
  *     Handles early/late payments vs invoice due dates.
  *
  *   Full-payment (no installment profile for student+class):
@@ -3091,7 +3204,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
                 + ((sr.phase_number - 1)::int * INTERVAL '1 month')
               )::date
             WHEN a.base_month IS NOT NULL THEN
-              (a.base_month + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month'))::date
+              ${INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL}
             ELSE NULL
           END AS billing_month
         FROM scoped_rows sr
@@ -3234,7 +3347,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
                 + ((sr.phase_number - 1)::int * INTERVAL '1 month')
               )::date
             WHEN a.base_month IS NOT NULL THEN
-              (a.base_month + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month'))::date
+              ${INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL}
             ELSE NULL
           END AS billing_month
         FROM scoped_rows sr
@@ -3954,6 +4067,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
+  applyDropRejoinGapMonthMatrixRules(students, months);
+
   applyUpsellMatrixDisplayRules(students, {
     periodKey: 'months',
     siblingTracksByStudent,
@@ -4077,6 +4192,7 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
       case 'reserved':
         reservedCount += 1;
         break;
+      case 'dropped':
       case 'dropped/unenrolled':
         droppedUnenrolledCount += 1;
         break;

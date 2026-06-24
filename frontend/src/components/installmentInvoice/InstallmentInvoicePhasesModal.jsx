@@ -36,10 +36,10 @@ const InstallmentInvoicePhasesModal = ({ open, profileId, onClose }) => {
       aria-labelledby="installment-phases-modal-title"
     >
       <div
-        className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-5xl w-full max-h-[95vh] sm:max-h-[90vh] my-auto sm:my-0 flex flex-col overflow-hidden"
+        className="bg-white rounded-t-xl sm:rounded-lg shadow-xl max-w-[min(98vw,1520px)] w-full max-h-[95vh] sm:max-h-[92vh] my-auto sm:my-0 flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 p-4 sm:p-6 border-b border-gray-200 flex-shrink-0">
+        <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 flex-shrink-0">
           <div className="min-w-0">
             <h2
               id="installment-phases-modal-title"
@@ -74,7 +74,7 @@ const InstallmentInvoicePhasesModal = ({ open, profileId, onClose }) => {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 sm:py-4">
           <InstallmentPlanDetails profileId={profileId} />
         </div>
 

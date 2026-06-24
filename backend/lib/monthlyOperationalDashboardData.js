@@ -6,8 +6,9 @@
  * only — same business date as Payment Logs (payment_date_from/to).
  * Approval filter matches Payment Logs main tab: exclude Returned and Rejected (see exclude_approval_status).
  *
- * Acknowledgement Receipt Sales (ar_sales) matches GET /acknowledgement-receipts list totals for the
- * same issue-date month and main-tab semantics (exclude Returned only; paired-row combine when enabled).
+ * Acknowledgement Receipt Sales (ar_sales) matches Financial Dashboard "All AR" and
+ * GET /acknowledgement-receipts with status=all for the same issue-date month
+ * (admin buckets, exclude Returned queue, paired-row combine when enabled).
  *
  * Merchandise Released uses merchandise_release_logtbl (stock deductions: Merchandise AR + package enroll).
  *
@@ -23,10 +24,10 @@ import {
   applyPaymentEnrollmentToBranchBreakdown,
 } from './dailyOperationalEnrollmentFromPayments.js';
 import {
-  ackReceiptHasPairedAckReceiptIdColumn,
-  AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
-  AR_LIST_LINE_AMOUNT_SUM_SQL,
-} from './ackReceiptPairedColumn.js';
+  buildArSalesBranchCteSql,
+  resolveArSalesLineAggregateFragments,
+} from './arSalesAggregate.js';
+import { AR_LIST_STATUS_FILTER, buildArAdminStatusFilterSql } from '../utils/acknowledgementReceiptStatus.js';
 import {
   loadRecentMerchandiseReleasesForOperationalDashboard,
   merchandiseReleaseDashboardCteMonthly,
@@ -76,7 +77,7 @@ const getMonthEndInclusiveYmd = (monthRange) => {
   return end.toISOString().slice(0, 10);
 };
 
-const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) => `
+const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesFragments) => `
             WITH branch_scope AS (
               SELECT
                 b.branch_id,
@@ -95,18 +96,7 @@ const buildBranchMetricsSql = (branchWhereClause, startIdx, endIdx, arSalesSql) 
                 AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               GROUP BY p.branch_id
             ),
-            ar_sales AS (
-              SELECT
-                ar.branch_id,
-                COUNT(*)::bigint AS ar_sales_count,
-                COALESCE(SUM(${arSalesSql.lineSumExpr}), 0) AS ar_sales_amount
-              FROM acknowledgement_receiptstbl ar
-              WHERE ar.issue_date >= $${startIdx}::date
-                AND ar.issue_date < $${endIdx}::date
-                AND (ar.status IS NULL OR ar.status <> 'Returned')
-                ${arSalesSql.extraWhere}
-              GROUP BY ar.branch_id
-            ),
+            ${buildArSalesBranchCteSql(startIdx, endIdx, arSalesFragments)}
             ${merchandiseReleaseDashboardCteMonthly(startIdx, endIdx)},
             pay_verified AS (
               SELECT
@@ -212,14 +202,16 @@ export async function loadMonthlyOperationalDashboardPayload(opts) {
   const tStart = branchParams.length + 1;
   const tEnd = branchParams.length + 2;
 
-  const hidePairedLeaders = await ackReceiptHasPairedAckReceiptIdColumn(runQuery);
-  const arSalesSql = {
-    lineSumExpr: hidePairedLeaders
-      ? AR_LIST_LINE_AMOUNT_SUM_SQL
-      : 'COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)',
-    extraWhere: hidePairedLeaders ? AR_LIST_EXCLUDE_PAIRED_LEADER_SQL : '',
+  const { lineSumExpr, pairedLeaderExcludeSql } = await resolveArSalesLineAggregateFragments(runQuery);
+  const statusStartIdx = branchParams.length + 3;
+  const statusClause = buildArAdminStatusFilterSql('ar', AR_LIST_STATUS_FILTER.ALL, statusStartIdx);
+  const arSalesFragments = {
+    lineSumExpr,
+    pairedLeaderExcludeSql,
+    statusFilterSql: statusClause.sql,
   };
-  const branchMetricsSql = buildBranchMetricsSql(branchWhereClause, startIdx, endIdx, arSalesSql);
+  const branchMetricsSql = buildBranchMetricsSql(branchWhereClause, startIdx, endIdx, arSalesFragments);
+  metricsParams.push(...statusClause.params);
 
   const salesTrendSql = `
             SELECT

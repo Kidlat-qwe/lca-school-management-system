@@ -17,15 +17,15 @@ import {
   loadStudentMonthEnrollmentMatrix,
 } from '../lib/enrollmentRateMetrics.js';
 import {
-  ackReceiptHasPairedAckReceiptIdColumn,
-  AR_LIST_EXCLUDE_PAIRED_LEADER_SQL,
-  AR_LIST_LINE_AMOUNT_SUM_SQL,
-} from '../lib/ackReceiptPairedColumn.js';
+  AR_LIST_STATUS_FILTER,
+  buildArAdminStatusFilterSql,
+} from '../utils/acknowledgementReceiptStatus.js';
 import {
   loadFinancialDashboardArVerification,
   loadFinancialDashboardPaymentVerification,
   parseManilaMonthInclusiveRange,
 } from '../lib/financialDashboardVerificationMetrics.js';
+import { resolveArSalesLineAggregateFragments } from '../lib/arSalesAggregate.js';
 import {
   loadMerchandiseReleasedDetails,
   loadRecentMerchandiseReleasesForOperationalDashboard,
@@ -470,10 +470,14 @@ router.get(
             rejected_deduction_amount: parseFloat(pvRow.rejected_deduction_amount) || 0,
           },
           ar_verification: {
+            all_count: parseInt(arvRow.all_count, 10) || 0,
+            all_amount: parseFloat(arvRow.all_amount) || 0,
             verified_count: parseInt(arvRow.verified_count, 10) || 0,
             verified_amount: parseFloat(arvRow.verified_amount) || 0,
             unverified_count: parseInt(arvRow.unverified_count, 10) || 0,
             unverified_amount: parseFloat(arvRow.unverified_amount) || 0,
+            rejected_count: parseInt(arvRow.rejected_count, 10) || 0,
+            rejected_amount: parseFloat(arvRow.rejected_amount) || 0,
           },
           crossing_procedures: {
             total_violations: crossingProceduresResult.rows.length,
@@ -523,12 +527,12 @@ router.get(
       const recentDaySequence = buildRecentDaySequence(7, summaryDate);
       const branchParams = branchFilter ? [branchFilter] : [];
       const branchWhereClause = branchFilter ? 'WHERE b.branch_id = $1' : '';
-
-      const hidePairedLeaders = await ackReceiptHasPairedAckReceiptIdColumn(query);
-      const arLineSumExpr = hidePairedLeaders
-        ? AR_LIST_LINE_AMOUNT_SUM_SQL
-        : 'COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)';
-      const arExtraWhere = hidePairedLeaders ? AR_LIST_EXCLUDE_PAIRED_LEADER_SQL : '';
+      const dateIdx = branchParams.length + 1;
+      const statusStartIdx = branchParams.length + 2;
+      const { lineSumExpr: arLineSumExpr, pairedLeaderExcludeSql: arPairedExcludeSql } =
+        await resolveArSalesLineAggregateFragments(query);
+      const arStatusClause = buildArAdminStatusFilterSql('ar', AR_LIST_STATUS_FILTER.ALL, statusStartIdx);
+      const dailyMetricsParams = [...branchParams, summaryDate, ...arStatusClause.params];
 
       const [branchesResult, branchMetricsResult, salesTrendResult] = await Promise.all([
         query(
@@ -555,7 +559,7 @@ router.get(
                 COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS daily_sales_amount
               FROM paymenttbl p
               WHERE p.status = 'Completed'
-                AND p.issue_date = $${branchParams.length + 1}::date
+                AND p.issue_date = $${dateIdx}::date
                 AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
               GROUP BY p.branch_id
             ),
@@ -565,12 +569,12 @@ router.get(
                 COUNT(*)::bigint AS ar_sales_count,
                 COALESCE(SUM(${arLineSumExpr}), 0) AS ar_sales_amount
               FROM acknowledgement_receiptstbl ar
-              WHERE ar.issue_date = $${branchParams.length + 1}::date
-                AND (ar.status IS NULL OR ar.status <> 'Returned')
-                ${arExtraWhere}
+              WHERE ar.issue_date = $${dateIdx}::date
+                ${arStatusClause.sql}
+                ${arPairedExcludeSql}
               GROUP BY ar.branch_id
             ),
-            ${merchandiseReleaseDashboardCteDaily(branchParams.length + 1)},
+            ${merchandiseReleaseDashboardCteDaily(dateIdx)},
             pay_verified AS (
               SELECT
                 p.branch_id,
@@ -647,7 +651,7 @@ router.get(
               COALESCE(ds.daily_sales_amount, 0) DESC,
               bs.branch_name ASC
           `,
-          [...branchParams, summaryDate]
+          dailyMetricsParams
         ),
         query(
           `

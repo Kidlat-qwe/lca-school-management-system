@@ -8,10 +8,12 @@ import {
   computeInstallmentPlanDisplayProgress,
   getInstallmentPhaseBillingLabel,
   getInstallmentPhaseOutstanding,
+  hasOpenPartialPhaseBalance,
   isDroppedEnrollmentPhase,
   isInactiveInstallmentPlanSlot,
   isInstallmentPlanSlotAddressed,
   isLateStartGapPhase,
+  isPhaseLockedByPriorPartialBalance,
 } from '../../utils/installmentPhaseSlotStatus';
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
@@ -19,6 +21,7 @@ import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustme
 import PaymentMethodSelect from '../common/PaymentMethodSelect';
 import PaymentReferenceNumberField from '../common/PaymentReferenceNumberField';
 import {
+  INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT,
   PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
   PAYMENT_TIP_ADJUSTMENT_LABEL,
   isPaymentReferenceNumberRequired,
@@ -75,8 +78,9 @@ const statusBadgeClass = (status) => {
     case 'not generated':
       return 'bg-gray-50 text-gray-500 border border-gray-200';
     case 'unpaid':
-    case 'partially paid':
       return 'bg-blue-50 text-blue-700 border border-blue-200';
+    case 'partially paid':
+      return 'bg-amber-100 text-amber-800 border border-amber-200';
     default:
       if (String(status || '').toLowerCase().includes('skipped')) {
         return 'bg-slate-100 text-slate-700 border border-slate-200';
@@ -503,7 +507,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
         } else {
           appAlert(
             apForm.payment_type === 'Partial Payment'
-              ? `Partial advance payment for Phase ${modalSnap.absolute} recorded successfully.`
+              ? `Partial advance payment for Phase ${modalSnap.absolute} recorded successfully. The student is enrolled for this phase; settle the remaining balance before paying the next phase.`
               : `Advance payment for Phase ${modalSnap.absolute} recorded successfully.`,
           );
         }
@@ -580,12 +584,28 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
   const visiblePhases = phaseProgress.visiblePhases ?? phases;
 
+  const openPartialPhases = useMemo(
+    () =>
+      visiblePhases.filter((p) => hasOpenPartialPhaseBalance(p)).map((p) => {
+        const absolute = Number(p.phase_number) + phaseStartOffset;
+        return { absolute, balance: getInstallmentPhaseOutstanding(p) };
+      }),
+    [visiblePhases, phaseStartOffset]
+  );
+
   /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
   const firstPayAction = useMemo(() => {
     if (profile?.upgraded_to_full_payment) return null;
 
-    const priorPlanSlotsOk = (upToIndex) =>
-      visiblePhases.slice(0, upToIndex).every((prev) => isInstallmentPlanSlotAddressed(prev));
+    const priorPlanSlotsOk = (upToIndex) => {
+      for (let j = 0; j < upToIndex; j += 1) {
+        const prev = visiblePhases[j];
+        if (isDroppedEnrollmentPhase(prev)) continue;
+        if (hasOpenPartialPhaseBalance(prev)) return false;
+        if (!isInstallmentPlanSlotAddressed(prev)) return false;
+      }
+      return true;
+    };
 
     for (let i = 0; i < visiblePhases.length; i += 1) {
       const p = visiblePhases[i];
@@ -638,7 +658,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
           )}
 
           <section className={`rounded-lg border border-gray-200 bg-gray-50 ${embedded ? 'p-3' : 'p-4 sm:p-5'}`}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-3 sm:gap-4">
               {showStudentName && (
                 <div>
                   <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
@@ -681,7 +701,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   {profile.class_name || '\u2014'}
                 </p>
               </div>
-              <div className="sm:col-span-2">
+              <div className="col-span-2 md:col-span-3 xl:col-span-4 2xl:col-span-6">
                 <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
                   Phase Progress
                 </p>
@@ -758,7 +778,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               <h3 className="text-sm font-semibold text-gray-900 mb-3">
                 Downpayment
               </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-sm">
                 <div>
                   <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
                     AR Number
@@ -797,6 +817,18 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 </div>
                 <div>
                   <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
+                    Balance
+                  </p>
+                  <p className="text-gray-900 font-medium">
+                    {downpayment.amount != null
+                      ? formatCurrency(
+                          Math.max(0, Number(downpayment.amount) - Number(downpayment.paid_amount || 0))
+                        )
+                      : '\u2014'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
                     Status
                   </p>
                   <span
@@ -817,6 +849,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               </span>
             </div>
 
+            {openPartialPhases.length > 0 && (
+              <div className="mx-4 sm:mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <span className="font-semibold">Partial payment in progress.</span>{' '}
+                Settle the remaining balance on{' '}
+                {openPartialPhases
+                  .map((p) => `Phase ${p.absolute} (${formatCurrency(p.balance)})`)
+                  .join(', ')}{' '}
+                before paying the next phase.
+              </div>
+            )}
+
             <div
               className={`overflow-x-auto rounded-b-lg ${
                 embedded ? '[&_th]:!px-1.5 [&_td]:!px-1.5' : ''
@@ -828,7 +871,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               }}
             >
               <table
-                style={{ width: '100%', minWidth: embedded ? '1040px' : '1120px' }}
+                style={{ width: '100%', minWidth: embedded ? '1180px' : '1320px' }}
                 className="divide-y divide-gray-200"
               >
                 <thead className="bg-gray-50">
@@ -843,6 +886,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Paid On</th>
                     <th className="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Amount</th>
                     <th className="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Paid</th>
+                    <th className="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Balance</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Status</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Note</th>
                     <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wide">Action</th>
@@ -851,7 +895,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {visiblePhases.length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="px-3 py-8 text-center text-sm text-gray-500">
+                      <td colSpan={14} className="px-3 py-8 text-center text-sm text-gray-500">
                         No phase records found.
                       </td>
                     </tr>
@@ -866,30 +910,65 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                         firstPayAction &&
                         firstPayAction.index === idx &&
                         (firstPayAction.mode === 'invoice' || firstPayAction.mode === 'advance');
+                      const lockedByPriorPartial = isPhaseLockedByPriorPartialBalance(visiblePhases, idx);
+                      const isOpenPartial = hasOpenPartialPhaseBalance(phase);
                       const isLockedFuture =
-                        isNotGenerated &&
+                        (isNotGenerated || lockedByPriorPartial) &&
                         !(firstPayAction && firstPayAction.index === idx && firstPayAction.mode === 'advance');
+                      const lockTitle = lockedByPriorPartial
+                        ? 'Settle the remaining balance on the earlier partially paid phase before paying this phase.'
+                        : 'Pay the current phase (or earlier unpaid invoice) first';
 
                       return (
                         <tr
                           key={`phase-${phase.phase_number}`}
-                          className={isNotGenerated ? 'bg-gray-50/60' : ''}
+                          className={
+                            isOpenPartial
+                              ? 'bg-amber-50/70'
+                              : isNotGenerated
+                                ? 'bg-gray-50/60'
+                                : ''
+                          }
                         >
                           <td className="px-2 py-2.5 text-sm text-gray-900 font-medium whitespace-nowrap">
                             Phase {absolutePhase}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 max-w-[140px]">
-                            {isInactiveSlot
-                              ? '\u2014'
-                              : phase.program_enrollment_status
-                                ? formatInstallmentPlanPhaseEnrollment(phase.program_enrollment_status)
-                                : '\u2014'}
+                            {(() => {
+                              const enrollmentLabel = formatInstallmentPlanPhaseEnrollment(
+                                phase.program_enrollment_status
+                              );
+                              if (!enrollmentLabel) return '\u2014';
+                              const enrollmentKey = String(phase.program_enrollment_status || '')
+                                .trim()
+                                .toLowerCase();
+                              return (
+                                <span
+                                  className={
+                                    enrollmentKey === 'dropped'
+                                      ? 'font-medium text-red-700'
+                                      : enrollmentKey === 'rejoin'
+                                        ? 'font-medium text-orange-800'
+                                        : enrollmentKey === 're_enrolled'
+                                          ? 'font-medium text-indigo-800'
+                                          : ''
+                                  }
+                                >
+                                  {enrollmentLabel}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td className="px-2 py-2.5 text-xs text-gray-600 whitespace-nowrap" title="Installment invoice slot">
                             {billingLabel}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 whitespace-nowrap">
-                            {phase.invoice_id != null ? phase.invoice_id : '\u2014'}
+                            {phase.invoice_id != null
+                              ? phase.root_invoice_id != null &&
+                                Number(phase.root_invoice_id) !== Number(phase.invoice_id)
+                                ? `${phase.root_invoice_id} \u2192 ${phase.invoice_id}`
+                                : phase.invoice_id
+                              : '\u2014'}
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 whitespace-nowrap">
                             {phase.invoice_ar_number || '\u2014'}
@@ -913,6 +992,21 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                           <td className="px-2 py-2.5 text-sm text-emerald-700 font-medium text-right whitespace-nowrap">
                             {isInactiveSlot ? '\u2014' : formatCurrency(phase.paid_amount || 0)}
                           </td>
+                          <td className="px-2 py-2.5 text-sm font-medium text-right whitespace-nowrap">
+                            {isInactiveSlot ? (
+                              '\u2014'
+                            ) : phase.is_generated ? (
+                              <span
+                                className={
+                                  outstanding > 0.009 ? 'text-amber-700' : 'text-gray-500'
+                                }
+                              >
+                                {formatCurrency(outstanding)}
+                              </span>
+                            ) : (
+                              phase.amount != null ? formatCurrency(phase.amount) : '\u2014'
+                            )}
+                          </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
                             {isInactiveSlot ? (
                               '\u2014'
@@ -929,6 +1023,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap">
                             {isInactiveSlot ? (
+                              '\u2014'
+                            ) : isDroppedEnrollmentPhase(phase) ? (
                               '\u2014'
                             ) : isPayRow ? (
                               <button
@@ -958,7 +1054,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                               </button>
                             ) : isLockedFuture ? (
                               <span
-                                title="Pay the current phase (or earlier unpaid invoice) first"
+                                title={lockTitle}
                                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed select-none"
                               >
                                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1138,16 +1234,21 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       <p className="text-xs text-red-500 mt-1">{apFormErrors.payable_amount}</p>
                     )}
                     {apForm.payment_type === 'Partial Payment' && (
-                      <p className="text-xs text-amber-600 mt-1">
-                        Partial payment must be lower than{' '}
-                        {paymentModal.mode === 'invoice' ? 'remaining amount' : 'phase amount'} (
-                        {formatCurrency(
-                          paymentModal.mode === 'invoice'
-                            ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
-                            : (paymentModal.amount || 0),
-                        )}
-                        ).
-                      </p>
+                      <>
+                        <p className="text-xs text-amber-600 mt-1">
+                          Partial payment must be lower than{' '}
+                          {paymentModal.mode === 'invoice' ? 'remaining amount' : 'phase amount'} (
+                          {formatCurrency(
+                            paymentModal.mode === 'invoice'
+                              ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
+                              : (paymentModal.amount || 0),
+                          )}
+                          ).
+                        </p>
+                        <p className="text-xs text-gray-600 mt-1">
+                          {INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT}
+                        </p>
+                      </>
                     )}
                     {(apForm.payment_type === 'Full Payment' ||
                       apForm.payment_type === 'Advance Payment') && (

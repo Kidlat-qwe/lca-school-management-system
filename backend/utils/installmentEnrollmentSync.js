@@ -1,4 +1,24 @@
-import { getCanonicalInstallmentPhaseCounts, parseTargetPhase } from './balanceInvoice.js';
+import {
+  getCanonicalInstallmentPhaseCounts,
+  getChainFinancialSummary,
+  parseTargetPhase,
+} from './balanceInvoice.js';
+
+const EPSILON = 0.01;
+
+async function phaseChainHasPayment(client, invoice) {
+  if (!invoice?.invoice_id) return false;
+  const chainRoot = Number(invoice.invoice_chain_root_id || invoice.invoice_id);
+  const summary = await getChainFinancialSummary(client, chainRoot);
+  return summary.total_paid_in_chain >= EPSILON;
+}
+
+async function isPhaseChainFullySettled(client, invoice) {
+  if (!invoice?.invoice_id) return false;
+  const chainRoot = Number(invoice.invoice_chain_root_id || invoice.invoice_id);
+  const summary = await getChainFinancialSummary(client, chainRoot);
+  return summary.total_paid_in_chain >= EPSILON && summary.remaining_on_leaf < EPSILON;
+}
 import { loadInstallmentProfilePhaseChains } from '../lib/installmentPaymentEligibility.js';
 import {
   mapPhaseChainsToLocalSlots,
@@ -69,6 +89,21 @@ async function ensureIntermediatePhaseEnrollments({
     return;
   }
 
+  const droppedBetweenResult = await client.query(
+    `SELECT 1
+     FROM classstudentstbl
+     WHERE student_id = $1
+       AND class_id = $2
+       AND program_enrollment_status = 'dropped'
+       AND COALESCE(phase_number, 0) > $3
+       AND COALESCE(phase_number, 0) < $4
+     LIMIT 1`,
+    [studentId, classId, maxActivePhase, targetPhase]
+  );
+  if (droppedBetweenResult.rows.length > 0) {
+    return;
+  }
+
   for (let phaseNumber = maxActivePhase + 1; phaseNumber < targetPhase; phaseNumber += 1) {
     const existing = await client.query(
       `SELECT classstudent_id
@@ -100,8 +135,10 @@ async function ensureIntermediatePhaseEnrollments({
 }
 
 /**
- * After an installment phase invoice is paid, promote pending_enrollment or insert
- * the active phase row (mirrors payments.js post-payment enrollment sync).
+ * After an installment phase invoice is paid or partially paid, promote pending_enrollment
+ * or insert the active phase row (mirrors payments.js post-payment enrollment sync).
+ * Partial payment enrolls the student for that phase; completion status updates only
+ * when the phase chain is fully settled.
  */
 export async function syncInstallmentEnrollmentForPaidInvoice({
   client,
@@ -115,12 +152,17 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
     return;
   }
 
+  const hasInvoiceContext = Boolean(invoice?.invoice_id);
+  const chainHasPayment = hasInvoiceContext
+    ? await phaseChainHasPayment(client, invoice)
+    : false;
+
   const { paidPhaseCount: paidInstallmentCount } = await getCanonicalInstallmentPhaseCounts(
     client,
     profileId,
     profile.downpayment_invoice_id || null
   );
-  if (paidInstallmentCount <= 0) {
+  if (!chainHasPayment && paidInstallmentCount <= 0) {
     return;
   }
 
@@ -150,6 +192,10 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
 
   const markCompletedIfFullyPaid = async () => {
     if (!(maxPhase !== null && targetPhase >= maxPhase)) return;
+    if (hasInvoiceContext) {
+      const fullySettled = await isPhaseChainFullySettled(client, invoice);
+      if (!fullySettled) return;
+    }
     const keepFirstPhaseNewResult = await client.query(
       `UPDATE classstudentstbl
        SET program_enrollment_status = CASE

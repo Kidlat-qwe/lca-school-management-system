@@ -87,22 +87,30 @@ export function formatProgramEnrollmentStatus(status) {
   return STATUS_LABELS[key] || (status ? String(status) : '—');
 }
 
-/** Installment plan phases table — clearer dropped / not-yet labels. */
+/** Installment plan phases table — canonical labels: new, dropped, rejoin, re enrolled. */
+export const INSTALLMENT_PLAN_ENROLLMENT_STATUSES = new Set([
+  'new',
+  'dropped',
+  'rejoin',
+  're_enrolled',
+]);
+
 export function formatInstallmentPlanPhaseEnrollment(status) {
   const key = String(status || '').trim().toLowerCase();
   switch (key) {
     case 'dropped':
       return 'Dropped';
-    case 'not_yet_enrolled':
-      return 'Not yet enrolled';
     case 're_enrolled':
+    case 'upsell':
       return 'Re-enrolled';
     case 'new':
       return 'New';
     case 'rejoin':
       return 'Rejoin';
     default:
-      return formatProgramEnrollmentStatus(status);
+      return INSTALLMENT_PLAN_ENROLLMENT_STATUSES.has(key)
+        ? formatProgramEnrollmentStatus(status)
+        : null;
   }
 }
 

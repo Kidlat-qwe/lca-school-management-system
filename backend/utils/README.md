@@ -1,5 +1,42 @@
 # Backend utilities
 
+## `acknowledgementReceiptStatus.js`
+
+Shared AR status constants and list-filter SQL helpers for `routes/acknowledgementreceipts.js`.
+
+- `AR_STATUS` / `AR_UNVERIFIED_STATUSES` — canonical status values (includes legacy `Submitted` / `Paid`)
+- `isArReturnedForCorrection` — Finance return detected via `[Returned]` notes (not a separate DB status)
+- `expandArStatusFilterValues`, `buildArReturnedOnlySql`, `buildArExcludeReturnedSql`, `buildArListStatusFilterSql`, `buildArAdminStatusFilterSql`, `resolveArEffectiveStatus` — GET list filters and Financial Dashboard AR verification cards
+- Legacy `Paid` rows: non-cash → Unverified bucket; cash → Verified bucket (by `payment_method`)
+
+Frontend mirror: `frontend/src/utils/acknowledgementReceiptStatus.js`.
+
+## `installmentEnrollmentSync.js`
+
+Enrolls a student in the class phase after an installment phase invoice receives payment.
+
+| Rule | Behavior |
+|------|----------|
+| Full phase payment | Promotes `pending_enrollment` or inserts active phase row; marks final phase `completed` when the profile is fully settled |
+| **Partial phase payment** | Same enrollment for that phase once any amount is recorded on the invoice chain; remaining balance must be settled before the next phase is payable (`installmentPaymentEligibility.js`) |
+| Downpayment | Unchanged — requires **full** downpayment before first phase invoice is generated |
+
+Used by: `routes/payments.js`, `routes/acknowledgementreceipts.js`, `routes/installmentinvoices.js` (partial advance-pay).
+
+## `installmentDelinquencyDrop.js`
+
+Auto-drop students when an installment phase invoice is unpaid past **`installment_final_dropoff_days`** after `due_date`.
+
+| Rule | Behavior |
+|------|----------|
+| Eligibility | Unpaid chain (no partial payment), `due_date + final_dropoff_days` reached |
+| Phase targeting | Uses **absolute** `classstudentstbl.phase_number` (not profile-local slot) |
+| No enrollment row | Inserts a `dropped` marker row for that phase |
+| Plan view sync | `GET .../profiles/:id/phases` runs sync so Student History shows **Dropped** immediately |
+| Daily job | `installmentDelinquencyService.js` + `installmentDelinquencyScheduler.js` |
+
+Partially paid phases are **not** auto-dropped (student remains enrolled until balance is settled or manually dropped).
+
 ## `installmentPhaseBillingSync.js`
 
 Keeps installment **phase slots**, **`generated_count`**, and **`TARGET_PHASE`** invoice remarks aligned.
@@ -12,6 +49,8 @@ Keeps installment **phase slots**, **`generated_count`**, and **`TARGET_PHASE`**
 | Persist wrong `TARGET_PHASE` on existing rows | `node scripts/repairInstallmentPhaseAlignment.js --email ... --apply` |
 
 Used by: `GET /installment-invoices/profiles/:id/phases`, manual/auto invoice generation, advance-pay.
+
+Phase API rows include `amount`, `paid_amount`, `remaining_balance` / `balance` (invoice-chain summary), and `invoice_id` as the payable leaf after partial payment.
 
 ## `installmentPhaseRowMapping.js`
 

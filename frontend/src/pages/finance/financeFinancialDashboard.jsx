@@ -6,6 +6,8 @@ import { appAlert } from '../../utils/appAlert';
 import { firstDayOfMonthManilaYMD, formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
 import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
 import { FINANCE_ROLE_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
+import { fetchArVerificationBucketTotals } from '../../utils/fetchArVerificationBucketTotals';
 
 const FinanceFinancialDashboard = () => {
   const navigate = useNavigate();
@@ -55,49 +57,22 @@ const FinanceFinancialDashboard = () => {
         metricsParams.set('payment_date_to', issueDateTo.trim());
       }
 
-      const fetchAllAcknowledgementReceipts = async () => {
-        const limit = 100;
-        let page = 1;
-        let allReceipts = [];
-        let totalPages = 1;
-        do {
-          const pageParams = new URLSearchParams();
-          if (issueDateFrom.trim()) {
-            pageParams.set('issue_date_from', issueDateFrom.trim());
-          }
-          if (issueDateTo.trim()) {
-            pageParams.set('issue_date_to', issueDateTo.trim());
-          }
-          pageParams.set('limit', String(limit));
-          pageParams.set('page', String(page));
-          const response = await apiRequest(`/acknowledgement-receipts?${pageParams.toString()}`);
-          const pageData = response.data || [];
-          allReceipts = allReceipts.concat(pageData);
-          totalPages = response.pagination?.totalPages || 1;
-          page += 1;
-        } while (page <= totalPages);
-        return allReceipts;
-      };
-
       const metricsQuery = metricsParams.toString();
-      const [invoicesResponse, payMetricsRes, acknowledgementReceipts] = await Promise.all([
+      const [invoicesResponse, payMetricsRes, arBuckets] = await Promise.all([
         apiRequest(invoiceUrl),
         apiRequest(
           metricsQuery
             ? `/payments/financial-dashboard-metrics?${metricsQuery}`
             : '/payments/financial-dashboard-metrics'
         ),
-        fetchAllAcknowledgementReceipts(),
+        fetchArVerificationBucketTotals({
+          dateFrom: issueDateFrom,
+          dateTo: issueDateTo,
+        }),
       ]);
 
       const invoices = invoicesResponse.data || [];
       const pm = payMetricsRes.data || {};
-
-      const packageAr = (acknowledgementReceipts || []).filter((ar) => ar.ar_type === 'Package');
-      const arIncludedSales = packageAr.filter((ar) => !['Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
-      const arVerified = packageAr.filter((ar) => ['Verified', 'Applied'].includes(ar.status));
-      const arUnverified = packageAr.filter((ar) => !['Verified', 'Applied', 'Rejected', 'Cancelled'].includes(ar.status || 'Submitted'));
-      const arAmount = (ar) => (parseFloat(ar.payment_amount) || 0) + (parseFloat(ar.tip_amount) || 0);
 
       setMetrics({
         totalRevenue: pm.totalRevenue ?? 0,
@@ -106,12 +81,12 @@ const FinanceFinancialDashboard = () => {
         verifiedPaymentsAmount: pm.verifiedPaymentsAmount ?? 0,
         unverifiedPaymentsCount: pm.unverifiedPaymentsCount ?? 0,
         unverifiedPaymentsAmount: pm.unverifiedPaymentsAmount ?? 0,
-        arSalesCount: arIncludedSales.length,
-        arSalesAmount: arIncludedSales.reduce((sum, ar) => sum + arAmount(ar), 0),
-        arVerifiedCount: arVerified.length,
-        arVerifiedAmount: arVerified.reduce((sum, ar) => sum + arAmount(ar), 0),
-        arUnverifiedCount: arUnverified.length,
-        arUnverifiedAmount: arUnverified.reduce((sum, ar) => sum + arAmount(ar), 0),
+        arSalesCount: arBuckets.all.count,
+        arSalesAmount: arBuckets.all.amount,
+        arVerifiedCount: arBuckets.verified.count,
+        arVerifiedAmount: arBuckets.verified.amount,
+        arUnverifiedCount: arBuckets.unverified.count,
+        arUnverifiedAmount: arBuckets.unverified.amount,
       });
 
       const recentInvoicesList = invoices
@@ -174,10 +149,14 @@ const FinanceFinancialDashboard = () => {
   const openArByVerification = (type) => {
     const params = new URLSearchParams();
     params.set('page', '1');
-    if (type === 'verified') {
-      params.set('status', 'Verified,Applied');
+    if (type === 'all') {
+      params.set('status', AR_STATUS_FILTER.ALL);
+    } else if (type === 'verified') {
+      params.set('status', AR_STATUS_FILTER.VERIFIED_APPLIED);
+    } else if (type === 'rejected') {
+      params.set('status', AR_STATUS_FILTER.REJECTED);
     } else {
-      params.set('status', 'Submitted,Pending,Paid');
+      params.set('status', AR_STATUS_FILTER.UNVERIFIED);
     }
     if (issueDateFrom.trim() && issueDateTo.trim()) {
       params.set('payment_date_from', issueDateFrom.trim());
@@ -322,47 +301,49 @@ const FinanceFinancialDashboard = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <button
-          type="button"
-          onClick={() => openArByVerification('verified')}
-          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Verified Acknowledgement Receipt</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">
-                {metrics.arVerifiedCount}
-              </p>
-              <p className="mt-1 text-xs text-gray-500">
-                {FINANCE_ROLE_DASHBOARD.verifiedAr(formatCurrency(metrics.arVerifiedAmount))}
-              </p>
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification</h2>
+          <p className="mt-1 text-sm text-gray-500">{FINANCE_ROLE_DASHBOARD.arVerificationIntro}</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <button
+            type="button"
+            onClick={() => openArByVerification('verified')}
+            className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Verified (Applied)</p>
+                <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.arVerifiedCount}</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {FINANCE_ROLE_DASHBOARD.verifiedAr(formatCurrency(metrics.arVerifiedAmount))}
+                </p>
+              </div>
+              <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+                <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-emerald-600" />
+              </div>
             </div>
-            <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
-              <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-emerald-600" />
+          </button>
+          <button
+            type="button"
+            onClick={() => openArByVerification('unverified')}
+            className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Unverified Acknowledgement Receipt</p>
+                <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.arUnverifiedCount}</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {FINANCE_ROLE_DASHBOARD.unverifiedAr(formatCurrency(metrics.arUnverifiedAmount))}
+                </p>
+              </div>
+              <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+                <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
+              </div>
             </div>
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={() => openArByVerification('unverified')}
-          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Unverified Acknowledgement Receipt</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">
-                {metrics.arUnverifiedCount}
-              </p>
-              <p className="mt-1 text-xs text-gray-500">
-                {FINANCE_ROLE_DASHBOARD.unverifiedAr(formatCurrency(metrics.arUnverifiedAmount))}
-              </p>
-            </div>
-            <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
-              <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
-            </div>
-          </div>
-        </button>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -212,6 +212,11 @@ export function isInstallmentPlanSlotAddressed(phase) {
     return false;
   }
 
+  if (phase.remaining_balance != null || phase.balance != null) {
+    const remaining = Number(phase.remaining_balance ?? phase.balance ?? 0);
+    return remaining <= PHASE_OUTSTANDING_EPSILON;
+  }
+
   const amount = phase.amount != null ? Number(phase.amount) : null;
   const paid = Number(phase.paid_amount || 0);
   if (amount != null) {
@@ -233,25 +238,98 @@ export function annotateInstallmentPhasePlanSlots(phases) {
   }));
 }
 
+const INSTALLMENT_PLAN_ENROLLMENT_KEYS = new Set(['new', 'dropped', 'rejoin', 're_enrolled']);
+
+const normalizeEnrollmentKey = (status) => String(status || '').trim().toLowerCase();
+
+const isPaidInstallmentPhaseRow = (phaseRow) => {
+  const status = String(phaseRow?.status || '').trim().toLowerCase();
+  return status === 'paid' || status === 'paid all';
+};
+
+/**
+ * Infer enrollment for a paid phase when classstudentstbl has no row (legacy data).
+ * After a drop, only the first paid phase is rejoin; later paid phases are re_enrolled.
+ */
+export function inferInstallmentPhaseEnrollmentStatus({
+  absolutePhase,
+  enrollmentByAbsolutePhase,
+  phaseStart = 1,
+  paidAbsolutePhases = [],
+}) {
+  const phase = Number(absolutePhase);
+  if (!Number.isFinite(phase) || phase < 1) return null;
+
+  const start = Math.max(1, parseInt(phaseStart, 10) || 1);
+
+  let latestDroppedPhase = 0;
+  for (let prior = start; prior < phase; prior += 1) {
+    const priorRow = enrollmentByAbsolutePhase?.get(prior);
+    if (normalizeEnrollmentKey(priorRow?.program_enrollment_status) === 'dropped') {
+      latestDroppedPhase = Math.max(latestDroppedPhase, prior);
+    }
+  }
+
+  if (latestDroppedPhase > 0) {
+    const comebackPhases = [...paidAbsolutePhases]
+      .filter((p) => p > latestDroppedPhase)
+      .sort((a, b) => a - b);
+    const firstComeback = comebackPhases[0];
+    if (phase === firstComeback) return 'rejoin';
+    if (comebackPhases.includes(phase)) return 're_enrolled';
+    return null;
+  }
+
+  if (phase === start) {
+    return 'new';
+  }
+
+  return 're_enrolled';
+}
+
 /**
  * Enrollment label for installment plan phase rows (absolute class phase).
+ * Canonical display values: new, dropped, rejoin, re_enrolled.
+ *
  * @param {Map<number, { program_enrollment_status: string }>} enrollmentByAbsolutePhase
  */
 export function resolveInstallmentPhaseEnrollmentStatus({
   absolutePhase,
   enrollmentByAbsolutePhase,
   phaseRow,
+  phaseStart = 1,
+  paidAbsolutePhases = [],
 }) {
   const enroll = enrollmentByAbsolutePhase?.get(absolutePhase);
-  if (enroll?.program_enrollment_status) {
-    return enroll.program_enrollment_status;
+  const dbStatus = normalizeEnrollmentKey(enroll?.program_enrollment_status);
+  if (dbStatus === 'dropped') {
+    return 'dropped';
   }
+
   if (phaseRow?.billing_kind === 'late_start_gap') {
     return null;
   }
   if (!phaseRow?.is_generated) {
-    return 'not_yet_enrolled';
+    return null;
   }
+
+  if (isPaidInstallmentPhaseRow(phaseRow)) {
+    const inferred = inferInstallmentPhaseEnrollmentStatus({
+      absolutePhase,
+      enrollmentByAbsolutePhase,
+      phaseStart,
+      paidAbsolutePhases,
+    });
+    if (inferred) return inferred;
+  }
+
+  if (dbStatus && INSTALLMENT_PLAN_ENROLLMENT_KEYS.has(dbStatus)) {
+    return dbStatus;
+  }
+  if (dbStatus === 'upsell') {
+    return 're_enrolled';
+  }
+
   return null;
 }
 
@@ -263,12 +341,12 @@ export async function loadEnrollmentStatusByAbsolutePhase(queryFn, studentId, cl
   const result = await queryFn(
     `SELECT DISTINCT ON (phase_number)
        phase_number,
-       program_enrollment_status
+       program_enrollment_status,
+       removed_at
      FROM classstudentstbl
      WHERE student_id = $1
        AND class_id = $2
        AND phase_number IS NOT NULL
-       AND removed_at IS NULL
      ORDER BY phase_number ASC, classstudent_id DESC`,
     [studentId, classId]
   );
@@ -284,6 +362,12 @@ export async function loadEnrollmentStatusByAbsolutePhase(queryFn, studentId, cl
 
 export function attachEnrollmentToInstallmentPhaseRows(phases, { phaseStart, enrollmentByAbsolutePhase }) {
   const start = Math.max(1, parseInt(phaseStart, 10) || 1);
+
+  const paidAbsolutePhases = (phases || [])
+    .filter(isPaidInstallmentPhaseRow)
+    .map((phaseRow) => start + parseInt(phaseRow.phase_number, 10) - 1)
+    .filter((p) => Number.isFinite(p));
+
   return (phases || []).map((phaseRow) => {
     const localPhase = parseInt(phaseRow.phase_number, 10);
     const absolutePhase = start + localPhase - 1;
@@ -294,6 +378,8 @@ export function attachEnrollmentToInstallmentPhaseRows(phases, { phaseStart, enr
         absolutePhase,
         enrollmentByAbsolutePhase,
         phaseRow,
+        phaseStart: start,
+        paidAbsolutePhases,
       }),
     };
   });

@@ -28,6 +28,7 @@ import { appAlert, appConfirm } from '../../utils/appAlert';
 import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
 import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
 import {
+  INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT,
   isPaymentReferenceNumberRequired,
   normalizePaymentReferenceNumber,
   PAYMENT_METHOD_REQUIRED_MESSAGE,
@@ -3474,10 +3475,17 @@ const Invoice = () => {
                       <p className="text-xs text-red-500 mt-1">{paymentFormErrors.payable_amount}</p>
                     )}
                     {paymentFormData.payment_type === 'Partial Payment' && (
-                      <p className="text-xs text-amber-600 mt-1">
-                        Partial payment must be lower than remaining amount
-                        ({` ₱${parseFloat(selectedInvoiceForPayment.amount || 0).toFixed(2)}`}).
-                      </p>
+                      <>
+                        <p className="text-xs text-amber-600 mt-1">
+                          Partial payment must be lower than remaining amount
+                          ({` ₱${parseFloat(selectedInvoiceForPayment.amount || 0).toFixed(2)}`}).
+                        </p>
+                        {selectedInvoiceForPayment?.installmentinvoiceprofiles_id ? (
+                          <p className="text-xs text-gray-600 mt-1">
+                            {INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT}
+                          </p>
+                        ) : null}
+                      </>
                     )}
                   </div>
 

@@ -100,9 +100,9 @@ export const MONTHLY_OPERATIONAL = {
   invoiceSales:
     'Completed invoice payments in this month (amount due + tips). Returned and rejected are excluded.',
   arSales: (receiptCount) =>
-    `${receiptCount} acknowledgement receipt(s) in this month — matches the main AR list for the same month.`,
+    `${receiptCount} acknowledgement receipt(s) in this month — matches Financial Dashboard All AR (Verified + Unverified + Rejected).`,
   combinedSales:
-    'Invoice sales use payment issue date in the month. AR sales match the AR list for the same month.',
+    'Invoice sales use payment issue date in the month. AR sales match Financial Dashboard All AR for the same month.',
   totalPayments:
     'Net completed invoice payment lines in this month (payment date, payable + tips). Returned and rejected lines in the month are deducted; settled payments count again when approved or re-recorded.',
   merchandise: (txnCount) =>
@@ -180,7 +180,7 @@ export const FINANCIAL_DASHBOARD = {
   paymentVerificationIntro:
     'Payment issue date in the selected month. Verified = finance approved. Unverified = completed but not approved yet (not returned or rejected). Invoice payment lines only — unapplied package AR is on AR verification below.',
   arVerificationIntro:
-    'Matches Acknowledgement Receipts for the selected month. Verified = Verified or Applied. Unverified = Submitted, Pending, or Paid.',
+    'Matches Acknowledgement Receipts for the selected month. Verified (Applied) and Unverified only — returned queue is on the Returned tab. Click a card to open the matching status filter.',
   chartEnrollment: 'New class enrollments over the last 6 months.',
   chartRevenue: 'Invoice totals (including tips from completed payments) by month.',
   chartStudentsByBranch: 'How many students are assigned to each branch today.',
@@ -198,8 +198,12 @@ export const FINANCE_ROLE_DASHBOARD = {
   arSales: (count) => `${count} acknowledgement receipt(s) in the selected date range.`,
   verifiedPayments: (amount) => `${amount} — finance has approved these payments`,
   unverifiedPayments: (amount) => `${amount} — completed, waiting for finance approval`,
-  verifiedAr: (amount) => `${amount} — package AR verified or applied`,
-  unverifiedAr: (amount) => `${amount} — package AR not verified yet`,
+  verifiedAr: (amount) => `${amount} — verified or applied acknowledgement receipts`,
+  unverifiedAr: (amount) => `${amount} — awaiting finance verification`,
+  arVerificationIntro:
+    'Matches Acknowledgement Receipts for your date filter. Verified (Applied) and Unverified — returned items use the Return tab on the AR page. Click a card to open the matching status filter.',
+  allAr: (amount) => `${amount} — all acknowledgement receipts in scope (excludes returned queue)`,
+  rejectedAr: (amount) => `${amount} — permanently rejected acknowledgement receipts`,
   recentInvoices: 'Newest invoices that match your date filter.',
   recentPayments: 'Newest completed payments that match your date filter.',
   revenueByBranch: 'Completed payment totals by branch for the current filter.',

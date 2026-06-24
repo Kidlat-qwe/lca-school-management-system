@@ -5,10 +5,11 @@ import {
   syncAllProgramPaymentStatuses,
   syncProgramPaymentStatusForInvoice,
 } from './programPaymentStatusService.js';
-import {
-  isInstallmentPenaltyExemptInvoice,
-  resolveLocalPhaseForInstallmentInvoice,
-} from './installmentPenaltyExempt.js';
+import { isInstallmentPenaltyExemptInvoice } from './installmentPenaltyExempt.js';
+import { getChainFinancialSummary } from './balanceInvoice.js';
+import { applyDelinquencyDropForInvoiceChain } from './installmentDelinquencyDrop.js';
+
+const EPSILON = 0.01;
 
 const getDefaultBillingSettings = () => ({
   installment_penalty_rate: { value: SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue, scope: 'default' },
@@ -36,13 +37,6 @@ const addDaysLocalNoon = (dateObj, days) => {
   return d;
 };
 
-const isAfterDate = (a, b) => {
-  const ay = a ? formatYmdLocal(a) : null;
-  const by = b ? formatYmdLocal(b) : null;
-  if (!ay || !by) return false;
-  return ay > by;
-};
-
 const isOnOrAfterDate = (a, b) => {
   const ay = a ? formatYmdLocal(a) : null;
   const by = b ? formatYmdLocal(b) : null;
@@ -51,7 +45,6 @@ const isOnOrAfterDate = (a, b) => {
 };
 
 const computeInvoiceTotals = async (client, invoiceId) => {
-  // Mirror the existing payments route calculation for consistency.
   const invoiceItemsResult = await client.query(
     `SELECT 
       COALESCE(SUM(amount), 0) as item_amount,
@@ -100,9 +93,9 @@ export const processInstallmentDelinquencies = async () => {
   };
 
   try {
-    const settingsCache = new Map(); // branchId (or 'global') -> effective settings
+    const settingsCache = new Map();
+    const processedChains = new Set();
 
-    // Find installment-linked invoices that are overdue and not paid/cancelled
     const candidates = await client.query(
       `SELECT
         i.invoice_id,
@@ -111,6 +104,7 @@ export const processInstallmentDelinquencies = async () => {
         TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS issue_date,
         i.installmentinvoiceprofiles_id,
         i.late_penalty_applied_for_due_date,
+        COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
         ip.student_id,
         ip.class_id,
         COALESCE(ip.branch_id, i.branch_id) as branch_id
@@ -127,12 +121,17 @@ export const processInstallmentDelinquencies = async () => {
     result.scanned = candidates.rows.length;
 
     for (const row of candidates.rows) {
+      const chainRootId = Number(row.chain_root_id);
+      if (processedChains.has(chainRootId)) {
+        continue;
+      }
+      processedChains.add(chainRootId);
+
       const invoiceId = row.invoice_id;
 
       try {
         await client.query('BEGIN');
 
-        // Lock invoice row so we don't double-apply penalty if job overlaps
         const invoiceLock = await client.query(
           `SELECT invoice_id, status, due_date, late_penalty_applied_for_due_date
            FROM invoicestbl
@@ -146,18 +145,15 @@ export const processInstallmentDelinquencies = async () => {
         }
 
         const invoice = invoiceLock.rows[0];
-        const dueDate = invoice.due_date; // Date object (pg)
+        const dueDate = invoice.due_date;
         const today = new Date();
 
-        const { remainingBalance } = await computeInvoiceTotals(client, invoiceId);
-
-        // Nothing to do if already fully settled
-        if (remainingBalance <= 0) {
+        const chainSummary = await getChainFinancialSummary(client, chainRootId);
+        if (chainSummary.remaining_on_leaf <= EPSILON) {
           await client.query('ROLLBACK');
           continue;
         }
 
-        // Get effective billing settings for this branch (with safe fallback if settings table doesn't exist yet)
         const branchId = row.branch_id !== undefined && row.branch_id !== null ? Number(row.branch_id) : null;
         const cacheKey = branchId === null ? 'global' : String(branchId);
         let effective = settingsCache.get(cacheKey);
@@ -176,31 +172,24 @@ export const processInstallmentDelinquencies = async () => {
 
         const penaltyRate = Number(effective.installment_penalty_rate?.value);
         const graceDays = Number(effective.installment_penalty_grace_days?.value);
-        const finalDropoffDays = Number(effective.installment_final_dropoff_days?.value);
 
-        // Penalty applies only after a full extra day beyond (due_date + graceDays)
-        // Example:
-        //  - due_date = 5th, graceDays = 0  -> earliest penalty day = 6th
-        //  - due_date = 5th, graceDays = 2  -> earliest penalty day = 8th
         const effectiveGraceDays = Number.isFinite(graceDays) ? graceDays : 0;
         const graceThreshold = addDaysLocalNoon(dueDate, effectiveGraceDays + 1);
         const isPenaltyEligible = graceThreshold ? isOnOrAfterDate(today, graceThreshold) : true;
 
-        // Removal applies when CURRENT_DATE >= due_date + finalDropoffDays
-        const dropoffThreshold = addDaysLocalNoon(dueDate, finalDropoffDays);
-        const isRemovalEligible = dropoffThreshold ? isOnOrAfterDate(today, dropoffThreshold) : false;
-
         const penaltyExempt = await isInstallmentPenaltyExemptInvoice(client, {
-          invoiceId,
+          invoiceId: chainRootId,
           profileId: row.installmentinvoiceprofiles_id,
         });
 
-        // 1) One-time penalty (guarded by due_date; skipped for first downpayment / first phase invoice)
+        const payableInvoiceId = chainSummary.payable_invoice_id;
+        const { remainingBalance } = await computeInvoiceTotals(client, payableInvoiceId);
+
         const alreadyAppliedForDueDate =
           invoice.late_penalty_applied_for_due_date &&
           formatYmdLocal(invoice.late_penalty_applied_for_due_date) === formatYmdLocal(dueDate);
 
-        if (!penaltyExempt && !alreadyAppliedForDueDate && isPenaltyEligible) {
+        if (!penaltyExempt && !alreadyAppliedForDueDate && isPenaltyEligible && remainingBalance > EPSILON) {
           const safeRate = Number.isFinite(penaltyRate)
             ? penaltyRate
             : SETTINGS_DEFINITIONS.installment_penalty_rate.defaultValue;
@@ -213,7 +202,7 @@ export const processInstallmentDelinquencies = async () => {
                 (invoice_id, description, amount, discount_amount, penalty_amount, tax_item, tax_percentage)
                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
               [
-                invoiceId,
+                payableInvoiceId,
                 `Late Payment Penalty (${penaltyPctLabel}%)`,
                 0,
                 0,
@@ -223,17 +212,15 @@ export const processInstallmentDelinquencies = async () => {
               ]
             );
 
-            // Update remaining amount shown on invoice list views
             await client.query(
               `UPDATE invoicestbl
                SET amount = $1,
                    late_penalty_applied_for_due_date = due_date
                WHERE invoice_id = $2`,
-              [round2(remainingBalance + penalty), invoiceId]
+              [round2(remainingBalance + penalty), payableInvoiceId]
             );
 
-            // Update status to reflect payments (Unpaid vs Partially Paid)
-            const totalsAfterPenalty = await computeInvoiceTotals(client, invoiceId);
+            const totalsAfterPenalty = await computeInvoiceTotals(client, payableInvoiceId);
             const newStatus =
               totalsAfterPenalty.totalPaid >= (totalsAfterPenalty.originalInvoiceAmount || 0)
                 ? 'Paid'
@@ -244,73 +231,36 @@ export const processInstallmentDelinquencies = async () => {
             if (newStatus !== row.status) {
               await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
                 newStatus,
-                invoiceId,
+                payableInvoiceId,
               ]);
             }
 
             result.penaltiesApplied += 1;
           } else {
-            // Still mark guard to avoid re-check if remaining is tiny/0 after rounding
             await client.query(
               `UPDATE invoicestbl
                SET late_penalty_applied_for_due_date = due_date
                WHERE invoice_id = $1`,
-              [invoiceId]
+              [payableInvoiceId]
             );
           }
         }
 
-        // 2) Auto removal when overdue by >= final_dropoff_days
-        if (isRemovalEligible && row.class_id && row.student_id) {
-          // Recompute after any penalty insertion to ensure remaining > 0
-          const totalsForRemoval = await computeInvoiceTotals(client, invoiceId);
-          const invoiceStatus = String(invoice.status || '');
-          const hasPartialPayment =
-            invoiceStatus === 'Partially Paid' && totalsForRemoval.totalPaid > 0;
-
-          if (totalsForRemoval.remainingBalance > 0 && !hasPartialPayment) {
-            const localPhase = await resolveLocalPhaseForInstallmentInvoice(client, {
-              invoiceId,
-              profileId: row.installmentinvoiceprofiles_id,
-            });
-
-            const updateParams = [
-              `Installment delinquency (>= ${
-                Number.isFinite(finalDropoffDays)
-                  ? finalDropoffDays
-                  : SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue
-              } days overdue)`,
-              'System',
-              row.class_id,
-              row.student_id,
-            ];
-
-            let phaseFilterSql = '';
-            if (localPhase != null && Number.isFinite(localPhase)) {
-              phaseFilterSql = ` AND COALESCE(phase_number, 1) = $${updateParams.length + 1}`;
-              updateParams.push(localPhase);
-            }
-
-            const updateRes = await client.query(
-              `UPDATE classstudentstbl
-               SET program_enrollment_status = 'dropped',
-                   removed_at = CURRENT_TIMESTAMP,
-                   removed_reason = $1,
-                   removed_by = $2
-               WHERE class_id = $3
-                 AND student_id = $4
-                 AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-                 ${phaseFilterSql}`,
-              updateParams
-            );
-
-            if ((updateRes.rowCount || 0) > 0) {
-              result.removalsApplied += 1;
-            }
+        if (row.class_id && row.student_id) {
+          const dropResult = await applyDelinquencyDropForInvoiceChain(client, {
+            invoiceId: chainRootId,
+            profileId: row.installmentinvoiceprofiles_id,
+            studentId: row.student_id,
+            classId: row.class_id,
+            branchId: row.branch_id,
+            dueDate,
+          });
+          if (dropResult.applied) {
+            result.removalsApplied += 1;
           }
         }
 
-        const syncResult = await syncProgramPaymentStatusForInvoice(client, invoiceId);
+        const syncResult = await syncProgramPaymentStatusForInvoice(client, payableInvoiceId);
         result.programPaymentStatusesSynced += syncResult.synced || 0;
 
         await client.query('COMMIT');
@@ -321,7 +271,7 @@ export const processInstallmentDelinquencies = async () => {
         } catch {
           // ignore
         }
-        console.error('[Delinquency] Error processing invoice', invoiceId, e);
+        console.error('[Delinquency] Error processing invoice chain', invoiceId, e);
       }
     }
 
@@ -333,4 +283,3 @@ export const processInstallmentDelinquencies = async () => {
     client.release();
   }
 };
-
