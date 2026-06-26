@@ -1,4 +1,5 @@
 import { getClient, query } from '../config/database.js';
+import { evaluateBillingNotificationEligibility } from './billingNotificationEligibility.js';
 import { sendOverduePaymentReminderEmail } from './emailService.js';
 import { isInstallmentPenaltyExemptInvoice } from './installmentPenaltyExempt.js';
 
@@ -179,12 +180,24 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
           // Guard: if invoice is paid now, skip.
           if (isPaidStatus(r.status)) continue;
 
+          const eligibility = await evaluateBillingNotificationEligibility(client, {
+            invoiceId,
+            studentId: r.student_id,
+          });
+          if (!eligibility.allowed) {
+            console.log(
+              `[AutoOverdueEmail] Skipping student ${r.student_id} — dropped, not rejoined (invoice ${invoiceId})`
+            );
+            continue;
+          }
+
           await sendOverduePaymentReminderEmail({
             to: Array.from(
               new Set([r.guardian_email, r.student_email].filter((e) => e && String(e).trim() !== ''))
             ),
             parentName: r.parent_name || null,
             studentName: r.full_name,
+            studentId: r.student_id,
             invoiceId: invoiceId,
             invoiceNumber: r.invoice_description || `INV-${invoiceId}`,
             invoiceDescription: r.invoice_description || `INV-${invoiceId}`,

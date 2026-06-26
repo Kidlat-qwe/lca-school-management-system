@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { evaluateBillingNotificationEligibility } from './billingNotificationEligibility.js';
 import {
   normalizeNotificationRecipients,
   sendMonthlyInvoiceNoticeEmail,
@@ -124,6 +125,18 @@ export const sendMonthlyInvoiceGeneratedNotice = async ({ invoiceId }) => {
   const summary = { attempted: 0, sent: 0, failed: 0, smsSent: 0, skipped: 0, errors: [] };
 
   for (const row of studentsRes.rows) {
+    const eligibility = await evaluateBillingNotificationEligibility(query, {
+      invoiceId,
+      studentId: row.student_id,
+    });
+    if (!eligibility.allowed) {
+      summary.skipped += 1;
+      console.log(
+        `[monthlyInvoiceNotice] Skipping student ${row.student_id} — dropped, not rejoined (invoice ${invoiceId}, class ${eligibility.classId ?? 'n/a'})`
+      );
+      continue;
+    }
+
     const recipients = normalizeNotificationRecipients([row.student_email, row.guardian_email]);
     if (recipients.length === 0) {
       summary.skipped += 1;

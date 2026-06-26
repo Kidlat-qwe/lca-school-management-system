@@ -135,9 +135,16 @@ const enrichInstallmentInvoiceRow = async (row) => {
   const phaseProgressDenominator =
     totalPhases != null ? totalPhases + phaseStartOffset : null;
 
+  const queueNextGenYmd = coerceToManilaYmd(row.next_generation_date, { fallbackToToday: false });
+  const queueNextMonthYmd = coerceToManilaYmd(row.next_invoice_month, { fallbackToToday: false });
+  const queueScheduledYmd = coerceToManilaYmd(row.scheduled_date, { fallbackToToday: false });
+
   if (!isPhaseInstallmentProfile(profile)) {
     return {
       ...baseRow,
+      next_generation_date: queueNextGenYmd || row.next_generation_date,
+      next_invoice_month: queueNextMonthYmd || row.next_invoice_month,
+      scheduled_date: queueScheduledYmd || row.scheduled_date,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,
@@ -149,15 +156,41 @@ const enrichInstallmentInvoiceRow = async (row) => {
   }
 
   try {
-    const schedule = await buildPhaseInstallmentSchedule({
+    // Queue dates: use profile.generated_count + stored queue row (never pass
+    // next_generation_date as issueDateOverride — that mis-seeds the recurring
+    // anchor and can shift display months ahead, e.g. Jul 25 → Nov 25).
+    const queueSchedule = await buildPhaseInstallmentSchedule({
       db: { query },
-      profile,
-      generatedCountOverride: scheduleGeneratedCount,
-      issueDateOverride: row.next_generation_date || null,
+      profile: {
+        ...profile,
+        installmentinvoiceprofiles_id: row.installmentinvoiceprofiles_id,
+        next_generation_date: row.next_generation_date,
+        next_invoice_month: row.next_invoice_month,
+      },
+      generatedCountOverride: profileGeneratedCount,
     });
+
+    const schedule =
+      scheduleGeneratedCount !== profileGeneratedCount
+        ? await buildPhaseInstallmentSchedule({
+            db: { query },
+            profile: {
+              ...profile,
+              installmentinvoiceprofiles_id: row.installmentinvoiceprofiles_id,
+              next_generation_date: row.next_generation_date,
+              next_invoice_month: row.next_invoice_month,
+            },
+            generatedCountOverride: scheduleGeneratedCount,
+          })
+        : queueSchedule;
 
     return {
       ...baseRow,
+      next_generation_date:
+        queueNextGenYmd || queueSchedule.current_generation_date || row.next_generation_date,
+      next_invoice_month:
+        queueNextMonthYmd || queueSchedule.current_invoice_month || row.next_invoice_month,
+      scheduled_date: queueScheduledYmd || row.scheduled_date,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,
@@ -182,6 +215,9 @@ const enrichInstallmentInvoiceRow = async (row) => {
   } catch (error) {
     return {
       ...baseRow,
+      next_generation_date: queueNextGenYmd || row.next_generation_date,
+      next_invoice_month: queueNextMonthYmd || row.next_invoice_month,
+      scheduled_date: queueScheduledYmd || row.scheduled_date,
       display_phase_progress: displayPhaseProgress,
       last_enrolled_phase_number: lastEnrolledPhaseNumber,
       phase_progress_complete: phaseProgressComplete,

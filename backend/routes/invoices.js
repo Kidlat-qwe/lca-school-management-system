@@ -2616,10 +2616,30 @@ router.post(
         }
 
         try {
+          const { evaluateBillingNotificationEligibility } = await import(
+            '../utils/billingNotificationEligibility.js'
+          );
+          const eligibility = await evaluateBillingNotificationEligibility(client, {
+            invoiceId: invoice.invoice_id,
+            studentId: student.student_id,
+          });
+          if (!eligibility.allowed) {
+            emailResults.push({
+              student_id: student.student_id,
+              student_name: student.full_name,
+              success: false,
+              skipped: true,
+              message:
+                'Student is dropped from this class and has not rejoined. Email and SMS were not sent.',
+            });
+            continue;
+          }
+
           await sendOverduePaymentReminderEmail({
             to: recipientEmails,
             parentName,
             studentName: student.full_name,
+            studentId: student.student_id,
             invoiceId: invoice.invoice_id,
             invoiceNumber: invoice.invoice_description || `INV-${invoice.invoice_id}`,
             invoiceDescription: invoice.invoice_description || `INV-${invoice.invoice_id}`,

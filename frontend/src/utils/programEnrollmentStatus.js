@@ -87,7 +87,7 @@ export function formatProgramEnrollmentStatus(status) {
   return STATUS_LABELS[key] || (status ? String(status) : '—');
 }
 
-/** Installment plan phases table — canonical labels: new, dropped, rejoin, re enrolled. */
+/** Keys shown on installment plan phase rows (Student History → Invoices). */
 export const INSTALLMENT_PLAN_ENROLLMENT_STATUSES = new Set([
   'new',
   'dropped',
@@ -95,18 +95,19 @@ export const INSTALLMENT_PLAN_ENROLLMENT_STATUSES = new Set([
   're_enrolled',
 ]);
 
+/** Installment plan phases table — labels match re-enrollment month matrix cells. */
 export function formatInstallmentPlanPhaseEnrollment(status) {
   const key = String(status || '').trim().toLowerCase();
   switch (key) {
     case 'dropped':
-      return 'Dropped';
+      return 'dropped';
     case 're_enrolled':
     case 'upsell':
-      return 'Re-enrolled';
+      return 're enrolled';
     case 'new':
-      return 'New';
+      return 'new';
     case 'rejoin':
-      return 'Rejoin';
+      return 'rejoin';
     default:
       return INSTALLMENT_PLAN_ENROLLMENT_STATUSES.has(key)
         ? formatProgramEnrollmentStatus(status)

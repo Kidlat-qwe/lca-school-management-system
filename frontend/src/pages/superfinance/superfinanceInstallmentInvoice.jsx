@@ -312,15 +312,19 @@ const SuperfinanceInstallmentInvoice = () => {
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        {invoice.next_generation_date
-                          ? formatDateManila(invoice.next_generation_date)
+                        {(invoice.current_generation_date || invoice.next_generation_date)
+                          ? formatDateManila(
+                              invoice.current_generation_date || invoice.next_generation_date
+                            )
                           : '-'}
                       </div>
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        {invoice.next_invoice_month
-                          ? formatDateManila(invoice.next_invoice_month)
+                        {(invoice.current_invoice_month || invoice.next_invoice_month)
+                          ? formatDateManila(
+                              invoice.current_invoice_month || invoice.next_invoice_month
+                            )
                           : '-'}
                       </div>
                     </td>

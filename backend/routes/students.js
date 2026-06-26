@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { deactivateInstallmentProfileForClassDrop } from '../utils/billingNotificationEligibility.js';
 import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
 
 const router = express.Router();
@@ -539,12 +540,7 @@ router.delete(
       }
 
       // --- Step 4: Stop future installment invoice generation ---
-      await client.query(
-        `UPDATE installmentinvoiceprofilestbl
-         SET is_active = false
-         WHERE student_id = $1 AND class_id = $2 AND is_active = true`,
-        [studentId, classId]
-      );
+      await deactivateInstallmentProfileForClassDrop(client, { studentId, classId });
 
       await client.query('COMMIT');
 
@@ -601,11 +597,10 @@ router.delete(
       );
 
       // Stop future installment generation, but preserve existing invoice and payment history.
-      await client.query(
-        `UPDATE installmentinvoiceprofilestbl SET is_active = false
-         WHERE student_id = $1 AND class_id = $2 AND is_active = true`,
-        [student_id, class_id]
-      );
+      await deactivateInstallmentProfileForClassDrop(client, {
+        studentId: student_id,
+        classId: class_id,
+      });
 
       await client.query('COMMIT');
 

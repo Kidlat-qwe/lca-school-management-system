@@ -317,6 +317,14 @@ export function resolveInstallmentPhaseEnrollmentStatus({
   }
 
   if (isPaidInstallmentPhaseRow(phaseRow)) {
+    const inferred = inferInstallmentPhaseEnrollmentStatus({
+      absolutePhase,
+      enrollmentByAbsolutePhase,
+      phaseStart,
+      paidAbsolutePhases,
+    });
+    if (inferred) return inferred;
+
     const sortedPaid = [...paidAbsolutePhases].sort((a, b) => a - b);
     const firstPaidAbsolute = sortedPaid[0] ?? null;
     const isFirstPaidOnPlan = absolutePhase === firstPaidAbsolute;
@@ -325,17 +333,6 @@ export function resolveInstallmentPhaseEnrollmentStatus({
     if (dbStatus === 'new' && (isFirstPaidOnPlan || isPlanStartAbsolute)) {
       return 'new';
     }
-    if (dbStatus === 'rejoin') {
-      return 'rejoin';
-    }
-
-    const inferred = inferInstallmentPhaseEnrollmentStatus({
-      absolutePhase,
-      enrollmentByAbsolutePhase,
-      phaseStart,
-      paidAbsolutePhases,
-    });
-    if (inferred) return inferred;
   }
 
   if (dbStatus && INSTALLMENT_PLAN_ENROLLMENT_KEYS.has(dbStatus)) {

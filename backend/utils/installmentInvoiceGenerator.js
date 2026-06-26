@@ -457,14 +457,21 @@ export const generateInvoiceFromInstallment = async (
       ? queueSchedule.is_last_phase
       : (maxInvoices !== null && newCount >= maxInvoices);
 
-    // Phase installments: next bill uses fixed 25th / 5th recurring schedule.
+    // Phase installments: queue row = next cycle to auto-generate (current_* on post-increment schedule).
     if (queueSchedule && !queueSchedule.is_last_phase) {
-      if (queueSchedule.next_generation_date) {
-        const ng = parseYmdToLocalNoon(queueSchedule.next_generation_date);
+      const nextGenYmd = justGeneratedFirstPhase
+        ? queueSchedule.next_generation_date
+        : queueSchedule.current_generation_date;
+      const nextMonthYmd = justGeneratedFirstPhase
+        ? queueSchedule.next_invoice_month
+        : queueSchedule.current_invoice_month;
+
+      if (nextGenYmd) {
+        const ng = parseYmdToLocalNoon(nextGenYmd);
         if (ng) nextGenDate = ng;
       }
-      if (queueSchedule.next_invoice_month) {
-        const nim = parseYmdToLocalNoon(queueSchedule.next_invoice_month);
+      if (nextMonthYmd) {
+        const nim = parseYmdToLocalNoon(nextMonthYmd);
         if (nim) nextInvoiceMonth = nim;
       }
     }

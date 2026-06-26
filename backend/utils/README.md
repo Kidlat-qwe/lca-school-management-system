@@ -59,3 +59,18 @@ Maps invoice chains to profile-local phase rows for Student History / Installmen
 `resolveInstallmentPhaseEnrollmentStatus` / `inferInstallmentPhaseEnrollmentStatus`: the first **paid** plan phase shows **new** (e.g. display Phase 2 when Phase 1 is a late-start gap); later paid phases show **re_enrolled** unless a prior **dropped** phase triggers **rejoin**.
 
 `isInstallmentPlanSlotAddressed` / `annotateInstallmentPhasePlanSlots` mark a phase as cleared when it is paid, skipped, or has no outstanding balance — used so **Pay Now** / advance-pay unlocks the next phase when prior slots are settled.
+
+## `billingNotificationEligibility.js`
+
+Gates **monthly invoice notice** and **overdue payment reminder** email/SMS for class-linked billing.
+
+| Rule | Behavior |
+|------|----------|
+| Active enrollment (`new`, `re_enrolled`, `upsell`, `rejoin`, `removed_at IS NULL`) | Notifications allowed |
+| Dropped in class, no active enrollment | **Email and SMS skipped** |
+| Rejoined after drop | Notifications resume |
+| Non-class invoice (no `class_id` resolved) | Allowed (e.g. merchandise) |
+
+Used by: `monthlyInvoiceNoticeEmailService.js`, `overdueInvoiceAutoEmailService.js`, `emailService.sendOverduePaymentReminderEmail`, manual `POST /invoices/:id/send-overdue-email`.
+
+`deactivateInstallmentProfileForClassDrop()` — sets `installmentinvoiceprofilestbl.is_active = false` on manual drop (`routes/students.js`) and auto delinquency drop (`installmentDelinquencyDrop.js`).

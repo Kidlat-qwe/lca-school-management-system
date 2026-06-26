@@ -4,6 +4,7 @@
  * @module utils/installmentDelinquencyDrop
  */
 
+import { deactivateInstallmentProfileForClassDrop } from './billingNotificationEligibility.js';
 import { getChainFinancialSummary, getChainRootInvoiceId } from './balanceInvoice.js';
 import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
 import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
@@ -194,6 +195,10 @@ export async function applyDelinquencyDropForInvoiceChain(
     finalDropoffDays: evaluation.finalDropoffDays,
     dueDateYmd: dueDate ? formatYmdLocal(dueDate) : null,
   });
+
+  if (applied) {
+    await deactivateInstallmentProfileForClassDrop(client, { studentId, classId });
+  }
 
   return { applied, absolutePhase, reason: applied ? 'dropped' : 'already_dropped' };
 }

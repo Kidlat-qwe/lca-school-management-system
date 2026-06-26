@@ -21,3 +21,8 @@ When an installment phase invoice remains **fully unpaid** after `due_date + ins
 
 - **Partial payment** — any amount paid on the invoice chain skips auto-drop
 - **Paid / cancelled** invoices
+
+## After drop
+
+- Sets `installmentinvoiceprofilestbl.is_active = false` for that student/class (stops new installment generation)
+- Billing email/SMS are suppressed via `billingNotificationEligibility.js` while dropped and not rejoined

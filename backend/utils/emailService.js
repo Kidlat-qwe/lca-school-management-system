@@ -394,6 +394,7 @@ export const sendOverduePaymentReminderEmail = async ({
   to,
   parentName,
   studentName,
+  studentId = null,
   invoiceId,
   invoiceNumber,
   invoiceDescription,
@@ -414,6 +415,31 @@ export const sendOverduePaymentReminderEmail = async ({
     (Array.isArray(to) && to.filter((x) => String(x || '').trim() !== '').length > 0);
   if (!hasRecipients) {
     throw new Error('Missing required email parameters');
+  }
+
+  if (studentId != null) {
+    const { query } = await import('../config/database.js');
+    const { evaluateBillingNotificationEligibility } = await import(
+      './billingNotificationEligibility.js'
+    );
+    const eligibility = await evaluateBillingNotificationEligibility(query, {
+      invoiceId,
+      studentId,
+    });
+    if (!eligibility.allowed) {
+      console.log('[emailService] Skipping overdue payment reminder — student dropped, not rejoined', {
+        invoiceId,
+        studentId,
+        classId: eligibility.classId ?? null,
+        reason: eligibility.reason,
+      });
+      return {
+        success: true,
+        skipped: true,
+        reason: eligibility.reason || 'dropped_not_rejoined',
+        smsSkipped: true,
+      };
+    }
   }
 
   requireEmailConfigured();

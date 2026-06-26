@@ -287,6 +287,40 @@ node scripts/repairPhaseInstallmentIssueDateMonotonic.js --invoice-id=863 --issu
 
 Rows where the required floor would be **after** `due_date` are skipped and logged as a conflict.
 
+### `listMissedInstallmentInvoicesForMonth.js`
+
+List students whose installment plan should have generated a **phase invoice** in a calendar month (e.g. June 2026 / 25th cycle) but did not. Writes a CSV by default when there are misses.
+
+```bash
+node backend/scripts/listMissedInstallmentInvoicesForMonth.js --month 2026-06
+node backend/scripts/listMissedInstallmentInvoicesForMonth.js --month 2026-06 --csv
+node backend/scripts/listMissedInstallmentInvoicesForMonth.js --month 2026-06 --json
+```
+
+### `listLateStartInstallmentBillingMismatch.js`
+
+Find **Kirsten-like** late-start installment drift: enrollment or first invoice begins after phase 1, `getCurrentInstallmentPhaseNumber` lags the next absolute `TARGET_PHASE`, the next phase invoice was never created, and the scheduler is stuck on a past cycle and/or the queue jumped ahead without generating.
+
+These students are **not** included in `listMissedInstallmentInvoicesForMonth.js` (canonical schedule still points at the last paid month).
+
+```bash
+node backend/scripts/listLateStartInstallmentBillingMismatch.js
+node backend/scripts/listLateStartInstallmentBillingMismatch.js --csv
+node backend/scripts/listLateStartInstallmentBillingMismatch.js --json
+```
+
+### `diagnoseMissedInstallmentGeneration.js`
+
+List class-linked installment profiles that **should** have auto-generated on a target date (25th cycle) but did not. Outputs summary, reason breakdown, and optional CSV.
+
+```bash
+node backend/scripts/diagnoseMissedInstallmentGeneration.js --date 2026-06-25
+node backend/scripts/diagnoseMissedInstallmentGeneration.js --date 2026-06-25 --csv missed-2026-06-25.csv
+node backend/scripts/diagnoseMissedInstallmentGeneration.js --date 2026-06-25 --json
+```
+
+Typical miss reason: `next_generation_date_in_future` — queue row is one month ahead. Fix with `repairInstallmentGenerationSchedule.js --apply`, then run the daily generator (`processDueInstallmentInvoices`).
+
 ### `repairInstallmentGenerationSchedule.js`
 
 Batch scan/repair for **all class-linked installment plans** whose auto-generation queue (`installmentinvoicestbl`) has the wrong **25th / 5th-next-month** cycle or is stuck with `status = 'Generated'` while more phases remain.
@@ -319,6 +353,52 @@ npm run repair:installment-generation-schedule:apply
 - `<profileId>`: Limit to one `installmentinvoiceprofiles_id`.
 
 Does **not** change existing invoice amounts, payments, or `generated_count` — only the **next auto-generation** queue row.
+
+### `repairAadamCawiliInstallmentGenerationQueue.js`
+
+Pilot repair for **one student** before bulk `repairInstallmentGenerationSchedule.js --apply`. Targets **Aadam June Cawili** (profile `142`, `may778848@gmail.com`) — June 25, 2026 missed generation (`next_generation_date` was `2026-07-25` instead of `2026-06-25`).
+
+```bash
+# Preview queue fix (no writes)
+node backend/scripts/repairAadamCawiliInstallmentGenerationQueue.js
+
+# Apply queue fix only
+node backend/scripts/repairAadamCawiliInstallmentGenerationQueue.js --apply
+
+# Apply queue fix + generate missed phase 5 invoice (issue Jun 25, due Jul 5)
+node backend/scripts/repairAadamCawiliInstallmentGenerationQueue.js --apply --generate
+```
+
+After a successful pilot, run bulk repair for the remaining profiles:
+
+### `repairMissedInstallmentGenerationJune2026.js`
+
+Bulk repair for **all students** who missed the June 25, 2026 installment run. Finds eligible profiles with no phase invoice in `2026-06`, fixes queue dates, and optionally generates missed invoices.
+
+**Installment Invoice Logs alignment:** Writes the same fields shown on the logs page — `next_generation_date` (Next Generation) and `next_invoice_month` (Next Month). Before generate: e.g. `2026-06-25` / `2026-07-01`. After generate: e.g. `2026-07-25` / `2026-08-01`. Post-generate sync verifies the queue matches `buildPhaseInstallmentSchedule` (guards against generator off-by-one-month bugs).
+
+```bash
+# Preview all missed students (no writes)
+node backend/scripts/repairMissedInstallmentGenerationJune2026.js
+
+# Fix queue dates only
+node backend/scripts/repairMissedInstallmentGenerationJune2026.js --apply
+
+# Fix queue + generate missed phase invoices
+node backend/scripts/repairMissedInstallmentGenerationJune2026.js --apply --generate
+
+# Skip pilot student already repaired (e.g. Aadam profile 142)
+node backend/scripts/repairMissedInstallmentGenerationJune2026.js --apply --generate --skip-profile-ids 142
+
+# Test first N profiles
+node backend/scripts/repairMissedInstallmentGenerationJune2026.js --apply --generate --limit 5
+```
+
+Options: `--apply`, `--generate` (requires `--apply`), `--limit N`, `--skip-profile-ids 1,2`, `--csv path`.
+
+Dry-run table includes `after_generate_gen` / `after_generate_month` (what the logs page should show after `--generate`). Results CSV includes `final_next_generation_date`, `final_next_invoice_month`, and `queue_synced_after_generate`.
+
+Writes a results CSV after `--apply`. Each profile is committed in its own transaction so one failure does not roll back others.
 
 ### `repairInstallmentQueueExplicitNextDates.js`
 
@@ -423,6 +503,16 @@ node scripts/repairEnrollmentAuditFindings.js --apply --student-id=336
 
 **Options:** `--dry-run`, `--apply`, `--student-id`, `--help`
 
+### `repairKirstenMahinayMissedPhase5Generation.js`
+
+One-off repair for **Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`, profile **123**) — missed **phase 5** (June 25, 2026) due to late-start billing drift. Restores `generated_count`, resets queue to Jun 25 / Jul 01, optionally generates the phase 5 invoice.
+
+```bash
+node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js
+node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js --apply
+node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js --apply --generate
+```
+
 ### `repairKirstenMahinayPhaseEnrollmentAndPayments.js`
 
 One-off repair for **Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`). **Cascades** earlier invoice + AR onto later phase slots (payments stay on the same physical invoice rows):
@@ -499,6 +589,24 @@ node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js
 node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --dry-run
 node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --apply
 node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --apply --shift-attendance
+```
+
+### `repairJaliyahAlmendrasPhaseProgressDisplay.js`
+
+Align **Installment Invoice Logs** phase progress with Kirsten (same class): **5 / 10** not **5 / 11**. Sets `phase_start` → `NULL` and `generated_count` → `5` when phase 5 invoice exists.
+
+```bash
+node backend/scripts/repairJaliyahAlmendrasPhaseProgressDisplay.js
+node backend/scripts/repairJaliyahAlmendrasPhaseProgressDisplay.js --apply
+```
+
+### `repairJaliyahAlmendrasInstallmentIssueDueDates.js`
+
+Correct **issue/due dates** and `TARGET_PHASE` remarks for Jaliyah Callie Almendras (`rinadeleon713@gmail.com`, profile **150**, class **47**) to match the same class billing cadence as Kirsten Mahinay (25th issue / 5th next-month due). Resets INV-1525 to **Unpaid** after moving phase 5 to Jun 25 / Jul 5.
+
+```bash
+node backend/scripts/repairJaliyahAlmendrasInstallmentIssueDueDates.js
+node backend/scripts/repairJaliyahAlmendrasInstallmentIssueDueDates.js --apply
 ```
 
 ### `repairJaliyahAlmendrasInstallmentInvoiceSlots.js`

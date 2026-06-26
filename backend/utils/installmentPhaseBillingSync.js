@@ -20,21 +20,68 @@ export const isRejoinInvoiceRemarks = (remarks) =>
   REJOIN_REMARKS_RE.test(String(remarks || ''));
 
 /**
+ * First absolute class phase that may receive an installment invoice.
+ * Skips only leading late-start gaps (before enrollment / first TARGET_PHASE).
+ */
+export function resolveFirstBillableAbsolutePhase(
+  profile,
+  activeEnrollmentAbsolutePhases = null,
+  phaseChains = []
+) {
+  const phaseStart = resolveProfilePhaseStart(profile);
+  const candidates = [phaseStart];
+
+  if (activeEnrollmentAbsolutePhases instanceof Set && activeEnrollmentAbsolutePhases.size > 0) {
+    candidates.push(Math.min(...activeEnrollmentAbsolutePhases));
+  }
+
+  for (const chain of phaseChains || []) {
+    const abs = parseAbsolutePhaseFromInvoice(chain?.representative);
+    if (Number.isFinite(abs) && abs > 0) {
+      candidates.push(abs);
+    }
+  }
+
+  return Math.max(...candidates.filter((n) => Number.isFinite(n) && n > 0));
+}
+
+/**
  * Lowest profile-local phase (1..totalPhases) with no invoice chain mapped.
+ * Skips leading late-start gaps before the first billable absolute class phase.
  * @param {Map<number, object>} chainByLocalPhase
  * @param {number|null} totalPhases
+ * @param {{ phase_start?: number|null, total_phases?: number|null }|null} [profile]
+ * @param {Set<number>|null} [activeEnrollmentAbsolutePhases]
+ * @param {number|null} [firstBillableAbsolutePhase]
  * @returns {number|null}
  */
-export function findNextUnbilledLocalPhase(chainByLocalPhase, totalPhases) {
+export function findNextUnbilledLocalPhase(
+  chainByLocalPhase,
+  totalPhases,
+  profile = null,
+  activeEnrollmentAbsolutePhases = null,
+  firstBillableAbsolutePhase = null
+) {
+  const phaseStart = resolveProfilePhaseStart(profile || {});
+  const firstBillable =
+    firstBillableAbsolutePhase != null
+      ? Number(firstBillableAbsolutePhase)
+      : resolveFirstBillableAbsolutePhase(profile, activeEnrollmentAbsolutePhases);
+
   const limit =
     totalPhases != null && Number.isFinite(Number(totalPhases)) && Number(totalPhases) > 0
       ? Number(totalPhases)
       : Math.max(0, ...(chainByLocalPhase?.keys() || [])) + 1;
 
   for (let local = 1; local <= limit; local += 1) {
-    if (!chainByLocalPhase?.has(local)) {
-      return local;
+    if (chainByLocalPhase?.has(local)) continue;
+
+    const absolute = phaseStart + local - 1;
+    if (Number.isFinite(firstBillable) && absolute < firstBillable) {
+      continue;
     }
+
+    return local;
   }
   return null;
 }
@@ -290,9 +337,22 @@ export async function syncInstallmentGeneratedCountToNextUnbilled(
   }
 
   const chainByLocalPhase = mapPhaseChainsToLocalSlots(chains, profile);
+  const activeEnrollmentAbsolutePhases = await loadActiveEnrollmentAbsolutePhases(
+    client,
+    profile.student_id,
+    profile.class_id
+  );
+  const firstBillable = resolveFirstBillableAbsolutePhase(
+    profile,
+    activeEnrollmentAbsolutePhases,
+    chains
+  );
   const nextLocal = findNextUnbilledLocalPhase(
     chainByLocalPhase,
-    profile.total_phases != null ? parseInt(profile.total_phases, 10) : null
+    profile.total_phases != null ? parseInt(profile.total_phases, 10) : null,
+    profile,
+    activeEnrollmentAbsolutePhases,
+    firstBillable
   );
   const syncedCount =
     nextLocal != null
