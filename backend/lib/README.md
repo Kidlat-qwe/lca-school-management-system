@@ -94,6 +94,8 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 - **New** cells that follow a paid reservation on the same class track include `from_previous_reserved: true`; the UI tooltip shows **Previous reserved**.
 - **Upsell** (e.g. Pre-K → KG): month matrix merges the higher program onto the lower-program **same row**. First month after the lower program’s last enrolled (or completed) month shows **upsell**; each later higher-program billing phase maps to the following month columns (re-enrolled, then completed on the terminal phase). The higher-class row is hidden. Phase indexing uses full billing metadata so **later calendar years** show continuation on that same row (e.g. Jan–Mar 2027). Requires a higher `level_tag` on the sibling class track.
 - **Installment delinquency drop → pay again**: after a **dropped** billing month, the first empty comeback month shows **rejoin** and the next active month shows **re-enrolled** (e.g. Mar=new, Apr=dropped, May=rejoin, Jun=re-enrolled). Dropped cells use label `dropped`.
+- **Installment `phase_start` > 1**: class phases before the plan start are omitted from month-matrix billing (anchor begins at `phase_start`). The first visible billing month shows **new**; later paid months show **re-enrolled**. Matrix hover on **new** shows **Enrolled in Phase N** (e.g. phase 2 → “Enrolled in Phase 2”).
+- **Installment plan enrollment column**: the first **paid** phase on the plan shows **new** even when `phase_start` is 1 and billing begins at a later absolute phase (e.g. Phase 2 after a skipped late-start gap).
 
 ## `operationalDashboardRecentPayments.js`
 

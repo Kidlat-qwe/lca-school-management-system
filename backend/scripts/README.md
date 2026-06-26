@@ -487,6 +487,38 @@ node scripts/repairKirstenMahinayPhase34IssueDueDates.js --dry-run
 node scripts/repairKirstenMahinayPhase34IssueDueDates.js --apply
 ```
 
+### `setJaliyahAlmendrasInstallmentPhaseStart2.js`
+
+Set **Jaliyah Callie Almendras** (`rinadeleon713@gmail.com`, profile `150`, class `47`) installment **`phase_start` → 2** so the plan begins at class Phase 2 (curriculum phase 1 is outside the plan grid).
+
+- **`--apply`**: updates `installmentinvoiceprofilestbl.phase_start` and aligns `program_enrollment_status` (phase 1 `new`, phases 2–4 `re_enrolled`).
+- **`--shift-attendance`**: optional with `--apply` — moves attendance rows phase 1→2, 2→3, 3→4 when present (dry-run previews shifts).
+
+```bash
+node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js
+node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --dry-run
+node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --apply
+node scripts/setJaliyahAlmendrasInstallmentPhaseStart2.js --apply --shift-attendance
+```
+
+### `repairJaliyahAlmendrasInstallmentInvoiceSlots.js`
+
+Swap installment invoice slots so **display Phase 4 = paid (INV-1043)** and **Phase 5 = overdue / Pay Now (INV-1525)**. Sets `TARGET_PHASE:4` on 1043 and `TARGET_PHASE:5` on 1525.
+
+```bash
+node scripts/repairJaliyahAlmendrasInstallmentInvoiceSlots.js
+node scripts/repairJaliyahAlmendrasInstallmentInvoiceSlots.js --apply
+```
+
+### `repairMariashaPangilinPhase1EnrollmentAnchor.js`
+
+Set phase 1 `classstudentstbl.enrolled_at` to the class Phase 1 start session so the month re-enrollment matrix shows **new** in **March** (not May when auto-enroll used a later payment date).
+
+```bash
+node scripts/repairMariashaPangilinPhase1EnrollmentAnchor.js
+node scripts/repairMariashaPangilinPhase1EnrollmentAnchor.js --apply
+```
+
 When adding new scripts to this directory:
 
 1. Follow the ES module syntax (import/export)

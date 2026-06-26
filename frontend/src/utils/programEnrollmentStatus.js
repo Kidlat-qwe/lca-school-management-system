@@ -279,6 +279,10 @@ export function enrollmentMatrixCellHoverTitle(cell, options = {}) {
 
   const statusLabel = cell?.label?.trim() || enrollmentMatrixCellTitle(cell);
   if (hasPhase) {
+    const isNew = statusLabel.toLowerCase() === 'new' || cell?.status === 'new';
+    if (isNew) {
+      return `Enrolled in Phase ${phaseNumber}`;
+    }
     return `Enrolled in Phase ${phaseNumber} · ${statusLabel}`;
   }
   return statusLabel;

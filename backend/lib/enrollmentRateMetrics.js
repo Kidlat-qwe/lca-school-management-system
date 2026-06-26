@@ -31,23 +31,42 @@ const INSTALLMENT_BILLING_MONTH_FROM_ANCHOR_SQL = `
     ) + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month')
   )::date`;
 
+/** Latest installment profile phase_start for matrix row (NULL when no profile). */
+const INSTALLMENT_PROFILE_PHASE_START_SUBQUERY = `
+  (
+    SELECT NULLIF(ip.phase_start, 0)
+    FROM installmentinvoiceprofilestbl ip
+    WHERE ip.student_id = cs.student_id
+      AND ip.class_id = cs.class_id
+    ORDER BY ip.installmentinvoiceprofiles_id DESC
+    LIMIT 1
+  )`;
+
 /** Dropped rows below installment package phase_start are orphan repair artifacts — omit from matrix. */
 const MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL = `
   AND NOT (
     cs.program_enrollment_status = 'dropped'
-    AND COALESCE(cs.phase_number, 1) < COALESCE(
-      (
-        SELECT NULLIF(ip.phase_start, 0)
-        FROM installmentinvoiceprofilestbl ip
-        WHERE ip.student_id = cs.student_id
-          AND ip.class_id = cs.class_id
-        ORDER BY ip.installmentinvoiceprofiles_id DESC
-        LIMIT 1
-      ),
-      1
+    AND COALESCE(cs.phase_number, 1) < COALESCE(${INSTALLMENT_PROFILE_PHASE_START_SUBQUERY}, 1)
+  )`;
+
+/**
+ * Installment plans with phase_start > 1: omit class phases before the plan start
+ * (e.g. legacy phase 1 row when the student begins at phase 2).
+ */
+const MATRIX_EXCLUDE_INSTALLMENT_PRE_START_PHASE_ROWS_SQL = `
+  AND NOT (
+    COALESCE(cs.phase_number, 1) < COALESCE(${INSTALLMENT_PROFILE_PHASE_START_SUBQUERY}, 1)
+    AND EXISTS (
+      SELECT 1
+      FROM installmentinvoiceprofilestbl ip
+      WHERE ip.student_id = cs.student_id
+        AND ip.class_id = cs.class_id
     )
-  )
-`;
+  )`;
+
+const MATRIX_EXCLUDE_INSTALLMENT_PHASE_START_SQL = `
+  ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
+  ${MATRIX_EXCLUDE_INSTALLMENT_PRE_START_PHASE_ROWS_SQL}`;
 
 /** Dashboard "reserved" from reservedstudentstbl only after the reservation fee is paid. */
 const RESERVATION_FEE_PAID_SQL = `(
@@ -3166,7 +3185,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
         WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
-          ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
+          ${MATRIX_EXCLUDE_INSTALLMENT_PHASE_START_SQL}
           AND (
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
@@ -3304,7 +3323,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${scopeBranchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
         WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
-          ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
+          ${MATRIX_EXCLUDE_INSTALLMENT_PHASE_START_SQL}
           AND (
             cs.enrolled_at IS NOT NULL
             OR c.start_date IS NOT NULL
@@ -3925,8 +3944,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   }
 
   // New by enrolled_at calendar month — applied last so it wins over billing-month dropped.
-  // Phase 1 only: installment phase 2+ rows are often stored as status 'new' when paid but are
-  // continuations; those stay on billing-month logic and display as re-enrolled.
+  // Match the installment plan start phase (phase_start when set, else phase 1). Later phases
+  // stored as "new" in DB are continuations and stay on billing-month logic as re-enrolled.
   const newCalendarResult = await queryFn(
     `
       SELECT DISTINCT
@@ -3935,12 +3954,14 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         c.class_name,
         c.level_tag AS class_level_tag,
         u.full_name,
+        COALESCE(cs.phase_number, 1) AS phase_number,
         TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key
       FROM classstudentstbl cs
       INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
       INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
       WHERE cs.program_enrollment_status = 'new'
-        AND COALESCE(cs.phase_number, 1) = 1
+        AND cs.removed_at IS NULL
+        AND COALESCE(cs.phase_number, 1) = COALESCE(${INSTALLMENT_PROFILE_PHASE_START_SUBQUERY}, 1)
         AND cs.enrolled_at IS NOT NULL
         AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date
         AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date
@@ -3998,7 +4019,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       mark: '1',
       label: 'new',
       status: 'new',
-      phase_number: 1,
+      phase_number: matrixCellPhaseNumber(
+        row.phase_number,
+        student.months[monthKey]?.phase_number
+      ),
       calendar_new: true,
       is_full_payment: Boolean(student.months[monthKey]?.is_full_payment),
     };
@@ -4055,11 +4079,18 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     for (const m of months) {
       const cell = student.months?.[m.key];
       if (!cell || cell.mark !== '1') continue;
-      if (cell.status === 'upsell' && m.key === firstEnrolledKey) {
+      const isFirstEnrolledMonth = m.key === firstEnrolledKey;
+      if (cell.status === 'upsell' && isFirstEnrolledMonth) {
         cell.label = 'upsell';
       } else if (cell.status === 'rejoin' || cell.calendar_rejoin) {
         cell.label = 'rejoin';
-      } else if (cell.status === 'new' && m.key !== firstEnrolledKey) {
+      } else if (
+        isFirstEnrolledMonth &&
+        ENROLLED_STATUSES_LIST.includes(cell.status) &&
+        !['upsell', 'rejoin', 'completed'].includes(cell.status)
+      ) {
+        cell.label = 'new';
+      } else if (cell.status === 'new' && !isFirstEnrolledMonth) {
         cell.label = 're-enrolled';
       } else if (cell.status === 're_enrolled' || cell.calendar_continuation) {
         cell.label = 're-enrolled';
