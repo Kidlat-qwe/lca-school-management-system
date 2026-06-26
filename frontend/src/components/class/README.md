@@ -4,7 +4,7 @@ Reusable UI for class detail views.
 
 ## ClassPhaseHeader
 
-Collapsible phase row with a **View** action for attendance summary. Used on superadmin, admin, and teacher class detail pages.
+Collapsible phase row with an **Attendance History** action for attendance summary. Used on superadmin, admin, and teacher class detail pages.
 
 ## ClassPhaseAttendanceSummaryModal
 

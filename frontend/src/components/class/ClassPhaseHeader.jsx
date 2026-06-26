@@ -1,5 +1,5 @@
 /**
- * Collapsible phase header with attendance summary "View" action.
+ * Collapsible phase header with attendance summary action.
  */
 const ClassPhaseHeader = ({
   phaseNumber,
@@ -54,9 +54,9 @@ const ClassPhaseHeader = ({
       <button
         type="button"
         onClick={onViewAttendance}
-        className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#F7C844]/50 sm:text-sm"
+        className="shrink-0 whitespace-nowrap rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#F7C844]/50 sm:text-sm"
       >
-        View
+        Attendance History
       </button>
     </div>
   );
