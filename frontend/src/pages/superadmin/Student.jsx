@@ -8,6 +8,7 @@ import { DEFAULT_PASSWORD_STUDENT } from '../../utils/defaultPasswords';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import StudentHistoryModal from '../../components/student/StudentHistoryModal';
+import GuardianLocationFields from '../../components/guardian/GuardianLocationFields';
 
 const Student = () => {
   const { signup } = useAuth();
@@ -47,7 +48,6 @@ const Student = () => {
     guardian_relationship: '',
     guardian_phone_number: '',
     guardian_tin_number: '',
-    guardian_gender: '',
     guardian_address: '',
     guardian_city: '',
     guardian_postal_code: '',
@@ -233,7 +233,6 @@ const Student = () => {
       guardian_relationship: '',
       guardian_phone_number: '',
       guardian_tin_number: '',
-      guardian_gender: '',
       guardian_address: '',
       guardian_city: '',
       guardian_postal_code: '',
@@ -265,7 +264,6 @@ const Student = () => {
       guardian_relationship: '',
       guardian_phone_number: '',
       guardian_tin_number: '',
-      guardian_gender: '',
       guardian_address: '',
       guardian_city: '',
       guardian_postal_code: '',
@@ -288,7 +286,6 @@ const Student = () => {
           guardian_relationship: guardian.relationship || '',
           guardian_phone_number: guardian.guardian_phone_number || '',
           guardian_tin_number: guardian.tin_number || '',
-          guardian_gender: guardian.gender || '',
           guardian_address: guardian.address || '',
           guardian_city: guardian.city || '',
           guardian_postal_code: guardian.postal_code || '',
@@ -343,6 +340,24 @@ const Student = () => {
     }));
   };
 
+  const handleGuardianLocationChange = (updates) => {
+    const fieldMap = {
+      country: 'guardian_country',
+      city: 'guardian_city',
+      stateProvince: 'guardian_state_province_region',
+      address: 'guardian_address',
+      postalCode: 'guardian_postal_code',
+    };
+    setFormData((prev) => {
+      const next = { ...prev };
+      Object.entries(updates).forEach(([key, value]) => {
+        const formKey = fieldMap[key];
+        if (formKey) next[formKey] = value;
+      });
+      return next;
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
@@ -364,7 +379,6 @@ const Student = () => {
       if (!formData.guardian_email.trim()) errors.guardian_email = 'Guardian email is required';
       if (!formData.guardian_relationship) errors.guardian_relationship = 'Relationship is required';
       if (!formData.guardian_phone_number.trim()) errors.guardian_phone_number = 'Guardian phone number is required';
-      if (!formData.guardian_gender) errors.guardian_gender = 'Guardian gender is required';
       if (!formData.guardian_address.trim()) errors.guardian_address = 'Address is required';
       if (!formData.guardian_city.trim()) errors.guardian_city = 'City is required';
       if (!formData.guardian_postal_code.trim()) errors.guardian_postal_code = 'Postal code is required';
@@ -407,7 +421,6 @@ const Student = () => {
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
               tin_number: formData.guardian_tin_number.trim() || null,
-              gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
               postal_code: formData.guardian_postal_code.trim(),
@@ -425,7 +438,6 @@ const Student = () => {
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
               tin_number: formData.guardian_tin_number.trim() || null,
-              gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
               postal_code: formData.guardian_postal_code.trim(),
@@ -459,7 +471,6 @@ const Student = () => {
               relationship: formData.guardian_relationship.trim(),
               guardian_phone_number: formData.guardian_phone_number.trim(),
               tin_number: formData.guardian_tin_number.trim() || null,
-              gender: formData.guardian_gender,
               address: formData.guardian_address.trim(),
               city: formData.guardian_city.trim(),
               postal_code: formData.guardian_postal_code.trim(),
@@ -1281,122 +1292,17 @@ const Student = () => {
                           />
                         </div>
 
-                        <div>
-                          <label htmlFor="guardian_gender" className="label-field">
-                            Guardian Gender <span className="text-red-500">*</span>
-                          </label>
-                          <select
-                            id="guardian_gender"
-                            name="guardian_gender"
-                            value={formData.guardian_gender}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_gender ? 'border-red-500' : ''}`}
-                            required
-                          >
-                            <option value="">Select Gender</option>
-                            <option value="Male">Male</option>
-                            <option value="Female">Female</option>
-                            <option value="Other">Other</option>
-                          </select>
-                          {formErrors.guardian_gender && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_gender}</p>
-                          )}
-                        </div>
-
-                        <div className="md:col-span-2">
-                          <label htmlFor="guardian_address" className="label-field">
-                            Address <span className="text-red-500">*</span>
-                          </label>
-                          <textarea
-                            id="guardian_address"
-                            name="guardian_address"
-                            value={formData.guardian_address}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_address ? 'border-red-500' : ''}`}
-                            required
-                            rows="2"
-                            placeholder="Street address"
-                          />
-                          {formErrors.guardian_address && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_address}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="guardian_city" className="label-field">
-                            City <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="guardian_city"
-                            name="guardian_city"
-                            value={formData.guardian_city}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_city ? 'border-red-500' : ''}`}
-                            required
-                            placeholder="City"
-                          />
-                          {formErrors.guardian_city && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_city}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="guardian_postal_code" className="label-field">
-                            Postal Code <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="guardian_postal_code"
-                            name="guardian_postal_code"
-                            value={formData.guardian_postal_code}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_postal_code ? 'border-red-500' : ''}`}
-                            required
-                            placeholder="Postal code"
-                          />
-                          {formErrors.guardian_postal_code && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_postal_code}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="guardian_state_province_region" className="label-field">
-                            State/Province/Region <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="guardian_state_province_region"
-                            name="guardian_state_province_region"
-                            value={formData.guardian_state_province_region}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_state_province_region ? 'border-red-500' : ''}`}
-                            required
-                            placeholder="State/Province/Region"
-                          />
-                          {formErrors.guardian_state_province_region && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_state_province_region}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="guardian_country" className="label-field">
-                            Country <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="guardian_country"
-                            name="guardian_country"
-                            value={formData.guardian_country}
-                            onChange={handleInputChange}
-                            className={`input-field ${formErrors.guardian_country ? 'border-red-500' : ''}`}
-                            required
-                            placeholder="Country"
-                          />
-                          {formErrors.guardian_country && (
-                            <p className="mt-1 text-sm text-red-600">{formErrors.guardian_country}</p>
-                          )}
-                        </div>
+                        <GuardianLocationFields
+                          values={{
+                            country: formData.guardian_country,
+                            city: formData.guardian_city,
+                            stateProvince: formData.guardian_state_province_region,
+                            address: formData.guardian_address,
+                            postalCode: formData.guardian_postal_code,
+                          }}
+                          errors={formErrors}
+                          onFieldChange={handleGuardianLocationChange}
+                        />
                       </div>
                     </div>
                   </div>

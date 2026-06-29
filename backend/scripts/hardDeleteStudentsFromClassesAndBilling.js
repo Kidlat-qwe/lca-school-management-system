@@ -38,9 +38,7 @@ import { getClient } from '../config/database.js';
 const isDryRun = process.argv.includes('--dry-run');
 
 const TARGET_STUDENT_EMAILS = [
-  'khal.guirnalda@gmail.com',
-  'Invfmontano@gmail.com',
-  't.laraangelabernardo@yahoo.com',
+  'celina.bongga@gmail.com',
 ];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
