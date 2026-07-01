@@ -1,0 +1,5219 @@
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
+import API_BASE_URL, { apiRequest } from '../../config/api';
+import { todayManilaYMD, formatDateManila } from '../../utils/dateUtils';
+import { paymentAndIssueDateFilterUtil as receiptDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
+import { useAuth } from '../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { appAlert, appConfirm, appPrompt } from '../../utils/appAlert';
+import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
+import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
+import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
+import { downloadAcknowledgementReceiptsXlsx } from '../../utils/acknowledgementReceiptsExcelExport';
+import StandardExportModal from '../../components/export/StandardExportModal';
+import SortableHeader from '../../components/table/SortableHeader';
+import AcknowledgementReceiptStylePreview from '../../components/receipts/AcknowledgementReceiptStylePreview';
+import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
+import {
+  formatArLinkedInvoiceArNumber,
+  formatArLinkedInvoiceLabel,
+  getArListLineTotal,
+  getArListPackagePrimaryLabel,
+  isArInvoiceOnlyGhostListRow,
+} from '../../utils/acknowledgementReceiptDisplay';
+import {
+  getArListRowDomId,
+  isAckReceiptListFocused,
+  useAckReceiptFocusFromQuery,
+} from '../../utils/arInvoiceCrossLink';
+import {
+  getInitialArSearchFromParams,
+  hasArCrossLinkParam,
+  shouldClearArDateFiltersOnLanding,
+} from '../../utils/billingListCrossLink';
+import { ArInvoiceIdLink } from '../../components/billing/BillingCrossLinks';
+import AcknowledgementReceiptStatusLegend from '../../components/receipts/AcknowledgementReceiptStatusLegend';
+import ArFinanceVerifyModal from '../../components/receipts/ArFinanceVerifyModal';
+import ArPairedReceiptSummaryBlocks from '../../components/receipts/ArPairedReceiptSummaryBlocks';
+import { resolveAckReceiptLeaderPair } from '../../utils/enrollmentAckReceiptList';
+import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
+import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
+import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import {
+  isPaymentMethodSelected,
+  PAYMENT_METHOD_OPTIONS,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+  validateFinancePaymentApproval,
+  buildArVerifyRequestBody,
+} from '../../constants/paymentFormLabels';
+import { getArIssuedByLabel } from '../../utils/issuedByDisplay';
+import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
+import {
+  getArStatusBadgeClass,
+  getArStatusDisplayLabel,
+  getArStatusLegend,
+  isArReturnedForCorrection,
+  isArUnverifiedStatus,
+  isArRejectedStatus,
+  AR_STATUS_FILTER,
+} from '../../utils/acknowledgementReceiptStatus';
+import { appendArListStatusExcludeParams } from '../../utils/fetchArVerificationBucketTotals';
+
+const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
+
+/** Non-cash merchandise AR (Unverified): Finance/Superfinance verify / return / reject on AR page. */
+const financeCanActOnMerchandiseAr = (receipt) =>
+  receipt?.ar_type === 'Merchandise' &&
+  isArUnverifiedStatus(receipt) &&
+  !isArReturnedForCorrection(receipt) &&
+  !isArRejectedStatus(receipt?.status) &&
+  String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash' &&
+  (receipt.verified_by_user_id == null || receipt.verified_by_user_id === '');
+
+const financeCanVerifyMerchandiseAr = financeCanActOnMerchandiseAr;
+
+/** Branch admin may resubmit Package or Merchandise AR after Finance returns it. */
+const canBranchResubmitReturnedAr = (receipt) =>
+  receipt &&
+  (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise') &&
+  isArReturnedForCorrection(receipt);
+
+/** Non-cash package AR (Unverified): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
+const financeCanVerifyPackageAr = (receipt) =>
+  receipt?.ar_type === 'Package' &&
+  isArUnverifiedStatus(receipt) &&
+  !isArReturnedForCorrection(receipt) &&
+  !isArRejectedStatus(receipt?.status) &&
+  String(receipt?.payment_method || '').trim().toLowerCase() !== 'cash';
+
+const financeHasPackageActionMenu = (receipt) => receipt?.ar_type === 'Package';
+
+const isValidPhilippineMobile = (phone) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return false;
+  if (digits.length === 11 && digits.startsWith('09')) return true;
+  if (digits.length === 12 && digits.startsWith('639')) return true;
+  if (digits.length === 10 && digits.startsWith('9')) return true;
+  return false;
+};
+
+/** Normalize DB json/jsonb merchandise snapshot for display rows */
+const parseMerchandiseItemsSnapshotForDisplay = (snap) => {
+  if (snap == null) return [];
+  if (Array.isArray(snap)) return snap;
+  if (typeof snap === 'string') {
+    try {
+      const parsed = JSON.parse(snap);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
+  const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
+  const userType = userInfo?.user_type || userInfo?.userType;
+  const userBranchId = userInfo?.branch_id || userInfo?.branchId || null;
+  const isSuperadmin = userType === 'Superadmin';
+  const isGlobalBranchFinance =
+    userType === 'Finance' && (userBranchId === null || userBranchId === undefined || userBranchId === '');
+  const canApplyGlobalBranchFilter =
+    userType === 'Superadmin' || userType === 'Superfinance' || isGlobalBranchFinance;
+  const isAdminOrSuperadmin = userType === 'Superadmin' || userType === 'Admin';
+  const isFinanceOrSuperfinance = userType === 'Finance' || userType === 'Superfinance';
+  const hasArReturnedTab = isAdminOrSuperadmin || isFinanceOrSuperfinance;
+  const usesStandardArStatusBuckets = isFinanceOrSuperfinance || isAdminOrSuperadmin;
+  const currentUserId = Number(userInfo?.user_id || userInfo?.userId || 0) || null;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialArAdminTab =
+    hasArReturnedTab && searchParams.get('tab') === 'return' ? 'return' : 'main';
+  const initialStatusRaw = searchParams.get('status');
+  const initialStatus =
+    initialStatusRaw != null && String(initialStatusRaw).trim() !== ''
+      ? initialStatusRaw
+      : usesStandardArStatusBuckets && initialArAdminTab !== 'return'
+        ? AR_STATUS_FILTER.ALL
+        : '';
+  const initialSearch = getInitialArSearchFromParams(searchParams);
+  const initialPaymentMethod = searchParams.get('payment_method') || '';
+  const initialPageRaw = parseInt(searchParams.get('page') || '1', 10);
+  const initialPage = Number.isFinite(initialPageRaw) && initialPageRaw > 0 ? initialPageRaw : 1;
+  const initialLimitRaw = parseInt(searchParams.get('limit') || '10', 10);
+  const initialLimit = [10, 20, 50, 100].includes(initialLimitRaw) ? initialLimitRaw : 10;
+  const initialPaymentFromRaw = (searchParams.get('payment_date_from') || '').trim().slice(0, 10);
+  const initialPaymentToRaw = (searchParams.get('payment_date_to') || '').trim().slice(0, 10);
+  const initialPaymentFrom = /^\d{4}-\d{2}-\d{2}$/.test(initialPaymentFromRaw) ? initialPaymentFromRaw : '';
+  const initialPaymentTo = /^\d{4}-\d{2}-\d{2}$/.test(initialPaymentToRaw) ? initialPaymentToRaw : '';
+  const initialListIssueFromRaw = (searchParams.get('issue_date_from') || '').trim().slice(0, 10);
+  const initialListIssueToRaw = (searchParams.get('issue_date_to') || '').trim().slice(0, 10);
+  const initialListIssueFrom = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueFromRaw) ? initialListIssueFromRaw : '';
+  const initialListIssueTo = /^\d{4}-\d{2}-\d{2}$/.test(initialListIssueToRaw) ? initialListIssueToRaw : '';
+  const initialArMonthRaw = (searchParams.get('ar_month') || '').trim();
+  const initialArMonth = /^\d{4}-\d{2}$/.test(initialArMonthRaw) ? initialArMonthRaw : '';
+  // Hydrate the date-filter mode from the URL: ar_month → Month; issue_date_* → Issue Date;
+  // payment_date_* → Payment date; otherwise default Month + current Manila month.
+  const initialDateFilterMode = initialArMonth
+    ? DATE_FILTER_MODES.MONTH
+    : (initialListIssueFrom || initialListIssueTo)
+      ? DATE_FILTER_MODES.ISSUE_DATE
+      : (initialPaymentFrom || initialPaymentTo)
+        ? DATE_FILTER_MODES.PAYMENT_DATE
+        : receiptDateFilterUtil.DEFAULT_MODE;
+  const initialIssueMonth = initialArMonth
+    ? initialArMonth
+    : shouldClearArDateFiltersOnLanding(searchParams)
+      ? ''
+      : receiptDateFilterUtil.defaultMonth();
+  const [receipts, setReceipts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState(initialPaymentMethod);
+  // Date filter mode switcher (Month | Payment date | Issue Date).
+  // Default mode = MONTH, default month = current Manila month.
+  const [dateFilterMode, setDateFilterMode] = useState(initialDateFilterMode);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(initialIssueMonth);
+  const [listPaymentDateFrom, setListPaymentDateFrom] = useState(initialPaymentFrom);
+  const [listPaymentDateTo, setListPaymentDateTo] = useState(initialPaymentTo);
+  const [listIssueDateFrom, setListIssueDateFrom] = useState(initialListIssueFrom);
+  const [listIssueDateTo, setListIssueDateTo] = useState(initialListIssueTo);
+
+  const handleArListDateFilterModeChange = (nextMode) => {
+    if (nextMode === dateFilterMode) return;
+    setDateFilterMode(nextMode);
+    clearInactivePaymentIssueDateModeFields(nextMode, {
+      setPaymentFrom: setListPaymentDateFrom,
+      setPaymentTo: setListPaymentDateTo,
+      setIssueFrom: setListIssueDateFrom,
+      setIssueTo: setListIssueDateTo,
+    });
+  };
+
+  const clearArListDateFilters = useCallback(() => {
+    setDateFilterMode(receiptDateFilterUtil.DEFAULT_MODE);
+    setFilterIssueMonth('');
+    setListPaymentDateFrom('');
+    setListPaymentDateTo('');
+    setListIssueDateFrom('');
+    setListIssueDateTo('');
+  }, []);
+
+  const [listRefreshing, setListRefreshing] = useState(false);
+  const initialDataLoadedRef = useRef(false);
+  const searchHydratedRef = useRef(false);
+  const arListFetchSeqRef = useRef(0);
+  const suppressAutoListFetchRef = useRef(hasArCrossLinkParam(searchParams));
+  const pendingArCrossLinkRef = useRef(hasArCrossLinkParam(searchParams));
+  const statusHydratedRef = useRef(false);
+  const paymentMethodHydratedRef = useRef(false);
+  const [arAdminTab, setArAdminTab] = useState(initialArAdminTab);
+  const arAdminTabHydratedRef = useRef(false);
+  const arListDateFilterHydratedRef = useRef(false);
+  const [pagination, setPagination] = useState({
+    page: initialPage,
+    limit: initialLimit,
+    total: 0,
+    totalPages: 1,
+  });
+  const [filterTotalLineAmount, setFilterTotalLineAmount] = useState(null);
+  const [sortConfig, setSortConfig] = useState(null);
+
+  const [packages, setPackages] = useState([]);
+  const [packagesLoading, setPackagesLoading] = useState(false);
+  const [merchandise, setMerchandise] = useState([]);
+  const [merchandiseLoading, setMerchandiseLoading] = useState(false);
+  const [branches, setBranches] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [selectedBranchId, setSelectedBranchId] = useState(
+    canApplyGlobalBranchFilter ? '' : (userBranchId ? String(userBranchId) : '')
+  );
+
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerUrl, setViewerUrl] = useState('');
+
+  /** Returned-queue count — badge on Return tab (Admin, Finance, Superfinance). */
+  const [returnedArCount, setReturnedArCount] = useState(null);
+  const [actionMenuRect, setActionMenuRect] = useState(null);
+  const [viewReceipt, setViewReceipt] = useState(null);
+  const [viewFormData, setViewFormData] = useState({
+    package_id: '',
+    prospect_student_name: '',
+    prospect_student_contact: '',
+    prospect_student_email: '',
+    prospect_student_phone: '',
+    prospect_student_notes: '',
+    level_tag: '',
+    reference_number: '',
+    payment_method: '',
+    issue_date: todayManilaYMD(),
+    tip_amount: '',
+    discount_amount: '',
+  });
+  const [viewPayableAmount, setViewPayableAmount] = useState(0);
+  const [viewModalAttachmentUrl, setViewModalAttachmentUrl] = useState('');
+  const [viewModalAttachmentUploading, setViewModalAttachmentUploading] = useState(false);
+  const [viewResubmitSaving, setViewResubmitSaving] = useState(false);
+  const [editAttachmentUploading, setEditAttachmentUploading] = useState(false);
+
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBranchModal, setShowBranchModal] = useState(false);
+  const [branchModalStep, setBranchModalStep] = useState(1);
+  const [arType, setArType] = useState('');
+  const [selectedPackage, setSelectedPackage] = useState(null);
+  const [merchandiseSelections, setMerchandiseSelections] = useState([]);
+  const [createFormData, setCreateFormData] = useState({
+    prospect_student_name: '',
+    prospect_student_contact: '',
+    prospect_student_email: '',
+    prospect_student_phone: '',
+    prospect_student_notes: '',
+    package_id: '',
+    payment_amount: '',
+    tip_amount: '',
+    discount_amount: '',
+    payment_method: '',
+    level_tag: '',
+    reference_number: '',
+    payment_attachment_url: '',
+    installment_option: 'downpayment_only',
+    issue_date: todayManilaYMD(),
+  });
+  const [createFormErrors, setCreateFormErrors] = useState({});
+  const [creating, setCreating] = useState(false);
+  /** After merchandise AR create: summary + same PDF template as invoice "Download Acknowledgement Receipt" */
+  const [merchandiseArCreatedSummary, setMerchandiseArCreatedSummary] = useState(null);
+  const [merchArPdfLoading, setMerchArPdfLoading] = useState(false);
+  /** After package AR create: summary + dedicated /acknowledgement-receipts/:id/pdf endpoint */
+  const [packageArCreatedSummary, setPackageArCreatedSummary] = useState(null);
+  const [packageArPdfLoading, setPackageArPdfLoading] = useState(false);
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [verifyLoadingId, setVerifyLoadingId] = useState(null);
+  const [financeVerifyModal, setFinanceVerifyModal] = useState({
+    open: false,
+    receipt: null,
+    pairedReceipt: null,
+    loading: false,
+    mode: 'verify',
+    remarks: '',
+    referenceNumber: '',
+  });
+  const [openActionMenuId, setOpenActionMenuId] = useState(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingReceiptId, setEditingReceiptId] = useState(null);
+  const [editingReceiptMeta, setEditingReceiptMeta] = useState(null);
+  const [editingPairedReceiptMeta, setEditingPairedReceiptMeta] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [isResubmitFlow, setIsResubmitFlow] = useState(false);
+  const [financeReturnNote, setFinanceReturnNote] = useState('');
+  const [exportLoading, setExportLoading] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportDateFrom, setExportDateFrom] = useState('');
+  const [exportDateTo, setExportDateTo] = useState('');
+  const [selectedExportBranchIds, setSelectedExportBranchIds] = useState([]);
+  const [editFormData, setEditFormData] = useState({
+    package_id: '',
+    prospect_student_name: '',
+    prospect_student_contact: '',
+    prospect_student_email: '',
+    prospect_student_phone: '',
+    prospect_student_notes: '',
+    level_tag: '',
+    reference_number: '',
+    payment_method: '',
+    issue_date: todayManilaYMD(),
+    tip_amount: '',
+    payment_attachment_url: '',
+  });
+  const [editPayableAmount, setEditPayableAmount] = useState(0);
+  const [editFormErrors, setEditFormErrors] = useState({});
+
+  const extractLatestTagNote = (notes, tag) => {
+    const text = String(notes || '');
+    if (!text) return '';
+    const safeTag = String(tag || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\[${safeTag}\\]\\s*([^\\n\\r]*)`, 'gi');
+    let match;
+    let latest = '';
+    while ((match = regex.exec(text)) !== null) {
+      latest = String(match[1] || '').trim();
+    }
+    return latest;
+  };
+
+  /** Finance return adds "[Returned]" to notes; issue_date must stay fixed for EOD (including after resubmit). */
+  const isAckIssueDateLocked = (receipt) =>
+    !!receipt && isArReturnedForCorrection(receipt);
+
+  useEffect(() => {
+    if (suppressAutoListFetchRef.current) return;
+    fetchReceipts(initialPage);
+
+    if (canApplyGlobalBranchFilter) {
+      fetchBranches();
+    } else if (userBranchId) {
+      fetchPackages(userBranchId);
+    } else {
+      fetchPackages(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canApplyGlobalBranchFilter, userBranchId]);
+
+  useEffect(() => {
+    if (!canApplyGlobalBranchFilter) return;
+    setSelectedBranchId(globalBranchId ? String(globalBranchId) : '');
+  }, [canApplyGlobalBranchFilter, globalBranchId]);
+
+  useEffect(() => {
+    if (!canApplyGlobalBranchFilter) return;
+    if (isSuperadmin) {
+      if (selectedBranchId) {
+        const branchId = parseInt(selectedBranchId, 10);
+        if (!Number.isNaN(branchId)) {
+          fetchPackages(branchId);
+          if (arType === 'Merchandise') fetchMerchandise(branchId);
+        }
+      } else {
+        fetchPackages(null);
+        fetchMerchandise(null);
+      }
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canApplyGlobalBranchFilter, isSuperadmin, selectedBranchId]);
+
+  const fetchReceipts = async (page = 1, limitOverride, options = {}) => {
+    arListFetchSeqRef.current += 1;
+    const fetchSeq = arListFetchSeqRef.current;
+    try {
+      if (!initialDataLoadedRef.current) {
+        setLoading(true);
+      } else {
+        setListRefreshing(true);
+      }
+      setError('');
+      const effectiveLimit = Number.isFinite(limitOverride) ? limitOverride : pagination.limit;
+
+      const params = buildReceiptQueryParams({
+        page,
+        limit: effectiveLimit,
+        searchOverride: options.searchOverride,
+        skipDateFilters: options.skipDateFilters,
+        invoiceIdOverride: options.invoiceIdOverride,
+      });
+
+      const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+      if (fetchSeq !== arListFetchSeqRef.current) return [];
+      const rows = (response.data || []).filter((r) => !isArInvoiceOnlyGhostListRow(r));
+      setReceipts(rows);
+      if (response.filterTotalLineAmount != null && response.filterTotalLineAmount !== undefined) {
+        setFilterTotalLineAmount(Number(response.filterTotalLineAmount));
+      } else {
+        setFilterTotalLineAmount(null);
+      }
+      if (response.pagination) {
+        setPagination({
+          page: response.pagination.page,
+          limit: response.pagination.limit,
+          total: response.pagination.total,
+          totalPages:
+            response.pagination.totalPages ??
+            Math.ceil((response.pagination.total || 0) / response.pagination.limit),
+        });
+      }
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (hasArReturnedTab && arAdminTab === 'return') {
+          next.delete('status');
+          next.set('tab', 'return');
+        } else {
+          if (statusFilter) next.set('status', statusFilter);
+          else next.delete('status');
+          next.delete('tab');
+        }
+        if (options.searchOverride !== undefined) {
+          const trimmed = String(options.searchOverride || '').trim();
+          if (trimmed) next.set('search', trimmed);
+          else next.delete('search');
+        } else if (searchTerm.trim()) {
+          next.set('search', searchTerm.trim());
+        } else {
+          next.delete('search');
+        }
+        if (paymentMethodFilter) next.set('payment_method', paymentMethodFilter);
+        else next.delete('payment_method');
+        next.delete('ar_focus');
+        const activeDateParams = options.skipDateFilters
+          ? {}
+          : receiptDateFilterUtil.buildParams({
+              mode: dateFilterMode,
+              month: filterIssueMonth,
+              paymentFrom: listPaymentDateFrom,
+              paymentTo: listPaymentDateTo,
+              issueFrom: listIssueDateFrom,
+              issueTo: listIssueDateTo,
+            });
+        if (activeDateParams.payment_date_from) next.set('payment_date_from', activeDateParams.payment_date_from);
+        else next.delete('payment_date_from');
+        if (activeDateParams.payment_date_to) next.set('payment_date_to', activeDateParams.payment_date_to);
+        else next.delete('payment_date_to');
+        if (activeDateParams.issue_date_from) next.set('issue_date_from', activeDateParams.issue_date_from);
+        else next.delete('issue_date_from');
+        if (activeDateParams.issue_date_to) next.set('issue_date_to', activeDateParams.issue_date_to);
+        else next.delete('issue_date_to');
+        next.delete('created_date_from');
+        next.delete('created_date_to');
+        next.set('page', String(page));
+        next.set('limit', String(effectiveLimit));
+        return next;
+      });
+      return rows;
+    } catch (err) {
+      if (fetchSeq !== arListFetchSeqRef.current) return [];
+      console.error('Error fetching acknowledgement receipts:', err);
+      setError('Failed to load acknowledgement receipts. Please try again.');
+      setFilterTotalLineAmount(null);
+      return [];
+    } finally {
+      if (fetchSeq === arListFetchSeqRef.current) {
+        setLoading(false);
+        setListRefreshing(false);
+        initialDataLoadedRef.current = true;
+      }
+    }
+  };
+
+  const refetchArListForCrossLink = useCallback(
+    (search, { invoiceId = null } = {}) =>
+      fetchReceipts(1, undefined, {
+        searchOverride: search,
+        skipDateFilters: true,
+        invoiceIdOverride: invoiceId,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searchTerm, statusFilter, paymentMethodFilter, dateFilterMode, filterIssueMonth, selectedBranchId]
+  );
+
+  const { focusAckReceiptId, focusInvoiceOnlyId, crossLinkLoadedReceipt, focusAckReceiptRow } =
+    useAckReceiptFocusFromQuery({
+    searchParams,
+    setSearchParams,
+    setSearchTerm,
+    clearListDateFilters: clearArListDateFilters,
+    refetchListForCrossLink: refetchArListForCrossLink,
+    suppressAutoListFetchRef,
+    pendingArCrossLinkRef,
+    apiRequest,
+    sortedReceipts: receipts,
+    paginationPage: pagination.page,
+  });
+
+  useEffect(() => {
+    if (!crossLinkLoadedReceipt) return;
+    if (isArInvoiceOnlyGhostListRow(crossLinkLoadedReceipt)) return;
+    const rowKey = crossLinkLoadedReceipt.invoice_only_payment
+      ? `inv:${crossLinkLoadedReceipt.linked_invoice_id}`
+      : crossLinkLoadedReceipt.ack_receipt_id
+        ? `ar:${crossLinkLoadedReceipt.ack_receipt_id}`
+        : null;
+    if (!rowKey) return;
+    setReceipts((prev) => {
+      const exists = prev.some((row) => {
+        if (crossLinkLoadedReceipt.invoice_only_payment) {
+          return (
+            row.invoice_only_payment &&
+            Number(row.linked_invoice_id) === Number(crossLinkLoadedReceipt.linked_invoice_id)
+          );
+        }
+        return Number(row.ack_receipt_id) === Number(crossLinkLoadedReceipt.ack_receipt_id);
+      });
+      if (exists) return prev;
+      return [crossLinkLoadedReceipt, ...prev];
+    });
+  }, [crossLinkLoadedReceipt]);
+
+  const shouldSkipAutoArListFetch = () =>
+    suppressAutoListFetchRef.current || pendingArCrossLinkRef.current;
+
+  const handleLimitChange = (nextLimit) => {
+    setPagination((prev) => ({ ...prev, limit: nextLimit, page: 1 }));
+    fetchReceipts(1, nextLimit);
+  };
+
+  const fetchPackages = async (branchId) => {
+    try {
+      setPackagesLoading(true);
+      let url = '/packages?limit=100';
+      if (branchId) {
+        url = `/packages?branch_id=${branchId}&limit=100`;
+      }
+      const response = await apiRequest(url);
+      setPackages(response.data || []);
+    } catch (err) {
+      console.error('Error fetching packages for AR:', err);
+    } finally {
+      setPackagesLoading(false);
+    }
+  };
+
+  const fetchMerchandise = async (branchId) => {
+    try {
+      setMerchandiseLoading(true);
+      const url = branchId ? `/merchandise?branch_id=${branchId}&limit=100` : '/merchandise?limit=100';
+      const response = await apiRequest(url);
+      setMerchandise(response.data || []);
+    } catch (err) {
+      console.error('Error fetching merchandise for AR:', err);
+      setMerchandise([]);
+    } finally {
+      setMerchandiseLoading(false);
+    }
+  };
+
+  const fetchBranches = async () => {
+    try {
+      setBranchesLoading(true);
+      const response = await apiRequest('/branches?limit=100');
+      setBranches(response.data || []);
+    } catch (err) {
+      console.error('Error fetching branches for AR:', err);
+    } finally {
+      setBranchesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!searchHydratedRef.current) {
+      searchHydratedRef.current = true;
+      return;
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    const timer = setTimeout(() => {
+      fetchReceipts(1);
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (!statusHydratedRef.current) {
+      statusHydratedRef.current = true;
+      return;
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
+
+  useEffect(() => {
+    if (!paymentMethodHydratedRef.current) {
+      paymentMethodHydratedRef.current = true;
+      return;
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentMethodFilter]);
+
+  useEffect(() => {
+    if (!hasArReturnedTab) return;
+    if (!arAdminTabHydratedRef.current) {
+      arAdminTabHydratedRef.current = true;
+      return;
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arAdminTab, hasArReturnedTab]);
+
+  useEffect(() => {
+    if (!arListDateFilterHydratedRef.current) {
+      arListDateFilterHydratedRef.current = true;
+      return;
+    }
+    if (shouldSkipAutoArListFetch()) return;
+    fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dateFilterMode,
+    filterIssueMonth,
+    listPaymentDateFrom,
+    listPaymentDateTo,
+    listIssueDateFrom,
+    listIssueDateTo,
+  ]);
+
+  const fetchReturnedCount = async () => {
+    if (!hasArReturnedTab) return;
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '1', returned_only: '1' });
+      if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
+      if (canApplyGlobalBranchFilter && selectedBranchId) params.set('branch_id', selectedBranchId);
+      const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+      const raw = response.pagination?.total;
+      const total = typeof raw === 'number' ? raw : parseInt(raw, 10) || 0;
+      setReturnedArCount(total);
+    } catch (err) {
+      console.error('fetchReturnedCount:', err);
+      setReturnedArCount(0);
+    }
+  };
+
+  useEffect(() => {
+    if (!hasArReturnedTab) return;
+    fetchReturnedCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasArReturnedTab, selectedBranchId, paymentMethodFilter]);
+
+  useEffect(() => {
+    if (!openActionMenuId) return;
+    const closeOnOutside = (e) => {
+      if (e.target.closest?.('.ar-action-menu-trigger') || e.target.closest?.('.ar-action-menu-portal')) return;
+      setOpenActionMenuId(null);
+      setActionMenuRect(null);
+    };
+    document.addEventListener('mousedown', closeOnOutside);
+    return () => document.removeEventListener('mousedown', closeOnOutside);
+  }, [openActionMenuId]);
+
+  useEffect(() => {
+    if (viewReceipt?.ack_receipt_id) {
+      setViewModalAttachmentUrl(viewReceipt.payment_attachment_url || '');
+    }
+  }, [viewReceipt]);
+
+  const resetCreateForm = () => {
+    setArType('');
+    setSelectedPackage(null);
+    setMerchandiseSelections([]);
+    setCreateFormData({
+      prospect_student_name: '',
+      prospect_student_contact: '',
+      prospect_student_email: '',
+      prospect_student_phone: '',
+      prospect_student_notes: '',
+      package_id: '',
+      payment_amount: '',
+      tip_amount: '',
+      discount_amount: '',
+      payment_method: '',
+      level_tag: '',
+      reference_number: '',
+      payment_attachment_url: '',
+      installment_option: 'downpayment_only',
+      issue_date: todayManilaYMD(),
+    });
+    setCreateFormErrors({});
+    setAttachmentUploading(false);
+  };
+
+  const openAttachmentViewer = (url) => {
+    if (!url) return;
+    setViewerUrl(url);
+    setViewerOpen(true);
+  };
+
+  const closeAttachmentViewer = () => {
+    setViewerOpen(false);
+    setViewerUrl('');
+  };
+
+  /**
+   * Build the AR list query params.
+   *
+   * - If `dateOverride` is provided, those date params (already a plain
+   *   object like {issue_date_from, issue_date_to, payment_date_from,
+   *   payment_date_to}) are used verbatim. Used by the export modal path,
+   *   which lets the user pick an explicit range.
+   * - Otherwise we derive the date params from the active date-filter mode
+   *   (Month / Payment date / Issue Date) via `receiptDateFilterUtil`.
+   */
+  const buildReceiptQueryParams = ({
+    page,
+    limit,
+    dateOverride = null,
+    forceBranchId = undefined,
+    searchOverride,
+    skipDateFilters = false,
+    invoiceIdOverride = null,
+  }) => {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    if (hasArReturnedTab && arAdminTab === 'return') {
+      params.set('returned_only', '1');
+    } else {
+      if (statusFilter) params.set('status', statusFilter);
+
+      const usesMainTabBuckets =
+        (isFinanceOrSuperfinance && arAdminTab === 'main') ||
+        (isAdminOrSuperadmin && arAdminTab === 'main');
+      if (usesMainTabBuckets) {
+        appendArListStatusExcludeParams(params, statusFilter || AR_STATUS_FILTER.ALL);
+      }
+    }
+    if (searchOverride !== undefined) {
+      const trimmed = String(searchOverride || '').trim();
+      if (trimmed) params.set('search', trimmed);
+    } else if (searchTerm.trim()) {
+      params.set('search', searchTerm.trim());
+    }
+    if (paymentMethodFilter) params.set('payment_method', paymentMethodFilter);
+    const invId = Number(invoiceIdOverride);
+    if (Number.isFinite(invId) && invId > 0) {
+      params.set('invoice_id', String(invId));
+    }
+    if (forceBranchId !== undefined && forceBranchId !== null && String(forceBranchId).trim() !== '') {
+      params.set('branch_id', String(forceBranchId));
+    } else if (canApplyGlobalBranchFilter && selectedBranchId) {
+      params.set('branch_id', selectedBranchId);
+    }
+    const dateParamPairs = skipDateFilters
+      ? {}
+      : dateOverride || receiptDateFilterUtil.buildParams({
+          mode: dateFilterMode,
+          month: filterIssueMonth,
+          paymentFrom: listPaymentDateFrom,
+          paymentTo: listPaymentDateTo,
+          issueFrom: listIssueDateFrom,
+          issueTo: listIssueDateTo,
+        });
+    Object.entries(dateParamPairs).forEach(([k, v]) => {
+      if (v) params.set(k, v);
+    });
+    return params;
+  };
+
+  const exportModalBranchOptions = useMemo(() => {
+    if (canApplyGlobalBranchFilter && Array.isArray(branches) && branches.length > 0) return branches;
+    if (userBranchId) {
+      return [
+        {
+          branch_id: userBranchId,
+          branch_nickname: userInfo?.branch_nickname,
+          branch_name: userInfo?.branch_name,
+        },
+      ];
+    }
+    return [];
+  }, [canApplyGlobalBranchFilter, branches, userBranchId, userInfo?.branch_nickname, userInfo?.branch_name]);
+
+  const initExportModalSelection = useCallback(() => {
+    const opts = exportModalBranchOptions;
+    if (opts.length === 0) {
+      setSelectedExportBranchIds([]);
+      return;
+    }
+    if (opts.length === 1) {
+      setSelectedExportBranchIds([String(opts[0].branch_id)]);
+      return;
+    }
+    if (canApplyGlobalBranchFilter && selectedBranchId) {
+      setSelectedExportBranchIds([String(selectedBranchId)]);
+      return;
+    }
+    setSelectedExportBranchIds([]);
+  }, [exportModalBranchOptions, canApplyGlobalBranchFilter, selectedBranchId]);
+
+  const toggleExportBranchInModal = (branchId) => {
+    const id = String(branchId);
+    setSelectedExportBranchIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAllExportBranchesInModal = () => {
+    setSelectedExportBranchIds((prev) => {
+      if (prev.length === exportModalBranchOptions.length) return [];
+      return exportModalBranchOptions.map((b) => String(b.branch_id));
+    });
+  };
+
+  const getArPackageOrItems = (r) => {
+    if (r.ar_type !== 'Merchandise') {
+      return getArListPackagePrimaryLabel(r);
+    }
+    const items =
+      typeof r.merchandise_items_snapshot === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(r.merchandise_items_snapshot);
+            } catch {
+              return [];
+            }
+          })()
+        : r.merchandise_items_snapshot;
+    if (!Array.isArray(items) || items.length === 0) return 'Merchandise';
+    return items
+      .map((i) => `${i.merchandise_name || 'Item'}${i.size ? ` (${i.size})` : ''} x ${i.quantity || 1}`)
+      .join(', ');
+  };
+
+  const fetchAllReceiptsForExport = async ({ dateOverride = null, branchIds = null } = {}) => {
+    const pageSize = 100;
+
+    const fetchPagesForBranch = async (forceBranchId) => {
+      let page = 1;
+      let totalPages = 1;
+      const all = [];
+      do {
+        const params = buildReceiptQueryParams({
+          page,
+          limit: pageSize,
+          dateOverride,
+          forceBranchId,
+        });
+        const response = await apiRequest(`/acknowledgement-receipts?${params.toString()}`);
+        all.push(...(response.data || []).filter((r) => !isArInvoiceOnlyGhostListRow(r)));
+        totalPages = Number(response.pagination?.totalPages || 1);
+        page += 1;
+      } while (page <= totalPages);
+      return all;
+    };
+
+    if (Array.isArray(branchIds) && branchIds.length > 0) {
+      const chunks = await Promise.all(branchIds.map((id) => fetchPagesForBranch(String(id))));
+      const seen = new Set();
+      const merged = [];
+      for (const row of chunks.flat()) {
+        const rid = row?.ack_receipt_id;
+        if (rid != null) {
+          if (seen.has(rid)) continue;
+          seen.add(rid);
+        }
+        merged.push(row);
+      }
+      return merged;
+    }
+
+    return fetchPagesForBranch(undefined);
+  };
+
+  const executeExportExcel = async ({
+    issueDateFrom = '',
+    issueDateTo = '',
+    branchIds = null,
+  } = {}) => {
+    try {
+      setExportLoading(true);
+      // If the caller passed an explicit issue-date range (modal path),
+      // honor it. Otherwise let `fetchAllReceiptsForExport` derive params
+      // from the active list date-filter mode.
+      const dateOverride = (issueDateFrom || issueDateTo)
+        ? {
+            ...(issueDateFrom ? { issue_date_from: issueDateFrom } : {}),
+            ...(issueDateTo ? { issue_date_to: issueDateTo } : {}),
+          }
+        : null;
+      const rows = await fetchAllReceiptsForExport({ dateOverride, branchIds });
+      if (!rows.length) {
+        appAlert('No acknowledgement receipts found for the current filters.');
+        return false;
+      }
+      const rowsForExport = requireExportDateRange
+        ? rows.filter((r) => {
+            if (r.ar_type !== 'Package') return false;
+            const status = r.status || 'Unverified';
+            return status !== 'Rejected' && status !== 'Cancelled';
+          })
+        : rows;
+
+      if (!rowsForExport.length) {
+        appAlert(
+          requireExportDateRange
+            ? 'No acknowledgement receipt sales records found for the selected date range.'
+            : 'No acknowledgement receipts found for the current filters.'
+        );
+        return false;
+      }
+
+      const exportRows = rowsForExport.map((r) => ({
+        'Acknowledgement Receipt ID': r.ack_receipt_id ?? '-',
+        'Student Name': r.prospect_student_name || '-',
+        'Invoice ID': formatArLinkedInvoiceLabel(r) || '-',
+        'Acknowledgement Receipt#': formatArLinkedInvoiceArNumber(r) || '-',
+        'Guardian Name': r.prospect_student_contact || '-',
+        'Mobile Number': r.prospect_student_phone || '-',
+        'Package / Items': getArPackageOrItems(r),
+        'Level Tag': r.level_tag || '-',
+        'Total Amount (PHP)': getArListLineTotal(r).toFixed(2),
+        Branch: r.branch_name || '-',
+        Status: r.status || '-',
+        'Payment Method': r.payment_method || '-',
+        'Reference Number': r.reference_number || '-',
+        'Issue Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
+        'Payment Date': r.issue_date ? formatDateManila(r.issue_date) : '-',
+        'Issued by': getArIssuedByLabel(r),
+      }));
+      const rangeTag =
+        issueDateFrom || issueDateTo
+          ? `${issueDateFrom || 'all'}_to_${issueDateTo || 'all'}`
+          : todayManilaYMD();
+      const filename = `Acknowledgement_Receipts_${rangeTag}.xlsx`;
+      downloadAcknowledgementReceiptsXlsx(exportRows, filename);
+      return true;
+    } catch (err) {
+      console.error('Error exporting acknowledgement receipts:', err);
+      appAlert(err?.message || 'Failed to export acknowledgement receipts.');
+      return false;
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (requireExportDateRange) {
+      initExportModalSelection();
+      if (listIssueDateFrom || listIssueDateTo) {
+        setExportDateFrom(listIssueDateFrom || '');
+        setExportDateTo(listIssueDateTo || '');
+      }
+      setShowExportModal(true);
+      return;
+    }
+    await executeExportExcel();
+  };
+
+  const handleConfirmExportWithDate = async () => {
+    const from = exportDateFrom.trim();
+    const to = exportDateTo.trim();
+    if (!from || !to) {
+      appAlert('Please select both export date from and to.');
+      return;
+    }
+    if (from > to) {
+      appAlert('Export "From" date must be on or before "To" date.');
+      return;
+    }
+    if (exportModalBranchOptions.length > 0 && selectedExportBranchIds.length === 0) {
+      appAlert('Select at least one branch to export.');
+      return;
+    }
+    const branchIdsForExport =
+      exportModalBranchOptions.length > 0 ? selectedExportBranchIds.map(String) : null;
+    const ok = await executeExportExcel({
+      issueDateFrom: from,
+      issueDateTo: to,
+      branchIds: branchIdsForExport,
+    });
+    if (ok) setShowExportModal(false);
+  };
+
+  const openCreateModal = (preserveArType) => {
+    resetCreateForm();
+    if (preserveArType) {
+      setArType(preserveArType);
+    }
+    setShowCreateModal(true);
+  };
+
+  const handleArTypeChange = (newType) => {
+    setArType(newType);
+    if (!newType) return;
+    setSelectedPackage(null);
+    setMerchandiseSelections([]);
+    setCreateFormData((prev) => ({
+      ...prev,
+      package_id: '',
+      payment_amount: '',
+      prospect_student_contact: prev.prospect_student_contact,
+    }));
+    const branchId = isSuperadmin ? parseInt(selectedBranchId, 10) : userBranchId;
+    if (newType === 'Merchandise' && branchId) {
+      fetchMerchandise(branchId);
+    } else if (newType === 'Package' && branchId) {
+      fetchPackages(branchId);
+    }
+  };
+
+  const uniqueMerchandiseNames = () => {
+    const names = [...new Set(merchandise.filter((m) => m.quantity == null || m.quantity > 0).map((m) => m.merchandise_name))];
+    return names.sort((a, b) => a.localeCompare(b));
+  };
+
+  const merchandiseTotalAmount = () => {
+    return merchandiseSelections.reduce((sum, sel) => {
+      if (!sel.selectedMerchandiseId) return sum;
+      const m = merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId);
+      const price = m ? (parseFloat(m.price) || 0) : 0;
+      return sum + price * (sel.quantity || 1);
+    }, 0);
+  };
+
+  const isUniformMerchandise = (name) => (name || '').toLowerCase().includes('uniform');
+
+  const addMerchandiseByName = (merchandiseName) => {
+    const sizeOptions = merchandise.filter(
+      (m) => m.merchandise_name === merchandiseName && (m.quantity == null || m.quantity > 0)
+    );
+    if (sizeOptions.length === 0) return;
+    const autoSelect = sizeOptions.length === 1 ? sizeOptions[0].merchandise_id : null;
+    setMerchandiseSelections((prev) => [
+      ...prev,
+      {
+        id: `sel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        merchandise_name: merchandiseName,
+        sizeOptions,
+        selectedMerchandiseId: autoSelect,
+        quantity: 1,
+      },
+    ]);
+  };
+
+  const removeMerchandiseSelection = (selectionId) => {
+    setMerchandiseSelections((prev) => prev.filter((s) => s.id !== selectionId));
+  };
+
+  const updateMerchandiseSelectionSize = (selectionId, merchandiseId) => {
+    setMerchandiseSelections((prev) =>
+      prev.map((s) => (s.id === selectionId ? { ...s, selectedMerchandiseId: merchandiseId ? parseInt(merchandiseId, 10) : null } : s))
+    );
+  };
+
+  const updateMerchandiseSelectionQuantity = (selectionId, qty) => {
+    const num = Math.max(1, parseInt(qty, 10) || 1);
+    setMerchandiseSelections((prev) =>
+      prev.map((s) => (s.id === selectionId ? { ...s, quantity: num } : s))
+    );
+  };
+
+  const handleCreateClick = () => {
+    if (isSuperadmin) {
+      setBranchModalStep(1);
+      setShowBranchModal(true);
+    } else {
+      openCreateModal();
+    }
+  };
+
+  const closeCreateModal = () => {
+    if (creating) return;
+    setShowCreateModal(false);
+  };
+
+  const closeMerchandiseArCreatedSummary = () => {
+    if (merchArPdfLoading) return;
+    setMerchandiseArCreatedSummary(null);
+    resetCreateForm();
+  };
+
+  const closePackageArCreatedSummary = () => {
+    if (packageArPdfLoading) return;
+    setPackageArCreatedSummary(null);
+  };
+
+  const fetchPackageArPdfBlobUrl = async (ackReceiptId) => {
+    const token = localStorage.getItem('firebase_token');
+    const response = await fetch(`${API_BASE_URL}/acknowledgement-receipts/${ackReceiptId}/pdf`, {
+      headers: { Authorization: token ? `Bearer ${token}` : '' },
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+    }
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  };
+
+  const handleDownloadPackageArPdf = async (ackReceiptId) => {
+    if (!ackReceiptId) {
+      appAlert('No receipt ID available. Please try again.');
+      return;
+    }
+    setPackageArPdfLoading(true);
+    try {
+      const url = await fetchPackageArPdfBlobUrl(ackReceiptId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download package acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setPackageArPdfLoading(false);
+    }
+  };
+
+  const handleDownloadMerchandiseArPdf = async (invoiceId) => {
+    if (!invoiceId) {
+      appAlert('No invoice is linked to this receipt yet. Print is unavailable.');
+      return;
+    }
+    setMerchArPdfLoading(true);
+    try {
+      const token = localStorage.getItem('firebase_token');
+      const response = await fetch(`${API_BASE_URL}/invoices/${invoiceId}/pdf?doc_type=ar`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || 'Failed to download acknowledgement receipt PDF');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download merchandise acknowledgement receipt PDF failed:', err);
+      appAlert(err.message || 'Failed to download acknowledgement receipt PDF');
+    } finally {
+      setMerchArPdfLoading(false);
+    }
+  };
+
+  const handleCreateInputChange = (e) => {
+    const { name, value } = e.target;
+    setCreateFormData((prev) => ({ ...prev, [name]: value }));
+    if (createFormErrors[name]) {
+      setCreateFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    }
+  };
+
+  const handlePackageChange = (e) => {
+    const value = e.target.value;
+    const pkg = packages.find((p) => String(p.package_id) === value);
+    setSelectedPackage(pkg || null);
+
+    let amount = 0;
+    if (pkg) {
+      const isInstallment = (pkg.package_type || '').toLowerCase() === 'installment' || (pkg.package_type === 'Phase' && (pkg.payment_option || '').toLowerCase() === 'installment');
+      const downpayment = pkg.downpayment_amount != null
+        ? (typeof pkg.downpayment_amount === 'number' ? pkg.downpayment_amount : parseFloat(pkg.downpayment_amount) || 0)
+        : 0;
+      if (isInstallment && downpayment > 0) {
+        amount = downpayment;
+      } else {
+        const price = pkg.package_price != null
+          ? (typeof pkg.package_price === 'number' ? pkg.package_price : parseFloat(pkg.package_price) || 0)
+          : (typeof pkg.price === 'number' ? pkg.price : parseFloat(pkg.price || '0') || 0);
+        amount = price;
+      }
+    }
+    const paymentAmount = pkg && amount > 0 ? String(amount) : '';
+
+    const nextLevelTag = pkg && LEVEL_TAG_OPTIONS.includes(pkg.level_tag) ? pkg.level_tag : '';
+    setCreateFormData((prev) => ({
+      ...prev,
+      package_id: value,
+      payment_amount: paymentAmount,
+      level_tag: nextLevelTag,
+      installment_option: 'downpayment_only',
+    }));
+    setCreateFormErrors((prev) => {
+      const next = { ...prev };
+      delete next.package_id;
+      delete next.payment_amount;
+      return next;
+    });
+  };
+
+  const handleInstallmentOptionChange = (option) => {
+    if (!selectedPackage) return;
+    const downpayment = parseFloat(selectedPackage.downpayment_amount || 0);
+    const monthly = parseFloat(selectedPackage.package_price || 0);
+    const amount = option === 'downpayment_plus_phase1'
+      ? String(downpayment + monthly)
+      : String(downpayment);
+    setCreateFormData((prev) => ({
+      ...prev,
+      installment_option: option,
+      payment_amount: amount,
+    }));
+  };
+
+  const handleAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
+      return;
+    }
+    setAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        // Unexpected non-JSON success response; fail safely
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
+      setCreateFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
+    } catch (err) {
+      console.error('AR attachment upload error:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearAttachment = () => {
+    setCreateFormData((prev) => ({ ...prev, payment_attachment_url: '' }));
+  };
+
+  const handleEditAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
+      return;
+    }
+    setEditAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
+      setEditFormData((prev) => ({ ...prev, payment_attachment_url: data.imageUrl || '' }));
+      setEditFormErrors((prev) => {
+        const next = { ...prev };
+        delete next.payment_attachment_url;
+        return next;
+      });
+    } catch (err) {
+      console.error('AR edit attachment upload error:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setEditAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearEditAttachment = () => {
+    setEditFormData((prev) => ({ ...prev, payment_attachment_url: '' }));
+  };
+
+  const handleViewModalAttachmentChange = async (e) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.type)) {
+      appAlert('Please select an image (JPEG, PNG, WebP, or GIF).');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      appAlert('Image must be 50 MB or less.');
+      return;
+    }
+    setViewModalAttachmentUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = localStorage.getItem('firebase_token');
+      const res = await fetch(`${API_BASE_URL}/upload/invoice-payment-image`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        if (!res.ok) {
+          const msg =
+            res.status === 413
+              ? 'Image is too large for the server. Please compress the image and try again.'
+              : `Upload failed (HTTP ${res.status}).`;
+          throw new Error(msg);
+        }
+        throw new Error('Upload failed: unexpected server response.');
+      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
+      setViewModalAttachmentUrl(data.imageUrl || '');
+    } catch (err) {
+      console.error('AR view modal attachment upload error:', err);
+      appAlert(err.message || 'Failed to upload image. Please try again.');
+    } finally {
+      setViewModalAttachmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const clearViewModalAttachment = () => setViewModalAttachmentUrl('');
+
+  const canResubmitViewReceipt = canBranchResubmitReturnedAr(viewReceipt);
+
+  const handleViewInputChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'issue_date') return;
+    if (name === 'package_id') {
+      const pkg = packages.find((p) => String(p.package_id) === String(value));
+      const packagePrice = Number(pkg?.package_price || 0);
+      const downpayment = Number(pkg?.downpayment_amount || 0);
+      const packageType = String(pkg?.package_type || '').toLowerCase();
+      const paymentOption = String(pkg?.payment_option || '').toLowerCase();
+      const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(viewReceipt?.installment_option || '').toLowerCase() === 'downpayment_only';
+      const nextPayable = isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+      setViewPayableAmount(Number.isFinite(nextPayable) ? nextPayable : 0);
+    }
+    setViewFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleViewModalResubmit = async () => {
+    if (!viewReceipt?.ack_receipt_id || !canResubmitViewReceipt) return;
+    const isMerchViewResubmit = viewReceipt.ar_type === 'Merchandise';
+    const attach = (viewModalAttachmentUrl || '').trim();
+    if (!attach) {
+      appAlert('Please upload an attachment image before resubmitting.');
+      return;
+    }
+    const id = viewReceipt.ack_receipt_id;
+    const email = (viewFormData.prospect_student_email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      appAlert('Please enter a valid client email before resubmitting.');
+      return;
+    }
+    const phone = (viewFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(phone)) {
+      appAlert('Please enter a valid mobile number for SMS notifications before resubmitting.');
+      return;
+    }
+    if (!(viewFormData.prospect_student_name || '').trim()) {
+      appAlert('Student name is required.');
+      return;
+    }
+    if (!(viewFormData.prospect_student_contact || '').trim()) {
+      appAlert('Guardian name is required.');
+      return;
+    }
+    if (!isMerchViewResubmit && !(viewFormData.package_id || '').trim()) {
+      appAlert('Package is required.');
+      return;
+    }
+    if (!isPaymentMethodSelected(viewFormData.payment_method)) {
+      appAlert(PAYMENT_METHOD_REQUIRED_MESSAGE);
+      return;
+    }
+    const fromReceipt =
+      viewReceipt.issue_date != null && String(viewReceipt.issue_date).trim() !== ''
+        ? String(viewReceipt.issue_date).slice(0, 10)
+        : '';
+    const fromForm =
+      viewFormData.issue_date != null && String(viewFormData.issue_date).trim() !== ''
+        ? String(viewFormData.issue_date).slice(0, 10)
+        : '';
+    const issueYmd = fromReceipt || fromForm;
+    if (!issueYmd) {
+      appAlert('Issue date is missing on this receipt.');
+      return;
+    }
+    const tipNum =
+      viewFormData.tip_amount == null || viewFormData.tip_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(String(viewFormData.tip_amount)));
+    const discountNum =
+      viewFormData.discount_amount == null || viewFormData.discount_amount === ''
+        ? 0
+        : parseFloat(String(viewFormData.discount_amount));
+    if (
+      !isMerchViewResubmit &&
+      viewFormData.discount_amount !== '' &&
+      (Number.isNaN(discountNum) || discountNum < 0)
+    ) {
+      appAlert('Discount amount must be 0 or greater.');
+      return;
+    }
+    const grossResubmit = Number(viewPayableAmount) || 0;
+    if (
+      !isMerchViewResubmit &&
+      viewFormData.discount_amount !== '' &&
+      grossResubmit > 0 &&
+      discountNum >= grossResubmit
+    ) {
+      appAlert('Discount amount must be less than the payment amount.');
+      return;
+    }
+    let pkgId = viewFormData.package_id ? parseInt(viewFormData.package_id, 10) : NaN;
+    if (!isMerchViewResubmit && !Number.isFinite(pkgId)) {
+      appAlert('Package is missing on this receipt. Please choose a package, then resubmit.');
+      return;
+    }
+
+    setViewResubmitSaving(true);
+    try {
+      const payload = {
+        prospect_student_name: (viewFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (viewFormData.prospect_student_contact || '').trim() || null,
+        prospect_student_email: email || null,
+        prospect_student_phone: phone,
+        prospect_student_notes: (viewFormData.prospect_student_notes || '').trim() || null,
+        level_tag: (viewFormData.level_tag || '').trim() || null,
+        reference_number: (viewFormData.reference_number || '').trim() || null,
+        payment_method: viewFormData.payment_method,
+        payment_attachment_url: attach,
+      };
+      if (!isMerchViewResubmit) {
+        payload.tip_amount = tipNum;
+        payload.discount_amount = discountNum > 0 ? discountNum : 0;
+        payload.package_id = pkgId;
+      }
+      if (!isAckIssueDateLocked(viewReceipt)) {
+        payload.issue_date = issueYmd;
+      }
+
+      await apiRequest(`/acknowledgement-receipts/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      await apiRequest(`/acknowledgement-receipts/${id}/resubmit`, {
+        method: 'PUT',
+        body: JSON.stringify({}),
+      });
+      appAlert('Acknowledgement receipt updated and resubmitted successfully.');
+      setViewReceipt(null);
+      setViewModalAttachmentUrl('');
+      await fetchReceipts(pagination.page || 1);
+      if (hasArReturnedTab) await fetchReturnedCount();
+      if (arAdminTab === 'return') {
+        setArAdminTab('main');
+        setStatusFilter(AR_STATUS_FILTER.UNVERIFIED);
+      }
+    } catch (err) {
+      console.error('AR view resubmit error:', err);
+      appAlert(err?.message || 'Failed to resubmit acknowledgement receipt.');
+    } finally {
+      setViewResubmitSaving(false);
+    }
+  };
+
+  const validateCreateForm = () => {
+    const errors = {};
+    const name = (createFormData.prospect_student_name || '').trim();
+    const isMerch = arType === 'Merchandise';
+
+    if (!arType) {
+      errors.ar_type = 'Issue type is required';
+    }
+    const arEmail = (createFormData.prospect_student_email || '').trim();
+
+    if (!name) {
+      errors.prospect_student_name = 'Student name is required';
+    }
+    if (isSuperadmin && !selectedBranchId) {
+      errors.branch_id = 'Branch is required';
+    }
+
+    if (!(createFormData.issue_date || '').trim()) {
+      errors.issue_date = isMerch ? 'Payment date is required' : 'Issue date is required';
+    }
+
+    const guardianName = (createFormData.prospect_student_contact || '').trim();
+    if (!guardianName) {
+      errors.prospect_student_contact = 'Guardian name is required';
+    }
+
+    if (isMerch) {
+      const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
+      if (merchandiseSelections.length === 0 || configuredCount === 0) {
+        errors.merchandise = 'Select at least one merchandise item and configure size';
+      } else if (merchandiseTotalAmount() <= 0) {
+        errors.merchandise = 'Total payment must be greater than 0';
+      }
+      const levelTag = (createFormData.level_tag || '').trim();
+      if (!levelTag) {
+        errors.level_tag = 'Level tag is required';
+      }
+    } else if (arType === 'Package') {
+      if (!createFormData.package_id) {
+        errors.package_id = 'Package is required';
+      }
+      const levelTag = (createFormData.level_tag || '').trim();
+      if (!levelTag) {
+        errors.level_tag = 'Level tag is required';
+      }
+      const amount = parseFloat(createFormData.payment_amount || '0');
+      if (!amount || amount <= 0) {
+        errors.payment_amount = 'Payment amount must be greater than 0';
+      }
+    }
+
+    if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    const arPhone = (createFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(arPhone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)';
+    }
+    if (createFormData.tip_amount !== '' && Number(createFormData.tip_amount) < 0) {
+      errors.tip_amount = 'Tip amount cannot be negative';
+    }
+    const grossPayable = isMerch
+      ? merchandiseTotalAmount()
+      : parseFloat(createFormData.payment_amount || '0') || 0;
+    const discountParsed =
+      createFormData.discount_amount === ''
+        ? 0
+        : parseFloat(createFormData.discount_amount);
+    if (createFormData.discount_amount !== '' && (Number.isNaN(discountParsed) || discountParsed < 0)) {
+      errors.discount_amount = 'Discount amount must be 0 or greater';
+    } else if (createFormData.discount_amount !== '' && grossPayable > 0 && discountParsed >= grossPayable) {
+      errors.discount_amount = 'Discount amount must be less than payable amount';
+    }
+    if (!isPaymentMethodSelected(createFormData.payment_method)) {
+      errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
+    }
+    if (!(createFormData.payment_attachment_url || '').trim()) {
+      errors.payment_attachment_url = 'Attachment image is required';
+    }
+
+    setCreateFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleCreateSubmit = async (e) => {
+    e.preventDefault();
+    if (!validateCreateForm()) return;
+
+    setCreating(true);
+    try {
+      const isMerch = arType === 'Merchandise';
+      const branchId = isSuperadmin && selectedBranchId
+        ? parseInt(selectedBranchId, 10)
+        : !isSuperadmin && userBranchId
+        ? userBranchId
+        : null;
+
+      let payload;
+      if (isMerch) {
+        payload = {
+          ar_type: 'Merchandise',
+          prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+          prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+          prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
+          prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
+          level_tag: (createFormData.level_tag || '').trim() || undefined,
+          merchandise_items: merchandiseSelections
+            .filter((s) => s.selectedMerchandiseId)
+            .map((s) => ({
+              merchandise_id: s.selectedMerchandiseId,
+              quantity: s.quantity || 1,
+            })),
+          reference_number: (createFormData.reference_number || '').trim() || undefined,
+          payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          tip_amount:
+            createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          discount_amount:
+            createFormData.discount_amount === ''
+              ? undefined
+              : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
+          payment_method: createFormData.payment_method,
+          issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
+          branch_id: branchId,
+        };
+        if (!payload.reference_number) delete payload.reference_number;
+        if (!payload.level_tag) delete payload.level_tag;
+        if (payload.discount_amount === 0) delete payload.discount_amount;
+      } else {
+        const isInstallmentPkg =
+          !!selectedPackage &&
+          (((selectedPackage.package_type || '').toLowerCase() === 'installment') ||
+            (selectedPackage.package_type === 'Phase' &&
+              (selectedPackage.payment_option || '').toLowerCase() === 'installment'));
+        payload = {
+          ar_type: 'Package',
+          prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+          prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+          prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+          prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
+          prospect_student_notes: (createFormData.prospect_student_notes || '').trim(),
+          package_id: parseInt(createFormData.package_id, 10),
+          payment_amount: parseFloat(createFormData.payment_amount),
+          tip_amount:
+            createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          discount_amount:
+            createFormData.discount_amount === ''
+              ? undefined
+              : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
+          payment_method: createFormData.payment_method,
+          issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
+          installment_option: isInstallmentPkg ? createFormData.installment_option : undefined,
+          level_tag: (createFormData.level_tag || '').trim() || undefined,
+          reference_number: (createFormData.reference_number || '').trim() || undefined,
+          payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          branch_id: branchId,
+        };
+        if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
+        if (!payload.level_tag) delete payload.level_tag;
+        if (!payload.reference_number) delete payload.reference_number;
+        if (payload.discount_amount === 0) delete payload.discount_amount;
+      }
+
+      const result = await apiRequest('/acknowledgement-receipts', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const created = result?.data;
+      if (isMerch && created?.ack_receipt_id) {
+        setShowCreateModal(false);
+        let invoiceArNumber = null;
+        if (created.invoice_id) {
+          try {
+            const invRes = await apiRequest(`/invoices/${created.invoice_id}`);
+            invoiceArNumber = invRes?.data?.invoice_ar_number ?? null;
+          } catch (fetchInvErr) {
+            console.error('Could not load invoice for AR summary modal:', fetchInvErr);
+          }
+        }
+        setMerchandiseArCreatedSummary({
+          receipt: created,
+          invoiceId: created.invoice_id ? Number(created.invoice_id) : null,
+          invoiceArNumber,
+          summaryMessage:
+            result.message ||
+            'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
+        });
+        resetCreateForm();
+      } else if (!isMerch && created?.ack_receipt_id) {
+        // Package AR: show receipt preview modal with dedicated PDF endpoint
+        setShowCreateModal(false);
+        setPackageArCreatedSummary({
+          receipt: created,
+          pairedReceipt: result.paired_acknowledgement_receipt || null,
+          summaryMessage: result.message || 'Package acknowledgement receipt created successfully.',
+        });
+        resetCreateForm();
+      } else {
+        appAlert(result.message || 'Acknowledgement Receipt created successfully.');
+        setShowCreateModal(false);
+        resetCreateForm();
+      }
+      await fetchReceipts(1);
+    } catch (err) {
+      console.error('Error creating acknowledgement receipt:', err);
+      appAlert(err.message || 'Failed to create acknowledgement receipt. Please try again.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleVerifyReceipt = async (receipt, approve) => {
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    openFinanceActionModal(receipt, approve ? 'verify' : 'return');
+  };
+
+  const openFinanceActionModal = async (receipt, mode = 'verify') => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    setFinanceVerifyModal({
+      open: true,
+      receipt,
+      pairedReceipt: null,
+      loading: true,
+      mode,
+      remarks: '',
+      referenceNumber: '',
+    });
+    try {
+      const response = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`);
+      const data = response.data || receipt;
+      setFinanceVerifyModal((prev) => ({
+        ...prev,
+        open: true,
+        receipt: data,
+        pairedReceipt: data.paired_acknowledgement_receipt || null,
+        loading: false,
+        mode,
+        remarks: '',
+        referenceNumber: '',
+      }));
+    } catch (err) {
+      console.error('Failed to load AR details for finance action:', err);
+      setFinanceVerifyModal((prev) => ({
+        ...prev,
+        open: true,
+        receipt,
+        pairedReceipt: null,
+        loading: false,
+        mode,
+        remarks: '',
+        referenceNumber: '',
+      }));
+    }
+  };
+
+  const closeFinanceVerifyModal = () => {
+    if (verifyLoadingId) return;
+    setFinanceVerifyModal({
+      open: false,
+      receipt: null,
+      pairedReceipt: null,
+      loading: false,
+      mode: 'verify',
+      remarks: '',
+      referenceNumber: '',
+    });
+  };
+
+  const setFinanceVerifyModalMode = (mode) => {
+    setFinanceVerifyModal((prev) => ({
+      ...prev,
+      mode,
+      remarks: '',
+      referenceNumber: '',
+    }));
+  };
+
+  const setFinanceVerifyModalRemarks = (remarks) => {
+    setFinanceVerifyModal((prev) => ({ ...prev, remarks }));
+  };
+
+  const setFinanceVerifyModalReferenceNumber = (referenceNumber) => {
+    setFinanceVerifyModal((prev) => ({ ...prev, referenceNumber }));
+  };
+
+  const handleVerifyModalArNumberClick = (targetReceipt) => {
+    const ackId = targetReceipt?.ack_receipt_id;
+    if (!ackId) return;
+    setFinanceVerifyModal({
+      open: false,
+      receipt: null,
+      pairedReceipt: null,
+      loading: false,
+      mode: 'verify',
+      remarks: '',
+      referenceNumber: '',
+    });
+    focusAckReceiptRow(ackId);
+  };
+
+  const handleEditModalArLineClick = (targetReceipt) => {
+    const ackId = targetReceipt?.ack_receipt_id;
+    if (!ackId) return;
+    closeEditModal();
+    focusAckReceiptRow(ackId);
+  };
+
+  const submitFinanceVerify = async () => {
+    const { receipt, pairedReceipt, referenceNumber } = financeVerifyModal;
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+
+    const { leader } = resolveAckReceiptLeaderPair(receipt, pairedReceipt);
+    const displayReceipt = leader || receipt;
+    const enteredRef = String(referenceNumber || '').trim();
+    const originalRef = String(displayReceipt.reference_number || '').trim();
+    const approvalCheck = validateFinancePaymentApproval(
+      displayReceipt.payment_method,
+      enteredRef,
+      originalRef
+    );
+    if (!approvalCheck.ok) {
+      appAlert(approvalCheck.message);
+      return;
+    }
+
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify(
+          buildArVerifyRequestBody(displayReceipt.payment_method, enteredRef)
+        ),
+      });
+      appAlert(result.message || 'Acknowledgement receipt verified.');
+      closeFinanceVerifyModal();
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR verify error:', err);
+      appAlert(err?.message || 'Failed to verify acknowledgement receipt.');
+    } finally {
+      setVerifyLoadingId(null);
+    }
+  };
+
+  const submitFinanceReturn = async () => {
+    const { receipt, remarks } = financeVerifyModal;
+    const remarksTrimmed = String(remarks || '').trim();
+    if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'return', remarks: remarksTrimmed }),
+      });
+      appAlert(
+        result.message ||
+          'Returned to branch for correction. This receipt was removed from your verification queue.'
+      );
+      closeFinanceVerifyModal();
+      await fetchReceipts(pagination.page || 1);
+      if (hasArReturnedTab) await fetchReturnedCount();
+    } catch (err) {
+      console.error('AR return error:', err);
+      appAlert(err?.message || 'Failed to return acknowledgement receipt.');
+    } finally {
+      setVerifyLoadingId(null);
+    }
+  };
+
+  const submitFinanceReject = async () => {
+    const { receipt, remarks } = financeVerifyModal;
+    const remarksTrimmed = String(remarks || '').trim();
+    if (!receipt?.ack_receipt_id || verifyLoadingId || !remarksTrimmed) return;
+    setVerifyLoadingId(receipt.ack_receipt_id);
+    try {
+      const result = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}/verify`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'reject', remarks: remarksTrimmed }),
+      });
+      appAlert(
+        result.message ||
+          'Acknowledgement receipt rejected and removed from your queue. The branch admin must create a new receipt.'
+      );
+      closeFinanceVerifyModal();
+      await fetchReceipts(pagination.page || 1);
+    } catch (err) {
+      console.error('AR reject error:', err);
+      appAlert(err?.message || 'Failed to reject acknowledgement receipt.');
+    } finally {
+      setVerifyLoadingId(null);
+    }
+  };
+
+  const handleRejectReceipt = (receipt) => {
+    if (!receipt?.ack_receipt_id || verifyLoadingId) return;
+    openFinanceActionModal(receipt, 'reject');
+  };
+
+  const closeEditModal = () => {
+    if (editSaving) return;
+    setEditModalOpen(false);
+    setEditingReceiptId(null);
+    setEditingReceiptMeta(null);
+    setEditingPairedReceiptMeta(null);
+    setEditFormErrors({});
+    setIsResubmitFlow(false);
+    setFinanceReturnNote('');
+    setEditAttachmentUploading(false);
+  };
+
+  const populateEditModalFromReceipt = (leader, phase1 = null, { asResubmit = false } = {}) => {
+    if (!leader?.ack_receipt_id) return;
+    setEditingReceiptId(leader.ack_receipt_id);
+    setEditingReceiptMeta(leader);
+    setEditingPairedReceiptMeta(phase1);
+    setIsResubmitFlow(asResubmit);
+    const returnNote =
+      extractLatestTagNote(leader.prospect_student_notes, 'Returned') ||
+      extractLatestTagNote(phase1?.prospect_student_notes, 'Returned');
+    setFinanceReturnNote(asResubmit ? returnNote : '');
+    const combinedLine =
+      getArListLineTotal(leader) + (phase1 ? getArListLineTotal(phase1) : 0);
+    setEditPayableAmount(phase1 ? combinedLine : Number(leader.payment_amount || 0) || 0);
+    if (asResubmit && leader.branch_id) {
+      fetchPackages(leader.branch_id);
+    }
+    setEditFormData({
+      package_id: leader.package_id ? String(leader.package_id) : '',
+      prospect_student_name: leader.prospect_student_name || '',
+      prospect_student_contact: leader.prospect_student_contact || '',
+      prospect_student_email: leader.prospect_student_email || '',
+      prospect_student_phone: leader.prospect_student_phone || '',
+      prospect_student_notes: leader.prospect_student_notes || '',
+      level_tag: leader.level_tag || '',
+      reference_number: leader.reference_number || phase1?.reference_number || '',
+      payment_method: leader.payment_method || '',
+      issue_date:
+        leader.issue_date != null && String(leader.issue_date).trim() !== ''
+          ? String(leader.issue_date).slice(0, 10)
+          : '',
+      tip_amount:
+        leader.tip_amount == null || Number(leader.tip_amount) === 0
+          ? ''
+          : String(Number(leader.tip_amount)),
+      payment_attachment_url:
+        leader.payment_attachment_url || phase1?.payment_attachment_url || '',
+    });
+    setEditFormErrors({});
+  };
+
+  const openEditModalForReceipt = (receipt, { asResubmit = false, pairedReceipt = null } = {}) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    const { leader, phase1 } = resolveAckReceiptLeaderPair(receipt, pairedReceipt);
+    populateEditModalFromReceipt(leader, phase1, { asResubmit });
+    setEditModalOpen(true);
+  };
+
+  const openResubmitModalForReceipt = async (receipt) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    setEditModalOpen(true);
+    setEditSaving(false);
+    populateEditModalFromReceipt(receipt, null, { asResubmit: true });
+    try {
+      const response = await apiRequest(`/acknowledgement-receipts/${receipt.ack_receipt_id}`);
+      const data = response.data || receipt;
+      const { leader, phase1 } = resolveAckReceiptLeaderPair(
+        data,
+        data.paired_acknowledgement_receipt || null
+      );
+      populateEditModalFromReceipt(leader, phase1, { asResubmit: true });
+    } catch (err) {
+      console.error('Failed to load paired AR details for resubmit:', err);
+      const { leader, phase1 } = resolveAckReceiptLeaderPair(receipt, null);
+      populateEditModalFromReceipt(leader, phase1, { asResubmit: true });
+    }
+  };
+
+  const openViewReceiptModal = (receipt) => {
+    if (!receipt?.ack_receipt_id) return;
+    setOpenActionMenuId(null);
+    setActionMenuRect(null);
+    if (receipt.ar_type === 'Package' && receipt.branch_id) {
+      fetchPackages(receipt.branch_id);
+    }
+    setViewFormData({
+      package_id: receipt.package_id ? String(receipt.package_id) : '',
+      prospect_student_name: receipt.prospect_student_name || '',
+      prospect_student_contact: receipt.prospect_student_contact || '',
+      prospect_student_email: receipt.prospect_student_email || '',
+      prospect_student_phone: receipt.prospect_student_phone || '',
+      prospect_student_notes: receipt.prospect_student_notes || '',
+      level_tag: receipt.level_tag || '',
+      reference_number: receipt.reference_number || '',
+      payment_method: receipt.payment_method || '',
+      issue_date:
+        receipt.issue_date != null && String(receipt.issue_date).trim() !== ''
+          ? String(receipt.issue_date).slice(0, 10)
+          : '',
+      tip_amount:
+        receipt.tip_amount == null || Number(receipt.tip_amount) === 0
+          ? ''
+          : String(Number(receipt.tip_amount)),
+      discount_amount: '',
+    });
+    const pkgForGross = packages.find((p) => String(p.package_id) === String(receipt.package_id || ''));
+    let grossPayable = Number(receipt.payment_amount || 0) || 0;
+    if (pkgForGross) {
+      const packagePrice = Number(pkgForGross.package_price || 0);
+      const downpayment = Number(pkgForGross.downpayment_amount || 0);
+      const packageType = String(pkgForGross.package_type || '').toLowerCase();
+      const paymentOption = String(pkgForGross.payment_option || '').toLowerCase();
+      const isInstallmentLike =
+        packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(receipt.installment_option || '').toLowerCase() === 'downpayment_only';
+      grossPayable =
+        isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+    } else if (Number(receipt.package_amount_snapshot || 0) > 0) {
+      grossPayable = Number(receipt.package_amount_snapshot);
+    }
+    setViewPayableAmount(grossPayable);
+    setViewReceipt(receipt);
+  };
+
+  const closeViewReceiptModal = () => {
+    setViewReceipt(null);
+    setViewFormData({
+      package_id: '',
+      prospect_student_name: '',
+      prospect_student_contact: '',
+      prospect_student_email: '',
+      prospect_student_phone: '',
+      prospect_student_notes: '',
+      level_tag: '',
+      reference_number: '',
+      payment_method: '',
+      issue_date: todayManilaYMD(),
+      tip_amount: '',
+      discount_amount: '',
+    });
+    setViewPayableAmount(0);
+    setViewModalAttachmentUrl('');
+    setViewModalAttachmentUploading(false);
+    setViewResubmitSaving(false);
+  };
+
+  const handleEditInputChange = (e) => {
+    const { name, value } = e.target;
+    if (isAckIssueDateLocked(editingReceiptMeta) && name === 'issue_date') return;
+    if (name === 'package_id') {
+      if (editingPairedReceiptMeta) return;
+      const pkg = packages.find((p) => String(p.package_id) === String(value));
+      const packagePrice = Number(pkg?.package_price || 0);
+      const downpayment = Number(pkg?.downpayment_amount || 0);
+      const packageType = String(pkg?.package_type || '').toLowerCase();
+      const paymentOption = String(pkg?.payment_option || '').toLowerCase();
+      const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+      const useDownpayment = String(editingReceiptMeta?.installment_option || '').toLowerCase() === 'downpayment_only';
+      const nextPayable = isInstallmentLike && useDownpayment && downpayment > 0 ? downpayment : packagePrice;
+      setEditPayableAmount(Number.isFinite(nextPayable) ? nextPayable : 0);
+    }
+    setEditFormData((prev) => ({ ...prev, [name]: value }));
+    if (editFormErrors[name]) {
+      setEditFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    }
+  };
+
+  const validateEditForm = () => {
+    const errors = {};
+    if (
+      isResubmitFlow &&
+      editingReceiptMeta?.ar_type === 'Package' &&
+      !editingPairedReceiptMeta &&
+      !(editFormData.package_id || '').trim()
+    ) {
+      errors.package_id = 'Package is required';
+    }
+    if (!(editFormData.prospect_student_name || '').trim()) {
+      errors.prospect_student_name = 'Student name is required';
+    }
+    if (!(editFormData.prospect_student_contact || '').trim()) {
+      errors.prospect_student_contact = 'Guardian name is required';
+    }
+    const email = (editFormData.prospect_student_email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    const phone = (editFormData.prospect_student_phone || '').trim();
+    if (!isValidPhilippineMobile(phone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation';
+    }
+    if (!isPaymentMethodSelected(editFormData.payment_method)) {
+      errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
+    }
+    if (!isAckIssueDateLocked(editingReceiptMeta) && !(editFormData.issue_date || '').trim()) {
+      errors.issue_date = 'Issue date is required';
+    }
+    if (editFormData.tip_amount !== '' && Number(editFormData.tip_amount) < 0) {
+      errors.tip_amount = 'Tip amount cannot be negative';
+    }
+    if (!(editFormData.payment_attachment_url || '').trim()) {
+      errors.payment_attachment_url = 'Attachment image is required';
+    }
+    setEditFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingReceiptId) return;
+    if (!validateEditForm()) return;
+
+    setEditSaving(true);
+    try {
+      const payload = {
+        prospect_student_name: (editFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (editFormData.prospect_student_contact || '').trim() || null,
+        prospect_student_email: (editFormData.prospect_student_email || '').trim() || null,
+        prospect_student_phone: (editFormData.prospect_student_phone || '').trim(),
+        prospect_student_notes: (editFormData.prospect_student_notes || '').trim() || null,
+        level_tag: (editFormData.level_tag || '').trim() || null,
+        reference_number: (editFormData.reference_number || '').trim() || null,
+        payment_method: editFormData.payment_method,
+        tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
+        payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
+      };
+      if (!isAckIssueDateLocked(editingReceiptMeta)) {
+        payload.issue_date = editFormData.issue_date;
+      }
+      if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' && !editingPairedReceiptMeta) {
+        payload.package_id = parseInt(editFormData.package_id, 10);
+      }
+
+      await apiRequest(`/acknowledgement-receipts/${editingReceiptId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+      if (isResubmitFlow) {
+        const resubmitResult = await apiRequest(`/acknowledgement-receipts/${editingReceiptId}/resubmit`, {
+          method: 'PUT',
+          body: JSON.stringify({}),
+        });
+        appAlert(
+          resubmitResult.message ||
+            (editingPairedReceiptMeta
+              ? 'Downpayment and Phase 1 acknowledgement receipts updated and resubmitted successfully.'
+              : 'Acknowledgement receipt updated and resubmitted successfully.')
+        );
+      } else {
+        appAlert('Acknowledgement receipt updated successfully.');
+      }
+      closeEditModal();
+      await fetchReceipts(pagination.page || 1);
+      if (hasArReturnedTab) await fetchReturnedCount();
+      if (isResubmitFlow && arAdminTab === 'return') {
+        setArAdminTab('main');
+        setStatusFilter(AR_STATUS_FILTER.UNVERIFIED);
+      }
+    } catch (err) {
+      console.error('AR update error:', err);
+      appAlert(err?.message || 'Failed to update acknowledgement receipt.');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+
+  const sortedReceipts = sortRows(receipts, sortConfig, {
+    invoice: { accessor: (r) => formatArLinkedInvoiceLabel(r) || '', type: 'string' },
+    ar_number: { accessor: (r) => formatArLinkedInvoiceArNumber(r) || '', type: 'string' },
+    branch: { accessor: 'branch_name', type: 'string' },
+    status: { accessor: (r) => getArStatusDisplayLabel(r), type: 'string' },
+    issue_date: { accessor: 'issue_date', type: 'date' },
+    payment_date: { accessor: 'issue_date', type: 'date' },
+  });
+
+  const handleSort = (key) => {
+    setSortConfig((current) => toggleSortConfig(current, key));
+  };
+
+  const actionMenuReceipt = receipts.find((x) => x.ack_receipt_id === openActionMenuId);
+  const canResubmitFromActionMenu =
+    canBranchResubmitReturnedAr(actionMenuReceipt) &&
+    (arAdminTab === 'return' ||
+      (currentUserId != null && Number(actionMenuReceipt.created_by) === Number(currentUserId)));
+  const actionMenuWidthPx = 176;
+  const summaryAcknowledgementReceiptCount = Number(pagination.total) || 0;
+  const summaryAcknowledgementReceiptTotal =
+    filterTotalLineAmount != null && !Number.isNaN(Number(filterTotalLineAmount))
+      ? Number(filterTotalLineAmount)
+      : receipts.reduce((sum, receipt) => sum + getArListLineTotal(receipt), 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Acknowledgement Receipts</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            Record upfront payments quickly and link them to invoices later.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={exportLoading || loading}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16" />
+            </svg>
+            {exportLoading ? 'Exporting...' : 'Export to Excel'}
+          </button>
+          <button
+            type="button"
+            onClick={handleCreateClick}
+            className="inline-flex items-center justify-center rounded-lg bg-[#F7C844] px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-[#F5B82E]"
+          >
+            Create Acknowledgement Receipt
+          </button>
+        </div>
+      </div>
+
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        title="Export Acknowledgement Receipts"
+        description={
+          <>
+            Select branches, then an <span className="font-medium">issue date</span> range (Manila). Exports Package Acknowledgement Receipt
+            rows aligned with Acknowledgement Receipt Sales on the financial dashboard. Rejected rows are excluded.
+          </>
+        }
+        maxWidthClass="max-w-lg"
+        overlayZClass="z-[9999]"
+        exportLoading={exportLoading}
+        onExport={handleConfirmExportWithDate}
+        exportDisabled={
+          exportModalBranchOptions.length === 0 || selectedExportBranchIds.length === 0
+        }
+      >
+        <div>
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <label className="text-sm font-medium text-gray-700">Select Branches to Export</label>
+            <button
+              type="button"
+              onClick={toggleSelectAllExportBranchesInModal}
+              className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-start"
+              disabled={exportLoading || exportModalBranchOptions.length === 0}
+            >
+              {selectedExportBranchIds.length === exportModalBranchOptions.length ? 'Clear All' : 'Select All'}
+            </button>
+          </div>
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
+            {exportModalBranchOptions.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">No branches available. Try again after branches load.</p>
+            ) : (
+              exportModalBranchOptions.map((branch) => {
+                const branchId = String(branch.branch_id);
+                const checked = selectedExportBranchIds.includes(branchId);
+                return (
+                  <label
+                    key={branchId}
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleExportBranchInModal(branchId)}
+                      disabled={exportLoading}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-gray-700">{branch.branch_nickname || branch.branch_name}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Issue date from</label>
+            <input
+              type="date"
+              value={exportDateFrom}
+              onChange={(e) => setExportDateFrom(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Issue date to</label>
+            <input
+              type="date"
+              value={exportDateTo}
+              onChange={(e) => setExportDateTo(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Selected: <span className="font-semibold">{selectedExportBranchIds.length}</span> branch(es)
+          {selectedExportBranchIds.length === 0 ? ' — select at least one to export.' : ''}
+        </div>
+      </StandardExportModal>
+
+      {hasArReturnedTab ? (
+        <div className="w-full">
+          <BranchPaymentLogTabs
+            value={arAdminTab}
+            onChange={(v) => {
+              setArAdminTab(v);
+              setStatusFilter(v === 'return' ? '' : AR_STATUS_FILTER.ALL);
+            }}
+            mainLabel="Acknowledgement receipts"
+            returnLabel="Return"
+            ariaLabel="Acknowledgement receipt views"
+            returnBadgeCount={returnedArCount}
+          />
+        </div>
+      ) : null}
+
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Search Filter</p>
+            <p className="text-xs text-gray-500">
+              Filter acknowledgement receipts before the table. Branch scope follows the global branch selector.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <label htmlFor="ar-search-filter" className="mb-1 block text-xs font-medium text-gray-700">Search</label>
+            <input
+              id="ar-search-filter"
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              placeholder="Name, contact, INV#, AR#..."
+              title="Search by name, contact, reference, invoice ID, or acknowledgement receipt number"
+            />
+          </div>
+          <div>
+            <label htmlFor="ar-payment-method-filter" className="mb-1 block text-xs font-medium text-gray-700">Payment Method</label>
+            <select
+              id="ar-payment-method-filter"
+              value={paymentMethodFilter}
+              onChange={(e) => setPaymentMethodFilter(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              <option value="">All</option>
+              {PAYMENT_METHOD_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="ar-status-filter" className="mb-1 block text-xs font-medium text-gray-700">Status</label>
+            {hasArReturnedTab && arAdminTab === 'return' ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">Returned only</div>
+            ) : (
+              <select
+                id="ar-status-filter"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value={AR_STATUS_FILTER.ALL}>All</option>
+                <option value={AR_STATUS_FILTER.VERIFIED_APPLIED}>Verified (Applied)</option>
+                <option value={AR_STATUS_FILTER.UNVERIFIED}>Unverified</option>
+                <option value={AR_STATUS_FILTER.REJECTED}>Rejected</option>
+              </select>
+            )}
+          </div>
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-gray-700">Date filter</span>
+            <div
+              role="tablist"
+              aria-label="Acknowledgement receipt date filter mode"
+              className="inline-flex flex-wrap gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5"
+            >
+              {[
+                { mode: DATE_FILTER_MODES.MONTH, label: receiptDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.MONTH] },
+                { mode: DATE_FILTER_MODES.PAYMENT_DATE, label: receiptDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.PAYMENT_DATE] },
+                { mode: DATE_FILTER_MODES.ISSUE_DATE, label: receiptDateFilterUtil.MODE_LABELS[DATE_FILTER_MODES.ISSUE_DATE] },
+              ].map(({ mode, label }) => {
+                const isActive = dateFilterMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => handleArListDateFilterModeChange(mode)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      isActive
+                        ? 'bg-white text-primary-700 shadow-sm ring-1 ring-primary-200'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {dateFilterMode === DATE_FILTER_MODES.MONTH && (
+              <input
+                type="month"
+                aria-label="Issue month"
+                value={filterIssueMonth}
+                onChange={(e) => setFilterIssueMonth(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="ar-list-payment-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="ar-list-payment-from"
+                    type="date"
+                    value={listPaymentDateFrom}
+                    onChange={(e) => setListPaymentDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="ar-list-payment-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="ar-list-payment-to"
+                    type="date"
+                    value={listPaymentDateTo}
+                    onChange={(e) => setListPaymentDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {dateFilterMode === DATE_FILTER_MODES.ISSUE_DATE && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="ar-list-issue-from" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">From</label>
+                  <input
+                    id="ar-list-issue-from"
+                    type="date"
+                    value={listIssueDateFrom}
+                    onChange={(e) => setListIssueDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="ar-list-issue-to" className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">To</label>
+                  <input
+                    id="ar-list-issue-to"
+                    type="date"
+                    value={listIssueDateTo}
+                    onChange={(e) => setListIssueDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="mt-4 border-t border-gray-100 pt-4">
+          <p className="text-xs leading-relaxed text-gray-500">
+            {dateFilterMode === DATE_FILTER_MODES.MONTH
+              ? 'Filtering by acknowledgement receipt payment date (month). Clear to show all dates.'
+              : dateFilterMode === DATE_FILTER_MODES.PAYMENT_DATE
+                ? 'Filtering by acknowledgement receipt payment date (range). Inclusive on both ends.'
+                : 'Filtering by acknowledgement receipt issue date (range). Inclusive on both ends.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+        <span>
+          <span className="font-semibold text-gray-900">Total Acknowledgement Receipts:</span>{' '}
+          <span className="font-medium text-gray-900">{summaryAcknowledgementReceiptCount.toLocaleString('en-US')}</span>
+        </span>
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-900">Total amount:</span>{' '}
+          <span className="font-semibold text-emerald-700">
+            ₱{summaryAcknowledgementReceiptTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
+      {hasArReturnedTab && arAdminTab === 'return' ? (
+        <p className="text-sm text-gray-700 rounded-md border border-orange-100 bg-orange-50/90 px-3 py-2">
+          {isFinanceOrSuperfinance ? (
+            <>
+              Acknowledgement receipts you <span className="font-semibold">returned to the branch</span> for correction.
+              They are removed from this tab after the branch admin <span className="font-semibold">resubmits</span>.
+            </>
+          ) : (
+            <>
+              These acknowledgement receipts were <span className="font-semibold">returned by Finance or Superfinance</span> for
+              correction. After you <span className="font-semibold">Resubmit</span>, they leave this tab and reappear on the main list
+              as <span className="font-semibold">Unverified</span> (non-cash) or <span className="font-semibold">Verified</span> (cash).
+            </>
+          )}
+        </p>
+      ) : null}
+
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+
+      <AcknowledgementReceiptStatusLegend className="shadow-sm" showFinanceActions={isFinanceOrSuperfinance || isAdminOrSuperadmin} />
+
+      {isFinanceOrSuperfinance && arAdminTab === 'main' ? (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm">
+          <p className="font-semibold">Finance verification queue</p>
+          <ul className="mt-1.5 list-inside list-disc space-y-1 text-xs sm:text-sm text-blue-800">
+            <li>
+              <strong>Unverified</strong> — review and choose <strong>Verify</strong>, <strong>Return</strong> (send back to branch for correction), or <strong>Reject</strong> (close permanently).
+            </li>
+            <li>
+              After <strong>Return</strong>, the receipt moves to the <strong>Return</strong> tab until the branch admin resubmits. After <strong>Reject</strong>, use the <strong>Rejected</strong> status filter on the main tab.
+            </li>
+            <li>
+              Only <strong>Verified</strong> receipts can be used for student enrollment.
+            </li>
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="relative bg-white rounded-lg shadow">
+        {loading && !initialDataLoadedRef.current ? (
+          <div
+            className="flex h-48 items-center justify-center"
+            role="status"
+          >
+            <div
+              className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+              aria-hidden
+            />
+            <span className="sr-only">Loading acknowledgement receipts</span>
+          </div>
+        ) : (
+          <div className="relative rounded-lg">
+              {listRefreshing ? (
+                <div
+                  className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]"
+                  aria-busy="true"
+                  aria-label="Refreshing acknowledgement receipts"
+                >
+                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary-600 border-t-transparent" />
+                </div>
+              ) : null}
+              {pagination.total > 0 && (
+                <TablePaginationSummary
+                  page={pagination.page}
+                  totalItems={pagination.total}
+                  itemsPerPage={pagination.limit}
+                  itemLabel="receipts"
+                  className="px-4 pt-4 pb-2"
+                />
+              )}
+              <div
+                className="overflow-x-auto rounded-lg"
+                style={{
+                  scrollbarWidth: 'thin',
+                  scrollbarColor: '#cbd5e0 #f7fafc',
+                  WebkitOverflowScrolling: 'touch',
+                }}
+              >
+              <table
+                className="min-w-full divide-y divide-gray-200 text-sm"
+                style={{ width: '100%', minWidth: '1920px' }}
+              >
+                <thead className="bg-gray-50 table-header-stable">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Student Name</th>
+                    <SortableHeader
+                      label="Invoice"
+                      sortKey="invoice"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap"
+                    />
+                    <SortableHeader
+                      label={
+                        <>
+                          <span className="block">Acknowledgement</span>
+                          <span className="block">Receipt#</span>
+                        </>
+                      }
+                      sortKey="ar_number"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap"
+                    />
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Guardian Name</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Mobile</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Package / Items</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Level Tag</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Total Amount</th>
+                    <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <SortableHeader label="Status" sortKey="status" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payment Method</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap overflow-hidden">
+                      Ref. No.
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Attachment</th>
+                    <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500" />
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                      Issued by
+                    </th>
+                    {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {receipts.length === 0 ? (
+                    <tr>
+                      <td colSpan={isFinanceOrSuperfinance || isAdminOrSuperadmin ? 17 : 16} className="px-6 py-12 text-center">
+                        <p className="text-gray-500">No acknowledgement receipts found.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedReceipts.map((r) => {
+                    const isFocusedFromCrossLink = isAckReceiptListFocused(
+                      r,
+                      focusAckReceiptId,
+                      focusInvoiceOnlyId
+                    );
+                    const rowDomId = getArListRowDomId(r);
+                    const rowKey = r.invoice_only_payment
+                      ? `invoice-only-${r.linked_invoice_id}`
+                      : r.ack_receipt_id;
+                    return (
+                    <tr
+                      key={rowKey}
+                      id={rowDomId || undefined}
+                      className={
+                        isFocusedFromCrossLink
+                          ? 'bg-primary-50 ring-2 ring-inset ring-primary-300'
+                          : isArReturnedForCorrection(r)
+                            ? 'bg-red-50/70'
+                            : isArRejectedStatus(r.status)
+                              ? 'bg-rose-50/60'
+                              : ''
+                      }
+                    >
+                      <td className="px-4 py-3">
+                        <div className="text-gray-900 font-medium">
+                          {r.prospect_student_name || '-'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-900">
+                        <ArInvoiceIdLink userType={userType} receipt={r} />
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600" style={{ maxWidth: '140px' }}>
+                        <span title={formatArLinkedInvoiceArNumber(r) || ''}>
+                          {formatArLinkedInvoiceArNumber(r) || (
+                            <span className="text-gray-300" title="No acknowledgement receipt number">
+                              —
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">
+                        {r.prospect_student_contact || <span className="text-gray-300">–</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900 whitespace-nowrap">
+                        {r.prospect_student_phone || <span className="text-gray-300">–</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.ar_type === 'Merchandise' ? (
+                          <div className="text-gray-900 text-xs">
+                            {(() => {
+                              const items = typeof r.merchandise_items_snapshot === 'string'
+                                ? (() => { try { return JSON.parse(r.merchandise_items_snapshot); } catch { return []; } })()
+                                : r.merchandise_items_snapshot;
+                              return items && Array.isArray(items)
+                              ? items.map((i, idx) => (
+                                  <span key={idx}>
+                                    {i.merchandise_name}
+                                    {i.size ? ` (${i.size})` : ''} × {i.quantity || 1}
+                                    {idx < items.length - 1 ? ', ' : ''}
+                                  </span>
+                                ))
+                              : 'Merchandise';
+                            })()}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-gray-900">
+                              {r.list_package_primary_label ||
+                                r.package_name_snapshot ||
+                                r.package_name ||
+                                'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              ₱
+                              {Number(
+                                r.list_combined_package_amount != null && r.list_combined_package_amount !== ''
+                                  ? r.list_combined_package_amount
+                                  : r.package_amount_snapshot || 0
+                              ).toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </div>
+                            {r.is_downpayment_plus_phase1_leader ? (
+                              <div className="text-xs font-medium text-amber-700 mt-0.5">Downpayment</div>
+                            ) : r.is_paired_phase1_follower ? (
+                              <div className="text-xs font-medium text-amber-700 mt-0.5">
+                                Phase 1
+                                {r.list_paired_leader_ar_number ? (
+                                  <span className="font-normal text-amber-600">
+                                    {' '}
+                                    · paired with AR# {r.list_paired_leader_ar_number}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {r.level_tag || <span className="text-gray-300">?</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900 font-medium">
+                        ₱
+                        {getArListLineTotal(r).toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">
+                        {r.branch_name || '-'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="inline-flex items-center gap-1.5">
+                          <span
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getArStatusBadgeClass(r)}`}
+                          >
+                            {getArStatusDisplayLabel(r)}
+                          </span>
+                          <span className="relative group inline-flex">
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              aria-label={`Status info: ${getArStatusDisplayLabel(r)}`}
+                              title={`${getArStatusDisplayLabel(r)}: ${getArStatusLegend(r)}`}
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            >
+                              i
+                            </button>
+                            <span
+                              role="tooltip"
+                              className="pointer-events-none invisible absolute left-1/2 top-full z-50 mt-1.5 w-56 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-2 text-[11px] leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
+                            >
+                              <span className="block font-semibold mb-0.5">{getArStatusDisplayLabel(r)}</span>
+                              <span className="block text-gray-200">
+                                {getArStatusLegend(r)}
+                              </span>
+                            </span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {r.payment_method || <span className="text-gray-300">?</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-sm">
+                        {r.reference_number || <span className="text-gray-300">?</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.payment_attachment_url ? (
+                          <button
+                            type="button"
+                            onClick={() => openAttachmentViewer(r.payment_attachment_url)}
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                              />
+                            </svg>
+                            <span>View</span>
+                          </button>
+                        ) : (
+                          <span className="text-gray-300">?</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">
+                        {r.issue_date ? formatDateManila(r.issue_date) : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">
+                        {r.issue_date ? formatDateManila(r.issue_date) : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900" style={{ maxWidth: '160px' }}>
+                        <div
+                          className="truncate"
+                          title={getArIssuedByLabel(r) === '—' ? undefined : getArIssuedByLabel(r)}
+                        >
+                          {getArIssuedByLabel(r)}
+                        </div>
+                      </td>
+                      {(isFinanceOrSuperfinance || isAdminOrSuperadmin) && (
+                        <td className="px-4 py-3">
+                          {(() => {
+                            if (r.invoice_only_payment) {
+                              return (
+                                <span
+                                  className="text-xs text-gray-500"
+                                  title="Payment was recorded on the Invoice page; there is no acknowledgement receipt record for this AR number."
+                                >
+                                  —
+                                </span>
+                              );
+                            }
+                            const financeHasActionMenu =
+                              isFinanceOrSuperfinance &&
+                              (arAdminTab === 'return' ||
+                                financeCanVerifyPackageAr(r) ||
+                                financeCanActOnMerchandiseAr(r) ||
+                                (financeHasPackageActionMenu(r) &&
+                                  isArUnverifiedStatus(r) &&
+                                  !isArReturnedForCorrection(r)));
+                            const showEllipsis = financeHasActionMenu || isAdminOrSuperadmin;
+                            if (!showEllipsis) {
+                              return <span className="text-xs text-gray-400">-</span>;
+                            }
+                            return (
+                              <div className="relative inline-block text-left">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const id = r.ack_receipt_id;
+                                    if (openActionMenuId === id) {
+                                      setOpenActionMenuId(null);
+                                      setActionMenuRect(null);
+                                    } else {
+                                      setOpenActionMenuId(id);
+                                      setActionMenuRect(e.currentTarget.getBoundingClientRect());
+                                    }
+                                  }}
+                                  disabled={verifyLoadingId === r.ack_receipt_id}
+                                  className="ar-action-menu-trigger inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                                  aria-label={`Open actions for acknowledgement receipt ${r.ack_receipt_id}`}
+                                  aria-expanded={openActionMenuId === r.ack_receipt_id}
+                                >
+                                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M10 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 5.5A1.5 1.5 0 1010 8.5a1.5 1.5 0 000 3zm0 5.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                                  </svg>
+                                </button>
+                              </div>
+                            );
+                          })()}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                  })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            </div>
+          )}
+        </div>
+
+        <PaymentAttachmentViewerModal open={viewerOpen} url={viewerUrl} onClose={closeAttachmentViewer} />
+
+        <ArFinanceVerifyModal
+          open={financeVerifyModal.open}
+          mode={financeVerifyModal.mode}
+          receipt={financeVerifyModal.receipt}
+          pairedReceipt={financeVerifyModal.pairedReceipt}
+          loading={financeVerifyModal.loading}
+          remarks={financeVerifyModal.remarks}
+          referenceNumber={financeVerifyModal.referenceNumber}
+          onReferenceNumberChange={setFinanceVerifyModalReferenceNumber}
+          onRemarksChange={setFinanceVerifyModalRemarks}
+          submitting={Boolean(
+            financeVerifyModal.receipt?.ack_receipt_id &&
+              verifyLoadingId === financeVerifyModal.receipt.ack_receipt_id
+          )}
+          onClose={closeFinanceVerifyModal}
+          onConfirmVerify={submitFinanceVerify}
+          onConfirmReturn={submitFinanceReturn}
+          onConfirmReject={submitFinanceReject}
+          onModeChange={setFinanceVerifyModalMode}
+          onViewAttachment={openAttachmentViewer}
+          onArNumberClick={handleVerifyModalArNumberClick}
+        />
+
+        {openActionMenuId && actionMenuRect && actionMenuReceipt && (isAdminOrSuperadmin || isFinanceOrSuperfinance)
+          ? createPortal(
+              (() => {
+                const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
+                const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+                const isMerchandiseVerifyRow =
+                  isFinanceOrSuperfinance && financeCanActOnMerchandiseAr(actionMenuReceipt);
+                const isPackageVerifyRow =
+                  isFinanceOrSuperfinance && financeCanVerifyPackageAr(actionMenuReceipt);
+                const financeCanPackageReturnReject =
+                  isFinanceOrSuperfinance &&
+                  financeHasPackageActionMenu(actionMenuReceipt) &&
+                  isArUnverifiedStatus(actionMenuReceipt) &&
+                  !isArReturnedForCorrection(actionMenuReceipt) &&
+                  !isArRejectedStatus(actionMenuReceipt?.status);
+                const financeCanReturnReject =
+                  isMerchandiseVerifyRow || financeCanPackageReturnReject;
+                const financeHasActionMenuOnRow =
+                  isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject;
+                const verifyDisabledForStatus = !(isMerchandiseVerifyRow || isPackageVerifyRow);
+                const returnRejectDisabledForStatus = !financeCanReturnReject;
+                const itemCount = isFinanceOrSuperfinance
+                  ? arAdminTab === 'return'
+                    ? 1
+                    : financeHasActionMenuOnRow
+                      ? isMerchandiseVerifyRow || isPackageVerifyRow || financeCanPackageReturnReject
+                        ? 3
+                        : 0
+                      : 0
+                  : arAdminTab === 'return'
+                    ? 1 + (canResubmitFromActionMenu ? 1 : 0)
+                    : 2 + (canResubmitFromActionMenu ? 1 : 0);
+                const approxH = Math.min(220, itemCount * 40 + 8);
+                const pad = 4;
+                let top = actionMenuRect.bottom + pad;
+                if (top + approxH > h - 8) {
+                  top = Math.max(8, actionMenuRect.top - approxH - pad);
+                }
+                const left = Math.max(8, Math.min(actionMenuRect.right - actionMenuWidthPx, w - actionMenuWidthPx - 8));
+                return (
+                  <div
+                    className="ar-action-menu-portal fixed z-[300] w-44 rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+                    style={{ top, left }}
+                    role="menu"
+                  >
+                    {isFinanceOrSuperfinance ? (
+                      arAdminTab === 'return' ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenActionMenuId(null);
+                            setActionMenuRect(null);
+                            openViewReceiptModal(actionMenuReceipt);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          View
+                        </button>
+                      ) : financeHasActionMenuOnRow ? (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              if (verifyDisabledForStatus) return;
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleVerifyReceipt(actionMenuReceipt, true);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || verifyDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
+                          >
+                            Verify
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              if (returnRejectDisabledForStatus) return;
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleVerifyReceipt(actionMenuReceipt, false);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || returnRejectDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
+                          >
+                            Return to branch
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              if (returnRejectDisabledForStatus) return;
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              handleRejectReceipt(actionMenuReceipt);
+                            }}
+                            disabled={verifyLoadingId === actionMenuReceipt.ack_receipt_id || returnRejectDisabledForStatus}
+                            className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:opacity-60"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : (
+                        <span className="block px-3 py-2 text-xs text-gray-400">No actions available</span>
+                      )
+                    ) : arAdminTab === 'return' ? (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => openViewReceiptModal(actionMenuReceipt)}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          View
+                        </button>
+                        {canResubmitFromActionMenu ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              openResubmitModalForReceipt(actionMenuReceipt);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+                          >
+                            Resubmit
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {canResubmitFromActionMenu ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionMenuRect(null);
+                              openResubmitModalForReceipt(actionMenuReceipt);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+                          >
+                            Resubmit
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenActionMenuId(null);
+                            setActionMenuRect(null);
+                            openEditModalForReceipt(actionMenuReceipt);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })(),
+              document.body
+            )
+          : null}
+
+        {pagination.total > 0 && (
+          <div className="pt-3 border-t border-gray-200 space-y-3">
+            <FixedTablePagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.total}
+              itemsPerPage={pagination.limit}
+              itemLabel="receipts"
+              onPageChange={fetchReceipts}
+            />
+          </div>
+        )}
+      {isSuperadmin &&
+        showBranchModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={() => { setShowBranchModal(false); setBranchModalStep(1); }}
+          >
+            <div
+              className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 pt-6 pb-4 border-b border-gray-200 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {branchModalStep === 1 ? 'Select Branch' : 'Select Issue Type'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => { setShowBranchModal(false); setBranchModalStep(1); }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="px-6 pt-4 pb-6 space-y-4">
+                {branchModalStep === 1 ? (
+                  <div>
+                    <label className="label-field text-xs">
+                      Select Branch <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={selectedBranchId}
+                      onChange={(e) => setSelectedBranchId(e.target.value)}
+                      className="input-field text-sm"
+                      disabled={branchesLoading}
+                    >
+                      <option value="">Choose a branch...</option>
+                      {branches.map((b) => (
+                        <option key={b.branch_id} value={b.branch_id}>
+                          {b.branch_nickname || b.branch_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={arType}
+                      onChange={(e) => setArType(e.target.value)}
+                      className="input-field text-sm"
+                    >
+                      <option value="">Select type...</option>
+                      <option value="Package">Package</option>
+                      <option value="Merchandise">Merchandise</option>
+                    </select>
+                  </div>
+                )}
+                <div className="flex justify-end gap-3 pt-2 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (branchModalStep === 2) {
+                        setBranchModalStep(1);
+                      } else {
+                        setShowBranchModal(false);
+                      }
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                  >
+                    {branchModalStep === 2 ? 'Back' : 'Cancel'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (branchModalStep === 1) {
+                        if (!selectedBranchId) {
+                          appAlert('Please select a branch.');
+                          return;
+                        }
+                        setBranchModalStep(2);
+                      } else {
+                        if (!arType) {
+                          appAlert('Please select an issue type.');
+                          return;
+                        }
+                        const branchId = parseInt(selectedBranchId, 10);
+                        fetchPackages(branchId);
+                        if (arType === 'Merchandise') {
+                          fetchMerchandise(branchId);
+                        }
+                        setShowBranchModal(false);
+                        setBranchModalStep(1);
+                        openCreateModal(arType);
+                      }
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-md hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {showCreateModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5 p-4"
+            onClick={closeCreateModal}
+          >
+            <div
+              className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] overflow-y-auto ${arType === 'Merchandise' ? 'max-w-4xl' : 'max-w-2xl'}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 pt-6 pb-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">Create Acknowledgement Receipt</h2>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {arType === 'Merchandise'
+                      ? 'Record a merchandise payment without creating the full student record yet.'
+                      : arType === 'Package'
+                        ? 'Record a payment for a package without creating the full student record yet.'
+                        : 'Select an issue type to continue.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCreateModal}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={creating}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateSubmit} className="px-6 pb-6 pt-4 space-y-4">
+                {isSuperadmin && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Branch <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={selectedBranchId}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setSelectedBranchId(value);
+                        setCreateFormErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.branch_id;
+                          return next;
+                        });
+                        setSelectedPackage(null);
+                        setMerchandiseSelections([]);
+                        setCreateFormData((prev) => ({
+                          ...prev,
+                          package_id: '',
+                          payment_amount: '',
+                          installment_option: 'downpayment_only',
+                        }));
+                        if (value) {
+                          const bid = parseInt(value, 10);
+                          fetchPackages(bid);
+                          if (arType === 'Merchandise') fetchMerchandise(bid);
+                        } else {
+                          setPackages([]);
+                          setMerchandise([]);
+                        }
+                      }}
+                      className={`input-field text-sm ${createFormErrors.branch_id ? 'border-red-500' : ''}`}
+                      disabled={branchesLoading}
+                    >
+                      <option value="">Select branch?</option>
+                      {branches.map((b) => (
+                        <option key={b.branch_id} value={b.branch_id}>
+                          {b.branch_nickname || b.branch_name}
+                        </option>
+                      ))}
+                    </select>
+                    {createFormErrors.branch_id && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.branch_id}</p>
+                    )}
+                  </div>
+                )}
+                {(isSuperadmin || isAdminOrSuperadmin) && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={arType}
+                      onChange={(e) => handleArTypeChange(e.target.value)}
+                      className={`input-field text-sm ${createFormErrors.ar_type ? 'border-red-500' : ''}`}
+                    >
+                      <option value="">Select type...</option>
+                      <option value="Package">Package</option>
+                      {isAdminOrSuperadmin && <option value="Merchandise">Merchandise</option>}
+                    </select>
+                    {createFormErrors.ar_type && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.ar_type}</p>
+                    )}
+                  </div>
+                )}
+                {!arType ? (
+                  <p className="text-sm text-gray-500 py-2">
+                    Choose Package or Merchandise above to continue filling out this form.
+                  </p>
+                ) : arType === 'Merchandise' ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">
+                          Student Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_name"
+                          value={createFormData.prospect_student_name}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
+                        />
+                        {createFormErrors.prospect_student_name && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Guardian Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_contact"
+                          value={createFormData.prospect_student_contact}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_contact ? 'border-red-500' : ''}`}
+                        />
+                        {createFormErrors.prospect_student_contact && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          name="prospect_student_email"
+                          value={createFormData.prospect_student_email}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                          placeholder="client@example.com"
+                        />
+                        {createFormErrors.prospect_student_email && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          name="prospect_student_phone"
+                          value={createFormData.prospect_student_phone}
+                          onChange={handleCreateInputChange}
+                          className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                          placeholder="09171234567"
+                          autoComplete="tel"
+                        />
+                        {createFormErrors.prospect_student_phone && (
+                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Select Merchandise <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        className={`input-field text-sm ${createFormErrors.merchandise ? 'border-red-500' : ''}`}
+                        disabled={merchandiseLoading}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val) {
+                            addMerchandiseByName(val);
+                            e.target.value = '';
+                          }
+                        }}
+                      >
+                        <option value="">Add merchandise...</option>
+                        {uniqueMerchandiseNames().map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      {createFormErrors.merchandise && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.merchandise}</p>
+                      )}
+                      {merchandiseSelections.length > 0 && (
+                        <ul className="mt-2 space-y-3">
+                          {merchandiseSelections.map((sel) => {
+                            const selectedItem = sel.selectedMerchandiseId
+                              ? merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId)
+                              : sel.sizeOptions.length === 1
+                              ? sel.sizeOptions[0]
+                              : null;
+                            const price = selectedItem ? parseFloat(selectedItem.price) || 0 : 0;
+                            const lineTotal = price * (sel.quantity || 1);
+                            const imageUrl = selectedItem?.image_url || sel.sizeOptions.find((o) => o.image_url)?.image_url || sel.sizeOptions[0]?.image_url;
+                            return (
+                              <li
+                                key={sel.id}
+                                className="flex flex-row items-center gap-4 p-3 bg-gray-50 rounded-lg border border-gray-200"
+                              >
+                                <div className="flex items-center gap-3 flex-shrink-0">
+                                  {imageUrl && (
+                                    <img
+                                      src={imageUrl}
+                                      alt={sel.merchandise_name}
+                                      className="w-12 h-12 object-cover rounded border border-gray-200 bg-white"
+                                    />
+                                  )}
+                                  <div>
+                                    <p className="font-medium text-gray-900 text-sm">{sel.merchandise_name}</p>
+                                    <p className="text-xs text-gray-500">
+                                      {selectedItem
+                                        ? [
+                                            `₱${price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+                                            selectedItem.size && selectedItem.size,
+                                            selectedItem.gender && selectedItem.gender,
+                                            selectedItem.type && selectedItem.type,
+                                            !isUniformMerchandise(sel.merchandise_name) && selectedItem.remarks?.trim() && selectedItem.remarks.trim(),
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' • ')
+                                        : isUniformMerchandise(sel.merchandise_name)
+                                          ? 'Select size'
+                                          : 'Select type'}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3 flex-1 flex-wrap min-w-0">
+                                  {sel.sizeOptions.length > 1 ? (
+                                    <div className="min-w-[180px]">
+                                      <label className="sr-only">{isUniformMerchandise(sel.merchandise_name) ? 'Size' : 'Type'}</label>
+                                      <select
+                                        value={sel.selectedMerchandiseId || ''}
+                                        onChange={(e) => updateMerchandiseSelectionSize(sel.id, e.target.value)}
+                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"
+                                      >
+                                        <option value="">
+                                          {isUniformMerchandise(sel.merchandise_name) ? 'Select size' : 'Select type'}
+                                        </option>
+                                        {sel.sizeOptions.map((opt) => (
+                                          <option key={opt.merchandise_id} value={opt.merchandise_id}>
+                                            {[
+                                              opt.size || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type'),
+                                              opt.gender && opt.gender,
+                                              opt.type && opt.type,
+                                              !isUniformMerchandise(sel.merchandise_name) && opt.remarks?.trim(),
+                                              `₱${Number(opt.price || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+                                            ]
+                                              .filter(Boolean)
+                                              .join(' - ')}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  ) : (
+                                    sel.sizeOptions.length === 1 && (
+                                      <span className="text-xs text-gray-500">
+                                        {[
+                                          sel.sizeOptions[0].size && `Size: ${sel.sizeOptions[0].size}`,
+                                          sel.sizeOptions[0].gender && `Gender: ${sel.sizeOptions[0].gender}`,
+                                          sel.sizeOptions[0].type && `Type: ${sel.sizeOptions[0].type}`,
+                                          !isUniformMerchandise(sel.merchandise_name) && sel.sizeOptions[0].remarks?.trim() && `Remarks: ${sel.sizeOptions[0].remarks.trim()}`,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' • ') || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type')}
+                                      </span>
+                                    )
+                                  )}
+                                  <div>
+                                    <label className="sr-only">Quantity</label>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={sel.quantity || 1}
+                                      onChange={(e) => updateMerchandiseSelectionQuantity(sel.id, e.target.value)}
+                                      className="w-16 px-2 py-1.5 text-sm border border-gray-300 rounded"
+                                    />
+                                  </div>
+                                  <span className="text-sm font-medium text-gray-700">
+                                    ₱{lineTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMerchandiseSelection(sel.id)}
+                                    className="p-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded"
+                                    title="Remove"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Level Tag <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        name="level_tag"
+                        value={createFormData.level_tag}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
+                      >
+                        <option value="">Select Level Tag</option>
+                        {LEVEL_TAG_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                      {createFormErrors.level_tag && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">
+                        Payment Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        name="issue_date"
+                        value={createFormData.issue_date}
+                        onChange={handleCreateInputChange}
+                        className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                        required
+                        disabled={creating}
+                      />
+                      {createFormErrors.issue_date && (
+                        <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
+                      )}
+                      <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Amount</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Tip/Payment Adjustment</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        name="tip_amount"
+                        value={createFormData.tip_amount}
+                        onChange={handleCreateInputChange}
+                        placeholder="0.00"
+                        className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                      />
+                      {createFormErrors.tip_amount && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
+                      )}
+                    </div>
+                    <PaymentDiscountField
+                      className="col-span-full"
+                      hintVariant="ar"
+                      value={createFormData.discount_amount}
+                      onChange={handleCreateInputChange}
+                      error={createFormErrors.discount_amount}
+                      payableAmount={merchandiseTotalAmount()}
+                      disabled={creating}
+                    />
+                    <div>
+                      <label className="label-field text-xs">
+                        Payment Method <span className="text-red-500">*</span>
+                      </label>
+                      <PaymentMethodSelect
+                        name="payment_method"
+                        value={createFormData.payment_method}
+                        onChange={handleCreateInputChange}
+                        error={createFormErrors.payment_method}
+                        disabled={creating}
+                      />
+                      {createFormErrors.payment_method && (
+                        <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
+                      )}
+                      {createFormData.payment_method === 'Cash' ? (
+                        <p className="text-xs text-emerald-600 mt-1">
+                          Cash merchandise is auto-verified on the AR page when issued. Finance still approves the payment in Payment Logs.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Non-cash merchandise must be verified by Finance/Superfinance on the AR page; Payment Logs auto-approve when Finance verifies.
+                        </p>
+                      )}
+                    </div>
+                    <PaymentReferenceNumberField
+                      paymentMethod={createFormData.payment_method}
+                      name="reference_number"
+                      value={createFormData.reference_number}
+                      onChange={handleCreateInputChange}
+                      disabled={creating}
+                      placeholder="e.g. GCash transaction ID, bank ref"
+                    />
+                    <div>
+                      <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
+                  <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 50 MB)</p>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={handleAttachmentChange}
+                        disabled={attachmentUploading || creating}
+                        className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                      />
+                      {attachmentUploading && <p className="text-xs text-amber-600 mt-1">Uploading…</p>}
+                      {createFormErrors.payment_attachment_url && (
+                        <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
+                      )}
+                      {createFormData.payment_attachment_url && !attachmentUploading && (
+                        <div className="mt-2">
+                          <img
+                            src={createFormData.payment_attachment_url}
+                            alt="Preview"
+                            className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
+                          />
+                          <div className="mt-2 flex gap-2">
+                            <button type="button" onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)} className="text-sm text-blue-600 hover:underline">
+                              View
+                            </button>
+                            <button type="button" onClick={clearAttachment} className="text-xs text-red-600 hover:text-red-700">
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label-field text-xs">
+                      Student Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="prospect_student_name"
+                      value={createFormData.prospect_student_name}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${
+                        createFormErrors.prospect_student_name ? 'border-red-500' : ''
+                      }`}
+                    />
+                    {createFormErrors.prospect_student_name && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">
+                      Guardian Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="prospect_student_contact"
+                      value={createFormData.prospect_student_contact}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${
+                        createFormErrors.prospect_student_contact ? 'border-red-500' : ''
+                      }`}
+                    />
+                    {createFormErrors.prospect_student_contact && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                    <input
+                      type="email"
+                      name="prospect_student_email"
+                      value={createFormData.prospect_student_email}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                      placeholder="client@example.com"
+                    />
+                    {createFormErrors.prospect_student_email && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">
+                      Mobile Number (SMS) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      name="prospect_student_phone"
+                      value={createFormData.prospect_student_phone}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                      placeholder="09171234567"
+                      autoComplete="tel"
+                    />
+                    {createFormErrors.prospect_student_phone && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">Notes (optional)</label>
+                  <textarea
+                    name="prospect_student_notes"
+                    value={createFormData.prospect_student_notes}
+                    onChange={handleCreateInputChange}
+                    rows="2"
+                    className="input-field text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="label-field text-xs">
+                    Level Tag <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    name="level_tag"
+                    value={createFormData.level_tag}
+                    onChange={handleCreateInputChange}
+                    className={`input-field text-sm ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
+                  >
+                    <option value="">Select Level Tag</option>
+                    <option value="Playgroup">Playgroup</option>
+                    <option value="Nursery">Nursery</option>
+                    <option value="Pre-Kindergarten">Pre-Kindergarten</option>
+                    <option value="Kindergarten">Kindergarten</option>
+                    <option value="Grade School">Grade School</option>
+                  </select>
+                  {createFormErrors.level_tag && (
+                    <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
+                  )}
+                  {selectedPackage?.level_tag && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Package level: {selectedPackage.level_tag}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label-field text-xs">
+                      Package <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="package_id"
+                      value={createFormData.package_id}
+                      onChange={handlePackageChange}
+                      className={`input-field text-sm ${
+                        createFormErrors.package_id ? 'border-red-500' : ''
+                      }`}
+                      disabled={packagesLoading}
+                    >
+                      <option value="">Select package?</option>
+                      {packages.map((pkg) => (
+                        <option key={pkg.package_id} value={pkg.package_id}>
+                          {pkg.package_name}
+                        </option>
+                      ))}
+                    </select>
+                    {createFormErrors.package_id && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.package_id}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Amount <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      tabIndex={-1}
+                      name="payment_amount"
+                      value={
+                        createFormData.payment_amount === '' || createFormData.payment_amount == null
+                          ? ''
+                          : `₱${Number(createFormData.payment_amount).toLocaleString('en-PH', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}`
+                      }
+                      className={`input-field text-sm bg-gray-100 cursor-not-allowed ${
+                        createFormErrors.payment_amount ? 'border-red-500' : ''
+                      }`}
+                      aria-readonly="true"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Amount is set from the selected package (and installment option if applicable); it cannot be edited.
+                    </p>
+                    {createFormErrors.payment_amount && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_amount}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      name="tip_amount"
+                      value={createFormData.tip_amount}
+                      onChange={handleCreateInputChange}
+                      placeholder="0.00"
+                      className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                    />
+                    {createFormErrors.tip_amount && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
+                    )}
+                  </div>
+                </div>
+
+                <PaymentDiscountField
+                  className="col-span-full"
+                  hintVariant="ar"
+                  value={createFormData.discount_amount}
+                  onChange={handleCreateInputChange}
+                  error={createFormErrors.discount_amount}
+                  payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
+                  disabled={creating}
+                />
+
+                {selectedPackage &&
+                  ((selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')) && (() => {
+                    const downpayment = parseFloat(selectedPackage.downpayment_amount || 0);
+                    const monthly = parseFloat(selectedPackage.package_price || 0);
+                    return (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+                        <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">
+                          Installment Payment Option
+                        </p>
+                        <div className="space-y-2">
+                          <label className="flex items-start gap-3 cursor-pointer group">
+                            <input
+                              type="radio"
+                              name="installment_option"
+                              value="downpayment_only"
+                              checked={createFormData.installment_option === 'downpayment_only'}
+                              onChange={() => handleInstallmentOptionChange('downpayment_only')}
+                              className="mt-0.5 accent-blue-600"
+                            />
+                            <span className="flex-1">
+                              <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                                Downpayment Only
+                              </span>
+                              <span className="block text-xs text-gray-500 mt-0.5">
+                                Amount: ₱{downpayment.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                                &nbsp;&mdash; Phase 1 invoice will be generated separately after enrollment.
+                              </span>
+                            </span>
+                          </label>
+                          <label className="flex items-start gap-3 cursor-pointer group">
+                            <input
+                              type="radio"
+                              name="installment_option"
+                              value="downpayment_plus_phase1"
+                              checked={createFormData.installment_option === 'downpayment_plus_phase1'}
+                              onChange={() => handleInstallmentOptionChange('downpayment_plus_phase1')}
+                              className="mt-0.5 accent-blue-600"
+                            />
+                            <span className="flex-1">
+                              <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                                Downpayment + Phase 1
+                              </span>
+                              <span className="block text-xs text-gray-500 mt-0.5">
+                                Amount: ₱{(downpayment + monthly).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                                &nbsp;(₱{downpayment.toLocaleString('en-PH', { minimumFractionDigits: 2 })} downpayment
+                                &nbsp;+ ₱{monthly.toLocaleString('en-PH', { minimumFractionDigits: 2 })} Phase 1)
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+                    );
+                  })()
+                }
+
+                {arType === 'Package' && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <PaymentMethodSelect
+                      name="payment_method"
+                      value={createFormData.payment_method}
+                      onChange={handleCreateInputChange}
+                      error={createFormErrors.payment_method}
+                      disabled={creating}
+                    />
+                    {createFormErrors.payment_method && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
+                    )}
+                    {createFormData.payment_method === 'Cash' ? (
+                      <p className="text-xs text-emerald-600 mt-1">
+                        Cash package AR is auto-verified for enrollment use. Finance approves the payment in Payment Logs (unapplied AR row until attached, or payment row after enrollment).
+                      </p>
+                    ) : (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Non-cash package AR must be verified by Finance/Superfinance on the AR page before enrollment. Payment Logs auto-approve when Finance verifies.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {arType === 'Package' && (
+                  <div>
+                    <label className="label-field text-xs">
+                      Issue Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      name="issue_date"
+                      value={createFormData.issue_date}
+                      onChange={handleCreateInputChange}
+                      className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
+                      required
+                      disabled={creating}
+                    />
+                    {createFormErrors.issue_date && (
+                      <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
+                  </div>
+                )}
+
+                <PaymentReferenceNumberField
+                  paymentMethod={createFormData.payment_method}
+                  name="reference_number"
+                  value={createFormData.reference_number}
+                  onChange={handleCreateInputChange}
+                  disabled={creating}
+                  placeholder="e.g. GCash transaction ID, bank ref, etc."
+                />
+
+                <div>
+                  <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 50 MB)
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={handleAttachmentChange}
+                    disabled={attachmentUploading || creating}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                  />
+                  {attachmentUploading && (
+                    <p className="text-xs text-amber-600 mt-1">Uploading?</p>
+                  )}
+                  {createFormData.payment_attachment_url && !attachmentUploading && (
+                    <div className="mt-2">
+                      <img
+                        src={createFormData.payment_attachment_url}
+                        alt="Payment attachment preview"
+                        className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
+                      />
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)}
+                          className="text-sm text-blue-600 hover:underline"
+                        >
+                          View attached image
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearAttachment}
+                          className="text-xs text-red-600 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {createFormErrors.payment_attachment_url && (
+                    <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
+                  )}
+                </div>
+
+                  </>
+                )}
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={closeCreateModal}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                    disabled={creating}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={
+                      creating ||
+                      attachmentUploading ||
+                      !arType ||
+                      !(createFormData.payment_attachment_url || '').trim() ||
+                      (arType === 'Package' &&
+                        (!createFormData.package_id ||
+                          !(parseFloat(createFormData.payment_amount) > 0))) ||
+                      (arType === 'Merchandise' && merchandiseTotalAmount() <= 0)
+                    }
+                  >
+                    {creating ? 'Saving?' : 'Done'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {merchandiseArCreatedSummary &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+            onClick={() => {
+              if (!merchArPdfLoading) closeMerchandiseArCreatedSummary();
+            }}
+            role="presentation"
+          >
+            <div
+              className="max-h-[95vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="merch-ar-created-title"
+            >
+              <div className="flex flex-col gap-2 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div>
+                  <h2 id="merch-ar-created-title" className="text-sm font-semibold text-gray-900 sm:text-base">
+                    Merchandise acknowledgement receipt created
+                  </h2>
+                  <p className="text-xs text-gray-600">{merchandiseArCreatedSummary.summaryMessage}</p>
+                </div>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-2">
+                  <button
+                    type="button"
+                    onClick={closeMerchandiseArCreatedSummary}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                    disabled={merchArPdfLoading}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadMerchandiseArPdf(merchandiseArCreatedSummary.invoiceId)}
+                    disabled={merchArPdfLoading || !merchandiseArCreatedSummary.invoiceId}
+                    className="rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      merchandiseArCreatedSummary.invoiceId
+                        ? 'Opens the same acknowledgement receipt PDF as Download Acknowledgement Receipt on the invoice page.'
+                        : 'No linked invoice'
+                    }
+                  >
+                    {merchArPdfLoading ? 'Opening PDF…' : 'Print'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 sm:p-4">
+                {(() => {
+                  const r = merchandiseArCreatedSummary.receipt;
+                  const b =
+                    branches.find((br) => Number(br.branch_id) === Number(r.branch_id)) || null;
+                  const branchLabel =
+                    b?.branch_nickname || b?.branch_name || (r.branch_id != null ? `Branch #${r.branch_id}` : '—');
+                  const issueYmd =
+                    r.issue_date != null && String(r.issue_date).trim() !== ''
+                      ? String(r.issue_date).slice(0, 10)
+                      : '';
+                  const receiptNo =
+                    merchandiseArCreatedSummary.invoiceArNumber ||
+                    (merchandiseArCreatedSummary.invoiceId
+                      ? `Invoice #${merchandiseArCreatedSummary.invoiceId}`
+                      : '—');
+
+                  const preparedByName =
+                    r.prepared_by_name ||
+                    userInfo?.full_name ||
+                    userInfo?.fullName ||
+                    userInfo?.email ||
+                    '—';
+                  const preparedByText = preparedByName;
+                  const receivedByText = r.prospect_student_contact || '';
+
+                  const { rows: merchRows, total: merchTotal } = buildAckReceiptTableRows(r);
+
+                  return (
+                    <>
+                      <AcknowledgementReceiptStylePreview
+                        branchAddress={b?.branch_address || undefined}
+                        branchPhone={b?.branch_phone_number || undefined}
+                        branchEmail={b?.branch_email || undefined}
+                        branchFallbackLine={!b?.branch_address?.trim() ? branchLabel : undefined}
+                        receiptNo={receiptNo}
+                        studentName={r.prospect_student_name || '—'}
+                        classLabel={r.level_tag || '-'}
+                        receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                        preparedByText={preparedByText}
+                        receivedByText={receivedByText}
+                        tableRows={merchRows}
+                        totalAmount={merchTotal}
+                      />
+                      {r.prospect_student_notes ? (
+                        <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">
+                          <span className="font-semibold text-gray-700">Notes: </span>
+                          {r.prospect_student_notes}
+                        </p>
+                      ) : null}
+                      {r.prospect_student_email ? (
+                        <p className="mt-2 text-xs text-gray-500">
+                          <span className="font-medium">Client email: </span>
+                          {r.prospect_student_email}
+                        </p>
+                      ) : null}
+                      {r.prospect_student_phone ? (
+                        <p className="mt-1 text-xs text-gray-500">
+                          <span className="font-medium">Mobile: </span>
+                          {r.prospect_student_phone}
+                        </p>
+                      ) : null}
+                      {r.reference_number ? (
+                        <p className="mt-1 text-xs text-gray-500">
+                          <span className="font-medium">Reference: </span>
+                          {r.reference_number}
+                        </p>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {packageArCreatedSummary &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+            onClick={() => {
+              if (!packageArPdfLoading) closePackageArCreatedSummary();
+            }}
+            role="presentation"
+          >
+            <div
+              className="max-h-[95vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pkg-ar-created-title"
+            >
+              <div className="flex flex-col gap-2 border-b border-gray-200 bg-gray-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div>
+                  <h2 id="pkg-ar-created-title" className="text-sm font-semibold text-gray-900 sm:text-base">
+                    {packageArCreatedSummary.pairedReceipt
+                      ? 'Package acknowledgement receipts created'
+                      : 'Package acknowledgement receipt created'}
+                  </h2>
+                  <p className="text-xs text-gray-600">{packageArCreatedSummary.summaryMessage}</p>
+                </div>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-2">
+                  <button
+                    type="button"
+                    onClick={closePackageArCreatedSummary}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                    disabled={packageArPdfLoading}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadPackageArPdf(packageArCreatedSummary.receipt?.ack_receipt_id)}
+                    disabled={packageArPdfLoading || !packageArCreatedSummary.receipt?.ack_receipt_id}
+                    className="rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      packageArCreatedSummary.pairedReceipt
+                        ? 'Opens one PDF: page 1 = downpayment AR number, page 2 = Phase 1 AR number (matches invoices).'
+                        : 'Opens the Acknowledgement Receipt PDF for this package AR.'
+                    }
+                  >
+                    {packageArPdfLoading ? 'Opening PDF…' : 'Print'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 sm:p-4">
+                {(() => {
+                  const renderPackageBlock = (r, sectionLabel) => {
+                    if (!r) return null;
+                    const b =
+                      branches.find((br) => Number(br.branch_id) === Number(r.branch_id)) || null;
+                    const branchLabel =
+                      b?.branch_nickname ||
+                      b?.branch_name ||
+                      (r.branch_id != null ? `Branch #${r.branch_id}` : '—');
+                    const issueYmd =
+                      r.issue_date != null && String(r.issue_date).trim() !== ''
+                        ? String(r.issue_date).slice(0, 10)
+                        : '';
+                    const receiptNo = r.ack_receipt_number || '—';
+
+                    const preparedByName =
+                      r.prepared_by_name ||
+                      userInfo?.full_name ||
+                      userInfo?.fullName ||
+                      userInfo?.email ||
+                      '—';
+                    const preparedByText = preparedByName;
+                    const receivedByText = r.prospect_student_contact || '';
+
+                    const matchedPkg =
+                      packages.find((pkg) => String(pkg.package_id) === String(r.package_id || '')) ||
+                      null;
+                    const { rows: packageRows, total: packageTotal } = buildAckReceiptTableRows(r, {
+                      selectedPackage: matchedPkg,
+                    });
+
+                    return (
+                      <div
+                        key={r.ack_receipt_id ?? receiptNo}
+                        className={
+                          sectionLabel
+                            ? 'mb-8 rounded-lg border border-gray-200 bg-white p-3 shadow-sm last:mb-0 sm:p-4'
+                            : ''
+                        }
+                      >
+                        {sectionLabel ? (
+                          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                            {sectionLabel}
+                          </p>
+                        ) : null}
+                        <AcknowledgementReceiptStylePreview
+                          branchAddress={b?.branch_address || undefined}
+                          branchPhone={b?.branch_phone_number || undefined}
+                          branchEmail={b?.branch_email || undefined}
+                          branchFallbackLine={!b?.branch_address?.trim() ? branchLabel : undefined}
+                          receiptNo={receiptNo}
+                          studentName={r.prospect_student_name || '—'}
+                          classLabel={r.level_tag || '-'}
+                          receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
+                          preparedByText={preparedByText}
+                          receivedByText={receivedByText}
+                          tableRows={packageRows}
+                          totalAmount={packageTotal}
+                        />
+                        {r.prospect_student_notes ? (
+                          <p className="mt-3 whitespace-pre-wrap border-t border-gray-200 pt-3 text-xs text-gray-600">
+                            <span className="font-semibold text-gray-700">Notes: </span>
+                            {r.prospect_student_notes}
+                          </p>
+                        ) : null}
+                        {r.prospect_student_email ? (
+                          <p className="mt-2 text-xs text-gray-500">
+                            <span className="font-medium">Client email: </span>
+                            {r.prospect_student_email}
+                          </p>
+                        ) : null}
+                        {r.prospect_student_phone ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Mobile: </span>
+                            {r.prospect_student_phone}
+                          </p>
+                        ) : null}
+                        {r.reference_number ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Reference: </span>
+                            {r.reference_number}
+                          </p>
+                        ) : null}
+                        {r.payment_method ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            <span className="font-medium">Payment method: </span>
+                            {r.payment_method}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  };
+
+                  const primary = packageArCreatedSummary.receipt;
+                  const paired = packageArCreatedSummary.pairedReceipt;
+                  return (
+                    <>
+                      {paired ? (
+                        <p className="mb-4 text-xs text-gray-600">
+                          Downpayment and Phase 1 each have a different AR number (next in sequence). Attach the
+                          <span className="font-medium"> downpayment </span>
+                          receipt for enrollment; the Phase 1 invoice will show the second AR number after auto-pay.
+                        </p>
+                      ) : null}
+                      {paired ? renderPackageBlock(primary, 'Downpayment') : renderPackageBlock(primary, null)}
+                      {paired ? renderPackageBlock(paired, 'Phase 1') : null}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {editModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/30 p-4"
+            onClick={closeEditModal}
+          >
+            <div
+              className={`w-full max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl ${
+                isResubmitFlow && editingPairedReceiptMeta ? 'max-w-5xl' : 'max-w-3xl'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+                <h3 className="text-base font-semibold text-gray-900">
+                  {isResubmitFlow
+                    ? editingPairedReceiptMeta
+                      ? 'Review & Resubmit Downpayment + Phase 1'
+                      : 'Review & Resubmit Acknowledgement Receipt'
+                    : 'Edit Acknowledgement Receipt'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  disabled={editSaving}
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handleEditSubmit} className="space-y-4 px-5 py-4">
+                {isResubmitFlow && financeReturnNote ? (
+                  <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-orange-900">Noted from Finance / Superfinance</p>
+                    <p className="mt-1 text-sm text-orange-800">{financeReturnNote}</p>
+                  </div>
+                ) : null}
+                {isResubmitFlow && editingPairedReceiptMeta ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                    <ArPairedReceiptSummaryBlocks
+                      leader={editingReceiptMeta}
+                      phase1={editingPairedReceiptMeta}
+                      onLineClick={handleEditModalArLineClick}
+                      showListHint
+                    />
+                  </div>
+                ) : (
+                <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Receipt details</p>
+                  <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-700 sm:grid-cols-2">
+                    <p><span className="font-semibold">Type:</span> {editingReceiptMeta?.ar_type || '-'}</p>
+                    <p><span className="font-semibold">Status:</span> {editingReceiptMeta?.status || '-'}</p>
+                    <p><span className="font-semibold">Package / Items:</span> {editingReceiptMeta?.ar_type === 'Merchandise' ? 'Merchandise' : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || '-')}</p>
+                    <p>
+                      <span className="font-semibold">Total Amount:</span>{' '}
+                      ₱{(Number(editingReceiptMeta?.payment_amount || 0) + Number(editingReceiptMeta?.tip_amount || 0)).toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </p>
+                    <p><span className="font-semibold">Branch:</span> {editingReceiptMeta?.branch_name || '-'}</p>
+                    <p><span className="font-semibold">Reference No.:</span> {editingReceiptMeta?.reference_number || '-'}</p>
+                  </div>
+                </div>
+                )}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="label-field text-xs">Package</label>
+                    {isResubmitFlow &&
+                    editingReceiptMeta?.ar_type === 'Package' &&
+                    !editingPairedReceiptMeta ? (
+                      <>
+                        <select
+                          name="package_id"
+                          value={editFormData.package_id}
+                          onChange={handleEditInputChange}
+                          className={`input-field text-sm ${editFormErrors.package_id ? 'border-red-500' : ''}`}
+                          disabled={editSaving}
+                        >
+                          <option value="">Select package</option>
+                          {packages.map((pkg) => (
+                            <option key={pkg.package_id} value={pkg.package_id}>
+                              {pkg.package_name} - ₱{Number(pkg.package_price || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </option>
+                          ))}
+                        </select>
+                        {editFormErrors.package_id && <p className="mt-1 text-xs text-red-500">{editFormErrors.package_id}</p>}
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        value={
+                          editingPairedReceiptMeta
+                            ? packages.find((p) => String(p.package_id) === String(editFormData.package_id))?.package_name ||
+                              editingReceiptMeta?.package_name ||
+                              editingReceiptMeta?.package_name_snapshot ||
+                              'N/A'
+                            : editingReceiptMeta?.ar_type === 'Merchandise'
+                              ? 'Merchandise'
+                              : (editingReceiptMeta?.package_name_snapshot || editingReceiptMeta?.package_name || 'N/A')
+                        }
+                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                        disabled
+                        readOnly
+                        tabIndex={-1}
+                      />
+                    )}
+                    {editingPairedReceiptMeta ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Package cannot be changed for a Downpayment + Phase 1 pair.
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Payable Amount</label>
+                    <input
+                      type="text"
+                      value={`₱${Number(editPayableAmount || 0).toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}`}
+                      className="input-field text-sm bg-gray-100"
+                      disabled
+                      readOnly
+                    />
+                    {editingPairedReceiptMeta ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Combined downpayment + Phase 1 line total (each AR keeps its own amount).
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Student Name <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      name="prospect_student_name"
+                      value={editFormData.prospect_student_name}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_name && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_name}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">
+                      Guardian Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="prospect_student_contact"
+                      value={editFormData.prospect_student_contact}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_contact ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_contact && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_contact}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Email</label>
+                    <input
+                      type="email"
+                      name="prospect_student_email"
+                      value={editFormData.prospect_student_email}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_email && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_email}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">
+                      Mobile Number (SMS) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      name="prospect_student_phone"
+                      value={editFormData.prospect_student_phone}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
+                      placeholder="09171234567"
+                      autoComplete="tel"
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.prospect_student_phone && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.prospect_student_phone}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Level Tag</label>
+                    <select
+                      name="level_tag"
+                      value={editFormData.level_tag}
+                      onChange={handleEditInputChange}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    >
+                      <option value="">Select level tag</option>
+                      {LEVEL_TAG_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Issue Date <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      name="issue_date"
+                      value={editFormData.issue_date}
+                      onChange={handleEditInputChange}
+                      readOnly={isAckIssueDateLocked(editingReceiptMeta)}
+                      tabIndex={isAckIssueDateLocked(editingReceiptMeta) ? -1 : undefined}
+                      className={`input-field text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''} ${isAckIssueDateLocked(editingReceiptMeta) ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {isAckIssueDateLocked(editingReceiptMeta) ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Original issue date cannot be changed after Finance returned this acknowledgement receipt (used for daily summaries and reports), including after you resubmit.
+                      </p>
+                    ) : null}
+                    {editFormErrors.issue_date && <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">
+                      Payment Method <span className="text-red-500">*</span>
+                    </label>
+                    <PaymentMethodSelect
+                      name="payment_method"
+                      value={editFormData.payment_method}
+                      onChange={handleEditInputChange}
+                      error={editFormErrors.payment_method}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.payment_method && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.payment_method}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="label-field text-xs">Tip Amount</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      name="tip_amount"
+                      value={editFormData.tip_amount}
+                      onChange={handleEditInputChange}
+                      className={`input-field text-sm ${editFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                      disabled={editSaving}
+                    />
+                    {editFormErrors.tip_amount && <p className="mt-1 text-xs text-red-500">{editFormErrors.tip_amount}</p>}
+                  </div>
+
+                  <PaymentReferenceNumberField
+                    paymentMethod={editFormData.payment_method}
+                    name="reference_number"
+                    value={editFormData.reference_number}
+                    onChange={handleEditInputChange}
+                    disabled={editSaving}
+                    requiredMark={false}
+                  />
+
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Attachment <span className="text-red-600">*</span></label>
+                    <p className="text-xs text-gray-500 mb-1">
+                      Upload or replace proof of payment (JPEG, PNG, WebP, GIF — max 50 MB)
+                    </p>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      onChange={handleEditAttachmentChange}
+                      disabled={editSaving || editAttachmentUploading}
+                      className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                    />
+                    {editAttachmentUploading && (
+                      <p className="text-xs text-amber-600 mt-1">Uploading...</p>
+                    )}
+                    {editFormData.payment_attachment_url ? (
+                      <div className="rounded-md border border-gray-200 bg-white p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-xs text-gray-600">Preview of attached file</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openAttachmentViewer(editFormData.payment_attachment_url)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              View full preview
+                            </button>
+                            <button
+                              type="button"
+                              onClick={clearEditAttachment}
+                              disabled={editSaving || editAttachmentUploading}
+                              className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-2 overflow-hidden rounded border border-gray-200 bg-gray-50">
+                          {/\.((png|jpe?g|webp|gif))(\\?.*)?$/i.test(editFormData.payment_attachment_url) ? (
+                            <img
+                              src={editFormData.payment_attachment_url}
+                              alt="Receipt attachment preview"
+                              className="max-h-48 w-full object-contain"
+                            />
+                          ) : (
+                            <div className="p-3 text-xs text-gray-600">
+                              Non-image attachment. Click "View full preview" to open.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                        No attachment uploaded. Please upload an image before saving.
+                        {editFormErrors.payment_attachment_url && (
+                          <div className="mt-2 text-xs text-red-500">{editFormErrors.payment_attachment_url}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="label-field text-xs">Notes</label>
+                    <textarea
+                      name="prospect_student_notes"
+                      value={editFormData.prospect_student_notes}
+                      onChange={handleEditInputChange}
+                      rows={3}
+                      className="input-field text-sm"
+                      disabled={editSaving}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 border-t border-gray-200 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeEditModal}
+                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    disabled={editSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className={`rounded-md px-4 py-2 text-sm font-medium text-white disabled:opacity-50 ${
+                      isResubmitFlow ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
+                    disabled={editSaving}
+                  >
+                    {editSaving ? 'Saving...' : isResubmitFlow
+                      ? editingPairedReceiptMeta
+                        ? 'Save & Resubmit Both'
+                        : 'Save & Resubmit'
+                      : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {viewReceipt &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/30 p-4"
+            onClick={closeViewReceiptModal}
+          >
+            <div
+              className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-lg bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+                <h3 className="text-base font-semibold text-gray-900">View acknowledgement receipt</h3>
+                <button
+                  type="button"
+                  onClick={closeViewReceiptModal}
+                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4 px-5 py-4">
+                {extractLatestTagNote(viewReceipt.prospect_student_notes, 'Returned') ? (
+                  <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-orange-900">Noted from Finance / Superfinance</p>
+                    <p className="mt-1 text-sm text-orange-800">
+                      {extractLatestTagNote(viewReceipt.prospect_student_notes, 'Returned')}
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                  <span className="font-semibold">Status:</span>{' '}
+                  <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-800">
+                    {viewReceipt.status || '—'}
+                  </span>
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">Branch:</span> {viewReceipt.branch_name || '—'}
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">Invoice:</span>{' '}
+                  {formatArLinkedInvoiceLabel(viewReceipt) || '—'}
+                  <span className="mx-2 text-gray-300">|</span>
+                  <span className="font-semibold">AR#:</span>{' '}
+                  {formatArLinkedInvoiceArNumber(viewReceipt) || '—'}
+                </div>
+
+                {viewReceipt.ar_type === 'Merchandise' ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Type</label>
+                        <input type="text" readOnly className="input-field text-sm bg-gray-100 cursor-not-allowed" value="Merchandise" />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Total</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={`₱${(
+                            Number(viewReceipt.payment_amount || 0) + Number(viewReceipt.tip_amount || 0)
+                          ).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Student Name</label>
+                        <input
+                          type="text"
+                          name="prospect_student_name"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_name : viewReceipt.prospect_student_name || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Guardian Name {canResubmitViewReceipt ? <span className="text-red-500">*</span> : null}
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_contact"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_contact : viewReceipt.prospect_student_contact || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          name="prospect_student_email"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_email : viewReceipt.prospect_student_email || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) {canResubmitViewReceipt ? <span className="text-red-500">*</span> : null}
+                        </label>
+                        <input
+                          type="tel"
+                          name="prospect_student_phone"
+                          readOnly={!canResubmitViewReceipt}
+                          className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                          value={canResubmitViewReceipt ? viewFormData.prospect_student_phone : viewReceipt.prospect_student_phone || ''}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          placeholder={canResubmitViewReceipt ? '09171234567' : undefined}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Notes</label>
+                      <textarea
+                        name="prospect_student_notes"
+                        rows={3}
+                        readOnly={!canResubmitViewReceipt}
+                        className={`input-field text-sm ${canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'}`}
+                        value={canResubmitViewReceipt ? viewFormData.prospect_student_notes : viewReceipt.prospect_student_notes || ''}
+                        onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                        disabled={viewResubmitSaving || !canResubmitViewReceipt}
+                      />
+                    </div>
+                    {canResubmitViewReceipt ? (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="label-field text-xs">
+                            Payment Method <span className="text-red-500">*</span>
+                          </label>
+                          <PaymentMethodSelect
+                            name="payment_method"
+                            value={viewFormData.payment_method}
+                            onChange={handleViewInputChange}
+                            disabled={viewResubmitSaving}
+                          />
+                        </div>
+                        <PaymentReferenceNumberField
+                          paymentMethod={viewFormData.payment_method}
+                          name="reference_number"
+                          value={viewFormData.reference_number}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                          requiredMark={false}
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="label-field text-xs">Payment Method</label>
+                          <input
+                            type="text"
+                            readOnly
+                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                            value={viewReceipt.payment_method || ''}
+                          />
+                        </div>
+                        <div>
+                          <label className="label-field text-xs">Reference #</label>
+                          <input
+                            type="text"
+                            readOnly
+                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                            value={viewReceipt.reference_number || ''}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Student Name</label>
+                        <input
+                          type="text"
+                          name="prospect_student_name"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_name}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Guardian Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="prospect_student_contact"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_contact}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
+                        <input
+                          type="email"
+                          name="prospect_student_email"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_email}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">
+                          Mobile Number (SMS) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          name="prospect_student_phone"
+                          className="input-field text-sm"
+                          value={viewFormData.prospect_student_phone}
+                          onChange={handleViewInputChange}
+                          placeholder="09171234567"
+                          autoComplete="tel"
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Notes</label>
+                      <textarea
+                        name="prospect_student_notes"
+                        rows={2}
+                        className="input-field text-sm"
+                        value={viewFormData.prospect_student_notes}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field text-xs">Level Tag</label>
+                      <select
+                        name="level_tag"
+                        value={viewFormData.level_tag}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                        className="input-field text-sm"
+                      >
+                        <option value="">—</option>
+                        {LEVEL_TAG_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Package</label>
+                        <select
+                          name="package_id"
+                          value={viewFormData.package_id}
+                          onChange={handleViewInputChange}
+                          className="input-field text-sm"
+                          disabled={viewResubmitSaving || packagesLoading}
+                        >
+                          <option value="">{packagesLoading ? 'Loading packages...' : 'Select package'}</option>
+                          {viewFormData.package_id && !packages.some((pkg) => String(pkg.package_id) === String(viewFormData.package_id)) ? (
+                            <option value={viewFormData.package_id}>
+                              {viewReceipt.package_name_snapshot || viewReceipt.package_name || 'Current package'}
+                            </option>
+                          ) : null}
+                          {packages.map((pkg) => (
+                            <option key={pkg.package_id} value={pkg.package_id}>
+                              {pkg.package_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Payment amount</label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={
+                            viewPayableAmount == null
+                              ? ''
+                              : `₱${Number(viewPayableAmount).toLocaleString('en-PH', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}`
+                          }
+                        />
+                        <p className="mt-1 text-xs text-gray-500">Set from the package; not editable here.</p>
+                      </div>
+                    </div>
+                    {String(viewReceipt.installment_option || '').toLowerCase() === 'downpayment_only' ? (
+                      <p className="text-xs text-gray-600">
+                        <span className="font-semibold">Installment:</span> Down payment only
+                      </p>
+                    ) : null}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">Tip/Payment Adjustment</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          name="tip_amount"
+                          className="input-field text-sm"
+                          value={viewFormData.tip_amount}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <div>
+                        <label className="label-field text-xs">Issue Date</label>
+                        <input
+                          type="date"
+                          name="issue_date"
+                          readOnly
+                          tabIndex={-1}
+                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          value={
+                            viewFormData.issue_date ||
+                            (viewReceipt?.issue_date ? String(viewReceipt.issue_date).slice(0, 10) : '')
+                          }
+                          aria-readonly="true"
+                          disabled={viewResubmitSaving}
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Issue date stays as recorded on this receipt (not changed on resubmit).
+                        </p>
+                      </div>
+                    </div>
+                    {canResubmitViewReceipt ? (
+                      <PaymentDiscountField
+                        hintVariant="ar"
+                        value={viewFormData.discount_amount}
+                        onChange={handleViewInputChange}
+                        payableAmount={viewPayableAmount}
+                        disabled={viewResubmitSaving}
+                      />
+                    ) : null}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="label-field text-xs">
+                          Payment Method <span className="text-red-500">*</span>
+                        </label>
+                        <PaymentMethodSelect
+                          name="payment_method"
+                          value={viewFormData.payment_method}
+                          onChange={handleViewInputChange}
+                          disabled={viewResubmitSaving}
+                        />
+                      </div>
+                      <PaymentReferenceNumberField
+                        paymentMethod={viewFormData.payment_method}
+                        name="reference_number"
+                        value={viewFormData.reference_number}
+                        onChange={handleViewInputChange}
+                        disabled={viewResubmitSaving}
+                        requiredMark={false}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="sm:col-span-2">
+                  <label className="label-field text-xs">
+                    Attachment (image) {canResubmitViewReceipt ? <span className="text-red-600">*</span> : null}
+                  </label>
+                  {canResubmitViewReceipt ? (
+                    <p className="mb-1 text-xs text-gray-500">
+                      Upload or replace proof of payment before resubmitting (JPEG, PNG, WebP, GIF — max 50 MB).
+                    </p>
+                  ) : null}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={handleViewModalAttachmentChange}
+                    disabled={!canResubmitViewReceipt || viewResubmitSaving || viewModalAttachmentUploading}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200 disabled:opacity-60"
+                  />
+                  {viewModalAttachmentUploading ? (
+                    <p className="mt-1 text-xs text-amber-600">Uploading…</p>
+                  ) : null}
+                  {viewModalAttachmentUrl ? (
+                    <div className="mt-3 rounded-md border border-gray-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentViewer(viewModalAttachmentUrl)}
+                          className="text-sm font-medium text-blue-600 hover:underline"
+                        >
+                          View attachment
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearViewModalAttachment}
+                          disabled={viewResubmitSaving || viewModalAttachmentUploading}
+                          className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="mt-2 overflow-hidden rounded border border-gray-200 bg-gray-50">
+                        {/\.((png|jpe?g|webp|gif))(\?.*)?$/i.test(viewModalAttachmentUrl) ? (
+                          <img
+                            src={viewModalAttachmentUrl}
+                            alt="Receipt attachment preview"
+                            className="max-h-48 w-full object-contain"
+                          />
+                        ) : (
+                          <div className="p-3 text-xs text-gray-600">
+                            Non-image file. Use View attachment to open.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                      No attachment yet. Upload an image to resubmit.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex border-t border-gray-200 px-5 py-4 sm:justify-end">
+                {canResubmitViewReceipt ? (
+                  <button
+                    type="button"
+                    onClick={handleViewModalResubmit}
+                    disabled={viewResubmitSaving || viewModalAttachmentUploading || !viewModalAttachmentUrl?.trim()}
+                    className="w-full rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 sm:w-auto"
+                  >
+                    {viewResubmitSaving ? 'Resubmitting…' : 'Resubmit'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={closeViewReceiptModal}
+                    className="w-full rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+};
+
+export default AcknowledgementReceiptsPage;
+

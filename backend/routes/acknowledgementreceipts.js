@@ -1,0 +1,3574 @@
+import express from 'express';
+import { body, param, query as queryValidator } from 'express-validator';
+import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { handleValidationErrors } from '../middleware/validation.js';
+import { query, getClient } from '../config/database.js';
+import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
+import { allocateNextArStyleNumber } from '../utils/invoiceArNumber.js';
+import {
+  determineEnrollmentStatus as detEnrollmentStatus,
+  determineRejoinAwarePhaseStatus,
+  ensurePendingEnrollmentAfterDownpaymentPaid,
+  promotePendingEnrollmentIfPhaseInvoicePaid,
+} from '../utils/enrollmentStatus.js';
+import { paymenttblHasActionOwnerUserIdColumn } from '../utils/paymentSchema.js';
+import {
+  sendArPaymentConfirmationByAckId,
+  sendInvoicePaymentConfirmationByInvoiceId,
+} from '../utils/paymentConfirmationEmailService.js';
+import {
+  ackReceiptHasPairedAckReceiptIdColumn,
+  resolvePairedAckReceiptIds,
+  resolveDownpaymentPhase1AckPair,
+} from '../lib/ackReceiptPairedColumn.js';
+import { resolveArSalesLineAggregateFragments } from '../lib/arSalesAggregate.js';
+import {
+  MERCH_RELEASE_SOURCE,
+  buildMerchandiseArReleaseBatchId,
+  insertMerchandiseReleaseLog,
+} from '../lib/merchandiseReleaseLog.js';
+import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
+import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
+import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
+import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
+import { isArInvoiceOnlyGhostListRow } from '../utils/arInvoiceOnlyListRows.js';
+import { shouldSyncPaymentLogApprovalOnArVerify } from '../lib/paymentLogArApproval.js';
+import {
+  isDownpaymentPlusPhase1Ack,
+  runArAttachInstallmentFollowUp,
+} from '../lib/arAttachInstallmentFollowUp.js';
+import {
+  AR_STATUS,
+  AR_UNVERIFIED_STATUSES,
+  expandArStatusFilterValues,
+  buildArListStatusFilterSql,
+  isArReturnedForCorrection,
+  isArUnverifiedStatus,
+  buildArReturnedOnlySql,
+  buildArExcludeReturnedSql,
+} from '../utils/acknowledgementReceiptStatus.js';
+
+const router = express.Router();
+const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
+
+/**
+ * AR is fully consumed when it has a payment or is Applied to a different invoice.
+ * Enrollment may pre-link invoice_id or place ack_receipt_id on a generated phase invoice;
+ * attach-to-invoice must allow the invoice that actually owns this AR.
+ */
+function isAckReceiptAlreadyApplied(ack, targetInvoiceId, options = {}) {
+  const ackStatusUpper = String(ack?.status || '').trim().toUpperCase();
+  const targetInvoiceAckReceiptId =
+    options.targetInvoiceAckReceiptId != null
+      ? Number(options.targetInvoiceAckReceiptId)
+      : null;
+  const ackId = Number(ack?.ack_receipt_id);
+
+  if (ack?.payment_id) return true;
+
+  const invoiceId = Number(targetInvoiceId);
+  const ackInvoiceId =
+    ack?.invoice_id != null && ack.invoice_id !== '' ? Number(ack.invoice_id) : null;
+
+  if (ackInvoiceId != null && Number.isFinite(invoiceId) && ackInvoiceId === invoiceId) {
+    return ackStatusUpper === 'APPLIED';
+  }
+
+  if (ackInvoiceId != null && Number.isFinite(invoiceId) && ackInvoiceId !== invoiceId) {
+    if (
+      targetInvoiceAckReceiptId != null &&
+      Number.isFinite(ackId) &&
+      targetInvoiceAckReceiptId === ackId &&
+      ackStatusUpper !== 'APPLIED'
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (ackStatusUpper === 'APPLIED') return true;
+
+  return false;
+}
+let ackVerifierColumnsKnownTrue = false;
+let announcementTargetUserIdKnownTrue = false;
+
+const ackReceiptHasVerifierColumns = async () => {
+  if (ackVerifierColumnsKnownTrue) return true;
+  try {
+    const r = await query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'acknowledgement_receiptstbl'
+         AND column_name IN ('verified_by_user_id', 'verified_at')
+       GROUP BY table_name
+       HAVING COUNT(DISTINCT column_name) = 2
+       LIMIT 1`
+    );
+    if (r.rows.length > 0) {
+      ackVerifierColumnsKnownTrue = true;
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+};
+
+const announcementstblHasTargetUserIdColumn = async () => {
+  if (announcementTargetUserIdKnownTrue) return true;
+  try {
+    const r = await query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'announcementstbl'
+         AND column_name = 'target_user_id'
+       LIMIT 1`
+    );
+    if (r.rows.length > 0) {
+      announcementTargetUserIdKnownTrue = true;
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+};
+
+// All routes require authentication and branch access
+router.use(verifyFirebaseToken);
+router.use(requireBranchAccess);
+
+/** Strip raw ack_receipt_number; expose safe display fields for the AR list/API. */
+function formatArListApiRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const ackNum =
+    row.ack_receipt_number != null && String(row.ack_receipt_number).trim() !== ''
+      ? String(row.ack_receipt_number).trim()
+      : null;
+  const invAr =
+    row.invoice_ar_number != null && String(row.invoice_ar_number).trim() !== ''
+      ? String(row.invoice_ar_number).trim()
+      : null;
+  const linkedInvoiceId =
+    row.linked_invoice_id != null && Number(row.linked_invoice_id) > 0
+      ? Number(row.linked_invoice_id)
+      : null;
+  const { ack_receipt_number: _n, ...rest } = row;
+  const invoiceOnly = Boolean(row.invoice_only_payment);
+  return {
+    ...rest,
+    linked_invoice_id: linkedInvoiceId,
+    invoice_only_payment: invoiceOnly,
+    receipt_ar_number: ackNum,
+    // AR#: from Invoice page when linked; else receipt number issued at AR creation.
+    display_ar_number: invAr || ackNum || null,
+    invoice_ar_number: invAr,
+  };
+}
+
+/** Linked invoice for list/detail: AR# and INV# follow invoicestbl (same as Invoice page). */
+const AR_INVOICE_LINK_LATERAL_SQL = `
+  LEFT JOIN LATERAL (
+    SELECT i.invoice_id, i.invoice_ar_number
+    FROM invoicestbl i
+    WHERE i.invoice_id = ar.invoice_id
+       OR i.ack_receipt_id = ar.ack_receipt_id
+       OR (ar.paired_ack_receipt_id IS NOT NULL AND i.ack_receipt_id = ar.paired_ack_receipt_id)
+       OR (
+         ar.payment_id IS NOT NULL
+         AND i.invoice_id = (
+           SELECT p.invoice_id FROM paymenttbl p WHERE p.payment_id = ar.payment_id LIMIT 1
+         )
+       )
+       OR (
+         ar.ack_receipt_number IS NOT NULL AND TRIM(ar.ack_receipt_number) <> ''
+         AND i.invoice_ar_number = TRIM(ar.ack_receipt_number)
+       )
+    ORDER BY
+      CASE
+        WHEN ar.invoice_id IS NOT NULL AND i.invoice_id = ar.invoice_id THEN 0
+        WHEN i.ack_receipt_id = ar.ack_receipt_id THEN 1
+        WHEN ar.paired_ack_receipt_id IS NOT NULL AND i.ack_receipt_id = ar.paired_ack_receipt_id THEN 2
+        WHEN ar.payment_id IS NOT NULL AND i.invoice_id = (
+          SELECT p.invoice_id FROM paymenttbl p WHERE p.payment_id = ar.payment_id LIMIT 1
+        ) THEN 3
+        WHEN ar.ack_receipt_number IS NOT NULL AND i.invoice_ar_number = TRIM(ar.ack_receipt_number) THEN 4
+        ELSE 5
+      END,
+      i.invoice_id DESC
+    LIMIT 1
+  ) inv_link ON TRUE
+`;
+
+const AR_LINKED_INVOICE_SELECT_SQL = `
+  COALESCE(
+    inv_link.invoice_id,
+    (SELECT i.invoice_id FROM invoicestbl i WHERE i.invoice_id = ar.invoice_id LIMIT 1)
+  ) AS linked_invoice_id,
+  (
+    SELECT i2.invoice_ar_number
+    FROM invoicestbl i2
+    WHERE i2.invoice_id = COALESCE(
+      inv_link.invoice_id,
+      (SELECT i.invoice_id FROM invoicestbl i WHERE i.invoice_id = ar.invoice_id LIMIT 1)
+    )
+    LIMIT 1
+  ) AS invoice_ar_number
+`;
+
+/** AR list text search — includes linked invoice_ar_number (e.g. 260878 on INV-1213). */
+function appendArListTextSearchClause(sql, params, paramCount, search) {
+  const trimmed = String(search || '').trim();
+  if (!trimmed) return { sql, params, paramCount };
+
+  paramCount += 1;
+  const likeIdx = paramCount;
+  params.push(`%${trimmed}%`);
+
+  sql += ` AND (
+    ar.prospect_student_name ILIKE $${likeIdx}
+    OR COALESCE(ar.prospect_student_contact, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.reference_number, '') ILIKE $${likeIdx}
+    OR COALESCE(inv_link.invoice_ar_number, '') ILIKE $${likeIdx}
+    OR COALESCE(inv_link.invoice_id::text, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.ack_receipt_number, '') ILIKE $${likeIdx}
+    OR COALESCE(ar.package_name_snapshot, '') ILIKE $${likeIdx}
+    OR EXISTS (
+      SELECT 1 FROM acknowledgement_receiptstbl ar_pair_s
+      WHERE ar_pair_s.ack_receipt_id = ar.paired_ack_receipt_id
+        AND (
+          COALESCE(ar_pair_s.ack_receipt_number, '') ILIKE $${likeIdx}
+          OR COALESCE(ar_pair_s.package_name_snapshot, '') ILIKE $${likeIdx}
+        )
+    )
+    OR EXISTS (
+      SELECT 1 FROM invoicestbl i_s
+      WHERE COALESCE(i_s.invoice_ar_number, '') ILIKE $${likeIdx}
+        AND (
+          i_s.ack_receipt_id = ar.ack_receipt_id
+          OR ar.invoice_id = i_s.invoice_id
+          OR (
+            ar.payment_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM paymenttbl p_s
+              WHERE p_s.payment_id = ar.payment_id AND p_s.invoice_id = i_s.invoice_id
+            )
+          )
+          OR (
+            ar.ack_receipt_number IS NOT NULL
+            AND TRIM(ar.ack_receipt_number) <> ''
+            AND i_s.invoice_ar_number = TRIM(ar.ack_receipt_number)
+          )
+        )
+    )
+  )`;
+
+  return { sql, params, paramCount };
+}
+
+/** Match AR rows linked to a specific invoice (cross-link from Invoice page). */
+function appendArInvoiceIdFilterClause(sql, params, paramCount, invoiceId) {
+  const id = Number(invoiceId);
+  if (!Number.isFinite(id) || id <= 0) return { sql, params, paramCount };
+  paramCount += 1;
+  sql += ` AND (
+    ar.invoice_id = $${paramCount}
+    OR EXISTS (
+      SELECT 1 FROM invoicestbl i_f
+      WHERE i_f.invoice_id = $${paramCount} AND i_f.ack_receipt_id = ar.ack_receipt_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM paymenttbl p_f
+      WHERE p_f.invoice_id = $${paramCount} AND p_f.payment_id = ar.payment_id
+    )
+  )`;
+  params.push(id);
+  return { sql, params, paramCount };
+}
+
+const createArSubmissionNotification = async ({
+  ackReceiptId,
+  branchId,
+  createdByUserId,
+  studentName,
+  arType,
+  paymentMethod,
+  status,
+}) => {
+  try {
+    const branchRes = await query(
+      `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+      [branchId]
+    );
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const title = 'Acknowledgement Receipt submitted';
+    const verificationState =
+      status === 'Verified'
+        ? 'Auto-verified (Cash payment).'
+        : 'Awaiting Finance/Superfinance verification.';
+    const body = `${studentName || 'Student'} - ${arType} Acknowledgement Receipt (payment: ${paymentMethod || 'Cash'}) was created at ${branchName}. ${verificationState}`;
+
+    await query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+      [
+        title,
+        body,
+        ['Finance'],
+        branchId,
+        createdByUserId,
+        'acknowledgement-receipts',
+        'page=1',
+      ]
+    );
+  } catch (err) {
+    console.error('createArSubmissionNotification:', err?.message || err);
+  }
+};
+
+const notifyArReturnedToCreator = async ({
+  ackReceiptId,
+  branchId,
+  returnedByUserId,
+  creatorUserId,
+  studentName,
+  reason,
+}) => {
+  try {
+    if (!branchId || !creatorUserId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
+    const [branchRes, returnerRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+        [branchId]
+      ),
+      query(`SELECT full_name, email FROM userstbl WHERE user_id = $1`, [returnedByUserId]),
+    ]);
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const returnedBy = returnerRes.rows[0]?.full_name || returnerRes.rows[0]?.email || 'Finance';
+    const studentLabel = studentName || 'Student';
+    const reasonText = reason && String(reason).trim() ? ` Note from Finance: ${String(reason).trim()}` : '';
+    const body = `Acknowledgement Receipt #${ackReceiptId} (${studentLabel}) was returned by ${returnedBy} at ${branchName} for correction.${reasonText}`;
+
+    if (!hasTargetUserIdColumn) {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7)`,
+        [
+          'Acknowledgement Receipt returned — action needed',
+          body,
+          ['Admin'],
+          branchId,
+          returnedByUserId,
+          'acknowledgement-receipts',
+          'status=Returned&page=1',
+        ]
+      );
+      return;
+    }
+
+    await query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+      [
+        'Acknowledgement Receipt returned — action needed',
+        body,
+        ['All'],
+        branchId,
+        returnedByUserId,
+        creatorUserId,
+        'acknowledgement-receipts',
+        'status=Returned&page=1',
+      ]
+    );
+  } catch (err) {
+    console.error('notifyArReturnedToCreator:', err?.message || err);
+  }
+};
+
+const notifyArRejectedToCreator = async ({
+  ackReceiptId,
+  branchId,
+  rejectedByUserId,
+  creatorUserId,
+  studentName,
+  reason,
+}) => {
+  try {
+    if (!branchId || !creatorUserId) return;
+    const hasTargetUserIdColumn = await announcementstblHasTargetUserIdColumn();
+    const [branchRes, rejecterRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name FROM branchestbl WHERE branch_id = $1`,
+        [branchId]
+      ),
+      query(`SELECT full_name, email FROM userstbl WHERE user_id = $1`, [rejectedByUserId]),
+    ]);
+    const branchName = branchRes.rows[0]?.branch_name || `Branch ${branchId}`;
+    const rejectedBy = rejecterRes.rows[0]?.full_name || rejecterRes.rows[0]?.email || 'Finance';
+    const studentLabel = studentName || 'Student';
+    const reasonText = reason && String(reason).trim() ? ` Reason: ${String(reason).trim()}.` : '';
+    const body = `Acknowledgement Receipt #${ackReceiptId} (${studentLabel}) was rejected by ${rejectedBy} at ${branchName}.${reasonText} Please create and submit a new acknowledgement receipt to continue.`;
+
+    if (!hasTargetUserIdColumn) {
+      await query(
+        `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+         VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
+        [
+          'Acknowledgement Receipt rejected — please recreate',
+          body,
+          ['Admin'],
+          branchId,
+          rejectedByUserId,
+          'acknowledgement-receipts',
+          'status=Rejected&page=1',
+        ]
+      );
+      return;
+    }
+
+    await query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+      [
+        'Acknowledgement Receipt rejected — please recreate',
+        body,
+        ['All'],
+        branchId,
+        rejectedByUserId,
+        creatorUserId,
+        'acknowledgement-receipts',
+        'status=Rejected&page=1',
+      ]
+    );
+  } catch (err) {
+    console.error('notifyArRejectedToCreator:', err?.message || err);
+  }
+};
+
+/**
+ * GET /api/sms/acknowledgement-receipts
+ * List acknowledgement receipts with optional filters
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.get(
+  '/',
+  [
+    queryValidator('status').optional().isString().withMessage('Status must be a string'),
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('search').optional().isString().withMessage('Search term must be a string'),
+    queryValidator('payment_method')
+      .optional()
+      .isIn(ALLOWED_AR_PAYMENT_METHODS)
+      .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
+    queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
+    queryValidator('issue_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('issue_date_from must be YYYY-MM-DD'),
+    queryValidator('issue_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('issue_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
+    queryValidator('only_unused')
+      .optional()
+      .isIn(['0', '1', 'true', 'false'])
+      .withMessage('only_unused must be 0, 1, true, or false'),
+    queryValidator('exclude_status').optional().isString().withMessage('exclude_status must be a string'),
+    queryValidator('returned_only')
+      .optional()
+      .isIn(['0', '1', 'true', 'false'])
+      .withMessage('returned_only must be 0, 1, true, or false'),
+    queryValidator('invoice_id').optional().isInt({ min: 1 }).withMessage('invoice_id must be a positive integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const {
+        status,
+        branch_id,
+        search,
+        payment_method,
+        page = 1,
+        limit = 20,
+        only_unused,
+        exclude_status,
+        returned_only,
+        invoice_id: invoiceIdFilter,
+        payment_date_from: paymentDateFrom,
+        payment_date_to: paymentDateTo,
+        issue_date_from: issueDateFrom,
+        issue_date_to: issueDateTo,
+        created_date_from: createdDateFrom,
+        created_date_to: createdDateTo,
+      } = req.query;
+      const paymentFrom = paymentDateFrom ? String(paymentDateFrom).trim().slice(0, 10) : '';
+      const paymentTo = paymentDateTo ? String(paymentDateTo).trim().slice(0, 10) : '';
+      if (paymentFrom && paymentTo && paymentFrom > paymentTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+      const arFrom = issueDateFrom ? String(issueDateFrom).trim().slice(0, 10) : '';
+      const arTo = issueDateTo ? String(issueDateTo).trim().slice(0, 10) : '';
+      if (arFrom && arTo && arFrom > arTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'issue_date_from must be on or before issue_date_to',
+        });
+      }
+      const createdFrom = createdDateFrom ? String(createdDateFrom).trim().slice(0, 10) : '';
+      const createdTo = createdDateTo ? String(createdDateTo).trim().slice(0, 10) : '';
+      if (createdFrom && createdTo && createdFrom > createdTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
+        });
+      }
+      const onlyUnusedList =
+        String(only_unused || '') === '1' || String(only_unused || '').toLowerCase() === 'true';
+      const pageNum = parseInt(page) || 1;
+      const limitNum = parseInt(limit) || 20;
+      const offset = (pageNum - 1) * limitNum;
+
+      const hidePairedPhaseRows = await ackReceiptHasPairedAckReceiptIdColumn();
+      const { lineSumExpr: arListLineSumExpr, pairedLeaderExcludeSql } =
+        await resolveArSalesLineAggregateFragments(query);
+
+      // Downpayment + Phase 1 creates two AR rows (sequential numbers). Each list row
+      // shows its own line amount — downpayment on the leader, Phase 1 on the paired row.
+      const listPairJoin = hidePairedPhaseRows
+        ? `
+        LEFT JOIN acknowledgement_receiptstbl ar_pair ON ar_pair.ack_receipt_id = ar.paired_ack_receipt_id`
+        : '';
+
+      const listPairSelect = hidePairedPhaseRows
+        ? `,
+          (COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)) AS list_line_total_amount,
+          COALESCE(ar.package_amount_snapshot, 0) AS list_combined_package_amount,
+          COALESCE(ar.package_name_snapshot::text, p.package_name::text, 'N/A') AS list_package_primary_label,
+          ar_pair.ack_receipt_number AS list_paired_phase_ar_number,
+          ar_pair.ack_receipt_id AS list_paired_phase_ack_receipt_id,
+          ar_pair.payment_amount AS list_paired_phase_payment_amount,
+          ar_pair.tip_amount AS list_paired_phase_tip_amount,
+          ar_pair.status AS list_paired_phase_status,
+          ar_pair.package_name_snapshot AS list_paired_phase_package_name,
+          ar_pair.package_amount_snapshot AS list_paired_phase_package_amount,
+          (ar.paired_ack_receipt_id IS NOT NULL) AS is_downpayment_plus_phase1_leader,
+          EXISTS (
+            SELECT 1 FROM acknowledgement_receiptstbl ar_parent
+            WHERE ar_parent.paired_ack_receipt_id = ar.ack_receipt_id
+          ) AS is_paired_phase1_follower,
+          (
+            SELECT ar_leader.ack_receipt_number
+            FROM acknowledgement_receiptstbl ar_leader
+            WHERE ar_leader.paired_ack_receipt_id = ar.ack_receipt_id
+            LIMIT 1
+          ) AS list_paired_leader_ar_number`
+        : '';
+
+      let sql = `
+        SELECT
+          ar.*,
+          prep_u.full_name AS prepared_by_name,
+          TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
+          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+          p.package_name,
+          u.full_name AS student_name,
+          ${AR_LINKED_INVOICE_SELECT_SQL}
+          ${listPairSelect}
+        FROM acknowledgement_receiptstbl ar
+        LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
+        LEFT JOIN packagestbl p ON ar.package_id = p.package_id
+        LEFT JOIN userstbl u ON ar.student_id = u.user_id
+        LEFT JOIN userstbl prep_u ON prep_u.user_id = ar.created_by
+        ${AR_INVOICE_LINK_LATERAL_SQL}
+        ${listPairJoin}
+        WHERE 1=1
+      `;
+
+      let params = [];
+      let paramCount = 0;
+
+      // Receipts that are not already consumed (enrollment: one use per AR)
+      if (onlyUnusedList) {
+        sql += ` AND ar.invoice_id IS NULL AND ar.payment_id IS NULL AND (ar.status IS NULL OR UPPER(TRIM(ar.status)) != 'APPLIED')`;
+      }
+
+      // Branch restriction for non-superadmin users
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        paramCount += 1;
+        sql += ` AND ar.branch_id = $${paramCount}`;
+        params.push(req.user.branchId);
+      } else if (branch_id) {
+        paramCount += 1;
+        sql += ` AND ar.branch_id = $${paramCount}`;
+        params.push(branch_id);
+      }
+
+      if (status) {
+        const rawStatuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+        const isReturnedFilter =
+          rawStatuses.length === 1 && rawStatuses[0].toLowerCase() === 'returned';
+        if (isReturnedFilter) {
+          const returnedClause = buildArReturnedOnlySql('ar', paramCount + 1);
+          sql += returnedClause.sql;
+          params.push(...returnedClause.params);
+          paramCount = returnedClause.nextParamIndex - 1;
+        } else {
+          const statusClause = buildArListStatusFilterSql('ar', status, paramCount + 1);
+          sql += statusClause.sql;
+          params.push(...statusClause.params);
+          paramCount = statusClause.nextParamIndex - 1;
+        }
+      }
+
+      const returnedOnly =
+        returned_only === '1' || returned_only === 'true' || returned_only === true;
+      if (returnedOnly && !status) {
+        const returnedClause = buildArReturnedOnlySql('ar', paramCount + 1);
+        sql += returnedClause.sql;
+        params.push(...returnedClause.params);
+        paramCount = returnedClause.nextParamIndex - 1;
+      }
+
+      if (exclude_status) {
+        const excluded = String(exclude_status)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const excludesReturned = excluded.some((s) => s.toLowerCase() === 'returned');
+        const otherExcluded = excluded.filter((s) => s.toLowerCase() !== 'returned');
+        if (excludesReturned) {
+          const excludeReturnedClause = buildArExcludeReturnedSql('ar', paramCount + 1);
+          sql += excludeReturnedClause.sql;
+          params.push(...excludeReturnedClause.params);
+          paramCount = excludeReturnedClause.nextParamIndex - 1;
+        }
+        if (otherExcluded.length > 0) {
+          paramCount += 1;
+          sql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${paramCount}::text[])))`;
+          params.push(expandArStatusFilterValues(otherExcluded));
+        }
+      }
+
+      if (search) {
+        ({ sql, params, paramCount } = appendArListTextSearchClause(sql, params, paramCount, search));
+      }
+
+      if (invoiceIdFilter) {
+        ({ sql, params, paramCount } = appendArInvoiceIdFilterClause(
+          sql,
+          params,
+          paramCount,
+          invoiceIdFilter
+        ));
+      }
+
+      if (payment_method) {
+        paramCount += 1;
+        sql += ` AND ar.payment_method = $${paramCount}`;
+        params.push(payment_method);
+      }
+
+      if (paymentFrom) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date >= $${paramCount}::date`;
+        params.push(paymentFrom);
+      }
+      if (paymentTo) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date <= $${paramCount}::date`;
+        params.push(paymentTo);
+      }
+
+      if (arFrom) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date >= $${paramCount}::date`;
+        params.push(arFrom);
+      }
+      if (arTo) {
+        paramCount += 1;
+        sql += ` AND ar.issue_date <= $${paramCount}::date`;
+        params.push(arTo);
+      }
+
+      if (createdFrom) {
+        paramCount += 1;
+        sql += ` AND ar.created_at::date >= $${paramCount}::date`;
+        params.push(createdFrom);
+      }
+      if (createdTo) {
+        paramCount += 1;
+        sql += ` AND ar.created_at::date <= $${paramCount}::date`;
+        params.push(createdTo);
+      }
+
+      sql += ` ORDER BY ar.ack_receipt_id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+      params.push(limitNum, offset);
+
+      const result = await query(sql, params);
+
+      const listRows = result.rows.filter((row) => !isArInvoiceOnlyGhostListRow(row));
+
+      // Total count for pagination
+      let countSql = `SELECT COUNT(*) AS total FROM acknowledgement_receiptstbl ar ${AR_INVOICE_LINK_LATERAL_SQL} WHERE 1=1`;
+      let countParams = [];
+      let countParamCount = 0;
+
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        countParamCount += 1;
+        countSql += ` AND ar.branch_id = $${countParamCount}`;
+        countParams.push(req.user.branchId);
+      } else if (branch_id) {
+        countParamCount += 1;
+        countSql += ` AND ar.branch_id = $${countParamCount}`;
+        countParams.push(branch_id);
+      }
+
+      if (onlyUnusedList) {
+        countSql += ` AND ar.invoice_id IS NULL AND ar.payment_id IS NULL AND (ar.status IS NULL OR UPPER(TRIM(ar.status)) != 'APPLIED')`;
+      }
+
+      if (status) {
+        const rawStatuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+        const isReturnedFilter =
+          rawStatuses.length === 1 && rawStatuses[0].toLowerCase() === 'returned';
+        if (isReturnedFilter) {
+          const returnedClause = buildArReturnedOnlySql('ar', countParamCount + 1);
+          countSql += returnedClause.sql;
+          countParams.push(...returnedClause.params);
+          countParamCount = returnedClause.nextParamIndex - 1;
+        } else {
+          const statusClause = buildArListStatusFilterSql('ar', status, countParamCount + 1);
+          countSql += statusClause.sql;
+          countParams.push(...statusClause.params);
+          countParamCount = statusClause.nextParamIndex - 1;
+        }
+      }
+
+      if (returnedOnly && !status) {
+        const returnedClause = buildArReturnedOnlySql('ar', countParamCount + 1);
+        countSql += returnedClause.sql;
+        countParams.push(...returnedClause.params);
+        countParamCount = returnedClause.nextParamIndex - 1;
+      }
+
+      if (exclude_status) {
+        const excluded = String(exclude_status)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const excludesReturned = excluded.some((s) => s.toLowerCase() === 'returned');
+        const otherExcluded = excluded.filter((s) => s.toLowerCase() !== 'returned');
+        if (excludesReturned) {
+          const excludeReturnedClause = buildArExcludeReturnedSql('ar', countParamCount + 1);
+          countSql += excludeReturnedClause.sql;
+          countParams.push(...excludeReturnedClause.params);
+          countParamCount = excludeReturnedClause.nextParamIndex - 1;
+        }
+        if (otherExcluded.length > 0) {
+          countParamCount += 1;
+          countSql += ` AND (ar.status IS NULL OR NOT (ar.status = ANY($${countParamCount}::text[])))`;
+          countParams.push(expandArStatusFilterValues(otherExcluded));
+        }
+      }
+
+      if (search) {
+        ({ sql: countSql, params: countParams, paramCount: countParamCount } = appendArListTextSearchClause(
+          countSql,
+          countParams,
+          countParamCount,
+          search
+        ));
+      }
+
+      if (invoiceIdFilter) {
+        ({ sql: countSql, params: countParams, paramCount: countParamCount } = appendArInvoiceIdFilterClause(
+          countSql,
+          countParams,
+          countParamCount,
+          invoiceIdFilter
+        ));
+      }
+
+      if (payment_method) {
+        countParamCount += 1;
+        countSql += ` AND ar.payment_method = $${countParamCount}`;
+        countParams.push(payment_method);
+      }
+
+      if (paymentFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date >= $${countParamCount}::date`;
+        countParams.push(paymentFrom);
+      }
+      if (paymentTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date <= $${countParamCount}::date`;
+        countParams.push(paymentTo);
+      }
+
+      if (arFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date >= $${countParamCount}::date`;
+        countParams.push(arFrom);
+      }
+      if (arTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.issue_date <= $${countParamCount}::date`;
+        countParams.push(arTo);
+      }
+
+      if (createdFrom) {
+        countParamCount += 1;
+        countSql += ` AND ar.created_at::date >= $${countParamCount}::date`;
+        countParams.push(createdFrom);
+      }
+      if (createdTo) {
+        countParamCount += 1;
+        countSql += ` AND ar.created_at::date <= $${countParamCount}::date`;
+        countParams.push(createdTo);
+      }
+
+      if (pairedLeaderExcludeSql) {
+        countSql += pairedLeaderExcludeSql;
+      }
+
+      const countResult = await query(countSql, countParams);
+      const total = parseInt(countResult.rows[0].total, 10) || 0;
+      const sumSql = countSql.replace(
+        /SELECT COUNT\(\*\) AS total/i,
+        `SELECT COALESCE(SUM(${arListLineSumExpr}), 0)::numeric AS total_line_amount`
+      );
+      const sumResult = await query(sumSql, countParams);
+      const filterTotalLineAmount = parseFloat(sumResult.rows[0]?.total_line_amount ?? 0) || 0;
+
+      res.json({
+        success: true,
+        data: listRows.map(formatArListApiRow),
+        filterTotalLineAmount,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/acknowledgement-receipts
+ * Create a new acknowledgement receipt (front-desk fast payment)
+ * Supports Package (enrollment) and Merchandise (buy merchandise) types
+ * Access: Superadmin, Admin (branch admin) - Merchandise; Superadmin, Admin, Finance, Superfinance - Package
+ */
+router.post(
+  '/',
+  [
+    body('ar_type')
+      .optional({ nullable: true })
+      .isIn(['Package', 'Merchandise'])
+      .withMessage('ar_type must be Package or Merchandise'),
+    body('prospect_student_name').notEmpty().isString().withMessage('Student name is required'),
+    body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
+    body('prospect_student_email').optional({ nullable: true, checkFalsy: true }).isEmail().withMessage('Client email must be a valid email'),
+    body('prospect_student_phone').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
+    body('prospect_student_notes').optional().isString().withMessage('Notes must be a string'),
+    body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
+    body('payment_amount').optional({ nullable: true }).isFloat({ min: 0.01 }).withMessage('Payment amount must be greater than 0'),
+    body('discount_amount')
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage('discount_amount must be a non-negative number'),
+    body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
+    body('issue_date').isISO8601().withMessage('Issue date is required and must be a valid date'),
+    body('payment_method')
+      .optional({ nullable: true })
+      .isIn(ALLOWED_AR_PAYMENT_METHODS)
+      .withMessage('payment_method must be Cash, Online Banking, Credit Card, or E-wallets'),
+    body('reference_number')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('Reference number must be a string')
+      .custom((value, { req }) => {
+        const method = String(req.body.payment_method || 'Cash').trim();
+        if (method === 'Cash') return true;
+        if (!value || !String(value).trim()) {
+          throw new Error('Reference number is required');
+        }
+        return true;
+      }),
+    body('payment_attachment_url')
+      .custom((value) => typeof value === 'string' && value.trim().length > 0)
+      .withMessage('Attachment image is required'),
+    body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
+    body('installment_option')
+      .optional({ nullable: true })
+      .isIn(['downpayment_only', 'downpayment_plus_phase1'])
+      .withMessage('installment_option must be downpayment_only or downpayment_plus_phase1'),
+    body('merchandise_items').optional().isArray().withMessage('merchandise_items must be an array'),
+    body('merchandise_items.*.merchandise_id').optional().isInt().withMessage('merchandise_id must be an integer'),
+    body('merchandise_items.*.quantity').optional().isInt({ min: 1 }).withMessage('quantity must be a positive integer'),
+    body('student_id').optional({ nullable: true }).isInt().withMessage('student_id must be an integer'),
+    handleValidationErrors,
+  ],
+    requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    const arType = req.body.ar_type || 'Package';
+    const isMerchandise = arType === 'Merchandise';
+
+    // Merchandise AR: Superadmin and Admin only (branch admin)
+    if (isMerchandise) {
+      const allowed = ['Superadmin', 'Admin'];
+      if (!allowed.includes(req.user?.userType)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only Superadmin and Branch Admin can create merchandise acknowledgement receipts',
+        });
+      }
+    }
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const {
+        prospect_student_name,
+        prospect_student_contact,
+        prospect_student_email,
+        prospect_student_phone,
+        prospect_student_notes,
+        package_id,
+        issue_date,
+        payment_method,
+        tip_amount,
+        discount_amount,
+        reference_number,
+        payment_attachment_url,
+        level_tag,
+        installment_option,
+        branch_id: bodyBranchId,
+        merchandise_items = [],
+        student_id: linkedStudentId,
+      } = req.body;
+
+      const discountValue = Math.max(0, parseFloat(discount_amount || 0) || 0);
+
+      let branchId = bodyBranchId || req.user.branchId || null;
+
+      const arPhoneNumbers = collectPhilippineMobiles(prospect_student_phone);
+      if (arPhoneNumbers.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
+        });
+      }
+      const normalizedProspectPhone = arPhoneNumbers[0];
+
+      if (!prospect_student_contact?.trim()) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Guardian name is required for acknowledgement receipt',
+        });
+      }
+
+      /** When true, create two Package AR rows (sequential AR numbers); leader links phase via paired_ack_receipt_id. */
+      let isSplitDualPackageAr = false;
+      let splitDownpaymentAmt = 0;
+      let splitMonthlyAmt = 0;
+      let splitPackageDisplayName = null;
+      const normalizedPaymentMethod = ALLOWED_AR_PAYMENT_METHODS.includes(String(payment_method || '').trim())
+        ? String(payment_method).trim()
+        : 'Cash';
+      let packageNameSnapshot = null;
+      let packageAmountSnapshot = null;
+      let pkgId = null;
+      let totalPaymentAmount = 0;
+      let merchandiseItemsSnapshot = null;
+
+      if (isMerchandise) {
+        // ── MERCHANDISE AR ─────────────────────────────────────────────────
+        if (!merchandise_items || merchandise_items.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'At least one merchandise item is required for merchandise acknowledgement receipt',
+          });
+        }
+
+        if (!bodyBranchId && !req.user.branchId) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Branch is required for merchandise acknowledgement receipt',
+          });
+        }
+
+        const merchSnapshots = [];
+        let totalAmount = 0;
+
+        for (const item of merchandise_items) {
+          const merchId = item.merchandise_id;
+          const qty = Math.max(1, parseInt(item.quantity, 10) || 1);
+
+          const merchResult = await client.query(
+            `SELECT merchandise_id, merchandise_name, size, quantity, price, branch_id
+             FROM merchandisestbl WHERE merchandise_id = $1`,
+            [merchId]
+          );
+
+          if (merchResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+              success: false,
+              message: `Merchandise ID ${merchId} not found`,
+            });
+          }
+
+          const merch = merchResult.rows[0];
+          const price = parseFloat(merch.price) || 0;
+          const itemTotal = price * qty;
+          totalAmount += itemTotal;
+
+          if (merch.branch_id && branchId && merch.branch_id !== branchId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Merchandise "${merch.merchandise_name}" belongs to a different branch`,
+            });
+          }
+
+          const availableQty = merch.quantity != null ? parseInt(merch.quantity, 10) : null;
+          if (availableQty !== null && availableQty < qty) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: `Insufficient stock for ${merch.merchandise_name}${merch.size ? ` (${merch.size})` : ''}. Available: ${availableQty}, Requested: ${qty}`,
+            });
+          }
+
+          merchSnapshots.push({
+            merchandise_id: merch.merchandise_id,
+            merchandise_name: merch.merchandise_name,
+            size: merch.size,
+            quantity: qty,
+            price,
+            branch_id: merch.branch_id || branchId,
+          });
+        }
+
+        merchandiseItemsSnapshot = merchSnapshots;
+        totalPaymentAmount = totalAmount;
+
+        if (totalPaymentAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Payment amount must be greater than 0. Check merchandise prices and quantities.',
+          });
+        }
+      } else {
+        // ── PACKAGE AR ─────────────────────────────────────────────────────
+        if (!package_id) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Package ID is required for package acknowledgement receipt',
+          });
+        }
+
+        const pkgResult = await client.query(
+          `SELECT package_id, package_name, package_price, branch_id, package_type, downpayment_amount, payment_option
+           FROM packagestbl WHERE package_id = $1`,
+          [package_id]
+        );
+
+        if (pkgResult.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({
+            success: false,
+            message: 'Package not found',
+          });
+        }
+
+        const pkg = pkgResult.rows[0];
+        pkgId = pkg.package_id;
+        packageNameSnapshot = pkg.package_name;
+        packageAmountSnapshot = pkg.package_price;
+        branchId = branchId || pkg.branch_id || null;
+
+        const isInstallmentPkg =
+          (pkg.package_type || '').toLowerCase() === 'installment' ||
+          (pkg.package_type === 'Phase' && (pkg.payment_option || '').toLowerCase() === 'installment');
+        const downpayment = parseFloat(pkg.downpayment_amount ?? 0) || 0;
+        const monthly = parseFloat(pkg.package_price ?? 0) || 0;
+
+        if (isInstallmentPkg && downpayment > 0) {
+          const opt =
+            installment_option === 'downpayment_plus_phase1' ? 'downpayment_plus_phase1' : 'downpayment_only';
+          totalPaymentAmount = opt === 'downpayment_plus_phase1' ? downpayment + monthly : downpayment;
+          if (opt === 'downpayment_plus_phase1') {
+            isSplitDualPackageAr = true;
+            splitDownpaymentAmt = downpayment;
+            splitMonthlyAmt = monthly;
+            splitPackageDisplayName = pkg.package_name;
+          }
+        } else {
+          totalPaymentAmount = monthly;
+        }
+
+        if (!branchId) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Branch is required to create an acknowledgement receipt',
+          });
+        }
+
+        if (totalPaymentAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Payment amount must be greater than 0. Check package pricing.',
+          });
+        }
+      }
+
+      if (discountValue > 0 && discountValue >= totalPaymentAmount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Discount amount must be less than the payment amount.',
+        });
+      }
+
+      // Verify branch exists
+      const branchCheck = await client.query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [branchId]);
+      if (branchCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Branch not found',
+        });
+      }
+
+      const createdBy = req.user.userId || null;
+      const isCashPayment =
+        String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash';
+      // Package AR: cash → Verified on issue (admin can enroll immediately); Finance approves in Payment Logs later.
+      // Package AR: non-cash → Unverified until Finance verifies on AR page (then Payment Logs auto-approved).
+      // Merchandise AR: cash → Verified on issue below; non-cash → Unverified until Finance verifies on AR page.
+      const initialPackageStatus = isCashPayment ? AR_STATUS.VERIFIED : AR_STATUS.UNVERIFIED;
+      const hasVerifierCols = await ackReceiptHasVerifierColumns();
+
+      const arVerifiedByOnCreate = isCashPayment && !isMerchandise ? createdBy : null;
+      const arVerifiedAtOnCreate = isCashPayment && !isMerchandise ? new Date() : null;
+
+      let ackReceipt;
+      let pairedAckReceipt = null;
+
+      const insertAcknowledgementRow = async ({
+        ackNum,
+        statusVal,
+        arTypeVal,
+        payAmt,
+        tipAmt,
+        pkgSnapName,
+        pkgSnapAmt,
+        merchJson,
+        installmentOpt,
+      }) => {
+        const insertParams = [
+          ackNum,
+          statusVal,
+          arTypeVal,
+          prospect_student_name,
+          prospect_student_contact?.trim() || null,
+          prospect_student_email?.trim()?.toLowerCase() || null,
+          normalizedProspectPhone,
+          prospect_student_notes?.trim() || null,
+          linkedStudentId || null,
+          branchId,
+          pkgId,
+          pkgSnapName,
+          pkgSnapAmt,
+          merchJson,
+          payAmt,
+          tipAmt,
+          issue_date,
+          normalizedPaymentMethod,
+          reference_number?.trim() || null,
+          payment_attachment_url || null,
+          level_tag?.trim() || null,
+          installmentOpt,
+          createdBy,
+        ];
+        const insertParamsWithVerifier = hasVerifierCols
+          ? [...insertParams, arVerifiedByOnCreate, arVerifiedAtOnCreate]
+          : insertParams;
+        const insResult = hasVerifierCols
+          ? await client.query(
+              `INSERT INTO acknowledgement_receiptstbl (
+               ack_receipt_number,
+               status,
+               ar_type,
+               prospect_student_name,
+               prospect_student_contact,
+               prospect_student_email,
+               prospect_student_phone,
+               prospect_student_notes,
+               student_id,
+               branch_id,
+               package_id,
+               package_name_snapshot,
+               package_amount_snapshot,
+               merchandise_items_snapshot,
+               payment_amount,
+               tip_amount,
+               issue_date,
+               payment_method,
+               reference_number,
+               payment_attachment_url,
+               level_tag,
+               installment_option,
+               invoice_id,
+               payment_id,
+               created_by,
+               verified_by_user_id,
+               verified_at
+             )
+             VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               $14, $15, $16, $17, $18, $19, $20, $21, $22, NULL, NULL, $23,
+               $24, $25
+             )
+             RETURNING *`,
+              insertParamsWithVerifier
+            )
+          : await client.query(
+              `INSERT INTO acknowledgement_receiptstbl (
+               ack_receipt_number,
+               status,
+               ar_type,
+               prospect_student_name,
+               prospect_student_contact,
+               prospect_student_email,
+               prospect_student_phone,
+               prospect_student_notes,
+               student_id,
+               branch_id,
+               package_id,
+               package_name_snapshot,
+               package_amount_snapshot,
+               merchandise_items_snapshot,
+               payment_amount,
+               tip_amount,
+               issue_date,
+               payment_method,
+               reference_number,
+               payment_attachment_url,
+               level_tag,
+               installment_option,
+               invoice_id,
+               payment_id,
+               created_by
+             )
+             VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               $14, $15, $16, $17, $18, $19, $20, $21, $22, NULL, NULL, $23
+             )
+             RETURNING *`,
+              insertParams
+            );
+        return insResult.rows[0];
+      };
+
+      if (isSplitDualPackageAr && !isMerchandise) {
+        const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn();
+        if (!hasPairedCol) {
+          await client.query('ROLLBACK');
+          return res.status(503).json({
+            success: false,
+            message:
+              'Run database migration 109_add_paired_ack_receipt_id.sql (paired_ack_receipt_id on acknowledgement_receiptstbl) before creating Downpayment + Phase 1 receipts.',
+          });
+        }
+        const n1 = await allocateNextArStyleNumber(client);
+        const n2 = await allocateNextArStyleNumber(client);
+        const stud = String(prospect_student_name || '').trim();
+        const lvl = String(level_tag || '').trim() || '-';
+        const dpDesc = `Downpayment for ${splitPackageDisplayName || 'Installment'}`;
+        const phDesc = `(Phase 1) Installment plan for ${stud} - ${lvl}`;
+        const tipVal = parseFloat(tip_amount || 0) || 0;
+        const dpDiscount = Math.min(discountValue, splitDownpaymentAmt);
+        const phase1Discount = Math.max(0, discountValue - dpDiscount);
+
+        ackReceipt = await insertAcknowledgementRow({
+          ackNum: n1,
+          statusVal: initialPackageStatus,
+          arTypeVal: 'Package',
+          payAmt: Math.max(0, splitDownpaymentAmt - dpDiscount),
+          tipAmt: tipVal,
+          pkgSnapName: dpDesc,
+          pkgSnapAmt: splitDownpaymentAmt,
+          merchJson: null,
+          installmentOpt: 'downpayment_plus_phase1',
+        });
+        pairedAckReceipt = await insertAcknowledgementRow({
+          ackNum: n2,
+          statusVal: initialPackageStatus,
+          arTypeVal: 'Package',
+          payAmt: Math.max(0, splitMonthlyAmt - phase1Discount),
+          tipAmt: 0,
+          pkgSnapName: phDesc,
+          pkgSnapAmt: splitMonthlyAmt,
+          merchJson: null,
+          installmentOpt: null,
+        });
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET paired_ack_receipt_id = $1 WHERE ack_receipt_id = $2`,
+          [pairedAckReceipt.ack_receipt_id, ackReceipt.ack_receipt_id]
+        );
+      } else {
+        const ackNumber = await allocateNextArStyleNumber(client);
+        ackReceipt = await insertAcknowledgementRow({
+          ackNum: ackNumber,
+          statusVal: isMerchandise ? AR_STATUS.UNVERIFIED : initialPackageStatus,
+          arTypeVal: isMerchandise ? 'Merchandise' : 'Package',
+          payAmt: Math.max(0, totalPaymentAmount - discountValue),
+          tipAmt: tip_amount || 0,
+          pkgSnapName: packageNameSnapshot,
+          pkgSnapAmt: packageAmountSnapshot,
+          merchJson: merchandiseItemsSnapshot ? JSON.stringify(merchandiseItemsSnapshot) : null,
+          installmentOpt: isMerchandise ? null : installment_option || null,
+        });
+      }
+
+      // ── For Merchandise AR: auto-generate invoice ─────────────────────────
+      if (isMerchandise && merchandiseItemsSnapshot) {
+        let studentIdForInvoice = linkedStudentId;
+
+        if (!studentIdForInvoice) {
+          // Use or auto-create Walk-in Customer for unregistered students (no migration needed)
+          const walkInResult = await client.query(
+            `SELECT user_id FROM userstbl WHERE email = 'walkin@merchandise.psms.internal' LIMIT 1`
+          );
+          if (walkInResult.rows.length > 0) {
+            studentIdForInvoice = walkInResult.rows[0].user_id;
+          } else {
+            // Auto-create Walk-in Customer (idempotent: ON CONFLICT reuses existing)
+            const insertResult = await client.query(
+              `INSERT INTO userstbl (email, full_name, user_type) 
+               VALUES ('walkin@merchandise.psms.internal', 'Walk-in Customer', 'Student') 
+               ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+               RETURNING user_id`
+            );
+            studentIdForInvoice = insertResult.rows[0].user_id;
+          }
+        }
+
+        const invoiceDesc = 'Merchandise (acknowledgement receipt)';
+
+        const invoiceResult = await client.query(
+          `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, ack_receipt_id, invoice_ar_number)
+           VALUES ($1, $2, $3, 'Unpaid', $4, $5, $6, $7, $8, $9)
+           RETURNING *`,
+          [
+            invoiceDesc,
+            branchId,
+            totalPaymentAmount,
+            `Merchandise purchase (acknowledgement receipt) — ${prospect_student_name}`,
+            issue_date,
+            issue_date,
+            createdBy,
+            ackReceipt.ack_receipt_id,
+            ackReceipt.ack_receipt_number,
+          ]
+        );
+
+        const newInvoice = invoiceResult.rows[0];
+
+        for (const item of merchandiseItemsSnapshot) {
+          const desc = `Merchandise: ${item.merchandise_name}${item.size ? ` (${item.size})` : ''}`;
+          const itemAmount = (item.price || 0) * (item.quantity || 1);
+          await client.query(
+            `INSERT INTO invoiceitemstbl (invoice_id, description, amount) VALUES ($1, $2, $3)`,
+            [newInvoice.invoice_id, desc, itemAmount]
+          );
+        }
+
+        await client.query(
+          'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
+          [newInvoice.invoice_id, studentIdForInvoice]
+        );
+
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET invoice_id = $1 WHERE ack_receipt_id = $2`,
+          [newInvoice.invoice_id, ackReceipt.ack_receipt_id]
+        );
+
+        ackReceipt.invoice_id = newInvoice.invoice_id;
+
+        const itemsSumResult = await client.query(
+          `SELECT COALESCE(SUM(amount), 0) AS s FROM invoiceitemstbl WHERE invoice_id = $1`,
+          [newInvoice.invoice_id]
+        );
+        const itemTotal = parseFloat(itemsSumResult.rows[0].s) || 0;
+
+        const actionOwnerAck = newInvoice.created_by != null ? newInvoice.created_by : createdBy;
+        const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+
+        const paymentInsert = hasActionOwnerCol
+          ? await client.query(
+              `INSERT INTO paymenttbl (
+             invoice_id, student_id, branch_id, payment_method, payment_type,
+             payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url, action_owner_user_id
+           )
+           VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, $11, $12)
+           RETURNING *`,
+              [
+                newInvoice.invoice_id,
+                studentIdForInvoice,
+                branchId,
+                normalizedPaymentMethod,
+                itemTotal,
+                tip_amount || 0,
+                issue_date,
+                reference_number?.trim() || null,
+                'Merchandise payment (acknowledgement receipt)',
+                createdBy,
+                payment_attachment_url || null,
+                actionOwnerAck,
+              ]
+            )
+          : await client.query(
+              `INSERT INTO paymenttbl (
+             invoice_id, student_id, branch_id, payment_method, payment_type,
+             payable_amount, tip_amount, issue_date, status, reference_number, remarks, created_by, payment_attachment_url
+           )
+           VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, $11)
+           RETURNING *`,
+              [
+                newInvoice.invoice_id,
+                studentIdForInvoice,
+                branchId,
+                normalizedPaymentMethod,
+                itemTotal,
+                tip_amount || 0,
+                issue_date,
+                reference_number?.trim() || null,
+                'Merchandise payment (acknowledgement receipt)',
+                createdBy,
+                payment_attachment_url || null,
+              ]
+            );
+        const newPayment = paymentInsert.rows[0];
+        const isMerchandiseCash =
+          String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash';
+
+        await client.query(
+          `UPDATE invoicestbl SET status = 'Paid', amount = 0 WHERE invoice_id = $1`,
+          [newInvoice.invoice_id]
+        );
+
+        if (isMerchandiseCash) {
+          if (hasVerifierCols) {
+            await client.query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Verified',
+                   payment_id = $1,
+                   verified_by_user_id = $2,
+                   verified_at = CURRENT_TIMESTAMP
+               WHERE ack_receipt_id = $3`,
+              [newPayment.payment_id, createdBy, ackReceipt.ack_receipt_id]
+            );
+            ackReceipt.verified_by_user_id = createdBy;
+          } else {
+            await client.query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = 'Verified', payment_id = $1
+               WHERE ack_receipt_id = $2`,
+              [newPayment.payment_id, ackReceipt.ack_receipt_id]
+            );
+          }
+          ackReceipt.status = 'Verified';
+
+        } else {
+          await client.query(
+            `UPDATE acknowledgement_receiptstbl SET status = $1, payment_id = $2 WHERE ack_receipt_id = $3`,
+            [AR_STATUS.UNVERIFIED, newPayment.payment_id, ackReceipt.ack_receipt_id]
+          );
+          ackReceipt.status = AR_STATUS.UNVERIFIED;
+        }
+
+        ackReceipt.payment_id = newPayment.payment_id;
+
+        const merchArReleaseBatchId = buildMerchandiseArReleaseBatchId(ackReceipt.ack_receipt_id);
+        for (const item of merchandiseItemsSnapshot) {
+          const merchId = item.merchandise_id;
+          const qty = parseInt(item.quantity, 10) || 1;
+          await client.query(
+            `UPDATE merchandisestbl SET quantity = GREATEST(0, COALESCE(quantity, 0) - $1) WHERE merchandise_id = $2`,
+            [qty, merchId]
+          );
+          await insertMerchandiseReleaseLog(client, {
+            releaseBatchId: merchArReleaseBatchId,
+            source: MERCH_RELEASE_SOURCE.MERCHANDISE_AR,
+            merchandiseId: merchId,
+            quantity: qty,
+            branchId,
+            merchandiseName: item.merchandise_name,
+            size: item.size,
+            ackReceiptId: ackReceipt.ack_receipt_id,
+            paymentId: newPayment.payment_id,
+            createdBy,
+          });
+        }
+      }
+
+      await client.query('COMMIT');
+
+      createArSubmissionNotification({
+        ackReceiptId: ackReceipt.ack_receipt_id,
+        branchId,
+        createdByUserId: createdBy,
+        studentName: prospect_student_name,
+        arType: isMerchandise ? 'Merchandise' : 'Package',
+        paymentMethod: normalizedPaymentMethod,
+        status: ackReceipt.status,
+      });
+
+      if (pairedAckReceipt) {
+        createArSubmissionNotification({
+          ackReceiptId: pairedAckReceipt.ack_receipt_id,
+          branchId,
+          createdByUserId: createdBy,
+          studentName: prospect_student_name,
+          arType: 'Package',
+          paymentMethod: normalizedPaymentMethod,
+          status: pairedAckReceipt.status,
+        });
+      }
+
+      if (
+        ackReceipt.status === AR_STATUS.UNVERIFIED ||
+        ackReceipt.status === AR_STATUS.APPLIED ||
+        ackReceipt.status === AR_STATUS.VERIFIED
+      ) {
+        (async () => {
+          try {
+            const emailClient = await getClient();
+            try {
+              await sendArPaymentConfirmationByAckId(emailClient, ackReceipt.ack_receipt_id);
+              if (ackReceipt.invoice_id) {
+                await sendInvoicePaymentConfirmationByInvoiceId(emailClient, ackReceipt.invoice_id);
+              }
+            } finally {
+              emailClient.release();
+            }
+          } catch (emailError) {
+            console.error(
+              `❌ Error sending AR payment confirmation email for AR ${ackReceipt.ack_receipt_id}:`,
+              emailError
+            );
+          }
+        })();
+      }
+
+      res.status(201).json({
+        success: true,
+        // Include ack_receipt_number for the creator so the post-creation
+        // modal can display and print the receipt without a separate lookup.
+        data: {
+          ...formatArListApiRow(ackReceipt),
+          ack_receipt_number: ackReceipt.ack_receipt_number,
+        },
+        ...(pairedAckReceipt
+          ? {
+              paired_acknowledgement_receipt: {
+                ...formatArListApiRow(pairedAckReceipt),
+                ack_receipt_number: pairedAckReceipt.ack_receipt_number,
+              },
+              message:
+                isCashPayment
+                  ? 'Two sequential AR numbers were issued (downpayment, then Phase 1). Cash receipts are auto-verified; Finance approves in Payment Logs when applicable.'
+                  : 'Two sequential AR numbers were issued (downpayment, then Phase 1). Both appear on the AR list as separate rows; verifying either marks both as Verified.',
+            }
+          : {}),
+        ...(!isMerchandise && !pairedAckReceipt && isCashPayment
+          ? {
+              message:
+                'Package acknowledgement receipt created and auto-verified (cash). You can apply it to enrollment now. Finance will approve the payment in Payment Logs.',
+            }
+          : {}),
+        ...(isMerchandise && ackReceipt.invoice_id && !pairedAckReceipt
+          ? {
+              message:
+                String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash'
+                  ? 'Merchandise acknowledgement receipt created and auto-verified (cash). Invoice is Paid and stock updated. Finance approves the payment in Payment Logs.'
+                  : 'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated. Finance must verify non-cash merchandise on the AR page.',
+            }
+          : {}),
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      next(err);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * GET /api/sms/acknowledgement-receipts/:id
+ * Get a single acknowledgement receipt
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.get(
+  '/:id',
+  [param('id').isInt().withMessage('ID must be an integer'), handleValidationErrors],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const sql = `
+        SELECT
+          ar.*,
+          prep_u.full_name AS prepared_by_name,
+          TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
+          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+          p.package_name,
+          u.full_name AS student_name,
+          ${AR_LINKED_INVOICE_SELECT_SQL}
+        FROM acknowledgement_receiptstbl ar
+        LEFT JOIN branchestbl b ON ar.branch_id = b.branch_id
+        LEFT JOIN packagestbl p ON ar.package_id = p.package_id
+        LEFT JOIN userstbl u ON ar.student_id = u.user_id
+        LEFT JOIN userstbl prep_u ON prep_u.user_id = ar.created_by
+        ${AR_INVOICE_LINK_LATERAL_SQL}
+        WHERE ar.ack_receipt_id = $1
+      `;
+      const result = await query(sql, [id]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ar = result.rows[0];
+
+      // Enforce branch restriction for non-superadmin users
+      if (req.user.userType !== 'Superadmin' && req.user.branchId && ar.branch_id !== req.user.branchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied',
+        });
+      }
+
+      let pairedAckRow = null;
+      const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn();
+      if (hasPairedCol) {
+        const pairedId =
+          ar.paired_ack_receipt_id != null
+            ? Number(ar.paired_ack_receipt_id)
+            : (
+                await query(
+                  `SELECT ack_receipt_id
+                   FROM acknowledgement_receiptstbl
+                   WHERE paired_ack_receipt_id = $1
+                   LIMIT 1`,
+                  [id]
+                )
+              ).rows[0]?.ack_receipt_id;
+        if (pairedId) {
+          const pairedResult = await query(sql, [pairedId]);
+          pairedAckRow = pairedResult.rows[0] || null;
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          ...formatArListApiRow(ar),
+          ...(pairedAckRow
+            ? {
+                paired_acknowledgement_receipt: {
+                  ...formatArListApiRow(pairedAckRow),
+                  ack_receipt_number: pairedAckRow.ack_receipt_number,
+                },
+              }
+            : {}),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/acknowledgement-receipts/:id/pdf
+ * Generate a printable Acknowledgement Receipt PDF directly from AR data.
+ * Works for both Package and Merchandise ARs without needing an invoice_id.
+ *
+ * Optional query `paired_id`: legacy — two sibling AR rows from an older split create;
+ * returns one PDF with two pages. New Downpayment + Phase 1 receipts use a single row;
+ * that case produces two pages automatically without `paired_id`.
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.get(
+  '/:id/pdf',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    queryValidator('paired_id')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('paired_id must be a positive integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const idNum = Number(id);
+      const pairedRaw = req.query.paired_id;
+      const pairedNum =
+        pairedRaw !== undefined && pairedRaw !== null && String(pairedRaw).trim() !== ''
+          ? Number(pairedRaw)
+          : null;
+
+      if (pairedNum != null && Number.isInteger(pairedNum) && pairedNum > 0 && pairedNum === idNum) {
+        return res.status(400).json({
+          success: false,
+          message: 'paired_id must differ from the receipt id.',
+        });
+      }
+
+      let buffer;
+      let filename;
+      let ar;
+      try {
+        ({ buffer, filename, ar } = await generateAckReceiptPdfBuffer(idNum, query, {
+          pairedAckReceiptId: pairedNum,
+        }));
+      } catch (pdfErr) {
+        const msg = pdfErr?.message || 'Failed to generate acknowledgement receipt PDF';
+        if (msg.includes('not found')) {
+          return res.status(404).json({ success: false, message: msg });
+        }
+        if (msg.includes('cannot be combined') || msg.includes('Invalid Downpayment')) {
+          return res.status(400).json({ success: false, message: msg });
+        }
+        throw pdfErr;
+      }
+
+      if (
+        req.user.userType !== 'Superadmin' &&
+        req.user.branchId != null &&
+        ar.branch_id != null &&
+        Number(ar.branch_id) !== Number(req.user.branchId)
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=${filename}`);
+      res.send(buffer);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/acknowledgement-receipts/:id/attach-to-invoice
+ * Attach an acknowledgement receipt to an invoice and create payment
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.post(
+  '/:id/attach-to-invoice',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    body('invoice_id').isInt().withMessage('Invoice ID is required and must be an integer'),
+    body('student_id').isInt().withMessage('Student ID is required and must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const { id } = req.params;
+      const { invoice_id, student_id } = req.body;
+
+      // Load acknowledgement receipt
+      const ackResult = await client.query(
+        'SELECT * FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+        [id]
+      );
+
+      if (ackResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      let ack = ackResult.rows[0];
+
+      const pairCtx = await resolveDownpaymentPhase1AckPair(ack, (sql, params) =>
+        client.query(sql, params)
+      );
+      if (pairCtx.isDownpaymentPlusPhase1 && pairCtx.leaderAck) {
+        ack = pairCtx.leaderAck;
+      }
+
+      const ackStatus = String(ack.status || '').trim();
+      const ackStatusUpper = ackStatus.toUpperCase();
+
+      // Verify invoice exists (load ack_receipt_id for attach eligibility)
+      const invoiceCheck = await client.query(
+        'SELECT *, installmentinvoiceprofiles_id FROM invoicestbl WHERE invoice_id = $1',
+        [invoice_id]
+      );
+      if (invoiceCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+      }
+
+      const invoice = invoiceCheck.rows[0];
+      const attachAckId = Number(ack.ack_receipt_id);
+      const targetAckOnInvoice =
+        invoice.ack_receipt_id != null ? Number(invoice.ack_receipt_id) : null;
+
+      if (
+        targetAckOnInvoice === attachAckId &&
+        ack.invoice_id != null &&
+        Number(ack.invoice_id) !== Number(invoice_id) &&
+        !ack.payment_id &&
+        ackStatusUpper !== 'APPLIED'
+      ) {
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET invoice_id = $1 WHERE ack_receipt_id = $2`,
+          [invoice_id, attachAckId]
+        );
+        ack = { ...ack, invoice_id: Number(invoice_id) };
+      }
+
+      if (isAckReceiptAlreadyApplied(ack, invoice_id, { targetInvoiceAckReceiptId: invoice.ack_receipt_id })) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'This acknowledgement receipt has already been used. Each acknowledgement receipt can only be applied once.',
+        });
+      }
+
+      const ackPayment = parseFloat(ack.payment_amount ?? 0) || 0;
+      if (ackPayment <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Acknowledgement receipt payment must be greater than zero.',
+        });
+      }
+
+      const isRejectedOrCancelled = ['Rejected', 'Cancelled'].includes(ackStatus);
+      const isReturnedForAttach = isArReturnedForCorrection(ack.status, ack.prospect_student_notes);
+      const ackPaymentMethod = String(ack.payment_method || '').trim().toLowerCase();
+      const isCashAck = ackPaymentMethod === 'cash';
+      const isVerifiedForAttach = ackStatusUpper === 'VERIFIED';
+      const canAttachAck =
+        !isRejectedOrCancelled && !isReturnedForAttach && (isVerifiedForAttach || isCashAck);
+
+      if (!canAttachAck) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: isCashAck
+            ? 'This cash acknowledgement receipt cannot be attached (rejected or returned).'
+            : 'Acknowledgement receipt must be Verified by Finance/Superfinance before it can be attached',
+        });
+      }
+
+      // Enforce branch access: non-superadmin limited to their branch
+      if (req.user.userType !== 'Superadmin' && req.user.branchId && ack.branch_id !== req.user.branchId) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this acknowledgement receipt',
+        });
+      }
+
+      // Verify student exists
+      const studentCheck = await client.query('SELECT * FROM userstbl WHERE user_id = $1', [student_id]);
+      if (studentCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Student not found',
+        });
+      }
+
+      // Basic sanity: ensure invoice is not already fully paid
+      if (invoice.status === 'Paid') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Invoice is already fully paid',
+        });
+      }
+
+      if (invoice.balance_invoice_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'This invoice is closed for payments. Use the current balance invoice instead.',
+        });
+      }
+
+      // Determine branch_id for payment from invoice or user
+      const branch_id = invoice.branch_id || req.user.branchId || ack.branch_id || null;
+
+      if (!branch_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Unable to determine branch for payment',
+        });
+      }
+
+      // Verify branch exists
+      const branchCheck = await client.query('SELECT branch_id FROM branchestbl WHERE branch_id = $1', [branch_id]);
+      if (branchCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Branch not found',
+        });
+      }
+
+      const createdBy = req.user.userId || null;
+      const actionOwnerAr = invoice.created_by != null ? invoice.created_by : createdBy;
+      const hasActionOwnerColAr = await paymenttblHasActionOwnerUserIdColumn();
+      const ackPaymentAmount = parseFloat(ack.payment_amount || 0) || 0;
+      const ackTipAmount = parseFloat(ack.tip_amount || 0) || 0;
+      const invoiceRemainingAmount = parseFloat(invoice.amount || 0) || 0;
+      // Prevent overpaying the attached invoice when AR amount includes additional
+      // components (e.g., downpayment + phase 1 combined in one AR).
+      const paymentAmountForInvoice = invoiceRemainingAmount > 0
+        ? Math.min(ackPaymentAmount, invoiceRemainingAmount)
+        : ackPaymentAmount;
+
+      const requestUserId = req.user.userId || req.user.user_id || null;
+      const arVerifierUserId = ack.verified_by_user_id || requestUserId || null;
+      const attachPaymentMethod = String(ack.payment_method || 'Cash').trim() || 'Cash';
+      let verifierUserTypeForAttach = null;
+      if (ack.verified_by_user_id) {
+        const verifierTypeRes = await client.query(
+          'SELECT user_type FROM userstbl WHERE user_id = $1',
+          [ack.verified_by_user_id]
+        );
+        verifierUserTypeForAttach = verifierTypeRes.rows[0]?.user_type || null;
+      }
+      const shouldAutoApproveFromVerifiedAr =
+        !isCashAck &&
+        ack.ar_type === 'Package' &&
+        ackStatusUpper === 'VERIFIED' &&
+        shouldSyncPaymentLogApprovalOnArVerify(verifierUserTypeForAttach);
+
+      // Create payment record from AR details — carry over reference_number and attachment from AR.
+      // Non-cash package AR verified by Finance on the AR page: auto-approve payment on attach.
+      // Cash AR (any type): Payment Logs approval stays with Finance separately.
+      const paymentResult = hasActionOwnerColAr
+        ? await client.query(
+            `INSERT INTO paymenttbl (
+           invoice_id,
+           student_id,
+           branch_id,
+           payment_method,
+           payment_type,
+           payable_amount,
+           tip_amount,
+           issue_date,
+           status,
+           reference_number,
+           remarks,
+           created_by,
+           payment_attachment_url,
+           action_owner_user_id
+         )
+         VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7, 'Completed', $8, $9, $10, $11, $12)
+         RETURNING *`,
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              attachPaymentMethod,
+              paymentAmountForInvoice,
+              ackTipAmount,
+              ack.issue_date,
+              ack.reference_number || null,
+              ack.prospect_student_notes
+                ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
+                : 'Paid via acknowledgement receipt',
+              createdBy,
+              ack.payment_attachment_url || null,
+              actionOwnerAr,
+            ]
+          )
+        : await client.query(
+            `INSERT INTO paymenttbl (
+           invoice_id,
+           student_id,
+           branch_id,
+           payment_method,
+           payment_type,
+           payable_amount,
+           tip_amount,
+           issue_date,
+           status,
+           reference_number,
+           remarks,
+           created_by,
+           payment_attachment_url
+         )
+         VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7, 'Completed', $8, $9, $10, $11)
+         RETURNING *`,
+            [
+              invoice_id,
+              student_id,
+              branch_id,
+              attachPaymentMethod,
+              paymentAmountForInvoice,
+              ackTipAmount,
+              ack.issue_date,
+              ack.reference_number || null,
+              ack.prospect_student_notes
+                ? `Paid via acknowledgement receipt: ${ack.prospect_student_notes}`
+                : 'Paid via acknowledgement receipt',
+              createdBy,
+              ack.payment_attachment_url || null,
+            ]
+          );
+
+      const newPayment = paymentResult.rows[0];
+
+      if (shouldAutoApproveFromVerifiedAr && newPayment?.payment_id) {
+        try {
+          const financeApproverId = ack.verified_by_user_id || requestUserId;
+          await client.query(
+            `UPDATE paymenttbl
+             SET approval_status = 'Approved',
+                 approved_by = $1,
+                 approved_at = CURRENT_TIMESTAMP
+             WHERE payment_id = $2`,
+            [financeApproverId, newPayment.payment_id]
+          );
+        } catch (autoApproveError) {
+          // Do not fail enrollment/attachment when approval metadata update is unavailable.
+          console.warn(
+            'Auto-approve skipped for AR attached payment:',
+            autoApproveError?.message || autoApproveError
+          );
+        }
+      }
+
+      // Update invoice payments and status (reuse logic from payments POST)
+      const invoiceItemsResult = await client.query(
+        `SELECT 
+          COALESCE(SUM(amount), 0) as item_amount,
+          COALESCE(SUM(discount_amount), 0) as total_discount,
+          COALESCE(SUM(penalty_amount), 0) as total_penalty,
+          COALESCE(SUM(amount * COALESCE(tax_percentage, 0) / 100), 0) as total_tax
+         FROM invoiceitemstbl 
+         WHERE invoice_id = $1`,
+        [invoice_id]
+      );
+
+      const itemAmount = parseFloat(invoiceItemsResult.rows[0].item_amount) || 0;
+      const totalDiscount = parseFloat(invoiceItemsResult.rows[0].total_discount) || 0;
+      const totalPenalty = parseFloat(invoiceItemsResult.rows[0].total_penalty) || 0;
+      const totalTax = parseFloat(invoiceItemsResult.rows[0].total_tax) || 0;
+
+      const originalInvoiceAmount = itemAmount - totalDiscount + totalPenalty + totalTax;
+
+      const totalPaymentsResult = await client.query(
+        `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) as total_paid
+         FROM paymenttbl
+         WHERE invoice_id = $1
+           AND status = $2
+           AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
+        [invoice_id, 'Completed']
+      );
+      const totalPaid = parseFloat(totalPaymentsResult.rows[0].total_paid) || 0;
+
+      const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
+
+      await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
+        remainingBalance,
+        invoice_id,
+      ]);
+
+      let newInvoiceStatus = invoice.status;
+      if (totalPaid >= originalInvoiceAmount) {
+        newInvoiceStatus = 'Paid';
+      } else if (totalPaid > 0) {
+        newInvoiceStatus = 'Partially Paid';
+      } else {
+        const hasRejectedPayment = await invoiceHasRejectedPayment(client, invoice_id);
+        if (hasRejectedPayment) {
+          newInvoiceStatus = 'Rejected';
+        } else if (invoice.status === 'Paid' || invoice.status === 'Partially Paid') {
+          newInvoiceStatus = 'Unpaid';
+        }
+      }
+
+      if (newInvoiceStatus !== invoice.status) {
+        await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
+          newInvoiceStatus,
+          invoice_id,
+        ]);
+      }
+
+      // ── INSTALLMENT DOWNPAYMENT LOGIC ─────────────────────────────────────────
+      // If the invoice is linked to an installment profile, mirror the same
+      // post-payment logic from payments.js:
+      //   • Mark downpayment as paid
+      //   • Create the first installment invoice record
+      //   • Generate the first installment invoice (async, after COMMIT)
+      let _pendingInvoiceGeneration = null;
+      if (
+        (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') &&
+        invoice.installmentinvoiceprofiles_id
+      ) {
+        try {
+          const profileResult = await client.query(
+            `SELECT ip.class_id, ip.student_id, ip.total_phases, ip.generated_count,
+                    ip.downpayment_paid, ip.downpayment_invoice_id, ip.amount, ip.frequency,
+                    ip.first_generation_date, ip.next_invoice_due_date, ip.bill_invoice_due_date,
+                    ip.branch_id, ip.package_id, ip.description, ip.phase_start
+             FROM installmentinvoiceprofilestbl ip
+             WHERE ip.installmentinvoiceprofiles_id = $1`,
+            [invoice.installmentinvoiceprofiles_id]
+          );
+
+          if (profileResult.rows.length > 0) {
+            const profile = profileResult.rows[0];
+
+            // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
+            const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(invoice_id);
+            const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+            const isPendingDownpayment =
+              (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
+
+            if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
+              if (!profile.downpayment_invoice_id) {
+                await client.query(
+                  `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
+                  [invoice_id, invoice.installmentinvoiceprofiles_id]
+                );
+              }
+              // Mark downpayment as paid
+              await client.query(
+                `UPDATE installmentinvoiceprofilestbl
+                 SET downpayment_paid = true
+                 WHERE installmentinvoiceprofiles_id = $1`,
+                [invoice.installmentinvoiceprofiles_id]
+              );
+
+              // Get student name for the installment invoice record
+              const studentNameResult = await client.query(
+                'SELECT full_name FROM userstbl WHERE user_id = $1',
+                [student_id]
+              );
+              const studentName = studentNameResult.rows[0]?.full_name || 'Student';
+
+              // Calculate dates for the first installment invoice
+              const firstGenerationDate = profile.first_generation_date
+                ? new Date(profile.first_generation_date)
+                : new Date();
+              const nextInvoiceDueDate = profile.next_invoice_due_date
+                ? new Date(profile.next_invoice_due_date)
+                : new Date();
+
+              // Create the first installment invoice record
+              const firstInvoiceRecordResult = await client.query(
+                `INSERT INTO installmentinvoicestbl
+                 (installmentinvoiceprofiles_id, scheduled_date, status, student_name,
+                  total_amount_including_tax, total_amount_excluding_tax, frequency,
+                  next_generation_date, next_invoice_month)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 RETURNING *`,
+                [
+                  invoice.installmentinvoiceprofiles_id,
+                  profile.bill_invoice_due_date || formatYmdLocal(nextInvoiceDueDate),
+                  'Pending',
+                  studentName,
+                  profile.amount,
+                  profile.amount,
+                  profile.frequency || '1 month(s)',
+                  formatYmdLocal(firstGenerationDate),
+                  formatYmdLocal(nextInvoiceDueDate),
+                ]
+              );
+
+              const firstInvoiceRecord = firstInvoiceRecordResult.rows[0];
+              console.log(`✅ AR downpayment paid: Created first installment invoice record for profile ${invoice.installmentinvoiceprofiles_id}`);
+
+              const isDownpaymentPlusPhase1 = pairCtx.isDownpaymentPlusPhase1;
+              const phase1AckRow = pairCtx.phase1Ack;
+
+              let phaseAckId = phase1AckRow?.ack_receipt_id ?? null;
+              let phaseAckNum = phase1AckRow?.ack_receipt_number ?? null;
+              let phase1PayAmount = parseFloat(profile.amount) || 0;
+              if (phase1AckRow) {
+                const pairedAmt = parseFloat(phase1AckRow.payment_amount);
+                if (Number.isFinite(pairedAmt) && pairedAmt > 0) {
+                  phase1PayAmount = pairedAmt;
+                }
+              }
+
+              if (isDownpaymentPlusPhase1 && !phase1AckRow) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                  success: false,
+                  message:
+                    'Downpayment + Phase 1 acknowledgement receipt is missing its paired Phase 1 row. Recreate the AR pair before enrolling.',
+                });
+              }
+
+              if (phase1AckRow && String(phase1AckRow.status || '').trim() === 'Applied') {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                  success: false,
+                  message: 'The paired Phase 1 acknowledgement receipt has already been used.',
+                });
+              }
+
+              // Store for generation after COMMIT (Phase 1 auto-pay when Downpayment + Phase 1 AR)
+              const enrollPhase = profile.phase_start != null ? parseInt(profile.phase_start) : 1;
+              const arDownpaymentIssueYmd = coerceToManilaYmd(ack.issue_date, {
+                fallbackToToday: true,
+              });
+              _pendingInvoiceGeneration = {
+                firstInvoiceRecord,
+                profile: {
+                  student_id: profile.student_id,
+                  branch_id: profile.branch_id || invoice.branch_id || null,
+                  package_id: profile.package_id || null,
+                  amount: profile.amount,
+                  frequency: profile.frequency || '1 month(s)',
+                  description: profile.description || 'Monthly Installment Payment',
+                  generated_count: profile.generated_count || 0,
+                  class_id: profile.class_id,
+                  phase_start: profile.phase_start,
+                },
+                profileId: invoice.installmentinvoiceprofiles_id,
+                paymentIssueDateYmd: arDownpaymentIssueYmd,
+                autoPayPhase1: isDownpaymentPlusPhase1 && Boolean(phase1AckRow),
+                autoPayPhase1Data:
+                  isDownpaymentPlusPhase1 && phase1AckRow
+                    ? {
+                        student_id,
+                        branch_id: profile.branch_id || invoice.branch_id || null,
+                        issue_date: phase1AckRow.issue_date || ack.issue_date,
+                        created_by: req.user.userId || null,
+                        ar_verified_by_user_id: arVerifierUserId,
+                        class_id: profile.class_id,
+                        phase_1_amount: phase1PayAmount,
+                        profile_id: invoice.installmentinvoiceprofiles_id,
+                        reference_number:
+                          phase1AckRow.reference_number || ack.reference_number || null,
+                        payment_attachment_url:
+                          phase1AckRow.payment_attachment_url || ack.payment_attachment_url || null,
+                        enroll_phase: enrollPhase,
+                        phase_ack_receipt_id: phaseAckId,
+                        phase_ack_receipt_number: phaseAckNum,
+                        is_cash_ack: isCashAck,
+                        payment_method:
+                          String(phase1AckRow.payment_method || ack.payment_method || 'Cash').trim() ||
+                          'Cash',
+                      }
+                    : null,
+              };
+
+              const skipPendingEnrollment =
+                isDownpaymentPlusPhase1 && Boolean(phase1AckRow);
+              await ensurePendingEnrollmentAfterDownpaymentPaid(client, profile, student_id, {
+                skip: skipPendingEnrollment,
+              });
+              // NOTE: If downpayment_only, student row is pending_enrollment until Phase 1 is paid.
+              // If downpayment_plus_phase1, Phase 1 is auto-paid after COMMIT and student is enrolled then.
+            } else if (
+              !isPendingDownpayment &&
+              profile.class_id &&
+              Number(profile.student_id) === Number(student_id)
+            ) {
+              await syncInstallmentEnrollmentForPaidInvoice({
+                client,
+                profileId: invoice.installmentinvoiceprofiles_id,
+                profile,
+                studentId: student_id,
+                sourceLabel:
+                  'System (Auto-enrolled via acknowledgement receipt — installment payment)',
+                invoice,
+              });
+            }
+          }
+        } catch (installmentError) {
+          console.error('Error processing AR installment downpayment:', installmentError);
+        }
+      }
+
+      if (newInvoiceStatus === 'Paid' || newInvoiceStatus === 'Partially Paid') {
+        try {
+          await promotePendingEnrollmentIfPhaseInvoicePaid(client, {
+            studentId: student_id,
+            invoice: { ...invoice, status: newInvoiceStatus },
+            sourceLabel:
+              'System (Auto-enrolled via acknowledgement receipt — installment payment)',
+          });
+        } catch (promoteErr) {
+          console.error('Error promoting pending enrollment after AR payment:', promoteErr);
+        }
+      }
+
+      // If invoice is now fully paid (and not an installment or reservation fee),
+      // reuse the full-payment auto-enrollment logic from payments.
+      if (
+        newInvoiceStatus === 'Paid' &&
+        !invoice.installmentinvoiceprofiles_id &&
+        invoice.invoice_description &&
+        !invoice.invoice_description.includes('Reservation Fee')
+      ) {
+        try {
+          // Get class_id from invoice remarks field (stored as CLASS_ID:class_id)
+          let classId = null;
+          if (invoice.remarks && invoice.remarks.includes('CLASS_ID:')) {
+            const match = invoice.remarks.match(/CLASS_ID:(\d+)/);
+            if (match) {
+              classId = parseInt(match[1], 10);
+            }
+          }
+
+          if (classId) {
+            // Get class and curriculum info
+            const classResult = await client.query(
+              `SELECT c.class_id, c.program_id, cu.number_of_phase
+               FROM classestbl c
+               LEFT JOIN programstbl p ON c.program_id = p.program_id
+               LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
+               WHERE c.class_id = $1`,
+              [classId]
+            );
+
+            if (classResult.rows.length > 0) {
+              const classData = classResult.rows[0];
+              const totalPhases = classData.number_of_phase || 1;
+
+              // Determine phase range for enrollment
+              // Default: 1..totalPhases (full payment for entire class)
+              // Phase packages: override using PHASE_START / PHASE_END from remarks
+              let phaseStart = 1;
+              let phaseEnd = totalPhases;
+              if (invoice.remarks && invoice.remarks.includes('PHASE_START:')) {
+                const startMatch = invoice.remarks.match(/PHASE_START:(\d+)/);
+                if (startMatch) {
+                  phaseStart = parseInt(startMatch[1], 10) || 1;
+                }
+              }
+              if (invoice.remarks && invoice.remarks.includes('PHASE_END:')) {
+                const endMatch = invoice.remarks.match(/PHASE_END:(\d+)/);
+                if (endMatch) {
+                  phaseEnd = parseInt(endMatch[1], 10) || phaseStart;
+                }
+              }
+              // Clamp to valid range
+              if (phaseStart < 1) phaseStart = 1;
+              if (phaseEnd > totalPhases) phaseEnd = totalPhases;
+              if (phaseEnd < phaseStart) phaseEnd = phaseStart;
+
+              // Check if student is already enrolled in this class
+              const existingEnrollmentCheck = await client.query(
+                `SELECT classstudent_id, phase_number 
+                 FROM classstudentstbl 
+                 WHERE student_id = $1 AND class_id = $2
+                 ORDER BY phase_number DESC`,
+                [student_id, classId]
+              );
+
+              // If student is not enrolled, enroll in all phases for full payment
+              if (existingEnrollmentCheck.rows.length === 0) {
+                const arFullStatus = await detEnrollmentStatus({ db: client, studentId: student_id, classId, enrollmentType: 'full_payment' });
+                for (let phase = phaseStart; phase <= phaseEnd; phase += 1) {
+                  await client.query(
+                    `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+                     VALUES ($1, $2, $3, $4, $5)`,
+                    [
+                      student_id,
+                      classId,
+                      'System (Auto-enrolled via acknowledgement receipt — full payment)',
+                      phase,
+                      arFullStatus,
+                    ]
+                  );
+                }
+              }
+            }
+          }
+        } catch (fullPaymentError) {
+          // Log error but don't fail AR attachment / payment
+          console.error('Error auto-enrolling student for AR full payment:', fullPaymentError);
+        }
+      }
+
+      // Link AR to invoice and payment (always the downpayment leader for dual-row ARs)
+      await client.query(
+        `UPDATE acknowledgement_receiptstbl
+         SET status = 'Applied',
+             student_id = $1,
+             invoice_id = $2,
+             payment_id = $3
+         WHERE ack_receipt_id = $4`,
+        [student_id, invoice_id, newPayment.payment_id, attachAckId]
+      );
+
+      const phase1AckForStudentLink = pairCtx.phase1Ack?.ack_receipt_id ?? ack.paired_ack_receipt_id;
+      if (phase1AckForStudentLink) {
+        await client.query(
+          `UPDATE acknowledgement_receiptstbl SET student_id = $1 WHERE ack_receipt_id = $2`,
+          [student_id, phase1AckForStudentLink]
+        );
+      }
+
+      // Package AR was issued with ack_receipt_number before enrollment; older enroll flows
+      // allocated a new invoice_ar_number. Align invoice display with the physical receipt.
+      const ackNumTrim = String(ack.ack_receipt_number || '').trim();
+      if (
+        String(ack.ar_type || '').trim().toLowerCase() === 'package' &&
+        ackNumTrim &&
+        String(invoice.invoice_ar_number || '').trim() !== ackNumTrim
+      ) {
+        await client.query(
+          `UPDATE invoicestbl
+           SET invoice_ar_number = $1,
+               ack_receipt_id = COALESCE(ack_receipt_id, $3)
+           WHERE invoice_id = $2`,
+          [ackNumTrim, invoice_id, ack.ack_receipt_id]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      if (newInvoiceStatus === 'Paid') {
+        (async () => {
+          try {
+            const emailClient = await getClient();
+            try {
+              await sendArPaymentConfirmationByAckId(emailClient, attachAckId);
+              await sendInvoicePaymentConfirmationByInvoiceId(emailClient, invoice_id);
+            } finally {
+              emailClient.release();
+            }
+          } catch (emailError) {
+            console.error(`❌ Error sending paid confirmation email for AR ${id}/invoice ${invoice_id}:`, emailError);
+          }
+        })();
+      }
+
+      let installmentFollowUp = null;
+      if (_pendingInvoiceGeneration) {
+        installmentFollowUp = await runArAttachInstallmentFollowUp(_pendingInvoiceGeneration);
+      }
+
+      const phase1Failed =
+        _pendingInvoiceGeneration?.autoPayPhase1 && installmentFollowUp?.error;
+
+      res.json({
+        success: !phase1Failed,
+        message: phase1Failed
+          ? `Downpayment recorded, but Phase 1 auto-payment failed: ${installmentFollowUp.error}`
+          : _pendingInvoiceGeneration?.autoPayPhase1 && installmentFollowUp?.phase1_auto_paid
+            ? 'Acknowledgement receipt attached: downpayment and Phase 1 invoices paid.'
+            : 'Acknowledgement receipt attached and payment recorded successfully',
+        data: {
+          acknowledgement_receipt: {
+            ...formatArListApiRow(ack),
+            status: 'Applied',
+            invoice_id,
+            payment_id: newPayment.payment_id,
+          },
+          payment: newPayment,
+          installment_follow_up: installmentFollowUp,
+        },
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      next(err);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/acknowledgement-receipts/:id
+ * Update editable acknowledgement receipt details.
+ * Access: Superadmin, Admin
+ */
+router.put(
+  '/:id',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    body('prospect_student_name').optional({ nullable: true }).isString().withMessage('Student name must be a string'),
+    body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
+    body('prospect_student_email').optional({ nullable: true }).isEmail().withMessage('Email must be valid'),
+    body('prospect_student_phone').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
+    body('prospect_student_notes').optional({ nullable: true }).isString().withMessage('Notes must be a string'),
+    body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
+    body('reference_number').optional({ nullable: true }).isString().withMessage('Reference number must be a string'),
+    body('payment_attachment_url')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('Attachment URL must be a string')
+      .custom((value) => value == null || String(value).trim().length > 0)
+      .withMessage('Attachment image is required'),
+    body('payment_method')
+      .optional({ nullable: true })
+      .isIn(ALLOWED_AR_PAYMENT_METHODS)
+      .withMessage(`payment_method must be one of: ${ALLOWED_AR_PAYMENT_METHODS.join(', ')}`),
+    body('issue_date').optional({ nullable: true }).isISO8601().withMessage('Issue date must be a valid date'),
+    body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be >= 0'),
+    body('package_id').optional({ nullable: true }).isInt().withMessage('Package ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const ackResult = await query(
+        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id, ar_type, installment_option, payment_attachment_url, issue_date,
+                prospect_student_notes
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1`,
+        [id]
+      );
+
+      if (ackResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ack = ackResult.rows[0];
+      if (req.user.userType !== 'Superadmin' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this acknowledgement receipt',
+        });
+      }
+
+      if (ack.status === 'Applied') {
+        return res.status(400).json({
+          success: false,
+          message: 'Applied acknowledgement receipts cannot be edited',
+        });
+      }
+      const isReturnedForCorrection = isArReturnedForCorrection(ack.status, ack.prospect_student_notes);
+      if (!isReturnedForCorrection && (ack.invoice_id || ack.payment_id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Applied acknowledgement receipts cannot be edited',
+        });
+      }
+
+      const raw = req.body || {};
+      const notesText = String(ack.prospect_student_notes || '');
+      const hadReturnedTag = notesText.includes('[Returned]');
+      if (
+        hadReturnedTag &&
+        Object.prototype.hasOwnProperty.call(raw, 'prospect_student_notes')
+      ) {
+        const nextNotes = String(raw.prospect_student_notes ?? '');
+        if (!nextNotes.includes('[Returned]')) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Notes must keep the Finance return marker ([Returned]). You may add text, but do not remove that history.',
+          });
+        }
+      }
+
+      const currentAttachment = ack.payment_attachment_url || null;
+      const nextAttachment = Object.prototype.hasOwnProperty.call(raw, 'payment_attachment_url')
+        ? (String(raw.payment_attachment_url || '').trim() || null)
+        : currentAttachment;
+      if (!nextAttachment) {
+        return res.status(400).json({
+          success: false,
+          message: 'Attachment image is required',
+        });
+      }
+
+      const updates = [];
+      const params = [];
+      const pushUpdate = (column, value) => {
+        params.push(value);
+        updates.push(`${column} = $${params.length}`);
+      };
+
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_name')) {
+        pushUpdate('prospect_student_name', String(raw.prospect_student_name || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_contact')) {
+        const contact = String(raw.prospect_student_contact || '').trim();
+        if (!contact) {
+          return res.status(400).json({
+            success: false,
+            message: 'Guardian name is required for acknowledgement receipt',
+          });
+        }
+        pushUpdate('prospect_student_contact', contact);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_email')) {
+        pushUpdate('prospect_student_email', String(raw.prospect_student_email || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_phone')) {
+        const phones = collectPhilippineMobiles(raw.prospect_student_phone);
+        if (phones.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
+          });
+        }
+        pushUpdate('prospect_student_phone', phones[0]);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'prospect_student_notes')) {
+        pushUpdate('prospect_student_notes', String(raw.prospect_student_notes || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'level_tag')) {
+        pushUpdate('level_tag', String(raw.level_tag || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'reference_number')) {
+        pushUpdate('reference_number', String(raw.reference_number || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'payment_attachment_url')) {
+        pushUpdate('payment_attachment_url', String(raw.payment_attachment_url || '').trim() || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'payment_method')) {
+        pushUpdate('payment_method', raw.payment_method || null);
+      }
+      // Preserve issue_date after Finance has returned this AR (sale / EOD attribution must stay fixed).
+      // While status is Returned, or notes still contain the "[Returned]" tag (after resubmit to Submitted),
+      // ignore client issue_date — edits + resubmit must not move the AR to another calendar day.
+      const issueDateLocked =
+        isReturnedForCorrection || notesText.includes('[Returned]');
+      if (Object.prototype.hasOwnProperty.call(raw, 'issue_date') && !issueDateLocked) {
+        pushUpdate('issue_date', raw.issue_date || null);
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'tip_amount')) {
+        const tip = raw.tip_amount === '' || raw.tip_amount == null ? 0 : parseFloat(raw.tip_amount);
+        pushUpdate('tip_amount', Number.isFinite(tip) && tip >= 0 ? tip : 0);
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(raw, 'discount_amount') &&
+        !Object.prototype.hasOwnProperty.call(raw, 'package_id')
+      ) {
+        if (ack.ar_type !== 'Package') {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount/Payment Adjustment applies only to Package acknowledgement receipts',
+          });
+        }
+        const discount = raw.discount_amount === '' || raw.discount_amount == null
+          ? 0
+          : parseFloat(raw.discount_amount);
+        if (!Number.isFinite(discount) || discount < 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount amount must be 0 or greater',
+          });
+        }
+        const pkgIdForDiscount = Object.prototype.hasOwnProperty.call(raw, 'package_id')
+          ? parseInt(raw.package_id, 10)
+          : ack.package_id;
+        if (!Number.isInteger(pkgIdForDiscount) || pkgIdForDiscount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Package is required to apply a discount',
+          });
+        }
+        const pkgDiscountResult = await query(
+          `SELECT package_price, package_type, downpayment_amount, payment_option
+           FROM packagestbl WHERE package_id = $1`,
+          [pkgIdForDiscount]
+        );
+        if (pkgDiscountResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Package not found',
+          });
+        }
+        const pkgDisc = pkgDiscountResult.rows[0];
+        const packagePrice = parseFloat(pkgDisc.package_price ?? 0) || 0;
+        const downpayment = parseFloat(pkgDisc.downpayment_amount ?? 0) || 0;
+        const packageType = String(pkgDisc.package_type || '').toLowerCase();
+        const paymentOption = String(pkgDisc.payment_option || '').toLowerCase();
+        const isInstallmentLike =
+          packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+        const installmentOpt = String(
+          Object.prototype.hasOwnProperty.call(raw, 'installment_option')
+            ? raw.installment_option
+            : ack.installment_option || ''
+        ).toLowerCase();
+        const grossPayable =
+          isInstallmentLike && installmentOpt === 'downpayment_only' && downpayment > 0
+            ? downpayment
+            : packagePrice;
+        if (discount >= grossPayable) {
+          return res.status(400).json({
+            success: false,
+            message: 'Discount amount must be less than the payment amount',
+          });
+        }
+        pushUpdate('payment_amount', Math.max(0, grossPayable - discount));
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, 'package_id')) {
+        const nextPackageId = raw.package_id == null || raw.package_id === '' ? null : parseInt(raw.package_id, 10);
+        if (!Number.isInteger(nextPackageId) || nextPackageId <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'A valid package is required',
+          });
+        }
+        if (ack.ar_type !== 'Package') {
+          return res.status(400).json({
+            success: false,
+            message: 'Package can only be changed for Package acknowledgement receipts',
+          });
+        }
+        const pkgResult = await query(
+          `SELECT package_id, package_name, package_price, branch_id, package_type, downpayment_amount, payment_option
+           FROM packagestbl
+           WHERE package_id = $1`,
+          [nextPackageId]
+        );
+        if (pkgResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Selected package not found',
+          });
+        }
+        const pkg = pkgResult.rows[0];
+        if (pkg.branch_id != null && Number(pkg.branch_id) !== Number(ack.branch_id)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Selected package does not belong to this acknowledgement receipt branch',
+          });
+        }
+        const packagePrice = parseFloat(pkg.package_price ?? 0) || 0;
+        const downpayment = parseFloat(pkg.downpayment_amount ?? 0) || 0;
+        const packageType = String(pkg.package_type || '').toLowerCase();
+        const paymentOption = String(pkg.payment_option || '').toLowerCase();
+        const isInstallmentLike = packageType === 'installment' || (packageType === 'phase' && paymentOption === 'installment');
+        const computedPayable =
+          isInstallmentLike && String(ack.installment_option || '').toLowerCase() === 'downpayment_only' && downpayment > 0
+            ? downpayment
+            : packagePrice;
+
+        pushUpdate('package_id', pkg.package_id);
+        pushUpdate('package_name_snapshot', pkg.package_name || null);
+        pushUpdate('package_amount_snapshot', packagePrice);
+        // Payable is system-derived from package; optional discount reduces collected amount.
+        let netPayable = computedPayable;
+        if (Object.prototype.hasOwnProperty.call(raw, 'discount_amount')) {
+          const pkgDiscount =
+            raw.discount_amount === '' || raw.discount_amount == null
+              ? 0
+              : parseFloat(raw.discount_amount);
+          if (Number.isFinite(pkgDiscount) && pkgDiscount > 0) {
+            if (pkgDiscount >= computedPayable) {
+              return res.status(400).json({
+                success: false,
+                message: 'Discount amount must be less than the payment amount',
+              });
+            }
+            netPayable = Math.max(0, computedPayable - pkgDiscount);
+          }
+        }
+        pushUpdate('payment_amount', netPayable);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No valid fields were provided to update',
+        });
+      }
+
+      params.push(id);
+      const updateRes = await query(
+        `UPDATE acknowledgement_receiptstbl
+         SET ${updates.join(', ')}
+         WHERE ack_receipt_id = $${params.length}
+         RETURNING *`,
+        params
+      );
+
+      const pairedIds = await resolvePairedAckReceiptIds(id);
+      const syncIds = pairedIds.filter((pid) => pid !== Number(id));
+      if (syncIds.length > 0) {
+        const sharedUpdates = [];
+        const sharedParams = [];
+        const pushShared = (column, value) => {
+          sharedParams.push(value);
+          sharedUpdates.push(`${column} = $${sharedParams.length}`);
+        };
+        const sharedFieldMap = [
+          ['prospect_student_name', raw.prospect_student_name],
+          ['prospect_student_contact', raw.prospect_student_contact],
+          ['prospect_student_email', raw.prospect_student_email],
+          ['prospect_student_phone', raw.prospect_student_phone],
+          ['prospect_student_notes', raw.prospect_student_notes],
+          ['level_tag', raw.level_tag],
+          ['reference_number', raw.reference_number],
+          ['payment_attachment_url', raw.payment_attachment_url],
+          ['payment_method', raw.payment_method],
+        ];
+        for (const [column, rawVal] of sharedFieldMap) {
+          if (!Object.prototype.hasOwnProperty.call(raw, column)) continue;
+          if (column === 'prospect_student_contact') {
+            pushShared(column, String(rawVal || '').trim() || null);
+          } else if (column === 'prospect_student_phone') {
+            const phones = collectPhilippineMobiles(rawVal);
+            pushShared(column, phones[0] || null);
+          } else {
+            pushShared(column, String(rawVal ?? '').trim() || null);
+          }
+        }
+        if (sharedUpdates.length > 0) {
+          sharedParams.push(syncIds);
+          await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET ${sharedUpdates.join(', ')}
+             WHERE ack_receipt_id = ANY($${sharedParams.length}::int[])`,
+            sharedParams
+          );
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: 'Acknowledgement receipt updated successfully',
+        data: formatArListApiRow(updateRes.rows[0]),
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/sms/acknowledgement-receipts/:id
+ * Delete acknowledgement receipt if not yet applied.
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/:id',
+  [param('id').isInt().withMessage('ID must be an integer'), handleValidationErrors],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const ackResult = await query(
+        `SELECT ack_receipt_id, branch_id, status, invoice_id, payment_id
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1`,
+        [id]
+      );
+
+      if (ackResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ack = ackResult.rows[0];
+      if (req.user.userType !== 'Superadmin' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this acknowledgement receipt',
+        });
+      }
+
+      if (ack.status === 'Applied' || ack.invoice_id || ack.payment_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Applied acknowledgement receipts cannot be deleted',
+        });
+      }
+
+      await query('DELETE FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1', [id]);
+      return res.json({
+        success: true,
+        message: 'Acknowledgement receipt deleted successfully',
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/acknowledgement-receipts/:id/verify
+ * Verify or return a package acknowledgement receipt, or verify non-cash merchandise AR (Unverified → Verified).
+ * Access: Finance, Superfinance
+ */
+router.put(
+  '/:id/verify',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    body('approve').optional({ nullable: true }).isBoolean().withMessage('approve must be boolean'),
+    body('action')
+      .optional({ nullable: true })
+      .isIn(['verify', 'return', 'reject', 'unverify'])
+      .withMessage("action must be 'verify', 'return', 'reject', or 'unverify'"),
+    body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
+    body('finance_verified_reference_number')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('finance_verified_reference_number must be a string'),
+    handleValidationErrors,
+  ],
+  requireRole('Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      // Resolve the action: prefer explicit `action`, fall back to legacy `approve`.
+      let action = (req.body?.action || '').toString().toLowerCase();
+      if (!action) {
+        if (req.body?.approve === true) action = 'verify';
+        else if (req.body?.approve === false) action = 'return';
+      }
+      if (!['verify', 'return', 'reject', 'unverify'].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: "action must be 'verify', 'return', 'reject', or 'unverify'",
+        });
+      }
+
+      const remarks = String(req.body?.remarks || '').trim() || null;
+      const financeVerifiedReferenceNumber = String(
+        req.body?.finance_verified_reference_number || ''
+      ).trim();
+
+      const ackResult = await query(
+        `SELECT ack_receipt_id, branch_id, ar_type, status, payment_method, verified_by_user_id,
+                prospect_student_notes, created_by, prospect_student_name, reference_number
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1`,
+        [id]
+      );
+
+      if (ackResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ack = ackResult.rows[0];
+      const isPackageAr = ack.ar_type === 'Package';
+      const isMerchandiseAr = ack.ar_type === 'Merchandise';
+
+      if (!isPackageAr && !isMerchandiseAr) {
+        return res.status(400).json({
+          success: false,
+          message: 'Only Package or Merchandise acknowledgement receipts can be verified in this flow',
+        });
+      }
+
+      if (isMerchandiseAr) {
+        if (action === 'unverify') {
+          // handled below in unverify block
+        } else if (String(ack.payment_method || '').trim().toLowerCase() === 'cash' && action === 'verify') {
+          return res.status(400).json({
+            success: false,
+            message: 'Cash merchandise acknowledgement receipts are auto-verified when issued',
+          });
+        } else if (action === 'verify') {
+          if (!isArUnverifiedStatus(ack.status)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Merchandise acknowledgement receipt must be Unverified before finance verification',
+            });
+          }
+          if (ack.verified_by_user_id != null) {
+            return res.status(400).json({
+              success: false,
+              message: 'This merchandise acknowledgement receipt is already verified',
+            });
+          }
+        } else if (action === 'return' || action === 'reject') {
+          if (!isArUnverifiedStatus(ack.status)) {
+            return res.status(400).json({
+              success: false,
+              message:
+                'Merchandise acknowledgement receipt must be Unverified before it can be returned or rejected',
+            });
+          }
+          if (ack.verified_by_user_id != null) {
+            return res.status(400).json({
+              success: false,
+              message: 'Verified merchandise acknowledgement receipts cannot be returned or rejected',
+            });
+          }
+        }
+      }
+
+      if (isPackageAr && action === 'verify') {
+        if (String(ack.payment_method || '').trim().toLowerCase() === 'cash') {
+          return res.status(400).json({
+            success: false,
+            message: 'Cash package acknowledgement receipts are auto-verified when created',
+          });
+        }
+        if (!isArUnverifiedStatus(ack.status)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Package acknowledgement receipt must be Unverified before finance verification',
+          });
+        }
+      }
+
+      if (req.user.userType === 'Finance' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only act on acknowledgement receipts from your assigned branch',
+        });
+      }
+
+      if (ack.status === 'Applied') {
+        return res.status(400).json({
+          success: false,
+          message: 'This acknowledgement receipt is already applied to an invoice',
+        });
+      }
+
+      if (ack.status === 'Cancelled') {
+        return res.status(400).json({
+          success: false,
+          message: 'Cancelled acknowledgement receipts cannot be acted on',
+        });
+      }
+
+      if (ack.status === 'Rejected') {
+        return res.status(400).json({
+          success: false,
+          message: 'This acknowledgement receipt is already rejected. Please ask the branch admin to create a new one.',
+        });
+      }
+
+      if (action === 'return' && isArReturnedForCorrection(ack.status, ack.prospect_student_notes)) {
+        return res.status(400).json({
+          success: false,
+          message: 'This acknowledgement receipt is already returned',
+        });
+      }
+      if ((action === 'return' || action === 'reject') && !remarks) {
+        return res.status(400).json({
+          success: false,
+          message: action === 'return' ? 'Return note is required' : 'Rejection reason is required',
+        });
+      }
+
+      if (action === 'unverify') {
+        if (ack.verified_by_user_id == null && String(ack.status || '') !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'This acknowledgement receipt is not verified',
+          });
+        }
+        if (isMerchandiseAr && String(ack.status || '').trim() !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only verified merchandise acknowledgement receipts can be unverified',
+          });
+        }
+        if (isPackageAr && String(ack.status || '').trim() !== 'Verified') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only verified package acknowledgement receipts can be unverified',
+          });
+        }
+      }
+
+      let nextStatus;
+      if (action === 'unverify') {
+        nextStatus = AR_STATUS.UNVERIFIED;
+      } else if (action === 'verify') {
+        nextStatus = AR_STATUS.VERIFIED;
+      } else if (action === 'reject') {
+        nextStatus = AR_STATUS.REJECTED;
+      } else {
+        nextStatus = AR_STATUS.UNVERIFIED;
+      }
+
+      const noteTag =
+        action === 'return'
+          ? 'Returned'
+          : action === 'reject'
+            ? 'Rejected'
+            : action === 'verify'
+              ? 'Verified'
+              : nextStatus;
+      const updatedNotes = remarks
+        ? `${ack.prospect_student_notes ? `${ack.prospect_student_notes}\n` : ''}[${noteTag}] ${remarks}`
+        : ack.prospect_student_notes;
+
+      const verifierUserId = req.user.userId || req.user.user_id || null;
+      const verifiedByOnUpdate = action === 'verify' ? verifierUserId : null;
+      const verifiedAtOnUpdate = action === 'verify' ? new Date() : null;
+
+      const ackIdsToUpdate =
+        isPackageAr && (await ackReceiptHasPairedAckReceiptIdColumn())
+          ? await resolvePairedAckReceiptIds(id)
+          : [Number(id)];
+
+      const isCashAck = String(ack.payment_method || '').trim().toLowerCase() === 'cash';
+
+      if (action === 'verify' && !isCashAck) {
+        if (!financeVerifiedReferenceNumber) {
+          return res.status(400).json({
+            success: false,
+            message: 'Finance reference number is required when verifying non-cash acknowledgement receipts',
+          });
+        }
+
+        const ackRefsRes = await query(
+          `SELECT ack_receipt_id, reference_number
+           FROM acknowledgement_receiptstbl
+           WHERE ack_receipt_id = ANY($1::int[])`,
+          [ackIdsToUpdate]
+        );
+
+        for (const row of ackRefsRes.rows) {
+          const issuedReferenceNumber = String(row.reference_number || '').trim();
+          if (!issuedReferenceNumber) {
+            return res.status(400).json({
+              success: false,
+              message:
+                'This acknowledgement receipt has no reference number on file. Return it to the branch and request correction before verification.',
+            });
+          }
+          if (financeVerifiedReferenceNumber !== issuedReferenceNumber) {
+            return res.status(400).json({
+              success: false,
+              message:
+                'Reference number mismatch. Verification is blocked. Please return this acknowledgement receipt to the branch for correction.',
+            });
+          }
+        }
+      }
+
+      const hasVerifierCols = await ackReceiptHasVerifierColumns();
+      const updateRes = hasVerifierCols
+        ? await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET status = $1,
+                 prospect_student_notes = $2,
+                 verified_by_user_id = $3,
+                 verified_at = $4
+             WHERE ack_receipt_id = ANY($5::int[])
+             RETURNING *`,
+            [nextStatus, updatedNotes, verifiedByOnUpdate, verifiedAtOnUpdate, ackIdsToUpdate]
+          )
+        : await query(
+            `UPDATE acknowledgement_receiptstbl
+             SET status = $1,
+                 prospect_student_notes = $2
+             WHERE ack_receipt_id = ANY($3::int[])
+             RETURNING *`,
+            [nextStatus, updatedNotes, ackIdsToUpdate]
+          );
+
+      const primaryUpdatedRow =
+        updateRes.rows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
+        updateRes.rows[0];
+
+      if (action === 'return') {
+        const returnedByUserId = req.user.userId || req.user.user_id || null;
+        await notifyArReturnedToCreator({
+          ackReceiptId: ack.ack_receipt_id,
+          branchId: ack.branch_id,
+          returnedByUserId,
+          creatorUserId: ack.created_by,
+          studentName: ack.prospect_student_name,
+          reason: remarks,
+        });
+      } else if (action === 'reject') {
+        const rejectedByUserId = req.user.userId || req.user.user_id || null;
+        await notifyArRejectedToCreator({
+          ackReceiptId: ack.ack_receipt_id,
+          branchId: ack.branch_id,
+          rejectedByUserId,
+          creatorUserId: ack.created_by,
+          studentName: ack.prospect_student_name,
+          reason: remarks,
+        });
+      }
+
+      const linkedPay = await query(
+        `SELECT payment_id FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = ANY($1::int[]) AND payment_id IS NOT NULL`,
+        [ackIdsToUpdate]
+      );
+      const linkedPaymentIds = [
+        ...new Set(
+          linkedPay.rows.map((row) => row.payment_id).filter((pid) => pid != null)
+        ),
+      ];
+
+      // Keep payment logs in sync when Finance verifies and a payment row already exists for this AR.
+      if (
+        action === 'verify' &&
+        verifierUserId &&
+        shouldSyncPaymentLogApprovalOnArVerify(req.user?.userType)
+      ) {
+        for (const linkedPaymentId of linkedPaymentIds) {
+          await query(
+            `UPDATE paymenttbl
+             SET approval_status = 'Approved',
+                 approved_by = $1,
+                 approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP),
+                 finance_verified_reference_number = $3
+             WHERE payment_id = $2
+               AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+            [
+              verifierUserId,
+              linkedPaymentId,
+              isCashAck ? null : financeVerifiedReferenceNumber || null,
+            ]
+          );
+        }
+      }
+
+      if (action === 'unverify') {
+        for (const linkedPaymentId of linkedPaymentIds) {
+          await query(
+            `UPDATE paymenttbl
+             SET approval_status = 'Pending',
+                 approved_by = NULL,
+                 approved_at = NULL,
+                 finance_verified_reference_number = NULL
+             WHERE payment_id = $1
+               AND COALESCE(approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+            [linkedPaymentId]
+          );
+        }
+      }
+
+      const returnedByUserId = req.user.userId || req.user.user_id || null;
+
+      if (isMerchandiseAr && (action === 'return' || action === 'reject')) {
+        for (const linkedPaymentId of linkedPaymentIds) {
+          if (action === 'reject') {
+            const payRow = await query(
+              `SELECT payment_id, invoice_id, payable_amount, discount_amount
+               FROM paymenttbl WHERE payment_id = $1`,
+              [linkedPaymentId]
+            );
+            const payment = payRow.rows[0];
+            await query(
+              `UPDATE paymenttbl
+               SET status = 'Rejected',
+                   approval_status = 'Rejected',
+                   reject_reason = $1,
+                   rejected_by = $2,
+                   rejected_at = CURRENT_TIMESTAMP,
+                   return_reason = NULL,
+                   returned_by = NULL,
+                   returned_at = NULL,
+                   approved_by = NULL,
+                   approved_at = NULL,
+                   finance_verified_reference_number = NULL
+               WHERE payment_id = $3`,
+              [remarks, returnedByUserId, linkedPaymentId]
+            );
+            if (payment?.invoice_id != null) {
+              await query(
+                `UPDATE invoicestbl
+                 SET status = 'Rejected',
+                     amount = COALESCE(amount, 0) + COALESCE($1::numeric, 0)
+                 WHERE invoice_id = $2`,
+                [
+                  Number(payment.payable_amount || 0) + Number(payment.discount_amount || 0),
+                  payment.invoice_id,
+                ]
+              );
+            }
+          } else {
+            await query(
+              `UPDATE paymenttbl
+               SET approval_status = 'Returned',
+                   return_reason = $1,
+                   returned_by = $2,
+                   returned_at = CURRENT_TIMESTAMP,
+                   reject_reason = NULL,
+                   rejected_by = NULL,
+                   rejected_at = NULL,
+                   approved_by = NULL,
+                   approved_at = NULL,
+                   finance_verified_reference_number = NULL
+               WHERE payment_id = $3
+                 AND COALESCE(approval_status, 'Pending') NOT IN ('Rejected')`,
+              [remarks, returnedByUserId, linkedPaymentId]
+            );
+          }
+        }
+      }
+
+      const pairedUpdateCount =
+        isPackageAr && ackIdsToUpdate.length > 1 ? ackIdsToUpdate.length : 0;
+
+      const successMessage =
+        action === 'unverify'
+          ? pairedUpdateCount > 0
+            ? 'Acknowledgement receipt pair verification revoked'
+            : 'Acknowledgement receipt verification revoked'
+          : action === 'verify'
+            ? pairedUpdateCount > 0
+              ? `Downpayment and Phase 1 acknowledgement receipts verified (${pairedUpdateCount} ARs)`
+              : 'Acknowledgement receipt verified successfully'
+            : action === 'reject'
+              ? pairedUpdateCount > 0
+                ? 'Acknowledgement receipt pair rejected and removed from your queue. The branch must create new receipts.'
+                : 'Acknowledgement receipt rejected and removed from your queue. The branch must create a new receipt.'
+              : pairedUpdateCount > 0
+                ? 'Returned to branch for correction. Both AR rows leave your verification queue until resubmitted.'
+                : 'Returned to branch for correction. This receipt leaves your verification queue until resubmitted.';
+
+      return res.json({
+        success: true,
+        message: successMessage,
+        data: formatArListApiRow(primaryUpdatedRow),
+        paired_verify_count: pairedUpdateCount || undefined,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/acknowledgement-receipts/:id/resubmit
+ * Resubmit a returned Package or Merchandise acknowledgement receipt (→ Unverified).
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.put(
+  '/:id/resubmit',
+  [
+    param('id').isInt().withMessage('ID must be an integer'),
+    body('remarks').optional({ nullable: true }).isString().withMessage('remarks must be a string'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const remarks = String(req.body?.remarks || '').trim() || null;
+      const ackResult = await query(
+        `SELECT ack_receipt_id, branch_id, ar_type, status, prospect_student_notes, created_by, payment_id,
+                reference_number, payment_method, payment_attachment_url
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = $1`,
+        [id]
+      );
+      if (ackResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acknowledgement receipt not found',
+        });
+      }
+
+      const ack = ackResult.rows[0];
+      const isMerchandiseAr = ack.ar_type === 'Merchandise';
+      const isPackageAr = ack.ar_type === 'Package';
+      if (!isMerchandiseAr && !isPackageAr) {
+        return res.status(400).json({
+          success: false,
+          message: 'Only Package or Merchandise acknowledgement receipts can be resubmitted in this flow',
+        });
+      }
+
+      const pairedIds =
+        isPackageAr && (await ackReceiptHasPairedAckReceiptIdColumn())
+          ? await resolvePairedAckReceiptIds(id)
+          : [Number(id)];
+      const rowsToResubmit = await query(
+        `SELECT ack_receipt_id, ar_type, status, branch_id, created_by, prospect_student_notes, payment_id,
+                reference_number, payment_method, payment_attachment_url
+         FROM acknowledgement_receiptstbl
+         WHERE ack_receipt_id = ANY($1::int[])`,
+        [pairedIds]
+      );
+      for (const row of rowsToResubmit.rows) {
+        if (row.ar_type !== ack.ar_type) {
+          return res.status(400).json({
+            success: false,
+            message: 'Paired acknowledgement receipts must share the same type before resubmitting',
+          });
+        }
+        if (!isArReturnedForCorrection(row.status, row.prospect_student_notes)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              pairedIds.length > 1
+                ? 'All Downpayment + Phase 1 acknowledgement receipts must be returned before resubmitting'
+                : 'Only returned acknowledgement receipts can be resubmitted',
+          });
+        }
+      }
+
+      if (!isArReturnedForCorrection(ack.status, ack.prospect_student_notes)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Only returned acknowledgement receipts can be resubmitted',
+        });
+      }
+
+      const actorId = req.user.userId || req.user.user_id || null;
+      const isSuperadmin = req.user.userType === 'Superadmin';
+      if (!isSuperadmin && Number(actorId) !== Number(ack.created_by)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the acknowledgement receipt creator can resubmit this acknowledgement receipt',
+        });
+      }
+      if (req.user.userType === 'Admin' && req.user.branchId && Number(ack.branch_id) !== Number(req.user.branchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied for this acknowledgement receipt',
+        });
+      }
+
+      const hasVerifierCols = await ackReceiptHasVerifierColumns();
+      const updatedRows = [];
+      for (const row of rowsToResubmit.rows) {
+        const rowNotes = `${row.prospect_student_notes ? `${row.prospect_student_notes}\n` : ''}[Resubmitted]${remarks ? ` ${remarks}` : ''}`;
+        const isCashResubmit =
+          String(row.payment_method || '').trim().toLowerCase() === 'cash';
+        const rowNextStatus = isCashResubmit ? AR_STATUS.VERIFIED : AR_STATUS.UNVERIFIED;
+        const resubmitVerifiedBy =
+          isCashResubmit && hasVerifierCols ? Number(row.created_by) || actorId : null;
+        const resubmitVerifiedAt = resubmitVerifiedBy ? new Date() : null;
+        const rowUpdate = hasVerifierCols
+          ? await query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = $1,
+                   prospect_student_notes = $2,
+                   verified_by_user_id = $3,
+                   verified_at = $4
+               WHERE ack_receipt_id = $5
+               RETURNING *`,
+              [rowNextStatus, rowNotes, resubmitVerifiedBy, resubmitVerifiedAt, row.ack_receipt_id]
+            )
+          : await query(
+              `UPDATE acknowledgement_receiptstbl
+               SET status = $1,
+                   prospect_student_notes = $2
+               WHERE ack_receipt_id = $3
+               RETURNING *`,
+              [rowNextStatus, rowNotes, row.ack_receipt_id]
+            );
+        if (rowUpdate.rows[0]) updatedRows.push(rowUpdate.rows[0]);
+      }
+
+      const primaryUpdatedRow =
+        updatedRows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
+        updatedRows[0];
+
+      if (isMerchandiseAr && primaryUpdatedRow?.payment_id) {
+        await query(
+          `UPDATE paymenttbl
+           SET approval_status = 'Pending',
+               return_reason = NULL,
+               returned_by = NULL,
+               returned_at = NULL,
+               approved_by = NULL,
+               approved_at = NULL,
+               finance_verified_reference_number = NULL,
+               reference_number = $2,
+               payment_method = $3,
+               payment_attachment_url = $4
+           WHERE payment_id = $1
+             AND COALESCE(approval_status, 'Pending') = 'Returned'`,
+          [
+            primaryUpdatedRow.payment_id,
+            String(primaryUpdatedRow.reference_number || '').trim() || null,
+            primaryUpdatedRow.payment_method || null,
+            String(primaryUpdatedRow.payment_attachment_url || '').trim() || null,
+          ]
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: isMerchandiseAr
+          ? 'Merchandise acknowledgement receipt resubmitted successfully. Finance will verify it again on the AR page.'
+          : pairedIds.length > 1
+            ? 'Downpayment and Phase 1 acknowledgement receipts resubmitted successfully'
+            : 'Acknowledgement receipt resubmitted successfully',
+        data: formatArListApiRow(primaryUpdatedRow),
+        paired_resubmit_count: pairedIds.length > 1 ? pairedIds.length : undefined,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+export default router;
+

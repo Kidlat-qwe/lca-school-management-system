@@ -1,0 +1,935 @@
+import express from 'express';
+import { body, param, query as queryValidator } from 'express-validator';
+import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { handleValidationErrors } from '../middleware/validation.js';
+import { query, getClient } from '../config/database.js';
+import { deactivateInstallmentProfileForClassDrop } from '../utils/billingNotificationEligibility.js';
+import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
+
+const router = express.Router();
+
+/**
+ * Compute payment verification status for students in a class.
+ * Student is Verified only when ALL Completed payments (for this class context) are Approved.
+ * Downpayment and each phase are verified separately.
+ * @param {number} classId
+ * @param {Array<{user_id: number}>} students
+ * @param {number|null} classBranchId
+ * @returns {Promise<Map<number, {is_payment_verified: boolean, payment_verification_status: string, unverified_payment_count: number}>>}
+ */
+async function computePaymentVerificationForClass(classId, students, classBranchId) {
+  const result = new Map();
+  const studentIds = [...new Set(students.map(s => s.user_id))];
+  if (studentIds.length === 0) return result;
+
+  const client = await getClient();
+  try {
+    // 1. Get installment profiles for this class (downpayment + phase invoices per student)
+    const profileResult = await client.query(
+      `SELECT ip.installmentinvoiceprofiles_id, ip.student_id, ip.downpayment_invoice_id
+       FROM installmentinvoiceprofilestbl ip
+       WHERE ip.class_id = $1 AND ip.is_active = true
+         AND ip.student_id = ANY($2::int[])`,
+      [classId, studentIds]
+    );
+
+    // 2. Get phase invoices for these profiles (exclude downpayment - verified separately)
+    let phaseInvoiceResult = { rows: [] };
+    if (profileResult.rows.length > 0) {
+      phaseInvoiceResult = await client.query(
+        `SELECT i.invoice_id, i.installmentinvoiceprofiles_id
+         FROM invoicestbl i
+         INNER JOIN installmentinvoiceprofilestbl ip ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         WHERE ip.class_id = $1 AND ip.student_id = ANY($2::int[])
+           AND (ip.downpayment_invoice_id IS NULL OR i.invoice_id != ip.downpayment_invoice_id)`,
+        [classId, studentIds]
+      );
+    }
+
+    // Build student -> invoice IDs map for installment
+    const studentToInvoiceIds = new Map();
+    for (const row of profileResult.rows) {
+      const ids = new Set();
+      if (row.downpayment_invoice_id) ids.add(row.downpayment_invoice_id);
+      const phaseInvoices = phaseInvoiceResult.rows.filter(
+        p => p.installmentinvoiceprofiles_id === row.installmentinvoiceprofiles_id
+      );
+      phaseInvoices.forEach(p => ids.add(p.invoice_id));
+      const existing = studentToInvoiceIds.get(row.student_id) || new Set();
+      ids.forEach(id => existing.add(id));
+      studentToInvoiceIds.set(row.student_id, existing);
+    }
+
+    // 3. Get full-payment invoices for this class (remarks contain CLASS_ID, not installment)
+    const fullInvoiceResult = await client.query(
+      `SELECT i.invoice_id, ist.student_id
+       FROM invoicestbl i
+       INNER JOIN invoicestudentstbl ist ON i.invoice_id = ist.invoice_id
+       WHERE i.remarks LIKE $1
+         AND ist.student_id = ANY($2::int[])
+         AND i.installmentinvoiceprofiles_id IS NULL`,
+      [`%CLASS_ID:${classId}%`, studentIds]
+    );
+
+    for (const row of fullInvoiceResult.rows) {
+      const existing = studentToInvoiceIds.get(row.student_id) || new Set();
+      existing.add(row.invoice_id);
+      studentToInvoiceIds.set(row.student_id, existing);
+    }
+
+    // 4. Get all Completed payments for these invoices, with approval_status
+    const allInvoiceIds = [...new Set([].concat(...[...studentToInvoiceIds.values()].map(s => [...s])))];
+    if (allInvoiceIds.length === 0) {
+      for (const sid of studentIds) {
+        result.set(sid, { is_payment_verified: false, payment_verification_status: 'Not Verified', unverified_payment_count: 0 });
+      }
+      return result;
+    }
+
+    const paymentsResult = await client.query(
+      `SELECT p.payment_id, p.student_id, p.invoice_id, p.status, COALESCE(p.approval_status, 'Pending') as approval_status
+       FROM paymenttbl p
+       WHERE p.invoice_id = ANY($1::int[])
+         AND p.status = 'Completed'
+         AND p.student_id = ANY($2::int[])
+         AND ($3::int IS NULL OR p.branch_id IS NULL OR p.branch_id = $3)`,
+      [allInvoiceIds, studentIds, classBranchId]
+    );
+
+    // 5. Group payments by student, check if all are Approved
+    const paymentsByStudent = new Map();
+    for (const p of paymentsResult.rows) {
+      if (!paymentsByStudent.has(p.student_id)) {
+        paymentsByStudent.set(p.student_id, []);
+      }
+      paymentsByStudent.get(p.student_id).push(p);
+    }
+
+    for (const sid of studentIds) {
+      const invoiceIds = studentToInvoiceIds.get(sid);
+      const payments = paymentsByStudent.get(sid) || [];
+
+      if (!invoiceIds || invoiceIds.size === 0) {
+        result.set(sid, { is_payment_verified: false, payment_verification_status: 'Not Verified', unverified_payment_count: 0 });
+        continue;
+      }
+
+      const unverifiedCount = payments.filter(p => p.approval_status !== 'Approved').length;
+      const isVerified = payments.length > 0 && unverifiedCount === 0;
+
+      result.set(sid, {
+        is_payment_verified: isVerified,
+        payment_verification_status: isVerified ? 'Verified' : 'Not Verified',
+        unverified_payment_count: unverifiedCount,
+      });
+    }
+  } finally {
+    client.release();
+  }
+  return result;
+}
+
+// All routes require authentication
+router.use(verifyFirebaseToken);
+router.use(requireBranchAccess);
+
+/**
+ * GET /api/sms/students
+ * Get list of students (optionally filtered by branch and search term)
+ * Access: Superadmin, Admin
+ */
+router.get(
+  '/',
+  requireRole('Superadmin', 'Admin'),
+  [
+    queryValidator('search').optional().isString().withMessage('Search must be a string'),
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('limit')
+      .optional()
+      .isInt({ min: 1, max: 1000 })
+      .withMessage('Limit must be between 1 and 1000'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { search, branch_id, limit = 1000 } = req.query;
+
+      let sql = `
+        SELECT 
+          user_id,
+          full_name,
+          email,
+          phone_number,
+          branch_id
+        FROM userstbl
+        WHERE user_type = 'Student'`;
+      const params = [];
+      let paramCount = 0;
+
+      // For non-superadmin users, restrict to their branch
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        paramCount += 1;
+        sql += ` AND branch_id = $${paramCount}`;
+        params.push(req.user.branchId);
+      } else if (branch_id) {
+        paramCount += 1;
+        sql += ` AND branch_id = $${paramCount}`;
+        params.push(branch_id);
+      }
+
+      if (search && search.trim() !== '') {
+        paramCount += 1;
+        sql += ` AND (LOWER(full_name) LIKE $${paramCount} OR LOWER(email) LIKE $${paramCount})`;
+        params.push(`%${search.toLowerCase()}%`);
+      }
+
+      paramCount += 1;
+      sql += ` ORDER BY full_name ASC NULLS LAST LIMIT $${paramCount}`;
+      params.push(parseInt(limit, 10));
+
+      const result = await query(sql, params);
+
+      res.json({
+        success: true,
+        data: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/students/enroll
+ * Enroll a student in a class
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/enroll',
+  [
+    body('student_id').isInt().withMessage('Student ID is required'),
+    body('class_id').isInt().withMessage('Class ID is required'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const { student_id, class_id } = req.body;
+
+      // Verify student exists and is a student
+      const studentCheck = await client.query(
+        'SELECT user_id, user_type, level_tag, branch_id FROM userstbl WHERE user_id = $1',
+        [student_id]
+      );
+      if (studentCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Student not found',
+        });
+      }
+      if (studentCheck.rows[0].user_type !== 'Student') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'User is not a student',
+        });
+      }
+
+      // Verify class exists and get class details including phase, start date, level_tag, and branch_id
+      const classCheck = await client.query(
+        `SELECT c.class_id, c.max_students, c.start_date, c.phase_number, c.level_tag, c.branch_id,
+                p.curriculum_id, cu.number_of_phase, cu.number_of_session_per_phase
+         FROM classestbl c
+         LEFT JOIN programstbl p ON c.program_id = p.program_id
+         LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
+         WHERE c.class_id = $1`,
+        [class_id]
+      );
+      if (classCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Class not found',
+        });
+      }
+
+      const classData = classCheck.rows[0];
+      const studentData = studentCheck.rows[0];
+      
+      // Validate that student's branch matches class's branch
+      const studentBranchId = studentData.branch_id;
+      const classBranchId = classData.branch_id;
+      
+      if (studentBranchId && classBranchId && studentBranchId !== classBranchId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Student cannot be enrolled in a class from a different branch. Student belongs to a different branch than the class.',
+        });
+      }
+      
+      // Determine enrollment phase based on class status
+      // Logic: If class hasn't started (start_date > today), enroll in Phase 1
+      //        If class is ongoing (start_date <= today), enroll in current phase
+      let enrollmentPhase = 1; // Default to Phase 1
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Reset time to start of day for comparison
+      
+      console.log('📅 Enrollment phase calculation:', {
+        class_id: class_id,
+        start_date: classData.start_date,
+        class_phase_number: classData.phase_number,
+        today: today.toISOString().split('T')[0],
+        number_of_phase: classData.number_of_phase
+      });
+      
+      if (classData.start_date) {
+        // PostgreSQL returns dates as strings in 'YYYY-MM-DD' format
+        const startDateStr = classData.start_date;
+        const startDate = new Date(startDateStr);
+        startDate.setHours(0, 0, 0, 0);
+        
+        console.log('📆 Date comparison:', {
+          start_date_str: startDateStr,
+          start_date_parsed: startDate.toISOString().split('T')[0],
+          today_str: today.toISOString().split('T')[0],
+          startDate_greater: startDate > today
+        });
+        
+        if (startDate > today) {
+          // Class hasn't started yet - enroll in Phase 1
+          enrollmentPhase = 1;
+          console.log('✅ Class hasn\'t started - enrolling in Phase 1');
+        } else {
+          // Class is ongoing - enroll in current phase
+          // Use class.phase_number if available, otherwise default to 1
+          enrollmentPhase = classData.phase_number || 1;
+          
+          // Validate phase number doesn't exceed curriculum phases
+          if (classData.number_of_phase && enrollmentPhase > classData.number_of_phase) {
+            enrollmentPhase = classData.number_of_phase;
+          }
+          console.log('✅ Class is ongoing - enrolling in Phase', enrollmentPhase);
+        }
+      } else if (classData.phase_number) {
+        // If no start_date but phase_number exists, use it
+        enrollmentPhase = classData.phase_number;
+        console.log('✅ Using class phase_number:', enrollmentPhase);
+      } else {
+        console.log('✅ No start_date or phase_number - defaulting to Phase 1');
+      }
+      
+      console.log('🎯 Final enrollment phase:', enrollmentPhase);
+
+      // Check if class is full
+      if (classData.max_students) {
+        const enrollmentCount = await client.query(
+          `SELECT COUNT(DISTINCT student_id) AS count
+           FROM classstudentstbl
+           WHERE class_id = $1
+            AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+             AND removed_at IS NULL`,
+          [class_id]
+        );
+        const currentCount = parseInt(enrollmentCount.rows[0].count);
+        if (currentCount >= classData.max_students) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Class is full',
+          });
+        }
+      }
+
+      // Check if student is already enrolled
+      const existingEnrollment = await client.query(
+        `SELECT classstudent_id
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+          AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+           AND removed_at IS NULL`,
+        [student_id, class_id]
+      );
+      if (existingEnrollment.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'Student is already enrolled in this class',
+        });
+      }
+
+      // Update student's level_tag to match class's level_tag if they differ
+      const classLevelTag = classData.level_tag;
+      const studentLevelTag = studentData.level_tag;
+      
+      if (classLevelTag && classLevelTag !== studentLevelTag) {
+        console.log(`🔄 Updating student level_tag from "${studentLevelTag}" to "${classLevelTag}"`);
+        await client.query(
+          'UPDATE userstbl SET level_tag = $1 WHERE user_id = $2',
+          [classLevelTag, student_id]
+        );
+        console.log(`✅ Student level_tag updated successfully`);
+      }
+
+      // Enroll student with automatically determined phase
+      console.log('💾 Inserting enrollment with phase_number:', enrollmentPhase);
+      const programEnrollmentStatus = await determineEnrollmentStatus({
+        db: client,
+        studentId: student_id,
+        classId: class_id,
+        enrollmentType: 'direct',
+        phaseNumber: enrollmentPhase,
+      });
+      const result = await client.query(
+        `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [student_id, class_id, req.user.fullName || req.user.email, enrollmentPhase, programEnrollmentStatus]
+      );
+      
+      console.log('✅ Enrollment created:', {
+        classstudent_id: result.rows[0].classstudent_id,
+        phase_number: result.rows[0].phase_number
+      });
+
+      await client.query('COMMIT');
+
+      res.status(201).json({
+        success: true,
+        message: `Student enrolled successfully in Phase ${enrollmentPhase}`,
+        data: {
+          ...result.rows[0],
+          enrollment_phase: enrollmentPhase,
+        },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/students/class/:classId/drop/:studentId
+ * Drop a student from a class starting from the next phase.
+ *
+ * Business rule:
+ *   Already-paid phases (new / re_enrolled / upsell / rejoin) keep their
+ *   program_enrollment_status so the history is preserved. Only removed_at
+ *   is set on those rows so they stop counting as active enrollments.
+ *   A new "dropped" row is inserted for the phase immediately after the
+ *   highest active phase to mark the drop point — this is what
+ *   determineRejoinEnrollmentStatus detects when the student rejoins later.
+ *   Any pending_enrollment rows are upgraded to "dropped".
+ *
+ * Result in DB (e.g. student active in Phase 1 & 2, drops before Phase 3):
+ *   Phase 1 → status=new,        removed_at=NOW  (historical)
+ *   Phase 2 → status=re_enrolled, removed_at=NOW  (historical)
+ *   Phase 3 → status=dropped,    removed_at=NOW  (drop-point marker)
+ *
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/class/:classId/drop/:studentId',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const classId = parseInt(req.params.classId, 10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const reason = String(req.body?.reason || '').trim() || 'Student unenrolled from class';
+
+      await client.query('BEGIN');
+
+      // Fetch all current phase rows for this student in this class
+      const { rows } = await client.query(
+        `SELECT classstudent_id, phase_number, program_enrollment_status, removed_at, enrolled_at
+         FROM classstudentstbl
+         WHERE student_id = $1 AND class_id = $2
+         ORDER BY COALESCE(phase_number, 0) ASC, classstudent_id ASC`,
+        [studentId, classId]
+      );
+
+      const ACTIVE_STATUSES = new Set(['new', 're_enrolled', 'upsell', 'rejoin']);
+
+      const activeRows = rows.filter(
+        (r) => ACTIVE_STATUSES.has(r.program_enrollment_status) && r.removed_at == null
+      );
+      const pendingRows = rows.filter(
+        (r) => r.program_enrollment_status === 'pending_enrollment' && r.removed_at == null
+      );
+
+      if (activeRows.length === 0 && pendingRows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'No active or pending enrollment found for this student in this class.',
+        });
+      }
+
+      // --- Step 1: Preserve active phases — only set removed_at, keep status intact ---
+      if (activeRows.length > 0) {
+        const activeIds = activeRows.map((r) => r.classstudent_id);
+        await client.query(
+          `UPDATE classstudentstbl
+           SET removed_at     = CURRENT_TIMESTAMP,
+               removed_reason = $1,
+               removed_by     = $2
+           WHERE classstudent_id = ANY($3::int[])`,
+          [reason, req.user.userId || null, activeIds]
+        );
+
+        // --- Step 2: Insert a "dropped" marker for the phase immediately after ---
+        const highestActivePhase = Math.max(
+          ...activeRows.map((r) => Number(r.phase_number) || 0)
+        );
+        const dropPhase = highestActivePhase + 1;
+
+        // Only insert if no row already exists for dropPhase
+        const existingDropPhase = rows.find((r) => Number(r.phase_number) === dropPhase);
+        if (!existingDropPhase) {
+          const markerEnrolledAt = activeRows.reduce((latest, row) => {
+            if (!row.enrolled_at) return latest;
+            if (!latest) return row.enrolled_at;
+            return new Date(row.enrolled_at) > new Date(latest) ? row.enrolled_at : latest;
+          }, null);
+          await client.query(
+            `INSERT INTO classstudentstbl
+               (student_id, class_id, enrolled_by, phase_number,
+                program_enrollment_status, enrolled_at, removed_at, removed_reason, removed_by)
+             VALUES ($1, $2, $3, $4, 'dropped', COALESCE($5::timestamptz, CURRENT_TIMESTAMP - INTERVAL '1 second'), CURRENT_TIMESTAMP, $6, $7)`,
+            [
+              studentId,
+              classId,
+              'System (Drop marker)',
+              dropPhase,
+              markerEnrolledAt,
+              reason,
+              req.user.userId || null,
+            ]
+          );
+        }
+        // If existingDropPhase is a pending_enrollment row, it will be handled in Step 3 below.
+      }
+
+      // --- Step 3: Mark pending_enrollment rows as dropped ---
+      if (pendingRows.length > 0) {
+        const pendingIds = pendingRows.map((r) => r.classstudent_id);
+        await client.query(
+          `UPDATE classstudentstbl
+           SET program_enrollment_status = 'dropped',
+               enrolled_at      = COALESCE(enrolled_at, CURRENT_TIMESTAMP - INTERVAL '1 second'),
+               removed_at       = CURRENT_TIMESTAMP,
+               removed_reason   = $1,
+               removed_by       = $2
+           WHERE classstudent_id = ANY($3::int[])`,
+          [reason, req.user.userId || null, pendingIds]
+        );
+      }
+
+      // --- Step 4: Stop future installment invoice generation ---
+      await deactivateInstallmentProfileForClassDrop(client, { studentId, classId });
+
+      await client.query('COMMIT');
+
+      res.json({ success: true, message: 'Student unenrolled successfully.' });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/students/unenroll/:enrollmentId
+ * Unenroll a student from a class
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/unenroll/:enrollmentId',
+  [
+    param('enrollmentId').isInt().withMessage('Enrollment ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { enrollmentId } = req.params;
+      await client.query('BEGIN');
+
+      const existingEnrollment = await client.query(
+        'SELECT * FROM classstudentstbl WHERE classstudent_id = $1',
+        [enrollmentId]
+      );
+      if (existingEnrollment.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Enrollment not found',
+        });
+      }
+
+      const { student_id, class_id } = existingEnrollment.rows[0];
+
+      await client.query(
+        `UPDATE classstudentstbl
+         SET program_enrollment_status = 'dropped',
+             removed_at = CURRENT_TIMESTAMP,
+             removed_reason = $1,
+             removed_by = $2
+         WHERE classstudent_id = $3`,
+        ['Student unenrolled from class', req.user.userId || null, enrollmentId]
+      );
+
+      // Stop future installment generation, but preserve existing invoice and payment history.
+      await deactivateInstallmentProfileForClassDrop(client, {
+        studentId: student_id,
+        classId: class_id,
+      });
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Student unenrolled successfully',
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/students/class/:classId/pending/:studentId
+ * Remove a pending (installment, not yet enrolled) student from the class list by deactivating their installment profile.
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/class/:classId/pending/:studentId',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      const result = await query(
+        `UPDATE installmentinvoiceprofilestbl SET is_active = false
+         WHERE student_id = $1 AND class_id = $2 AND is_active = true
+         RETURNING installmentinvoiceprofiles_id`,
+        [studentId, classId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No active pending enrollment found for this student in this class',
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Pending student removed from class successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/students/class/:classId
+ * Get all students enrolled in a class
+ * Access: All authenticated users
+ */
+router.get(
+  '/class/:classId',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { classId } = req.params;
+
+      // Get class branch_id for payment verification scoping
+      const classResult = await query(
+        'SELECT branch_id FROM classestbl WHERE class_id = $1',
+        [classId]
+      );
+      const classBranchId = classResult.rows[0]?.branch_id ?? null;
+
+      // Get enrolled + removed students.
+      // Removed enrollments are kept for historical visibility in class/payment/invoice contexts,
+      // but should not count toward active capacity.
+      const enrolledResult = await query(
+        `SELECT 
+          cs.classstudent_id,
+          cs.enrolled_at,
+          cs.enrolled_by,
+          cs.phase_number,
+          cs.program_enrollment_status,
+          cs.removed_at,
+          cs.removed_reason,
+          cs.removed_by,
+          active_profile.package_id as current_package_id,
+          active_profile.package_name as current_package_name,
+          u.user_id,
+          u.full_name,
+          u.email,
+          u.phone_number,
+          u.date_of_birth,
+          u.gender,
+          u.level_tag,
+          u.profile_picture_url,
+          CASE
+            WHEN cs.program_enrollment_status = 'dropped' OR cs.removed_at IS NOT NULL
+              THEN 'unenrolled'
+            ELSE 'enrolled'
+          END as student_type,
+          CASE
+            WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed') AND cs.removed_at IS NULL THEN true
+            WHEN active_profile.package_id IS NOT NULL
+              AND cs.program_enrollment_status NOT IN ('dropped')
+              AND cs.removed_at IS NULL THEN true
+            ELSE false
+          END as shouldCount
+         FROM classstudentstbl cs
+         INNER JOIN userstbl u ON cs.student_id = u.user_id
+         LEFT JOIN LATERAL (
+           SELECT ip.package_id, pkg.package_name
+           FROM installmentinvoiceprofilestbl ip
+           LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
+           WHERE ip.student_id = cs.student_id
+             AND ip.class_id = cs.class_id
+             AND ip.is_active = true
+           ORDER BY ip.installmentinvoiceprofiles_id DESC
+           LIMIT 1
+         ) active_profile ON true
+         WHERE cs.class_id = $1`,
+        [classId]
+      );
+
+      // Get pending students (have installment profiles for this class but not enrolled yet)
+      // These are students who have enrolled but haven't paid Phase 1 yet
+      // They should appear in the modal but not be counted as enrolled
+      // IMPORTANT: This query returns ALL pending students regardless of downpayment status
+      // - Students with downpayment NOT paid: appear as "Pending Enrollment (Downpayment Not Paid)"
+      // - Students with downpayment PAID: appear as "Pending Enrollment (Downpayment Paid)"
+      // Both should remain visible until Phase 1 (first installment invoice) is paid
+      const pendingResult = await query(
+        `SELECT DISTINCT
+          NULL as classstudent_id,
+          NULL as enrolled_at,
+          CASE 
+            WHEN ip.downpayment_paid = true THEN 'Pending Enrollment (Downpayment Paid)'
+            ELSE 'Pending Enrollment (Downpayment Not Paid)'
+          END as enrolled_by,
+          1 as phase_number, -- Default to Phase 1 for pending students
+          ip.package_id as current_package_id,
+          pkg.package_name as current_package_name,
+          u.user_id,
+          u.full_name,
+          u.email,
+          u.phone_number,
+          u.date_of_birth,
+          u.gender,
+          u.level_tag,
+          u.profile_picture_url,
+          'pending' as student_type
+         FROM installmentinvoiceprofilestbl ip
+         INNER JOIN userstbl u ON ip.student_id = u.user_id
+         LEFT JOIN packagestbl pkg ON ip.package_id = pkg.package_id
+         LEFT JOIN classstudentstbl cs
+           ON ip.student_id = cs.student_id
+          AND cs.class_id = $1
+          AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+          AND cs.removed_at IS NULL
+         WHERE ip.class_id = $1
+           AND cs.classstudent_id IS NULL -- Not enrolled yet (Phase 1 not paid)
+           AND ip.is_active = true
+           -- Note: No filter on downpayment_paid - we want all pending students regardless of downpayment status`,
+        [classId]
+      );
+
+      // Avoid duplicates: students returned in enrolledResult should not reappear as pending
+      const enrolledStudentIds = new Set(enrolledResult.rows.map((row) => row.user_id));
+      const dedupedPendingRows = pendingResult.rows.filter(
+        (row) => !enrolledStudentIds.has(row.user_id)
+      );
+
+      // Combine enrolled and pending students
+      const allStudents = [
+        ...enrolledResult.rows,
+        ...dedupedPendingRows
+      ];
+
+      // Compute payment verification for each student (all Completed payments must be Approved)
+      const verificationMap = await computePaymentVerificationForClass(
+        parseInt(classId, 10),
+        allStudents,
+        classBranchId
+      );
+
+      // Add verification fields to each student
+      for (const student of allStudents) {
+        const verification = verificationMap.get(student.user_id) || {
+          is_payment_verified: false,
+          payment_verification_status: 'Not Verified',
+          unverified_payment_count: 0,
+        };
+        student.is_payment_verified = verification.is_payment_verified;
+        student.payment_verification_status = verification.payment_verification_status;
+        student.unverified_payment_count = verification.unverified_payment_count;
+      }
+
+      // Sort by enrolled_at (enrolled students first, then pending)
+      allStudents.sort((a, b) => {
+        if (a.enrolled_at && b.enrolled_at) {
+          return new Date(b.enrolled_at) - new Date(a.enrolled_at);
+        }
+        if (a.enrolled_at) return -1;
+        if (b.enrolled_at) return 1;
+        return 0;
+      });
+
+      res.json({
+        success: true,
+        data: allStudents,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/students/:studentId/classes
+ * Get all classes a student is enrolled in
+ * Access: All authenticated users (or own profile for students)
+ */
+router.get(
+  '/:studentId/classes',
+  [
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { studentId } = req.params;
+
+      // Check access permission
+      if (req.user.userType === 'Student' && req.user.userId !== parseInt(studentId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view your own enrollments.',
+        });
+      }
+
+      // Get all enrollments for the student
+      const enrollmentsResult = await query(
+        `SELECT 
+          cs.classstudent_id,
+          cs.enrolled_at,
+          cs.enrolled_by,
+          cs.phase_number,
+          c.class_id,
+          c.level_tag,
+          c.class_name,
+          c.max_students,
+          TO_CHAR(c.start_date, 'YYYY-MM-DD') as start_date,
+          TO_CHAR(c.end_date, 'YYYY-MM-DD') as end_date,
+          p.program_id,
+          p.program_name,
+          p.program_code,
+          r.room_name
+         FROM classstudentstbl cs
+         INNER JOIN classestbl c ON cs.class_id = c.class_id
+         LEFT JOIN programstbl p ON c.program_id = p.program_id
+         LEFT JOIN roomstbl r ON c.room_id = r.room_id
+         WHERE cs.student_id = $1
+         ORDER BY cs.enrolled_at DESC`,
+        [studentId]
+      );
+
+      // Group by class_id to get unique classes with aggregated phase information
+      const classesMap = new Map();
+      enrollmentsResult.rows.forEach(row => {
+        const classId = row.class_id;
+        if (!classesMap.has(classId)) {
+          classesMap.set(classId, {
+            class_id: row.class_id,
+            level_tag: row.level_tag,
+            class_name: row.class_name,
+            max_students: row.max_students,
+            start_date: row.start_date || null,
+            end_date: row.end_date || null,
+            program_id: row.program_id,
+            program_name: row.program_name,
+            program_code: row.program_code,
+            room_name: row.room_name,
+            enrollments: [],
+            phases: [],
+            earliest_enrollment: row.enrolled_at,
+            enrolled_by: row.enrolled_by,
+          });
+        }
+        
+        const classData = classesMap.get(classId);
+        classData.enrollments.push({
+          classstudent_id: row.classstudent_id,
+          enrolled_at: row.enrolled_at,
+          enrolled_by: row.enrolled_by,
+          phase_number: row.phase_number,
+        });
+        
+        // Add phase if not already in the array
+        if (!classData.phases.includes(row.phase_number)) {
+          classData.phases.push(row.phase_number);
+        }
+        
+        // Update earliest enrollment date if this one is earlier
+        if (new Date(row.enrolled_at) < new Date(classData.earliest_enrollment)) {
+          classData.earliest_enrollment = row.enrolled_at;
+          classData.enrolled_by = row.enrolled_by;
+        }
+      });
+
+      // Convert map to array and sort by earliest enrollment date
+      const uniqueClasses = Array.from(classesMap.values()).sort((a, b) => {
+        return new Date(b.earliest_enrollment) - new Date(a.earliest_enrollment);
+      });
+
+      res.json({
+        success: true,
+        data: uniqueClasses,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+export default router;
+

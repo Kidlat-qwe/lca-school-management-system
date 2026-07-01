@@ -1,0 +1,1734 @@
+/**
+ * Daily Summary Sales
+ * - Admin: Submit daily summary for TODAY only (amount auto-calculated from paymenttbl)
+ * - One submission per branch per calendar day; stores the full day total (all payments with issue_date = summary date).
+ * - Admin submissions are auto-verified (Approved) on submit
+ * - Superadmin / Superfinance: List summaries and optionally flag for review
+ */
+import express from 'express';
+import { param, query as queryValidator, body } from 'express-validator';
+import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { handleValidationErrors } from '../middleware/validation.js';
+import { query } from '../config/database.js';
+import {
+  sendSystemNotificationEmailToEach,
+  normalizeNotificationRecipients,
+  isEmailConfigured,
+} from '../utils/emailService.js';
+import {
+  DEFAULT_SCHOOL_NAME,
+  logTemplateRenderWarning,
+  renderMessagingTemplate,
+} from '../utils/templateRenderService.js';
+import { resolveEodStakeholderEmails, SUPERADMIN_USER_TYPE_SQL } from '../utils/eodEmailRecipients.js';
+import {
+  assertAdminMayAmendSummary,
+  eodHasAmendmentDrift,
+  getEodBackfillDates,
+} from '../lib/closedPeriodBillingAmendment.js';
+
+const router = express.Router();
+router.use(verifyFirebaseToken);
+router.use(requireBranchAccess);
+
+/** Comma-separated extra recipients for the EOD "management" digest (merged with Superadmin emails from userstbl). */
+const parseEodStakeholderEmailsFromEnv = () =>
+  normalizeNotificationRecipients(
+    String(process.env.EOD_STAKEHOLDER_EMAILS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+
+/**
+ * GET /api/sms/daily-summary-sales
+ * List daily summaries with filters.
+ * Admin: only their branch. Superadmin/Superfinance: all branches (optional branch_id filter).
+ */
+router.get(
+  '/',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
+    queryValidator('summary_date').optional().isISO8601().withMessage('summary_date must be YYYY-MM-DD'),
+    // Range filter (preferred over single-day `summary_date`). Either bound is
+    // optional; if both omitted, no date filter is applied. If `summary_date`
+    // is also sent, the range params take precedence so old callers still work.
+    queryValidator('summary_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('summary_date_from must be YYYY-MM-DD'),
+    queryValidator('summary_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('summary_date_to must be YYYY-MM-DD'),
+    queryValidator('created_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_from must be YYYY-MM-DD'),
+    queryValidator('created_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('created_date_to must be YYYY-MM-DD'),
+    // Payment Logs–aligned aliases: both map to summary calendar day (same
+    // business day as paymenttbl.issue_date for EOD snapshots).
+    queryValidator('payment_date_from')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_from must be YYYY-MM-DD'),
+    queryValidator('payment_date_to')
+      .optional()
+      .isISO8601()
+      .withMessage('payment_date_to must be YYYY-MM-DD'),
+    queryValidator('status')
+      .optional()
+      .isIn(['Submitted', 'Approved', 'Rejected', 'Returned'])
+      .withMessage('status must be Submitted, Approved, Rejected, or Returned'),
+    queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be positive'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit 1-100'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const {
+        branch_id,
+        summary_date,
+        summary_date_from,
+        summary_date_to,
+        status,
+        page = 1,
+        limit = 50,
+      } = req.query;
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+      const limitNum = parseInt(limit) || 50;
+      const pageNum = parseInt(page) || 1;
+      const offset = (pageNum - 1) * limitNum;
+
+      const paymentDateFrom = req.query.payment_date_from
+        ? String(req.query.payment_date_from).trim().slice(0, 10)
+        : '';
+      const paymentDateTo = req.query.payment_date_to
+        ? String(req.query.payment_date_to).trim().slice(0, 10)
+        : '';
+      const createdDateFrom = req.query.created_date_from
+        ? String(req.query.created_date_from).trim().slice(0, 10)
+        : '';
+      const createdDateTo = req.query.created_date_to
+        ? String(req.query.created_date_to).trim().slice(0, 10)
+        : '';
+      // Legacy range (still supported for older callers).
+      const dateFrom = summary_date_from ? String(summary_date_from).trim().slice(0, 10) : null;
+      const dateTo = summary_date_to ? String(summary_date_to).trim().slice(0, 10) : null;
+
+      const usePaymentDateRange = Boolean(paymentDateFrom || paymentDateTo);
+      const useIssueDateRange = Boolean(createdDateFrom || createdDateTo);
+      const useSummaryRange = Boolean(dateFrom || dateTo);
+      const legacyDate =
+        !usePaymentDateRange && !useIssueDateRange && !useSummaryRange && summary_date ? summary_date : null;
+
+      if (usePaymentDateRange && paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'payment_date_from must be on or before payment_date_to',
+        });
+      }
+      if (useIssueDateRange && createdDateFrom && createdDateTo && createdDateFrom > createdDateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_date_from must be on or before created_date_to',
+        });
+      }
+      if (useSummaryRange && dateFrom && dateTo && dateFrom > dateTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'summary_date_from must be on or before summary_date_to',
+        });
+      }
+
+      let sql = `
+        SELECT d.daily_summary_id, d.branch_id, d.summary_date, d.total_amount, d.payment_count,
+               d.status, d.submitted_by, d.submitted_at, d.approved_by, d.approved_at, d.remarks,
+               COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+               sub.full_name AS submitted_by_name,
+               app.full_name AS approved_by_name
+        FROM daily_summary_salestbl d
+        LEFT JOIN branchestbl b ON d.branch_id = b.branch_id
+        LEFT JOIN userstbl sub ON d.submitted_by = sub.user_id
+        LEFT JOIN userstbl app ON d.approved_by = app.user_id
+        WHERE 1=1`;
+      const params = [];
+      let pc = 0;
+
+      // Admin: restrict to their branch
+      if (userType === 'Admin' && userBranchId) {
+        pc++;
+        sql += ` AND d.branch_id = $${pc}`;
+        params.push(userBranchId);
+      } else if (branch_id) {
+        pc++;
+        sql += ` AND d.branch_id = $${pc}`;
+        params.push(branch_id);
+      }
+
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          pc++;
+          sql += ` AND d.summary_date >= $${pc}::date`;
+          params.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          pc++;
+          sql += ` AND d.summary_date <= $${pc}::date`;
+          params.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        // EOD submit date: when the branch submitted the end-of-shift summary.
+        if (createdDateFrom) {
+          pc++;
+          sql += ` AND d.submitted_at::date >= $${pc}::date`;
+          params.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          pc++;
+          sql += ` AND d.submitted_at::date <= $${pc}::date`;
+          params.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
+        if (dateFrom) {
+          pc++;
+          sql += ` AND d.summary_date >= $${pc}::date`;
+          params.push(dateFrom);
+        }
+        if (dateTo) {
+          pc++;
+          sql += ` AND d.summary_date <= $${pc}::date`;
+          params.push(dateTo);
+        }
+      } else if (legacyDate) {
+        pc++;
+        sql += ` AND d.summary_date = $${pc}`;
+        params.push(legacyDate);
+      }
+      if (status) {
+        if (status === 'Returned') {
+          sql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          pc++;
+          sql += ` AND d.status = $${pc}`;
+          params.push(status);
+        }
+      }
+
+      sql += ` ORDER BY d.summary_date DESC, d.branch_id ASC LIMIT $${pc + 1} OFFSET $${pc + 2}`;
+      params.push(limitNum, offset);
+
+      const result = await query(sql, params);
+
+      /**
+       * Align list Amount with GET /:id/payments totals (same rules as EOD snapshot).
+       * Stored total_amount may lag until resubmit; live_grand_* matches the detail modal.
+       */
+      const dataRows = await Promise.all(
+        (result.rows || []).map(async (row) => {
+          const ymd = summaryDateToYmd(row.summary_date);
+          if (!ymd || !row.branch_id) {
+          return { ...row, live_grand_total: null, live_grand_count: null, needs_amendment: false };
+          }
+          try {
+            const agg = await getEodGrandTotalsOnly({
+              branchId: row.branch_id,
+              summaryDate: ymd,
+              submittedAfter: null,
+            });
+            return {
+              ...row,
+              live_grand_total: agg.total,
+              live_grand_count: agg.paymentCount,
+              needs_amendment: eodHasAmendmentDrift(row, agg),
+            };
+          } catch {
+          return { ...row, live_grand_total: null, live_grand_count: null, needs_amendment: false };
+          }
+        })
+      );
+
+      // Count total
+      let countSql = `SELECT COUNT(*) AS total FROM daily_summary_salestbl d WHERE 1=1`;
+      const countParams = [];
+      let cc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        cc++;
+        countSql += ` AND d.branch_id = $${cc}`;
+        countParams.push(userBranchId);
+      } else if (branch_id) {
+        cc++;
+        countSql += ` AND d.branch_id = $${cc}`;
+        countParams.push(branch_id);
+      }
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          cc++;
+          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          cc++;
+          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          cc++;
+          countSql += ` AND d.submitted_at::date >= $${cc}::date`;
+          countParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          cc++;
+          countSql += ` AND d.submitted_at::date <= $${cc}::date`;
+          countParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
+        if (dateFrom) {
+          cc++;
+          countSql += ` AND d.summary_date >= $${cc}::date`;
+          countParams.push(dateFrom);
+        }
+        if (dateTo) {
+          cc++;
+          countSql += ` AND d.summary_date <= $${cc}::date`;
+          countParams.push(dateTo);
+        }
+      } else if (legacyDate) {
+        cc++;
+        countSql += ` AND d.summary_date = $${cc}`;
+        countParams.push(legacyDate);
+      }
+      if (status) {
+        if (status === 'Returned') {
+          countSql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          cc++;
+          countSql += ` AND d.status = $${cc}`;
+          countParams.push(status);
+        }
+      }
+      const countRes = await query(countSql, countParams);
+      const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+      // Summary card (all-status) — all end-of-shift submissions in the same branch/date scope.
+      let submittedSql = `SELECT COUNT(*)::int AS submitted_count, COALESCE(SUM(d.total_amount), 0)::numeric AS submitted_total_amount
+        FROM daily_summary_salestbl d
+        WHERE 1=1`;
+      const submittedParams = [];
+      let sc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        sc++;
+        submittedSql += ` AND d.branch_id = $${sc}`;
+        submittedParams.push(userBranchId);
+      } else if (branch_id) {
+        sc++;
+        submittedSql += ` AND d.branch_id = $${sc}`;
+        submittedParams.push(branch_id);
+      }
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          sc++;
+          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          sc++;
+          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          sc++;
+          submittedSql += ` AND d.submitted_at::date >= $${sc}::date`;
+          submittedParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          sc++;
+          submittedSql += ` AND d.submitted_at::date <= $${sc}::date`;
+          submittedParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
+        if (dateFrom) {
+          sc++;
+          submittedSql += ` AND d.summary_date >= $${sc}::date`;
+          submittedParams.push(dateFrom);
+        }
+        if (dateTo) {
+          sc++;
+          submittedSql += ` AND d.summary_date <= $${sc}::date`;
+          submittedParams.push(dateTo);
+        }
+      } else if (legacyDate) {
+        sc++;
+        submittedSql += ` AND d.summary_date = $${sc}`;
+        submittedParams.push(legacyDate);
+      }
+      const submittedRes = await query(submittedSql, submittedParams);
+      const submittedSummary = submittedRes.rows[0] || { submitted_count: 0, submitted_total_amount: 0 };
+
+      // Summary card (filtered) — matches the list’s status filter (including Returned => Returned+Rejected).
+      let filteredSql = `SELECT COUNT(*)::int AS filtered_count, COALESCE(SUM(d.total_amount), 0)::numeric AS filtered_total_amount
+        FROM daily_summary_salestbl d
+        WHERE 1=1`;
+      const filteredParams = [];
+      let fc = 0;
+      if (userType === 'Admin' && userBranchId) {
+        fc++;
+        filteredSql += ` AND d.branch_id = $${fc}`;
+        filteredParams.push(userBranchId);
+      } else if (branch_id) {
+        fc++;
+        filteredSql += ` AND d.branch_id = $${fc}`;
+        filteredParams.push(branch_id);
+      }
+      if (usePaymentDateRange) {
+        if (paymentDateFrom) {
+          fc++;
+          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredParams.push(paymentDateFrom);
+        }
+        if (paymentDateTo) {
+          fc++;
+          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredParams.push(paymentDateTo);
+        }
+      } else if (useIssueDateRange) {
+        if (createdDateFrom) {
+          fc++;
+          filteredSql += ` AND d.submitted_at::date >= $${fc}::date`;
+          filteredParams.push(createdDateFrom);
+        }
+        if (createdDateTo) {
+          fc++;
+          filteredSql += ` AND d.submitted_at::date <= $${fc}::date`;
+          filteredParams.push(createdDateTo);
+        }
+      } else if (useSummaryRange) {
+        if (dateFrom) {
+          fc++;
+          filteredSql += ` AND d.summary_date >= $${fc}::date`;
+          filteredParams.push(dateFrom);
+        }
+        if (dateTo) {
+          fc++;
+          filteredSql += ` AND d.summary_date <= $${fc}::date`;
+          filteredParams.push(dateTo);
+        }
+      } else if (legacyDate) {
+        fc++;
+        filteredSql += ` AND d.summary_date = $${fc}`;
+        filteredParams.push(legacyDate);
+      }
+      if (status) {
+        if (status === 'Returned') {
+          filteredSql += ` AND d.status IN ('Returned', 'Rejected')`;
+        } else {
+          fc++;
+          filteredSql += ` AND d.status = $${fc}`;
+          filteredParams.push(status);
+        }
+      }
+      const filteredRes = await query(filteredSql, filteredParams);
+      const filteredSummary = filteredRes.rows[0] || { filtered_count: 0, filtered_total_amount: 0 };
+
+      res.json({
+        success: true,
+        data: dataRows,
+        submitted_summary: {
+          count: Number(submittedSummary.submitted_count || 0),
+          total_amount: Number(submittedSummary.submitted_total_amount || 0),
+        },
+        filtered_summary: {
+          count: Number(filteredSummary.filtered_count || 0),
+          total_amount: Number(filteredSummary.filtered_total_amount || 0),
+        },
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum) || 1,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/daily-summary-sales/preview
+ * Preview today's calculated total for a branch (from paymenttbl).
+ * Admin: only their branch. Superadmin/Superfinance: require branch_id.
+ */
+router.get(
+  '/preview',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
+    queryValidator('date').optional().isISO8601().withMessage('date must be YYYY-MM-DD'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+      const { branch_id, date } = req.query;
+
+      let targetBranchId = branch_id ? parseInt(branch_id, 10) : userBranchId;
+      const targetDateRaw = date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const targetDate = String(targetDateRaw).slice(0, 10);
+
+      if (!targetBranchId) {
+        return res.status(400).json({
+          success: false,
+          message: 'branch_id is required for Superadmin/Superfinance',
+        });
+      }
+
+      if (userType === 'Admin' && targetBranchId !== userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only preview your assigned branch',
+        });
+      }
+
+      const lastSubmittedAt = await getLastEodSubmittedAt({
+        branchId: targetBranchId,
+        summaryDate: targetDate,
+      });
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: targetBranchId,
+        summaryDate: targetDate,
+        submittedAfter: null,
+      });
+      const ar_receipts = await getEodStandaloneArReceipts(targetBranchId, targetDate);
+
+      res.json({
+        success: true,
+        data: {
+          branch_id: targetBranchId,
+          summary_date: targetDate,
+          total_amount: snapshot.total,
+          payment_count: snapshot.paymentCount,
+          completed_payment_total: snapshot.completedPaymentTotal,
+          completed_payment_count: snapshot.completedPaymentCount,
+          ar_sales_total: snapshot.arSalesTotal,
+          ar_sales_count: snapshot.arSalesCount,
+          payments: snapshot.payments,
+          ar_receipts,
+          last_submitted_at: lastSubmittedAt,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const TODAY_MANILA = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+/**
+ * Pending End-of-Shift dates for a branch:
+ * every calendar day after the latest submitted summary, up to today (Manila).
+ */
+const getPendingEodDates = async (branchId, todayYmd) => {
+  if (!branchId || !todayYmd) return [];
+  const result = await query(
+    `
+      WITH latest_summary AS (
+        SELECT MAX(summary_date)::date AS latest_date
+        FROM daily_summary_salestbl
+        WHERE branch_id = $1
+      )
+      SELECT TO_CHAR(gs::date, 'YYYY-MM-DD') AS summary_date
+      FROM latest_summary ls
+      CROSS JOIN LATERAL generate_series(
+        COALESCE((ls.latest_date + INTERVAL '1 day')::date, $2::date),
+        $2::date,
+        '1 day'::interval
+      ) gs
+      ORDER BY gs ASC
+    `,
+    [branchId, todayYmd]
+  );
+  return (result.rows || []).map((row) => String(row.summary_date).slice(0, 10)).filter(Boolean);
+};
+
+/** Normalize Postgres DATE / string / Date to YYYY-MM-DD (calendar date for branch summary). */
+const summaryDateToYmd = (value) => {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value.slice(0, 10);
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(value).slice(0, 10);
+};
+
+const buildEodPaymentWhere = (branchId, summaryDate, submittedAfter = null) => {
+  const whereParts = [
+    'p.branch_id = $1',
+    'p.issue_date = $2::date',
+    "p.status = 'Completed'",
+    "COALESCE(p.approval_status, 'Pending') <> 'Rejected'",
+  ];
+  const params = [branchId, summaryDate];
+  let pc = 2;
+  if (submittedAfter) {
+    pc += 1;
+    whereParts.push(`p.created_at > $${pc}`);
+    params.push(submittedAfter);
+  }
+  return { whereClause: whereParts.join(' AND '), params };
+};
+
+/** Completed payments + standalone AR totals only (no payment row fetch). Used for list API enrichment. */
+const getEodGrandTotalsOnly = async ({ branchId, summaryDate, submittedAfter = null }) => {
+  const { whereClause, params } = buildEodPaymentWhere(branchId, summaryDate, submittedAfter);
+  const sumRes = await query(
+    `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.tip_amount, 0)), 0) AS total,
+            COUNT(*) AS payment_count
+     FROM paymenttbl p
+     WHERE ${whereClause}`,
+    params
+  );
+  const arRes = await query(
+    `SELECT
+       COALESCE(SUM(COALESCE(ar.payment_amount, 0) + COALESCE(ar.tip_amount, 0)), 0) AS ar_total,
+       COUNT(*) AS ar_count
+     FROM acknowledgement_receiptstbl ar
+     WHERE ar.branch_id = $1
+       AND ar.issue_date = $2::date
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+       AND ar.payment_id IS NULL
+       AND ar.invoice_id IS NULL`,
+    [branchId, summaryDate]
+  );
+  const row = sumRes.rows[0];
+  const paymentTotal = Math.round((parseFloat(row?.total || 0)) * 100) / 100;
+  const completedPaymentCount = parseInt(row?.payment_count || 0, 10);
+  const arTotal = Math.round((parseFloat(arRes.rows[0]?.ar_total || 0)) * 100) / 100;
+  const arCount = parseInt(arRes.rows[0]?.ar_count || 0, 10);
+  const total = Math.round((paymentTotal + arTotal) * 100) / 100;
+  const paymentCount = completedPaymentCount + arCount;
+  return {
+    total,
+    paymentCount,
+    completedPaymentTotal: paymentTotal,
+    completedPaymentCount,
+    arSalesTotal: arTotal,
+    arSalesCount: arCount,
+    whereClause,
+    params,
+  };
+};
+
+const getLastEodSubmittedAt = async ({ branchId, summaryDate }) => {
+  const result = await query(
+    `SELECT submitted_at
+     FROM daily_summary_salestbl
+     WHERE branch_id = $1 AND summary_date = $2::date
+     LIMIT 1`,
+    [branchId, summaryDate]
+  );
+  return result.rows[0]?.submitted_at || null;
+};
+
+const getEodPaymentSnapshot = async ({ branchId, summaryDate, submittedAfter = null }) => {
+  // Keep this aligned with Daily Operational Dashboard:
+  // completed payment sales + AR sales for the selected date.
+  const agg = await getEodGrandTotalsOnly({ branchId, summaryDate, submittedAfter });
+  const { whereClause, params } = agg;
+  const paymentTotal = agg.completedPaymentTotal;
+  const completedPaymentCount = agg.completedPaymentCount;
+  const arTotal = agg.arSalesTotal;
+  const arCount = agg.arSalesCount;
+  const total = agg.total;
+  const paymentCount = agg.paymentCount;
+
+  const paymentsRes = await query(
+    `SELECT p.payment_id,
+            p.invoice_id,
+            p.student_id,
+            p.payment_method,
+            p.payable_amount,
+            COALESCE(p.tip_amount, 0) AS tip_amount,
+            p.payment_attachment_url,
+            p.reference_number,
+            p.status,
+            TO_CHAR(p.issue_date, 'YYYY-MM-DD') AS issue_date,
+            u.full_name AS student_name,
+            u.email AS student_email,
+            COALESCE(
+              NULLIF(TRIM(u.level_tag), ''),
+              NULLIF(TRIM(ar.level_tag), ''),
+              NULLIF(
+                TRIM(
+                  (
+                    SELECT ar2.level_tag
+                    FROM acknowledgement_receiptstbl ar2
+                    WHERE ar2.invoice_id = i.invoice_id
+                    ORDER BY ar2.ack_receipt_id DESC
+                    LIMIT 1
+                  )
+                ),
+                ''
+              ),
+              NULLIF(
+                TRIM(
+                  (
+                    SELECT c.level_tag
+                    FROM classstudentstbl cs
+                    INNER JOIN classestbl c ON c.class_id = cs.class_id
+                    WHERE cs.student_id = p.student_id
+                    ORDER BY
+                      CASE
+                        WHEN cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin') AND cs.removed_at IS NULL THEN 0
+                        ELSE 1
+                      END,
+                      cs.classstudent_id DESC
+                    LIMIT 1
+                  )
+                ),
+                ''
+              )
+            ) AS student_level_tag,
+            i.invoice_description,
+            TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_date,
+            i.ack_receipt_id,
+            ar.payment_method AS ar_payment_method,
+            CASE
+              WHEN p.invoice_id IS NULL THEN NULL
+              WHEN EXISTS (
+                SELECT 1 FROM invoiceitemstbl ii WHERE ii.invoice_id = p.invoice_id
+              ) THEN (
+                SELECT ROUND(
+                  COALESCE(
+                    SUM(
+                      (COALESCE(ii.amount, 0) - COALESCE(ii.discount_amount, 0) + COALESCE(ii.penalty_amount, 0)) *
+                      (1 + COALESCE(ii.tax_percentage, 0) / 100.0)
+                    ),
+                    0
+                  )::numeric,
+                  2
+                )
+                FROM invoiceitemstbl ii
+                WHERE ii.invoice_id = p.invoice_id
+              )
+              ELSE ROUND(COALESCE(i.amount, 0)::numeric, 2)
+            END AS invoice_document_total
+     FROM paymenttbl p
+     LEFT JOIN userstbl u ON p.student_id = u.user_id
+     LEFT JOIN invoicestbl i ON p.invoice_id = i.invoice_id
+     LEFT JOIN acknowledgement_receiptstbl ar ON ar.ack_receipt_id = i.ack_receipt_id
+     WHERE ${whereClause}
+     ORDER BY p.payment_id DESC`,
+    params
+  );
+
+  // Replace Walk-in Customer with AR prospect name for merchandise AR payments
+  const payments = [];
+  for (const paymentRow of paymentsRes.rows || []) {
+    let studentName = paymentRow.student_name;
+    let studentEmail = paymentRow.student_email;
+
+    const isWalkIn = (studentEmail || '').toLowerCase() === 'walkin@merchandise.psms.internal';
+    if (isWalkIn && paymentRow.ack_receipt_id) {
+      const arResult = await query(
+        'SELECT prospect_student_name FROM acknowledgement_receiptstbl WHERE ack_receipt_id = $1',
+        [paymentRow.ack_receipt_id]
+      );
+      const prospectName = arResult.rows[0]?.prospect_student_name || null;
+      if (prospectName) {
+        studentName = prospectName;
+      }
+    }
+
+    const rawPaymentMethod = String(paymentRow.payment_method || '').trim();
+    const arPaymentMethod = String(paymentRow.ar_payment_method || '').trim();
+    const shouldUseArMethod =
+      arPaymentMethod &&
+      rawPaymentMethod.toLowerCase() === 'cash' &&
+      arPaymentMethod.toLowerCase() !== 'cash';
+
+    payments.push({
+      ...paymentRow,
+      payment_method: shouldUseArMethod ? arPaymentMethod : paymentRow.payment_method,
+      student_name: studentName,
+      student_email: studentEmail,
+    });
+  }
+
+  const summaryYmd = String(summaryDate).slice(0, 10);
+  const paymentsForDate = payments.filter(
+    (p) => String(p.issue_date || '').slice(0, 10) === summaryYmd
+  );
+
+  return {
+    total,
+    paymentCount,
+    completedPaymentTotal: paymentTotal,
+    completedPaymentCount,
+    arSalesTotal: arTotal,
+    arSalesCount: arCount,
+    payments: paymentsForDate,
+  };
+};
+
+/** Standalone AR rows included in EOD (same filter as grand total / GET :id/payments). */
+const getEodStandaloneArReceipts = async (branchId, summaryDate) => {
+  const arListRes = await query(
+    `SELECT ar.ack_receipt_id,
+            TO_CHAR(ar.issue_date, 'YYYY-MM-DD') AS issue_date,
+            ar.payment_method,
+            COALESCE(ar.payment_amount, 0) AS payment_amount,
+            COALESCE(ar.tip_amount, 0) AS tip_amount,
+            NULLIF(TRIM(ar.level_tag), '') AS level_tag,
+            ar.prospect_student_name,
+            ar.ack_receipt_number,
+            ar.reference_number,
+            ar.payment_attachment_url,
+            COALESCE(ar.status, 'Submitted') AS status
+     FROM acknowledgement_receiptstbl ar
+     WHERE ar.branch_id = $1
+       AND ar.issue_date = $2::date
+       AND COALESCE(ar.status, 'Submitted') NOT IN ('Rejected', 'Cancelled', 'Applied')
+       AND ar.payment_id IS NULL
+       AND ar.invoice_id IS NULL
+     ORDER BY ar.ack_receipt_id DESC`,
+    [branchId, summaryDate]
+  );
+  return (arListRes.rows || []).map((r) => ({
+    ...r,
+    program_level_tag: r.level_tag || null,
+  }));
+};
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/** e.g. 2026-04-08 → Wednesday, April 8, 2026 (for formal email copy) */
+const formatBusinessDateFormal = (ymd) => {
+  const s = String(ymd || '').slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return s;
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10) - 1;
+  const d = parseInt(m[3], 10);
+  const dt = new Date(Date.UTC(y, mo, d));
+  return dt.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+};
+
+/**
+ * Wrap HTML for email clients that use dark UI: force a light content area so #111827 text stays readable.
+ */
+const wrapEodNotificationHtml = (innerBodyHtml) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+</head>
+<body style="margin:0;padding:0;background-color:#e5e7eb;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#e5e7eb;">
+  <tr>
+    <td align="center" style="padding:20px 12px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:8px;border:1px solid #d1d5db;">
+        <tr>
+          <td style="padding:20px 24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#111827;">
+${innerBodyHtml}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`;
+
+const sendEodEmailNotifications = async ({
+  submittedBranchId,
+  summaryDate,
+  totalAmount,
+  paymentCount,
+  submittedByUserId,
+}) => {
+  try {
+    if (!isEmailConfigured()) {
+      console.warn(
+        '[EOD email] Email not configured on this server. Set SENDGRID_API_KEY (recommended on Linode — SMTP ports are blocked) or SMTP_* in backend/.env, then restart the API.'
+      );
+      return;
+    }
+
+    const [branchResult, submitterResult, stakeholderRecipientsResult, branchAdminsResult] =
+      await Promise.all([
+      query(
+        `SELECT COALESCE(branch_nickname, branch_name) AS branch_name
+         FROM branchestbl
+         WHERE branch_id = $1`,
+        [submittedBranchId]
+      ),
+      query(
+        `SELECT full_name, email
+         FROM userstbl
+         WHERE user_id = $1`,
+        [submittedByUserId]
+      ),
+      // Stakeholder digest: Superadmin only (by userstbl), plus optional EOD_STAKEHOLDER_EMAILS in .env.
+      query(
+        `SELECT user_id, TRIM(email) AS email, firebase_uid
+         FROM userstbl
+         WHERE ${SUPERADMIN_USER_TYPE_SQL}`
+      ),
+      query(
+        `SELECT DISTINCT TRIM(email) AS email
+         FROM userstbl
+         WHERE LOWER(TRIM(user_type)) = 'admin'
+           AND branch_id = $1
+           AND COALESCE(TRIM(email), '') <> ''`,
+        [submittedBranchId]
+      ),
+    ]);
+
+    const submitterEmail = submitterResult.rows[0]?.email
+      ? String(submitterResult.rows[0].email).trim()
+      : null;
+    const submitterName = submitterResult.rows[0]?.full_name || submitterEmail || 'Branch Admin';
+    const submittedBranchName = branchResult.rows[0]?.branch_name || `Branch ${submittedBranchId}`;
+
+    const uniqueStakeholderEmails = await resolveEodStakeholderEmails(
+      stakeholderRecipientsResult.rows || [],
+      parseEodStakeholderEmailsFromEnv()
+    );
+
+    const branchAdminEmails = normalizeNotificationRecipients(
+      (branchAdminsResult.rows || []).map((row) => row.email)
+    );
+    const branchConfirmationEmails = normalizeNotificationRecipients([
+      ...branchAdminEmails,
+      submitterEmail,
+    ]);
+
+    const formattedTotal = Number(totalAmount || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    const templateVariables = {
+      summaryDate,
+      totalAmount: `₱${formattedTotal}`,
+      paymentCount: String(paymentCount || 0),
+      submittedBy: submitterName,
+      branchName: submittedBranchName,
+      schoolName: DEFAULT_SCHOOL_NAME,
+    };
+
+    let subject = `[PSMS] End of Day - ${submittedBranchName} - ${summaryDate}`;
+    let html = `<p>EOD summary for ${submittedBranchName} on ${summaryDate}. Total: ₱${formattedTotal}. Payments: ${paymentCount || 0}. Submitted by: ${submitterName}</p>`;
+
+    try {
+      const rendered = await renderMessagingTemplate({
+        templateKey: 'template_eod_summary',
+        branchId: submittedBranchId,
+        variables: templateVariables,
+      });
+
+      if (rendered?.enabled === false) {
+        console.warn(
+          '[EOD email] template_eod_summary is disabled in Settings → Templates; skipping emails. Enable it on production (Superadmin → Settings).'
+        );
+        return;
+      }
+
+      if (rendered?.enabled) {
+        subject = rendered.subject?.trim() || rendered.title?.trim() || subject;
+        html = rendered.bodyHtml;
+      }
+    } catch (templateErr) {
+      await logTemplateRenderWarning('sendEodEmailNotifications template load', templateErr);
+    }
+
+    // 1) Superadmin only: one email each (whole-branch submitted / not submitted lists).
+    //    Finance / Superfinance are intentionally excluded from EOD notifications.
+    try {
+      if (uniqueStakeholderEmails.length > 0) {
+        const summary = await sendSystemNotificationEmailToEach({
+          recipients: uniqueStakeholderEmails,
+          subject,
+          html,
+        });
+        console.log('[EOD email] Stakeholder digest:', {
+          attempted: summary.attempted,
+          sent: summary.sent,
+          failed: summary.failed,
+          ...(summary.errors?.length ? { errors: summary.errors } : {}),
+        });
+        if (summary.failed > 0) {
+          console.warn(
+            '[EOD email] Stakeholder digest had SMTP/recipient failures. Verify production .env SMTP_* and that recipient inboxes are valid.'
+          );
+        }
+      } else {
+        console.warn(
+          '[EOD email] No stakeholder recipients: ensure Superadmin users have email in Personnel (userstbl), and/or set EOD_STAKEHOLDER_EMAILS=you@example.com in backend/.env on the server. Firebase login email is used as fallback when userstbl.email is empty.'
+        );
+      }
+    } catch (err) {
+      console.error('[EOD email] Stakeholder digest unexpected error:', err?.message || err);
+    }
+
+    // 2) Branch Admin(s) + submitter: confirmation for this branch’s EOD
+    try {
+      if (branchConfirmationEmails.length > 0) {
+        const summary = await sendSystemNotificationEmailToEach({
+          recipients: branchConfirmationEmails,
+          subject,
+          html,
+        });
+        console.log('[EOD email] Branch confirmation:', {
+          attempted: summary.attempted,
+          sent: summary.sent,
+          failed: summary.failed,
+          ...(summary.errors?.length ? { errors: summary.errors } : {}),
+        });
+      } else {
+        console.warn(
+          '[EOD email] No branch confirmation recipients: set a valid email on the submitting Admin and on branch Admin users (same branch_id in userstbl). Login email in Firebase alone is not used unless synced to userstbl.email.'
+        );
+      }
+    } catch (err) {
+      console.error('[EOD email] Branch confirmation unexpected error:', err?.message || err);
+    }
+  } catch (error) {
+    // Never block EOD submission if email sending fails.
+    console.error('Failed to send EOD email notifications:', error);
+  }
+};
+
+const createDailySummarySubmissionNotification = async ({
+  dailySummaryId,
+  branchId,
+  summaryDate,
+  totalAmount,
+  paymentCount,
+  createdBy,
+}) => {
+  const [branchResult, userResult] = await Promise.all([
+    query(
+      `SELECT COALESCE(branch_nickname, branch_name) AS branch_name
+       FROM branchestbl
+       WHERE branch_id = $1`,
+      [branchId]
+    ),
+    query(
+      `SELECT full_name, email
+       FROM userstbl
+       WHERE user_id = $1`,
+      [createdBy]
+    ),
+  ]);
+
+  const branchName = branchResult.rows[0]?.branch_name || `Branch ${branchId}`;
+  const submittedBy = userResult.rows[0]?.full_name || userResult.rows[0]?.email || 'Branch Admin';
+
+  const formattedTotal = Number(totalAmount || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+  const fallbackTitle = 'End of Shift Submitted';
+  const fallbackBody = `${submittedBy} submitted End of Shift for ${branchName} on ${summaryDate}. Total: ₱${formattedTotal} (${paymentCount || 0} payment${Number(paymentCount || 0) === 1 ? '' : 's'}).`;
+
+  let title = fallbackTitle;
+  let body = fallbackBody;
+
+  try {
+    const rendered = await renderMessagingTemplate({
+      templateKey: 'template_eod_summary',
+      branchId,
+      variables: {
+        summaryDate,
+        totalAmount: `₱${formattedTotal}`,
+        paymentCount: String(paymentCount || 0),
+        submittedBy,
+        branchName,
+        schoolName: DEFAULT_SCHOOL_NAME,
+      },
+    });
+
+    if (rendered?.enabled === false) {
+      return;
+    }
+
+    if (rendered?.enabled) {
+      title = rendered.title?.trim() || fallbackTitle;
+      body = rendered.body?.trim() || fallbackBody;
+    }
+  } catch (templateErr) {
+    console.warn('[EOD notification] template load failed:', templateErr?.message || templateErr);
+  }
+
+  // No Finance / Superfinance group bell notification for EOD (per product rules).
+  // Cash deposit submissions still use the Finance group in cashDepositSummaries.js.
+
+  // Explicitly notify all Superadmin users as targeted bell notifications.
+  const superadminRes = await query(
+    `SELECT user_id FROM userstbl WHERE LOWER(TRIM(user_type)) = 'superadmin'`
+  );
+  const superadminIds = (superadminRes.rows || [])
+    .map((row) => row.user_id)
+    .filter((id) => id != null && Number(id) !== Number(createdBy));
+
+  if (superadminIds.length > 0) {
+    await Promise.all(
+      superadminIds.map((targetUserId) =>
+        query(
+          `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+           VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7, $8)`,
+          [
+            title,
+            body,
+            ['All'],
+            branchId,
+            createdBy,
+            targetUserId,
+            'daily-summary-sales',
+            `notificationTab=endOfShift${dailySummaryId ? `&dailySummaryId=${dailySummaryId}` : ''}`,
+          ]
+        )
+      )
+    );
+  }
+};
+
+/**
+ * POST /api/sms/daily-summary-sales
+ * Submit daily summary for a pending calendar day. Admin only.
+ * Amount is auto-calculated from paymenttbl (no manual input).
+ * Body: { summary_date } optional. Defaults to today Manila.
+ */
+router.post(
+  '/',
+  requireRole('Admin'),
+  [body('summary_date').optional().isISO8601().withMessage('summary_date must be YYYY-MM-DD')],
+  handleValidationErrors,
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can submit daily summary. Superadmin/Superfinance use the approval page.',
+        });
+      }
+
+      const today = TODAY_MANILA();
+      const requestedDate = (req.body?.summary_date || today).slice(0, 10);
+      if (requestedDate > today) {
+        return res.status(400).json({
+          success: false,
+          message: `You cannot submit End of Shift for a future date. Today is ${today}.`,
+        });
+      }
+
+      const pendingDates = await getPendingEodDates(userBranchId, today);
+      if (!pendingDates.includes(requestedDate)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'The selected date is not pending for End of Shift submission. Please choose one of the pending dates.',
+          pending_dates: pendingDates,
+          required_date: pendingDates[0] || null,
+        });
+      }
+
+      const already = await query(
+        `SELECT daily_summary_id FROM daily_summary_salestbl WHERE branch_id = $1 AND summary_date = $2::date LIMIT 1`,
+        [userBranchId, requestedDate]
+      );
+      if (already.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'End of day for this date has already been submitted. Only one EOD submission per branch per day is allowed.',
+        });
+      }
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        submittedAfter: null,
+      });
+      const totalAmount = snapshot.total;
+      const paymentCount = snapshot.paymentCount;
+
+      let insertRes;
+      try {
+        insertRes = await query(
+          `INSERT INTO daily_summary_salestbl (branch_id, summary_date, total_amount, payment_count, status, submitted_by, approved_by, approved_at)
+           VALUES ($1, $2, $3, $4, 'Submitted', $5, NULL, NULL)
+           RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+          [userBranchId, requestedDate, totalAmount, paymentCount, userId]
+        );
+      } catch (dbErr) {
+        if (dbErr.code === '23505') {
+          return res.status(409).json({
+            success: false,
+            message:
+              'End of day for this date has already been submitted. Only one EOD submission per branch per day is allowed.',
+          });
+        }
+        throw dbErr;
+      }
+
+      await createDailySummarySubmissionNotification({
+        dailySummaryId: insertRes.rows[0]?.daily_summary_id,
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount,
+        paymentCount,
+        createdBy: userId,
+      });
+
+      await sendEodEmailNotifications({
+        submittedBranchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount,
+        paymentCount,
+        submittedByUserId: userId,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Daily summary submitted successfully and is awaiting verification',
+        data: insertRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/daily-summary-sales/:id/approve
+ * Verify (approve: true) or reject (approve: false) an End of Shift (daily) summary.
+ * Superadmin, Finance, and Superfinance. Branch-scoped Finance only for their branch; others all branches.
+ */
+router.put(
+  '/:id/approve',
+  requireRole('Superadmin', 'Finance', 'Superfinance'),
+  [
+    param('id').isInt().withMessage('id must be an integer'),
+    body('approve').optional().isBoolean().withMessage('approve must be boolean'),
+    body('remarks').optional().isString().withMessage('remarks must be string'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { approve, remarks } = req.body || {};
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      // Branch-scoped Finance can verify only their own branch summaries. Superadmin and
+      // Superfinance (no branch) can verify any branch. HQ Finance (no branch) can verify any.
+      if (userType === 'Finance' && userBranchId !== null && userBranchId !== undefined) {
+        const branchCheck = await query(
+          'SELECT branch_id FROM daily_summary_salestbl WHERE daily_summary_id = $1',
+          [id]
+        );
+        const targetBranchId = branchCheck.rows[0]?.branch_id;
+        if (targetBranchId && Number(targetBranchId) !== Number(userBranchId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only verify daily summaries for your assigned branch',
+          });
+        }
+      }
+
+      const checkRes = await query(
+        'SELECT daily_summary_id, status FROM daily_summary_salestbl WHERE daily_summary_id = $1',
+        [id]
+      );
+      if (checkRes.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Daily summary not found',
+        });
+      }
+      const rec = checkRes.rows[0];
+      const allowedVerifyStatuses = ['Submitted', 'Returned', 'Rejected'];
+      if (!allowedVerifyStatuses.includes(rec.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot change verification. Current status: ${rec.status}`,
+        });
+      }
+
+      const isApproved = approve === true || approve === 'true';
+      const newStatus = isApproved ? 'Approved' : 'Returned';
+
+      if (isApproved) {
+        await query(
+          `UPDATE daily_summary_salestbl
+           SET status = 'Approved',
+               approved_by = $1,
+               approved_at = CURRENT_TIMESTAMP,
+               remarks = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE daily_summary_id = $3`,
+          [req.user.userId, remarks || null, id]
+        );
+      } else {
+        await query(
+          `UPDATE daily_summary_salestbl
+           SET status = 'Returned',
+               approved_by = NULL,
+               approved_at = NULL,
+               remarks = $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE daily_summary_id = $2`,
+          [remarks || null, id]
+        );
+      }
+
+      const updated = await query(
+        `SELECT d.daily_summary_id, d.branch_id, d.summary_date, d.total_amount, d.payment_count, d.status,
+                d.approved_by, d.approved_at, d.remarks,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                app.full_name AS approved_by_name
+         FROM daily_summary_salestbl d
+         LEFT JOIN branchestbl b ON d.branch_id = b.branch_id
+         LEFT JOIN userstbl app ON d.approved_by = app.user_id
+         WHERE d.daily_summary_id = $1`,
+        [id]
+      );
+
+      res.json({
+        success: true,
+        message: isApproved ? 'Daily summary verified' : 'Daily summary returned for correction',
+        data: updated.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/daily-summary-sales/:id/resubmit
+ * Branch Admin resubmits a rejected End of Day summary (refreshes totals from current data).
+ */
+router.put(
+  '/:id/resubmit',
+  requireRole('Admin'),
+  [param('id').isInt().withMessage('id must be an integer'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can resubmit daily summaries.',
+        });
+      }
+
+      const rowRes = await query(
+        `SELECT daily_summary_id,
+                branch_id,
+                summary_date,
+                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                total_amount, payment_count, status, submitted_by
+         FROM daily_summary_salestbl
+         WHERE daily_summary_id = $1`,
+        [id]
+      );
+      if (rowRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+
+      const rec = rowRes.rows[0];
+      if (Number(rec.branch_id) !== Number(userBranchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only resubmit daily summaries for your branch',
+        });
+      }
+      if (rec.status !== 'Rejected' && rec.status !== 'Returned') {
+        return res.status(400).json({
+          success: false,
+          message: `Only returned summaries can be resubmitted. Current status: ${rec.status}`,
+        });
+      }
+      if (Number(rec.submitted_by) !== Number(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the Admin who submitted this summary can resubmit it',
+        });
+      }
+
+      // Use DB calendar string — never rec.summary_date.toISOString() (UTC shift breaks issue_date match → ₱0).
+      const summaryDateStr = String(rec.summary_date_ymd || summaryDateToYmd(rec.summary_date)).slice(0, 10);
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: rec.branch_id,
+        summaryDate: summaryDateStr,
+        submittedAfter: null,
+      });
+
+      const updateRes = await query(
+        `UPDATE daily_summary_salestbl
+         SET total_amount = $1,
+             payment_count = $2,
+             status = 'Submitted',
+             approved_by = NULL,
+             approved_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE daily_summary_id = $3
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [snapshot.total, snapshot.paymentCount, id]
+      );
+
+      return res.json({
+        success: true,
+        message: 'Daily summary resubmitted for verification',
+        data: updateRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/sms/daily-summary-sales/:id/amend-for-verification
+ * Refresh an Approved/Submitted EOD after billing correction + re-enrollment (Finance re-verifies).
+ */
+router.put(
+  '/:id/amend-for-verification',
+  requireRole('Admin'),
+  [param('id').isInt().withMessage('id must be an integer'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userBranchId = req.user.branchId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can amend daily summaries.',
+        });
+      }
+
+      const rowRes = await query(
+        `SELECT daily_summary_id,
+                branch_id,
+                summary_date,
+                TO_CHAR(summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                total_amount, payment_count, status, submitted_by
+         FROM daily_summary_salestbl
+         WHERE daily_summary_id = $1`,
+        [id]
+      );
+      if (rowRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+
+      const rec = rowRes.rows[0];
+      const perm = assertAdminMayAmendSummary(req, rec);
+      if (!perm.ok) {
+        return res.status(perm.status).json({ success: false, message: perm.message });
+      }
+
+      if (rec.status !== 'Approved' && rec.status !== 'Submitted') {
+        return res.status(400).json({
+          success: false,
+          message: `Only Approved or Submitted summaries can be amended. Current status: ${rec.status}. Use resubmit for Returned summaries.`,
+        });
+      }
+
+      const summaryDateStr = String(rec.summary_date_ymd || summaryDateToYmd(rec.summary_date)).slice(0, 10);
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: rec.branch_id,
+        summaryDate: summaryDateStr,
+        submittedAfter: null,
+      });
+
+      if (!eodHasAmendmentDrift(rec, snapshot)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'No new or changed sales were found for this date. Record re-enrollment payments first, then amend.',
+        });
+      }
+
+      const updateRes = await query(
+        `UPDATE daily_summary_salestbl
+         SET total_amount = $1,
+             payment_count = $2,
+             status = 'Submitted',
+             approved_by = NULL,
+             approved_at = NULL,
+             remarks = COALESCE(NULLIF(TRIM(remarks), ''), '') ||
+               CASE WHEN COALESCE(TRIM(remarks), '') = '' THEN '' ELSE E'\\n' END ||
+               'Amended after billing correction — pending Finance verification.',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE daily_summary_id = $3
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [snapshot.total, snapshot.paymentCount, id]
+      );
+
+      return res.json({
+        success: true,
+        message: 'End of day amended and sent for Finance verification.',
+        data: updateRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/daily-summary-sales/backfill
+ * Submit EOD for a past date that has sales but no summary row (e.g. after hard delete removed the row).
+ */
+router.post(
+  '/backfill',
+  requireRole('Admin'),
+  [body('summary_date').isISO8601().withMessage('summary_date must be YYYY-MM-DD'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      const userId = req.user.userId;
+
+      if (!userBranchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only branch Admin can backfill daily summaries.',
+        });
+      }
+
+      const today = TODAY_MANILA();
+      const requestedDate = String(req.body?.summary_date || '').slice(0, 10);
+      if (requestedDate > today) {
+        return res.status(400).json({
+          success: false,
+          message: `You cannot backfill End of Shift for a future date. Today is ${today}.`,
+        });
+      }
+
+      const backfillDates = await getEodBackfillDates(query, userBranchId, today);
+      if (!backfillDates.includes(requestedDate)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'This date is not eligible for backfill. It may already have an EOD row or has no completed sales.',
+          backfill_dates: backfillDates,
+        });
+      }
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        submittedAfter: null,
+      });
+
+      if (!snapshot.paymentCount || snapshot.total <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No completed sales found for this date — nothing to backfill.',
+        });
+      }
+
+      const insertRes = await query(
+        `INSERT INTO daily_summary_salestbl (branch_id, summary_date, total_amount, payment_count, status, submitted_by, approved_by, approved_at)
+         VALUES ($1, $2, $3, $4, 'Submitted', $5, NULL, NULL)
+         RETURNING daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at`,
+        [userBranchId, requestedDate, snapshot.total, snapshot.paymentCount, userId]
+      );
+
+      await createDailySummarySubmissionNotification({
+        dailySummaryId: insertRes.rows[0]?.daily_summary_id,
+        branchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount: snapshot.total,
+        paymentCount: snapshot.paymentCount,
+        createdBy: userId,
+      });
+
+      await sendEodEmailNotifications({
+        submittedBranchId: userBranchId,
+        summaryDate: requestedDate,
+        totalAmount: snapshot.total,
+        paymentCount: snapshot.paymentCount,
+        submittedByUserId: userId,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'End of day backfilled and submitted for verification.',
+        data: insertRes.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/daily-summary-sales/check-today
+ * Check pending End-of-Shift dates for Admin branch (up to today, Manila).
+ */
+router.get(
+  '/check-today',
+  requireRole('Admin'),
+  async (req, res, next) => {
+    try {
+      const userBranchId = req.user.branchId;
+      if (!userBranchId) {
+        return res.json({
+          success: true,
+          data: { submitted: false, record: null, pending_dates: [], required_date: null },
+        });
+      }
+      const today = TODAY_MANILA();
+      const result = await query(
+        `SELECT daily_summary_id, branch_id, summary_date, total_amount, payment_count, status, submitted_at
+         FROM daily_summary_salestbl
+         WHERE branch_id = $1 AND summary_date = $2`,
+        [userBranchId, today]
+      );
+      const record = result.rows[0] || null;
+      const pendingDates = await getPendingEodDates(userBranchId, today);
+      const backfillDates = await getEodBackfillDates(query, userBranchId, today);
+      const requiredDate = pendingDates[0] || null;
+      res.json({
+        success: true,
+        data: {
+          submitted: pendingDates.length === 0 && backfillDates.length === 0,
+          record,
+          pending_dates: pendingDates,
+          backfill_dates: backfillDates,
+          required_date: requiredDate,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/daily-summary-sales/:id/payments
+ * Same rules as EOD submit snapshot: Completed payments (issue_date = summary date) + standalone AR receipts.
+ * Returns payments, ar_receipts, totals (sums match pies), and submitted_snapshot from the row for drift detection.
+ */
+router.get(
+  '/:id/payments',
+  [param('id').isInt().withMessage('id must be an integer')],
+  handleValidationErrors,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const userType = req.user.userType;
+      const userBranchId = req.user.branchId;
+
+      const summaryRes = await query(
+        `SELECT d.daily_summary_id, d.branch_id, d.summary_date,
+                TO_CHAR(d.summary_date, 'YYYY-MM-DD') AS summary_date_ymd,
+                d.total_amount, d.payment_count, d.status,
+                d.submitted_by, d.submitted_at, d.approved_by, d.approved_at, d.remarks,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+                sub.full_name AS submitted_by_name,
+                app.full_name AS approved_by_name
+         FROM daily_summary_salestbl d
+         LEFT JOIN branchestbl b ON d.branch_id = b.branch_id
+         LEFT JOIN userstbl sub ON d.submitted_by = sub.user_id
+         LEFT JOIN userstbl app ON d.approved_by = app.user_id
+         WHERE d.daily_summary_id = $1`,
+        [id]
+      );
+      if (summaryRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Daily summary not found' });
+      }
+      const summary = summaryRes.rows[0];
+      const branchId = summary.branch_id;
+      const summaryDate = String(summary.summary_date_ymd || summaryDateToYmd(summary.summary_date)).slice(0, 10);
+
+      if (userType === 'Admin' && userBranchId !== branchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only view payments for your branch',
+        });
+      }
+      if (userType === 'Finance' && userBranchId != null && userBranchId !== branchId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only view payments for your branch',
+        });
+      }
+
+      const snapshot = await getEodPaymentSnapshot({
+        branchId,
+        summaryDate,
+        submittedAfter: null,
+      });
+
+      const paymentsNormalized = (snapshot.payments || []).map((row) => ({
+        ...row,
+        program_level_tag: row.student_level_tag || row.program_level_tag || null,
+      }));
+
+      const ar_receipts = await getEodStandaloneArReceipts(branchId, summaryDate);
+
+      res.json({
+        success: true,
+        data: {
+          summary,
+          payments: paymentsNormalized,
+          ar_receipts,
+          totals: {
+            completed_total: snapshot.completedPaymentTotal,
+            ar_total: snapshot.arSalesTotal,
+            grand_total: snapshot.total,
+            completed_count: snapshot.completedPaymentCount,
+            ar_count: snapshot.arSalesCount,
+            grand_count: snapshot.paymentCount,
+          },
+          submitted_snapshot: {
+            total_amount: parseFloat(summary.total_amount) || 0,
+            payment_count: parseInt(summary.payment_count, 10) || 0,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+export default router;

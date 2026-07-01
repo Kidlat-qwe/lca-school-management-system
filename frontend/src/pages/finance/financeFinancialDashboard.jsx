@@ -1,0 +1,432 @@
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { apiRequest } from '../../config/api';
+import FinancialDashboardDateFilter from '../../components/dashboard/FinancialDashboardDateFilter';
+import { appAlert } from '../../utils/appAlert';
+import { firstDayOfMonthManilaYMD, formatDateManila, todayManilaYMD } from '../../utils/dateUtils';
+import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons';
+import { FINANCE_ROLE_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
+import { fetchArVerificationBucketTotals } from '../../utils/fetchArVerificationBucketTotals';
+
+const FinanceFinancialDashboard = () => {
+  const navigate = useNavigate();
+  const [metrics, setMetrics] = useState({
+    totalRevenue: 0,
+    completedPayments: 0,
+    verifiedPaymentsCount: 0,
+    verifiedPaymentsAmount: 0,
+    unverifiedPaymentsCount: 0,
+    unverifiedPaymentsAmount: 0,
+    arSalesCount: 0,
+    arSalesAmount: 0,
+    arVerifiedCount: 0,
+    arVerifiedAmount: 0,
+    arUnverifiedCount: 0,
+    arUnverifiedAmount: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [recentInvoices, setRecentInvoices] = useState([]);
+  const [recentPayments, setRecentPayments] = useState([]);
+  // Default the dashboard date range to "This Month" (Manila) so totals/recent lists
+  // surface the current cycle on first paint. Users can clear or change via the filter modal.
+  const defaultMonthFrom = firstDayOfMonthManilaYMD();
+  const defaultMonthTo = todayManilaYMD();
+  const [draftFrom, setDraftFrom] = useState(defaultMonthFrom);
+  const [draftTo, setDraftTo] = useState(defaultMonthTo);
+  const [issueDateFrom, setIssueDateFrom] = useState(defaultMonthFrom);
+  const [issueDateTo, setIssueDateTo] = useState(defaultMonthTo);
+
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      const invParams = new URLSearchParams();
+      if (issueDateFrom.trim()) invParams.set('issue_date_from', issueDateFrom.trim());
+      if (issueDateTo.trim()) invParams.set('issue_date_to', issueDateTo.trim());
+      const invoiceQuery = invParams.toString();
+      const invoiceUrl = invoiceQuery ? `/invoices?${invoiceQuery}` : '/invoices';
+
+      const metricsParams = new URLSearchParams();
+      if (issueDateFrom.trim()) {
+        metricsParams.set('payment_date_from', issueDateFrom.trim());
+      }
+      if (issueDateTo.trim()) {
+        metricsParams.set('payment_date_to', issueDateTo.trim());
+      }
+
+      const metricsQuery = metricsParams.toString();
+      const [invoicesResponse, payMetricsRes, arBuckets] = await Promise.all([
+        apiRequest(invoiceUrl),
+        apiRequest(
+          metricsQuery
+            ? `/payments/financial-dashboard-metrics?${metricsQuery}`
+            : '/payments/financial-dashboard-metrics'
+        ),
+        fetchArVerificationBucketTotals({
+          dateFrom: issueDateFrom,
+          dateTo: issueDateTo,
+        }),
+      ]);
+
+      const invoices = invoicesResponse.data || [];
+      const pm = payMetricsRes.data || {};
+
+      setMetrics({
+        totalRevenue: pm.totalRevenue ?? 0,
+        completedPayments: pm.completedPayments ?? 0,
+        verifiedPaymentsCount: pm.verifiedPaymentsCount ?? 0,
+        verifiedPaymentsAmount: pm.verifiedPaymentsAmount ?? 0,
+        unverifiedPaymentsCount: pm.unverifiedPaymentsCount ?? 0,
+        unverifiedPaymentsAmount: pm.unverifiedPaymentsAmount ?? 0,
+        arSalesCount: arBuckets.all.count,
+        arSalesAmount: arBuckets.all.amount,
+        arVerifiedCount: arBuckets.verified.count,
+        arVerifiedAmount: arBuckets.verified.amount,
+        arUnverifiedCount: arBuckets.unverified.count,
+        arUnverifiedAmount: arBuckets.unverified.amount,
+      });
+
+      const recentInvoicesList = invoices
+        .sort((a, b) => new Date(b.issue_date || 0) - new Date(a.issue_date || 0))
+        .slice(0, 2);
+      setRecentInvoices(recentInvoicesList);
+
+      const recentPaymentsList = (pm.recentPayments || []).slice(0, 2);
+      setRecentPayments(recentPaymentsList);
+    } catch (err) {
+      setError(err.message || 'Failed to load dashboard data');
+      console.error('Error fetching dashboard data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [issueDateFrom, issueDateTo]);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  const handleApplyFilter = () => {
+    if (draftFrom && draftTo && draftFrom > draftTo) {
+      appAlert('Start date must be on or before end date.');
+      return;
+    }
+    setIssueDateFrom(draftFrom.trim());
+    setIssueDateTo(draftTo.trim());
+  };
+
+  const handleClearFilter = () => {
+    setDraftFrom('');
+    setDraftTo('');
+    setIssueDateFrom('');
+    setIssueDateTo('');
+  };
+
+  const handleThisMonth = () => {
+    const from = firstDayOfMonthManilaYMD();
+    const to = todayManilaYMD();
+    setDraftFrom(from);
+    setDraftTo(to);
+    setIssueDateFrom(from);
+    setIssueDateTo(to);
+  };
+
+  const activeSummary =
+    issueDateFrom || issueDateTo
+      ? `Applied: ${issueDateFrom ? formatDateManila(issueDateFrom) : '…'} — ${
+          issueDateTo ? formatDateManila(issueDateTo) : '…'
+        } (invoice issue dates for counts; total revenue uses payment date in Manila, inclusive)`
+      : 'No date filter — totals include all invoices and payments.';
+
+  const formatCurrency = (amount) => {
+    if (!amount && amount !== 0) return '₱0.00';
+    return `₱${parseFloat(amount).toFixed(2)}`;
+  };
+
+  const formatDate = (dateString) => formatDateManila(dateString);
+  const openArByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('page', '1');
+    if (type === 'all') {
+      params.set('status', AR_STATUS_FILTER.ALL);
+    } else if (type === 'verified') {
+      params.set('status', AR_STATUS_FILTER.VERIFIED_APPLIED);
+    } else if (type === 'rejected') {
+      params.set('status', AR_STATUS_FILTER.REJECTED);
+    } else {
+      params.set('status', AR_STATUS_FILTER.UNVERIFIED);
+    }
+    if (issueDateFrom.trim() && issueDateTo.trim()) {
+      params.set('payment_date_from', issueDateFrom.trim());
+      params.set('payment_date_to', issueDateTo.trim());
+    }
+    navigate(`/finance/acknowledgement-receipts?${params.toString()}`);
+  };
+  const openPaymentLogsByVerification = (type) => {
+    const params = new URLSearchParams();
+    params.set('notificationTab', 'main');
+    params.set('financeApproval', type === 'verified' ? 'approved' : 'pending');
+    if (issueDateFrom.trim()) params.set('payment_date_from', issueDateFrom.trim());
+    if (issueDateTo.trim()) params.set('payment_date_to', issueDateTo.trim());
+    navigate(`/finance/payment-logs?${params.toString()}`);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full min-w-0 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Financial Dashboard</h1>
+          <p className="mt-2 text-sm text-gray-600">{FINANCE_ROLE_DASHBOARD.pageIntroBranch}</p>
+          {issueDateFrom || issueDateTo ? (
+            <p className="mt-2 text-xs text-primary-700 font-medium">
+              {activeSummary}
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-gray-500">{activeSummary}</p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <FinancialDashboardDateFilter
+            draftFrom={draftFrom}
+            draftTo={draftTo}
+            onDraftFromChange={setDraftFrom}
+            onDraftToChange={setDraftTo}
+            onApply={handleApplyFilter}
+            onClear={handleClearFilter}
+            onThisMonth={handleThisMonth}
+            activeSummary={activeSummary}
+            onPrepareOpen={() => {
+              setDraftFrom(issueDateFrom);
+              setDraftTo(issueDateTo);
+            }}
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Total Revenue</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {formatCurrency(metrics.totalRevenue)}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">{FINANCE_ROLE_DASHBOARD.totalRevenue}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Completed Payments</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {metrics.completedPayments}
+              </p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
+              <svg className="h-6 w-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Acknowledgement Receipt Sales</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{formatCurrency(metrics.arSalesAmount)}</p>
+              <p className="mt-1 text-xs text-gray-500">{FINANCE_ROLE_DASHBOARD.arSales(metrics.arSalesCount)}</p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-violet-100 flex items-center justify-center">
+              <DashboardStatIcon name="clipboardList" className="h-6 w-6 text-violet-600" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <button
+          type="button"
+          onClick={() => openPaymentLogsByVerification('verified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Verified Payments</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.verifiedPaymentsCount}</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {FINANCE_ROLE_DASHBOARD.verifiedPayments(formatCurrency(metrics.verifiedPaymentsAmount))}
+              </p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-teal-100 flex items-center justify-center">
+              <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-teal-600" />
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => openPaymentLogsByVerification('unverified')}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Unverified Payments</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.unverifiedPaymentsCount}</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {FINANCE_ROLE_DASHBOARD.unverifiedPayments(formatCurrency(metrics.unverifiedPaymentsAmount))}
+              </p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+              <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
+            </div>
+          </div>
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Acknowledgement Receipt verification</h2>
+          <p className="mt-1 text-sm text-gray-500">{FINANCE_ROLE_DASHBOARD.arVerificationIntro}</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <button
+            type="button"
+            onClick={() => openArByVerification('verified')}
+            className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Verified (Applied)</p>
+                <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.arVerifiedCount}</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {FINANCE_ROLE_DASHBOARD.verifiedAr(formatCurrency(metrics.arVerifiedAmount))}
+                </p>
+              </div>
+              <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+                <DashboardStatIcon name="shieldCheck" className="h-6 w-6 text-emerald-600" />
+              </div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => openArByVerification('unverified')}
+            className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Unverified Acknowledgement Receipt</p>
+                <p className="mt-2 text-2xl font-bold text-gray-900">{metrics.arUnverifiedCount}</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {FINANCE_ROLE_DASHBOARD.unverifiedAr(formatCurrency(metrics.arUnverifiedAmount))}
+                </p>
+              </div>
+              <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+                <DashboardStatIcon name="clock" className="h-6 w-6 text-amber-600" />
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">Recent Invoices</h2>
+            <p className="text-xs text-gray-500 mt-0.5">{FINANCE_ROLE_DASHBOARD.recentInvoices}</p>
+          </div>
+          <div className="p-6">
+            {recentInvoices.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-4">No recent invoices</p>
+            ) : (
+              <div className="space-y-4">
+                {recentInvoices.map((invoice) => (
+                  <div
+                    key={invoice.invoice_id}
+                    className="flex items-center justify-between pb-4 border-b border-gray-100 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">INV-{invoice.invoice_id}</p>
+                      <p className="text-xs text-gray-500 mt-1 truncate">{invoice.invoice_description || '-'}</p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDate(invoice.issue_date)}</p>
+                    </div>
+                    <div className="ml-4 text-right">
+                      <p className="text-sm font-semibold text-gray-900">{formatCurrency(invoice.amount)}</p>
+                      <span
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium mt-1 ${
+                          invoice.status === 'Paid'
+                            ? 'bg-green-100 text-green-800'
+                            : invoice.status === 'Unpaid'
+                              ? 'bg-red-100 text-red-800'
+                              : invoice.status === 'Partial'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        {invoice.status || 'Draft'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">Recent Payments</h2>
+            <p className="text-xs text-gray-500 mt-0.5">{FINANCE_ROLE_DASHBOARD.recentPayments}</p>
+          </div>
+          <div className="p-6">
+            {recentPayments.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-4">No recent payments</p>
+            ) : (
+              <div className="space-y-4">
+                {recentPayments.map((payment) => (
+                  <div
+                    key={payment.payment_id}
+                    className="flex items-center justify-between pb-4 border-b border-gray-100 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{payment.student_name || 'N/A'}</p>
+                      <p className="text-xs text-gray-500 mt-1 truncate">
+                        INV-{payment.invoice_id} • {payment.payment_method || '-'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDate(payment.issue_date)}</p>
+                    </div>
+                    <div className="ml-4 text-right">
+                      <p className="text-sm font-semibold text-green-600">{formatCurrency((parseFloat(payment.payable_amount) || 0) + (parseFloat(payment.tip_amount) || 0))}</p>
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium mt-1 bg-green-100 text-green-800">
+                        {payment.status || 'Completed'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default FinanceFinancialDashboard;

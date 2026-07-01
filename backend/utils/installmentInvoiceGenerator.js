@@ -1,0 +1,803 @@
+import { query, getClient } from '../config/database.js';
+import { insertInvoiceWithArNumberReuseOrAllocate } from './invoiceArNumber.js';
+import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila, coerceToManilaYmd } from './dateUtils.js';
+import { parseTargetPhase, getCanonicalInstallmentPhaseCounts } from './balanceInvoice.js';
+import {
+  buildPhaseInstallmentSchedule,
+  getPhaseDueDateYmd,
+  isPhaseInstallmentProfile,
+  resolveProfilePhaseStart,
+  shouldCatchUpRecurringOnFirstPhasePayment,
+} from './phaseInstallmentUtils.js';
+import { syncProgramPaymentStatusForInvoice } from './programPaymentStatusService.js';
+import { syncInstallmentGeneratedCountToNextUnbilled } from './installmentPhaseBillingSync.js';
+
+/**
+ * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
+ * @param {string} frequency - Frequency string
+ * @returns {number} Number of months
+ */
+export const parseFrequency = (frequency) => {
+  if (!frequency) return 1;
+  
+  const match = frequency.match(/(\d+)\s*month/i);
+  if (match) {
+    return parseInt(match[1], 10);
+  }
+  
+  // Default to 1 month if parsing fails
+  return 1;
+};
+
+/**
+ * Calculate next generation date based on current date and frequency
+ * @param {Date|string} currentDate - Current generation date
+ * @param {string} frequency - Frequency string (e.g., "1 month(s)")
+ * @returns {Date} Next generation date
+ */
+export const calculateNextGenerationDate = (currentDate, frequency) => {
+  const date = new Date(currentDate);
+  const months = parseFrequency(frequency);
+
+  // Enforce fixed monthly generation cadence: every 25th.
+  date.setDate(25);
+  // Add months to the date
+  date.setMonth(date.getMonth() + months);
+
+  return date;
+};
+
+/**
+ * Calculate next invoice month (first day of the next billing month)
+ * @param {Date|string} currentInvoiceMonth - Current invoice month
+ * @param {string} frequency - Frequency string
+ * @returns {Date} Next invoice month (first day of the month)
+ */
+export const calculateNextInvoiceMonth = (currentInvoiceMonth, frequency) => {
+  const date = new Date(currentInvoiceMonth);
+  const months = parseFrequency(frequency);
+  
+  // Set to first day of the month
+  date.setDate(1);
+  // Add months
+  date.setMonth(date.getMonth() + months);
+  
+  return date;
+};
+
+/**
+ * Build fixed installment cycle dates from a generation anchor date.
+ * Rule:
+ * - Generation/issue date: 25th of the current cycle month
+ * - Invoice month: 1st of the next month
+ * - Due date: 5th of the next month
+ */
+const buildFixedInstallmentCycleDates = (generationAnchor, frequency) => {
+  const months = parseFrequency(frequency);
+  const issueDate = new Date(generationAnchor);
+  issueDate.setDate(25);
+
+  const invoiceMonth = new Date(issueDate);
+  invoiceMonth.setDate(1);
+  invoiceMonth.setMonth(invoiceMonth.getMonth() + 1);
+
+  const dueDate = new Date(invoiceMonth);
+  dueDate.setDate(5);
+
+  const nextGenerationDate = new Date(issueDate);
+  nextGenerationDate.setMonth(nextGenerationDate.getMonth() + months);
+  nextGenerationDate.setDate(25);
+
+  const nextInvoiceMonth = new Date(invoiceMonth);
+  nextInvoiceMonth.setDate(1);
+  nextInvoiceMonth.setMonth(nextInvoiceMonth.getMonth() + months);
+
+  return {
+    issueDate,
+    dueDate,
+    invoiceMonth,
+    nextGenerationDate,
+    nextInvoiceMonth,
+  };
+};
+
+/**
+ * Generate invoice from installment invoice
+ * @param {Object} installmentInvoice - Installment invoice record from installmentinvoicestbl
+ * @param {Object} profile - Installment invoice profile from installmentinvoiceprofilestbl
+ * @param {{ reuseInvoiceArNumber?: string, ack_receipt_id?: number, enrollmentInvoiceIssueYmd?: string }|null} enrollmentAckReuse - Prepaid AR reuse options; optional `enrollmentInvoiceIssueYmd` (YYYY-MM-DD) sets the first auto-generated invoice's issue_date to the enrollment day (local).
+ * @returns {Object} Created invoice data
+ */
+export const generateInvoiceFromInstallment = async (
+  installmentInvoice,
+  profile,
+  enrollmentAckReuse = null
+) => {
+  const client = await getClient();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // Get student information
+    const studentResult = await client.query(
+      'SELECT user_id, full_name, email FROM userstbl WHERE user_id = $1',
+      [profile.student_id]
+    );
+    
+    if (studentResult.rows.length === 0) {
+      throw new Error(`Student with ID ${profile.student_id} not found`);
+    }
+    
+    const student = studentResult.rows[0];
+
+    const syncResult = await syncInstallmentGeneratedCountToNextUnbilled(
+      client,
+      installmentInvoice.installmentinvoiceprofiles_id
+    );
+    if (syncResult?.generated_count != null) {
+      profile.generated_count = syncResult.generated_count;
+    }
+
+    // Get promo info from profile if available
+    const profilePromoResult = await client.query(
+      `SELECT promo_id, promo_apply_scope, promo_months_to_apply, promo_months_applied 
+       FROM installmentinvoiceprofilestbl 
+       WHERE installmentinvoiceprofiles_id = $1`,
+      [installmentInvoice.installmentinvoiceprofiles_id]
+    );
+    
+    const profilePromo = profilePromoResult.rows[0] || {};
+    const promoId = profilePromo.promo_id;
+    const promoApplyScope = profilePromo.promo_apply_scope;
+    const promoMonthsToApply = profilePromo.promo_months_to_apply;
+    const promoMonthsApplied = profilePromo.promo_months_applied || 0;
+    
+    // Check if promo should be applied to this monthly invoice
+    const shouldApplyPromoToMonthly = promoId && 
+      promoApplyScope && 
+      (promoApplyScope === 'monthly' || promoApplyScope === 'both') &&
+      promoMonthsToApply !== null &&
+      promoMonthsApplied < promoMonthsToApply;
+    
+    let promoDiscount = 0;
+    let promoData = null;
+    let promoMerchandise = [];
+    
+    if (shouldApplyPromoToMonthly) {
+      // Fetch promo details (including promo type to handle free_merchandise)
+      const promoResult = await client.query(
+        `SELECT promo_id, promo_name, promo_type, discount_percentage, discount_amount 
+         FROM promostbl 
+         WHERE promo_id = $1 AND status = 'Active'`,
+        [promoId]
+      );
+      
+      if (promoResult.rows.length > 0) {
+        promoData = promoResult.rows[0];
+        const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
+        
+        // Calculate discount based on promo type (only for discount types)
+        if (promoData.promo_type === 'percentage_discount' && promoData.discount_percentage) {
+          promoDiscount = (baseAmount * parseFloat(promoData.discount_percentage)) / 100;
+        } else if (promoData.promo_type === 'fixed_discount' && promoData.discount_amount) {
+          const fixed = parseFloat(promoData.discount_amount);
+          promoDiscount = Math.min(fixed, baseAmount);
+        } else if (promoData.promo_type === 'combined') {
+          // Combined can have discount + merchandise
+          if (promoData.discount_percentage && parseFloat(promoData.discount_percentage) > 0) {
+            promoDiscount = (baseAmount * parseFloat(promoData.discount_percentage)) / 100;
+          } else if (promoData.discount_amount && parseFloat(promoData.discount_amount) > 0) {
+            const fixed = parseFloat(promoData.discount_amount);
+            promoDiscount = Math.min(fixed, baseAmount);
+          }
+        }
+        // Note: free_merchandise type doesn't have discount, only merchandise items
+        
+        // Fetch free merchandise items for this promo (for free_merchandise and combined types)
+        if (promoData.promo_type === 'free_merchandise' || promoData.promo_type === 'combined') {
+          const merchResult = await client.query(
+            `SELECT pm.*, m.merchandise_name, m.price
+             FROM promomerchandisetbl pm
+             LEFT JOIN merchandisestbl m ON pm.merchandise_id = m.merchandise_id
+             WHERE pm.promo_id = $1`,
+            [promoId]
+          );
+          promoMerchandise = merchResult.rows || [];
+        }
+      }
+    }
+    
+    const profileGeneratedCount = parseInt(profile.generated_count, 10) || 0;
+    const rawEnrollmentIssue = enrollmentAckReuse?.enrollmentInvoiceIssueYmd;
+    const explicitEnrollmentIssueYmd =
+      rawEnrollmentIssue != null && String(rawEnrollmentIssue).trim() !== ''
+        ? String(rawEnrollmentIssue).trim().slice(0, 10)
+        : '';
+    const hasExplicitEnrollmentIssue = /^\d{4}-\d{2}-\d{2}$/.test(explicitEnrollmentIssueYmd);
+    let enrollmentIssueForFirst = hasExplicitEnrollmentIssue ? explicitEnrollmentIssueYmd : null;
+    // First phase after downpayment: issue on generation day (e.g. payment date), not phase due date.
+    if (
+      !enrollmentIssueForFirst &&
+      profileGeneratedCount === 0 &&
+      isPhaseInstallmentProfile(profile)
+    ) {
+      enrollmentIssueForFirst = todayYmdManila();
+    }
+
+    const frequency = installmentInvoice.frequency || profile.frequency || '1 month(s)';
+    const frequencyMonths = parseFrequency(frequency);
+    const generationAnchorYmd = coerceToManilaYmd(installmentInvoice.next_generation_date, {
+      fallbackToToday: false,
+    });
+
+    const phaseSchedule = isPhaseInstallmentProfile(profile)
+      ? await buildPhaseInstallmentSchedule({
+          db: client,
+          profile: {
+            ...profile,
+            next_generation_date: generationAnchorYmd || profile.next_generation_date,
+          },
+          generatedCountOverride: profile.generated_count || 0,
+          issueDateOverride: enrollmentIssueForFirst,
+          generationAnchorYmd,
+          frequencyMonths,
+        })
+      : null;
+
+    // Fixed cadence for non-phase auto-generated installment invoices (25th anchor).
+    const generationAnchor = generationAnchorYmd
+      ? parseYmdToLocalNoon(generationAnchorYmd)
+      : typeof installmentInvoice.next_generation_date === 'string'
+        ? parseYmdToLocalNoon(installmentInvoice.next_generation_date)
+        : new Date(installmentInvoice.next_generation_date || new Date());
+    const cycle = buildFixedInstallmentCycleDates(generationAnchor, frequency);
+    let issueDate = cycle.issueDate;
+    let dueDate = cycle.dueDate;
+
+    if (phaseSchedule?.current_issue_date && phaseSchedule?.current_due_date) {
+      const pi = parseYmdToLocalNoon(phaseSchedule.current_issue_date);
+      const pd = parseYmdToLocalNoon(phaseSchedule.current_due_date);
+      if (pi && pd) {
+        issueDate = pi;
+        dueDate = pd;
+      }
+    } else if (enrollmentIssueForFirst) {
+      const e = parseYmdToLocalNoon(enrollmentIssueForFirst);
+      if (e) issueDate = e;
+    }
+
+    // Explicit payment/enrollment issue date always wins over schedule defaults (due date cap).
+    if (enrollmentIssueForFirst) {
+      const explicitIssue = parseYmdToLocalNoon(enrollmentIssueForFirst);
+      if (explicitIssue) issueDate = explicitIssue;
+    }
+    
+    // Calculate final invoice amount after promo discount
+    const baseAmount = installmentInvoice.total_amount_including_tax || profile.amount;
+    const finalInvoiceAmount = Math.max(0, baseAmount - promoDiscount);
+    
+    const reuseAr =
+      enrollmentAckReuse?.reuseInvoiceArNumber != null &&
+      String(enrollmentAckReuse.reuseInvoiceArNumber).trim() !== ''
+        ? String(enrollmentAckReuse.reuseInvoiceArNumber).trim()
+        : null;
+    const ackReceiptIdCol =
+      enrollmentAckReuse?.ack_receipt_id != null && Number.isInteger(Number(enrollmentAckReuse.ack_receipt_id))
+        ? Number(enrollmentAckReuse.ack_receipt_id)
+        : null;
+
+    // Create invoice (link to installment invoice profile for phase tracking)
+    const newInvoice = await insertInvoiceWithArNumberReuseOrAllocate(
+      client,
+      `INSERT INTO invoicestbl (invoice_description, branch_id, amount, status, remarks, issue_date, due_date, created_by, installmentinvoiceprofiles_id, promo_id, ack_receipt_id, invoice_ar_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        'TEMP', // Temporary, will be updated
+        profile.branch_id || null,
+        finalInvoiceAmount, // Use discounted amount
+        'Unpaid',
+        `Auto-generated from installment invoice: ${profile.description || 'Installment payment'}${
+          phaseSchedule?.current_phase_number ? `;TARGET_PHASE:${phaseSchedule.current_phase_number}` : ''
+        }`,
+        formatYmdLocal(issueDate),
+        formatYmdLocal(dueDate),
+        null, // System-generated
+        installmentInvoice.installmentinvoiceprofiles_id, // Link to installment profile for phase tracking
+        shouldApplyPromoToMonthly ? promoId : null, // Link promo if discount applied
+        ackReceiptIdCol,
+      ],
+      reuseAr
+    );
+    
+    // Update invoice description
+    await client.query(
+      'UPDATE invoicestbl SET invoice_description = $1 WHERE invoice_id = $2',
+      [`INV-${newInvoice.invoice_id}`, newInvoice.invoice_id]
+    );
+    
+    // Create invoice item
+    await client.query(
+      `INSERT INTO invoiceitemstbl (invoice_id, description, amount, tax_item, tax_percentage)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        newInvoice.invoice_id,
+        profile.description || `Installment payment - ${installmentInvoice.frequency || 'Monthly'}`,
+        installmentInvoice.total_amount_excluding_tax || profile.amount,
+        null,
+        installmentInvoice.total_amount_including_tax && installmentInvoice.total_amount_excluding_tax
+          ? ((installmentInvoice.total_amount_including_tax - installmentInvoice.total_amount_excluding_tax) / installmentInvoice.total_amount_excluding_tax * 100)
+          : null,
+      ]
+    );
+    
+    // Apply promo to monthly invoice (discount and/or free merchandise)
+    if (shouldApplyPromoToMonthly && promoData) {
+      // Add discount item if discount was applied
+      if (promoDiscount > 0) {
+        let discountDescription = `Promo: ${promoData.promo_name} (`;
+        if (promoData.promo_type === 'percentage_discount' && promoData.discount_percentage) {
+          discountDescription += `${promoData.discount_percentage}%`;
+        } else if (promoData.promo_type === 'fixed_discount' && promoData.discount_amount) {
+          discountDescription += `PHP ${parseFloat(promoData.discount_amount).toFixed(2)}`;
+        } else if (promoData.promo_type === 'combined') {
+          if (promoData.discount_percentage && parseFloat(promoData.discount_percentage) > 0) {
+            discountDescription += `${promoData.discount_percentage}%`;
+          } else if (promoData.discount_amount && parseFloat(promoData.discount_amount) > 0) {
+            discountDescription += `PHP ${parseFloat(promoData.discount_amount).toFixed(2)}`;
+          }
+        }
+        discountDescription += ' — applied to monthly installment)';
+        
+        await client.query(
+          `INSERT INTO invoiceitemstbl (invoice_id, description, amount, discount_amount)
+           VALUES ($1, $2, $3, $4)`,
+          [newInvoice.invoice_id, discountDescription, 0, promoDiscount]
+        );
+      }
+      
+      // Add free merchandise items if promo includes merchandise (for free_merchandise or combined types)
+      if (promoMerchandise.length > 0) {
+        for (const promoMerch of promoMerchandise) {
+          for (let i = 0; i < (promoMerch.quantity || 1); i++) {
+            await client.query(
+              `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+               VALUES ($1, $2, $3)`,
+              [newInvoice.invoice_id, `Free: ${promoMerch.merchandise_name} (Promo: ${promoData.promo_name})`, 0]
+            );
+          }
+        }
+      }
+      
+      // Increment promo_months_applied counter (transactionally) - only if promo was actually applied
+      // This applies whether it's discount, merchandise, or both
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl 
+         SET promo_months_applied = COALESCE(promo_months_applied, 0) + 1 
+         WHERE installmentinvoiceprofiles_id = $1`,
+        [installmentInvoice.installmentinvoiceprofiles_id]
+      );
+    }
+    
+    // Link student to invoice
+    await client.query(
+      'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
+      [newInvoice.invoice_id, profile.student_id]
+    );
+    await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
+    
+    // Default: fixed monthly cadence (25th generation / 5th due). Phase packages override below.
+    let nextGenDate = cycle.nextGenerationDate;
+    let nextInvoiceMonth = cycle.nextInvoiceMonth;
+    
+    // Check phase limit before generating
+    const profileCheck = await client.query(
+      'SELECT total_phases, generated_count, downpayment_invoice_id, phase_start FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1',
+      [installmentInvoice.installmentinvoiceprofiles_id]
+    );
+    
+    if (profileCheck.rows.length === 0) {
+      throw new Error('Installment invoice profile not found');
+    }
+    
+    const profileData = profileCheck.rows[0];
+    const totalPhases = profileData.total_phases;
+    const currentCount = profileData.generated_count || 0;
+    const maxInvoices = totalPhases !== null ? totalPhases : null; // Max invoices = total_phases (downpayment doesn't count)
+    
+    const { paidPhaseCount: paidPhases } = await getCanonicalInstallmentPhaseCounts(
+      client,
+      profileData.installmentinvoiceprofiles_id,
+      profileData.downpayment_invoice_id || null
+    );
+    
+    // Debug logging
+    console.log('[Generator] Paid invoices count:', paidPhases);
+    console.log('[Generator] Total phases:', totalPhases);
+    console.log('[Generator] Downpayment invoice ID:', profileData.downpayment_invoice_id);
+    
+    // Check if all phases are already paid (not just generated)
+    // If paid_phases < total_phases, we can still generate invoices
+    // This is the key check: allow generation based on paid status, not generated count
+    if (totalPhases !== null && paidPhases >= totalPhases) {
+      throw new Error(`All phases are already paid (${paidPhases}/${totalPhases}). Downpayment is not counted as a phase. Cannot generate more invoices.`);
+    }
+    
+    // Increment generated count
+    const newCount = currentCount + 1;
+    await client.query(
+      'UPDATE installmentinvoiceprofilestbl SET generated_count = $1 WHERE installmentinvoiceprofiles_id = $2',
+      [newCount, installmentInvoice.installmentinvoiceprofiles_id]
+    );
+    
+    // Check if this was the last invoice (reached phase limit)
+    const nextPhaseSchedule = isPhaseInstallmentProfile({
+      ...profile,
+      ...profileData,
+      phase_start: profile.phase_start ?? profileData.phase_start,
+    })
+      ? await buildPhaseInstallmentSchedule({
+          db: client,
+          profile: {
+            ...profile,
+            ...profileData,
+            phase_start: profile.phase_start ?? profileData.phase_start,
+          },
+          generatedCountOverride: newCount,
+        })
+      : null;
+
+    const justGeneratedFirstPhase = profileGeneratedCount === 0;
+    const queueSchedule =
+      justGeneratedFirstPhase && phaseSchedule?.next_generation_date
+        ? phaseSchedule
+        : nextPhaseSchedule;
+
+    const isLastInvoice = queueSchedule
+      ? queueSchedule.is_last_phase
+      : (maxInvoices !== null && newCount >= maxInvoices);
+
+    // Phase installments: queue row = next cycle to auto-generate (current_* on post-increment schedule).
+    if (queueSchedule && !queueSchedule.is_last_phase) {
+      const nextGenYmd = justGeneratedFirstPhase
+        ? queueSchedule.next_generation_date
+        : queueSchedule.current_generation_date;
+      const nextMonthYmd = justGeneratedFirstPhase
+        ? queueSchedule.next_invoice_month
+        : queueSchedule.current_invoice_month;
+
+      if (nextGenYmd) {
+        const ng = parseYmdToLocalNoon(nextGenYmd);
+        if (ng) nextGenDate = ng;
+      }
+      if (nextMonthYmd) {
+        const nim = parseYmdToLocalNoon(nextMonthYmd);
+        if (nim) nextInvoiceMonth = nim;
+      }
+    }
+    
+    if (isLastInvoice) {
+      // Last invoice - mark profile as inactive and update installment invoice status
+      await client.query(
+        'UPDATE installmentinvoiceprofilestbl SET is_active = false WHERE installmentinvoiceprofiles_id = $1',
+        [installmentInvoice.installmentinvoiceprofiles_id]
+      );
+      
+      await client.query(
+        `UPDATE installmentinvoicestbl 
+         SET status = 'Generated', scheduled_date = $1
+         WHERE installmentinvoicedtl_id = $2`,
+        [
+          todayYmdManila(),
+          installmentInvoice.installmentinvoicedtl_id,
+        ]
+      );
+    } else {
+      // Not last invoice - persist the generated cycle as the row baseline.
+      await client.query(
+        `UPDATE installmentinvoicestbl 
+         SET status = NULL, next_generation_date = $1, next_invoice_month = $2, scheduled_date = $3
+         WHERE installmentinvoicedtl_id = $4`,
+        [
+          formatYmdLocal(nextGenDate),
+          formatYmdLocal(nextInvoiceMonth),
+          todayYmdManila(), // Update scheduled_date to today (Philippines business calendar)
+          installmentInvoice.installmentinvoicedtl_id,
+        ]
+      );
+    }
+    
+    await client.query('COMMIT');
+    
+    // Get updated profile data
+    const updatedProfile = await client.query(
+      'SELECT generated_count, total_phases, is_active FROM installmentinvoiceprofilestbl WHERE installmentinvoiceprofiles_id = $1',
+      [installmentInvoice.installmentinvoiceprofiles_id]
+    );
+    
+    return {
+      invoice_id: newInvoice.invoice_id,
+      invoice_description: `INV-${newInvoice.invoice_id}`,
+      student_name: student.full_name,
+      amount: finalInvoiceAmount, // Return discounted amount
+      original_amount: baseAmount, // Original amount before discount
+      promo_discount: promoDiscount, // Discount applied
+      next_generation_date: isLastInvoice ? null : formatYmdLocal(nextGenDate),
+      next_invoice_month: isLastInvoice ? null : formatYmdLocal(nextInvoiceMonth),
+      generated_count: updatedProfile.rows[0]?.generated_count || newCount,
+      total_phases: updatedProfile.rows[0]?.total_phases || totalPhases,
+      phase_limit_reached: isLastInvoice,
+      current_phase_number: phaseSchedule?.current_phase_number || null,
+      current_due_date: phaseSchedule?.current_due_date || formatYmdLocal(dueDate),
+      next_phase_number: queueSchedule?.next_phase_number ?? nextPhaseSchedule?.current_phase_number ?? null,
+      next_due_date: queueSchedule?.next_due_date ?? nextPhaseSchedule?.current_due_date ?? null,
+      next_generation_date: isLastInvoice
+        ? null
+        : formatYmdLocal(nextGenDate),
+      next_invoice_month: isLastInvoice
+        ? null
+        : formatYmdLocal(nextInvoiceMonth),
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Process all due installment invoices
+ * 
+ * This function:
+ * 1. Finds all active installment invoices where next_generation_date <= today
+ * 2. For each due invoice:
+ *    - Creates an actual invoice in invoicestbl
+ *    - Creates invoice items and links student
+ *    - Updates the installment invoice record with next generation date and invoice month
+ *    - Resets status to NULL so it can be processed again in the next cycle
+ * 
+ * The next generation date is calculated by adding the frequency (e.g., "1 month(s)") 
+ * to the current next_generation_date.
+ * 
+ * @returns {Object} Summary of processed invoices with details
+ */
+export const processDueInstallmentInvoices = async () => {
+  const todayStr = todayYmdManila();
+  
+  try {
+    // Find all active installment invoices where next_generation_date <= today
+    // and status is not 'Generated' (or is null/empty)
+    // Only process invoices that haven't been generated yet
+    // Check that generated_count < total_phases (phase limit not reached)
+    // Only process if downpayment is paid (or no downpayment required)
+    const result = await query(
+      `SELECT ii.*, ip.student_id, ip.branch_id, ip.package_id, ip.amount as profile_amount, 
+              ip.frequency as profile_frequency, ip.description, ip.is_active,
+              ip.class_id, ip.total_phases, ip.generated_count, ip.phase_start,
+              ip.downpayment_paid, ip.downpayment_invoice_id
+       FROM installmentinvoicestbl ii
+       JOIN installmentinvoiceprofilestbl ip ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+       WHERE ii.next_generation_date <= $1
+         AND (ii.status IS NULL OR ii.status = '' OR ii.status != 'Generated')
+         AND ip.is_active = true
+         AND (ip.total_phases IS NULL OR ip.generated_count < ip.total_phases)
+         AND (ip.downpayment_invoice_id IS NULL OR ip.downpayment_paid = true)
+       ORDER BY ii.next_generation_date ASC`,
+      [todayStr]
+    );
+    
+    const dueInvoices = result.rows;
+    const processed = [];
+    const errors = [];
+    
+    for (const installmentInvoice of dueInvoices) {
+      try {
+        const phaseProfile = isPhaseInstallmentProfile({
+          class_id: installmentInvoice.class_id,
+          phase_start: installmentInvoice.phase_start,
+        });
+        if (phaseProfile) {
+          const phaseSched = await buildPhaseInstallmentSchedule({
+            db: { query },
+            profile: {
+              class_id: installmentInvoice.class_id,
+              phase_start: installmentInvoice.phase_start,
+              total_phases: installmentInvoice.total_phases,
+              generated_count: installmentInvoice.generated_count || 0,
+            },
+            generatedCountOverride: installmentInvoice.generated_count || 0,
+          });
+          const genYmd = phaseSched?.current_generation_date;
+          if (genYmd && String(genYmd).slice(0, 10) > todayStr) {
+            console.log(
+              `[Generator] Skip profile ${installmentInvoice.installmentinvoiceprofiles_id}: phase ${phaseSched.current_phase_number} generation ${genYmd} is after today`
+            );
+            continue;
+          }
+        }
+
+        const invoiceData = await generateInvoiceFromInstallment(installmentInvoice, {
+          student_id: installmentInvoice.student_id,
+          branch_id: installmentInvoice.branch_id,
+          package_id: installmentInvoice.package_id,
+          amount: installmentInvoice.profile_amount,
+          frequency: installmentInvoice.profile_frequency || installmentInvoice.frequency,
+          description: installmentInvoice.description,
+          generated_count: installmentInvoice.generated_count || 0,
+          class_id: installmentInvoice.class_id,
+          total_phases: installmentInvoice.total_phases,
+          phase_start: installmentInvoice.phase_start,
+        });
+
+        try {
+          const { sendMonthlyInvoiceGeneratedNotice } = await import(
+            './monthlyInvoiceNoticeEmailService.js'
+          );
+          const emailResult = await sendMonthlyInvoiceGeneratedNotice({
+            invoiceId: invoiceData.invoice_id,
+          });
+          if (emailResult?.sent > 0) {
+            console.log(
+              `[Generator] Monthly invoice notice sent for invoice_id=${invoiceData.invoice_id} (${emailResult.sent} recipient group(s))`
+            );
+          } else if (emailResult?.skipped) {
+            console.log(
+              `[Generator] Monthly invoice notice skipped for invoice_id=${invoiceData.invoice_id}: ${emailResult.reason || 'unknown'}`
+            );
+          }
+        } catch (emailErr) {
+          console.error(
+            `[Generator] Monthly invoice notice email failed for invoice_id=${invoiceData.invoice_id}:`,
+            emailErr?.message || emailErr
+          );
+        }
+
+        processed.push(invoiceData);
+      } catch (error) {
+        console.error(`Error processing installment invoice ${installmentInvoice.installmentinvoicedtl_id}:`, error);
+        errors.push({
+          installment_invoice_id: installmentInvoice.installmentinvoicedtl_id,
+          student_id: installmentInvoice.student_id,
+          error: error.message,
+        });
+      }
+    }
+    
+    return {
+      total_due: dueInvoices.length,
+      processed: processed.length,
+      errors: errors.length,
+      details: {
+        processed,
+        errors,
+      },
+    };
+  } catch (error) {
+    console.error('Error processing due installment invoices:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mid-enrollment catch-up: when the first phase is paid on/after the missed 25th
+ * in the same month, immediately generate the next recurring phase invoice.
+ */
+export async function tryGenerateCatchUpInstallmentAfterFirstPhasePayment({
+  profileId,
+  paidInvoiceId,
+  paymentIssueDateYmd,
+}) {
+  const profileRes = await query(
+    `SELECT ip.*, ii.installmentinvoicedtl_id, ii.next_generation_date, ii.next_invoice_month
+     FROM installmentinvoiceprofilestbl ip
+     LEFT JOIN installmentinvoicestbl ii
+       ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+     WHERE ip.installmentinvoiceprofiles_id = $1`,
+    [profileId]
+  );
+
+  if (!profileRes.rows.length) {
+    return { skipped: true, reason: 'profile not found' };
+  }
+
+  const profile = profileRes.rows[0];
+  if (!isPhaseInstallmentProfile(profile)) {
+    return { skipped: true, reason: 'not class-linked' };
+  }
+  if ((profile.generated_count || 0) !== 1) {
+    return { skipped: true, reason: 'not first phase slot' };
+  }
+
+  const invRes = await query(
+    `SELECT invoice_id,
+            TO_CHAR(issue_date, 'YYYY-MM-DD') AS issue_date,
+            TO_CHAR(due_date, 'YYYY-MM-DD') AS due_date,
+            remarks
+     FROM invoicestbl
+     WHERE invoice_id = $1`,
+    [paidInvoiceId]
+  );
+  const paidInv = invRes.rows[0];
+  if (!paidInv) {
+    return { skipped: true, reason: 'invoice not found' };
+  }
+
+  const phaseStartNum = resolveProfilePhaseStart(profile);
+  const phaseStartRes = await query(
+    `SELECT MIN(scheduled_date)::text AS phase_start
+     FROM classsessionstbl
+     WHERE class_id = $1 AND phase_number = $2`,
+    [profile.class_id, phaseStartNum]
+  );
+  const firstPhaseStartYmd = phaseStartRes.rows[0]?.phase_start
+    ? String(phaseStartRes.rows[0].phase_start).slice(0, 10)
+    : null;
+
+  const phaseStart = phaseStartNum;
+  const targetPhase = parseTargetPhase(paidInv.remarks);
+  if (targetPhase == null || targetPhase !== phaseStart) {
+    return { skipped: true, reason: 'not first enrolled phase invoice' };
+  }
+
+  const schedGen = coerceToManilaYmd(profile.next_generation_date, { fallbackToToday: false });
+  const payYmd = coerceToManilaYmd(paymentIssueDateYmd, { fallbackToToday: true });
+
+  if (
+    !shouldCatchUpRecurringOnFirstPhasePayment({
+      firstPhaseIssueYmd: paidInv.issue_date,
+      firstPhaseDueYmd: paidInv.due_date,
+      firstPhaseStartYmd,
+      paymentYmd: payYmd,
+      scheduledGenerationYmd: schedGen,
+    })
+  ) {
+    return { skipped: true, reason: 'catch-up not required' };
+  }
+
+  const nextPhase = phaseStart + 1;
+  const existingNext = await query(
+    `SELECT invoice_id
+     FROM invoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+       AND remarks ILIKE $2
+     LIMIT 1`,
+    [profileId, `%TARGET_PHASE:${nextPhase}%`]
+  );
+  if (existingNext.rows.length > 0) {
+    return { skipped: true, reason: 'next phase already generated' };
+  }
+
+  const iiRes = await query(
+    `SELECT *
+     FROM installmentinvoicestbl
+     WHERE installmentinvoiceprofiles_id = $1
+     ORDER BY installmentinvoicedtl_id ASC
+     LIMIT 1`,
+    [profileId]
+  );
+  if (!iiRes.rows.length) {
+    return { skipped: true, reason: 'installment schedule row missing' };
+  }
+
+  const installmentInvoice = iiRes.rows[0];
+  const generated = await generateInvoiceFromInstallment(
+    installmentInvoice,
+    {
+      student_id: profile.student_id,
+      branch_id: profile.branch_id,
+      package_id: profile.package_id,
+      amount: profile.amount,
+      frequency: profile.frequency || '1 month(s)',
+      description: profile.description,
+      generated_count: profile.generated_count || 0,
+      class_id: profile.class_id,
+      total_phases: profile.total_phases,
+      phase_start: profile.phase_start,
+    },
+    { enrollmentInvoiceIssueYmd: payYmd }
+  );
+
+  return { generated: true, invoice_id: generated.invoice_id };
+};
+

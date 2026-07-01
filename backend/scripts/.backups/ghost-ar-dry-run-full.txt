@@ -1,0 +1,55 @@
+﻿INV-418 260067  Matteo Joaquin Fajardo  LCA Malolos     Paid    ??,146.00       2026-04-05      Cash22152
+INV-417 260066  Ma. Chandria Dale Layog LCA Malolos     Paid    ??,146.00       2026-04-07      Online Banking      22200
+INV-416 260065  Klaudia Edine R. Dela Cruz      LCA Malolos     Paid    ??,999.00       2026-04-13 Credit Card      2026041421075389897797529600
+INV-415 260064  Lewis Axel S. Marasigan LCA Malolos     Paid    ??,999.00       2026-03-27      E-wallets   729054909
+INV-414 260063  Ezekiel James F. De Leon        LCA Malolos     Paid    ??,999.00       2026-04-06 Cash     22162
+INV-413 260062  Rayah Galvez Salamat    LCA Malolos     Paid    ??,999.00       2026-04-06      Cash22161
+INV-412 260061  Ma. Michaela Esmee S. Sherrill  LCA Malolos     Paid    ??,999.00       2026-04-06 E-wallets        565453783
+INV-411 260060  Elisha Gianna J. Abulencia      LCA Malolos     Paid    ??,999.00       2026-04-05 Online Banking   2026040621072511768670453760
+INV-410 260059  Allyana Lucia G. Antalan        LCA Malolos     Paid    ??,999.00       2026-03-27 Cash     22118
+INV-407 260056  Caleb G. Tolentino      LCA Malolos     Paid    ??,146.00       2026-01-11      Online Banking      MCG852PCA
+INV-406 260055  Natalia Skye C. Cardenas        LCA Malolos     Paid    ??,999.00       2026-04-09 Credit Card      2026041021073983479789907968
+INV-392 260041  Amari Natalia N. Felias LCA Malolos     Paid    ??,146.00       2026-03-25      E-wallets   924406412
+INV-390 260039  Jayson Caleb S. Chong   LCA Malolos     Paid    ??,803.00       2026-04-05      Online Banking      223964
+INV-389 260038  Paul Gavin F. Faustino  LCA Malolos     Paid    ??,236.00       2026-03-09      E-wallets   362709403
+INV-388 260037  Carlos Aaron C. Bautista        LCA Malolos     Paid    ??,146.00       2026-02-03 Cash     21372
+INV-383 260032  Amanda Elisse M. Valeroso       LCA Malolos     Paid    ??,236.00       2026-04-06 Cash     22195
+INV-379 260028  Caleb Reyes Sunga       LCA Malolos     Paid    ??,999.00       2026-04-05      Online Banking      5447698349652
+INV-378 260027  Gianna Tabitha Baltazar Angelo  LCA Malolos     Paid    ??,999.00       2026-04-15 Cash     22482
+INV-377 260026  Jon Allen Tanjutco      LCA Malolos     Paid    ??,999.00       2026-04-05      E-wallets   160800472
+INV-376 260025  Jinder Santos Jaswal    LCA Malolos     Paid    ??,999.00       2026-04-05      Online Banking      2026040621072339816910069760
+INV-375 260024  Alistair Primo S. Torres        LCA Malolos     Paid    ??,999.00       2026-04-06 E-wallets        860617916
+INV-374 260023  Zacharee Jayne Soriaga Bersonda LCA Malolos     Paid    ??,999.00       2026-04-06 E-wallets        4FEB 4CA4 3CEF
+INV-362 260011  Keion Brylle Lucas Bertuldo     LCA Malolos     Paid    ??,236.00       2026-03-09 Online Banking   217878
+INV-361 260010  Yohan Teodoro Hipolito  LCA Pampanga    Paid    ??,236.00       2026-03-23      Online Banking      ITO260324032855011
+INV-353 260002  Matthew R. Sabino       LCA Malolos     Paid    ??,146.00       2026-04-09      Cash22461
+INV-514 260166  Zoeh Caralia A. Cudia   LCA Malolos     Paid    ??,999.00       2026-04-21      Cash22501
+INV-513 260165  Keesha Amelie Castillo  LCA Malolos     Paid    ??,999.00       2026-04-05      Online Banking      22171
+INV-468 260118  Severus Azrael Viola Manzanal   LCA Guiguinto   Paid    ??,999.00       2026-04-06 Cash     22411
+INV-467 260117  Dino Alon Kou H. Oliveros       LCA Guiguinto   Paid    ??,999.00       2026-03-01 Online Banking   114518
+INV-459 260109  Maria Alliyah Carmeli M. David  LCA Guiguinto   Paid    ??,999.00       2026-03-28 Cash     21990
+INV-456 260106  Hera Eiko K. Seman      LCA Guiguinto   Paid    ??,999.00       2026-02-13      Cash00497
+INV-451 260101  Jacob V. Mateo  LCA Guiguinto   Paid    ??,999.00       2026-04-04      Online Banking      7039449105272
+INV-450 260100  Nathania Isabelle Camina        LCA Guiguinto   Paid    ??,999.00       2026-03-26 Online Banking   004608616682157
+INV-449 260099  Althea Hera F. Evangelista      LCA Guiguinto   Paid    ??,999.00       2026-04-04 E-wallets        462459115
+INV-448 260098  Philo Joaquim Bongga Ching      LCA Guiguinto   Paid    ??,999.00       2026-04-04 E-wallets        257347908
+INV-447 260097  Skyler Dawson Legerin Villanueva        LCA Guiguinto   Paid    ??,999.00       2026-04-04  Online Banking  204194
+INV-446 260096  Anaiah Cali Tan Mecija  LCA Guiguinto   Paid    ??,999.00       2026-04-20      E-wallets   959852078
+INV-404 260053  Dane Stefan G. Bayan    LCA Malolos     Paid    ??,999.00       2026-03-06      Cash22040
+INV-403 260052  Oleya Gia Dela Cruz     LCA Malolos     Paid    ??,999.00       2026-04-10      Credit Card 2026041111074403394699128832
+INV-402 260051  Luna Amari M. Maclang   LCA Malolos     Paid    ??,999.00       2026-04-06      Online Banking      BN-20260406-13068584
+INV-401 260050  Kash Aevryzxc V. Martinez       LCA Malolos     Paid    ??,999.00       2026-03-25 Online Banking   004608509222395
+INV-397 260046  Anaia Prairie B. Galman LCA Malolos     Unpaid  ??,498.90       2026-03-19      ?? ??INV-396 260045  Althea Amira D. De Leon LCA Malolos     Paid    ??,999.00       2026-04-08      Online Banking      BN-20260407-13707719
+INV-466 260116  Olivia Celeste Pascual  LCA Malolos     Paid    ??,999.00       2026-03-26      Cash22107
+INV-465 260115  Theo Samuel P. Morales  LCA Malolos     Paid    ??,999.00       2026-04-05      Cash22150
+INV-464 260114  Raniesha Alaia G. Vistan        LCA Malolos     Paid    ??,999.00       2026-04-05 Cash     22147
+INV-463 260113  Zev Aiden Crisostomo    LCA Malolos     Paid    ??,999.00       2026-03-26      Cash22106
+INV-462 260112  Elijah Margarette Roque Reyes   LCA Malolos     Paid    ??,999.00       2026-03-26 Cash     22105
+INV-461 260111  Juancho Elian Arnedo Payongayong        LCA Malolos     Paid    ??,999.00       2026-04-05  Online Banking  ITO260406033922004
+INV-460 260110  Olivia Louveen Mir C. Valdoz    LCA Malolos     Paid    ??,999.00       2026-03-26 Online Banking   991933
+INV-858 260516  Nathalia Jayne S. Bautista      LCA Cavite      Paid    ??,000.00       2026-05-03 E-wallets        05783
+INV-1312        260973  Marianna Agatha Romero  LCA Guiguinto   Unpaid  ??,660.60       2026-03-02 ??INV-733 260388  CHLOE SOFIA M. EVANGELISTA      LCA Pampanga    Paid    ??,708.00       2026-03-27 Online Banking   180398
+INV-1236        260901  Lucas Jeremy  Evangelista       LCA Pampanga    Unpaid  ??,498.90       2026-03-01  ??      ??INV-1278        260942  Marianna Agatha Romero  LCA Guiguinto   Unpaid  ??,660.60       2026-02-02 ??INV-1267        260932  Kristian Matteo M. Laot LCA Pampanga    Paid    ??,236.00       2026-04-15 Online Banking   22226
+INV-1211        260876  Lucas Jeremy  Evangelista       LCA Pampanga    Unpaid  ??,498.90       2026-02-01  ??      ??INV-955 260617  Ryan Sebastian Quienday LCA Malolos     Paid    ??,999.00       2026-04-12      Cash22472
+INV-494 260145  Ryleigh Maeve Sabalsa   LCA Malolos     Paid    ??,000.00       2026-04-22      Cash22504
+INV-1400        261066  Kylen Lorenzo O. Eva    LCA Guiguinto   Unpaid  ??,236.00       2025-10-04 ??INV-939 260600  Sabrina M. Resurreccion LCA Malolos     Paid    ??1,520.00      2026-05-18      E-wallets   802191580

@@ -1,0 +1,224 @@
+// Load env first: .env (NODE_ENV) then .env.development or .env.production
+import './config/loadEnv.js';
+
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+
+// Import routes
+import authRoutes from './routes/auth.js';
+import usersRoutes from './routes/users.js';
+import branchesRoutes from './routes/branches.js';
+import classesRoutes from './routes/classes.js';
+import studentsRoutes from './routes/students.js';
+import programsRoutes from './routes/programs.js';
+import roomsRoutes from './routes/rooms.js';
+import curriculumRoutes from './routes/curriculum.js';
+import packagesRoutes from './routes/packages.js';
+import pricinglistsRoutes from './routes/pricinglists.js';
+import merchandiseRoutes from './routes/merchandise.js';
+import merchandiseRequestsRoutes from './routes/merchandiserequests.js';
+import invoicesRoutes from './routes/invoices.js';
+import installmentInvoicesRoutes from './routes/installmentinvoices.js';
+import acknowledgementReceiptsRoutes from './routes/acknowledgementreceipts.js';
+import guardiansRoutes from './routes/guardians.js';
+import phasesessionsRoutes from './routes/phasesessions.js';
+import paymentsRoutes from './routes/payments.js';
+import reservationsRoutes from './routes/reservations.js';
+import dashboardRoutes from './routes/dashboard.js';
+import calendarRoutes from './routes/calendar.js';
+import promosRoutes from './routes/promos.js';
+import referralsRoutes from './routes/referrals.js';
+import attendanceRoutes from './routes/attendance.js';
+import announcementsRoutes from './routes/announcements.js';
+import suspensionsRoutes from './routes/suspensions.js';
+import uploadRoutes from './routes/upload.js';
+import holidaysRoutes from './routes/holidays.js';
+import settingsRoutes from './routes/settings.js';
+import reportsRoutes from './routes/reports.js';
+import dailySummarySalesRoutes from './routes/dailySummarySales.js';
+import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
+import systemLogsRoutes from './routes/systemLogs.js';
+
+// Import middleware
+import { activityLogger } from './middleware/activityLogger.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+
+// Import configs (this will initialize database and Firebase connections)
+import './config/database.js';
+import './config/firebase.js';
+
+// Import scheduled jobs
+import { startInstallmentInvoiceScheduler } from './jobs/installmentInvoiceScheduler.js';
+import { startInstallmentDelinquencyScheduler } from './jobs/installmentDelinquencyScheduler.js';
+import { startOverdueInvoiceEmailScheduler } from './jobs/overdueInvoiceEmailScheduler.js';
+import { verifyEmailConnection, getEmailConfigSummary } from './utils/emailTransport.js';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Security middleware
+app.use(helmet());
+
+// CORS configuration - Support Replit, local dev, and deployed frontend (Linode)
+const getAllowedOrigins = () => {
+  const origins = [];
+  
+  // CORS_ORIGIN: single URL or comma-separated list (e.g. on Linode set to your frontend origin)
+  if (process.env.CORS_ORIGIN) {
+    process.env.CORS_ORIGIN.split(',').forEach(o => { const t = o.trim(); if (t) origins.push(t); });
+  }
+  
+  if (process.env.REPLIT_FRONTEND_URL) {
+    origins.push(process.env.REPLIT_FRONTEND_URL);
+  }
+  
+  // Local and deployed origins (so deployed works even if .env on server has no CORS_ORIGIN)
+  origins.push('http://localhost:5173');
+  origins.push('https://cms.little-champion.com');
+  origins.push('http://cms.little-champion.com');
+  origins.push('https://*.id.repl.co');
+  origins.push('https://*.repl.co');
+  
+  return origins;
+};
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = getAllowedOrigins();
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      // Support wildcard patterns for Replit
+      if (allowedOrigin.includes('*')) {
+        // Escape special regex characters and convert * to .*
+        const pattern = allowedOrigin
+          .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape special chars
+          .replace(/\*/g, '.*'); // Convert * to .*
+        const regex = new RegExp(`^${pattern}$`);
+        return regex.test(origin);
+      }
+      return origin === allowedOrigin;
+    });
+    
+    // In development, allow all origins for easier testing
+    if (isAllowed || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
+
+// Body parsing middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Logging middleware
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+} else {
+  app.use(morgan('combined'));
+}
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// API routes
+const API_VERSION = '/api/sms';
+
+// Log mutating API requests after response (req.user set by route auth)
+app.use(API_VERSION, activityLogger);
+
+app.use(`${API_VERSION}/auth`, authRoutes);
+app.use(`${API_VERSION}/users`, usersRoutes);
+app.use(`${API_VERSION}/branches`, branchesRoutes);
+app.use(`${API_VERSION}/classes`, classesRoutes);
+app.use(`${API_VERSION}/students`, studentsRoutes);
+app.use(`${API_VERSION}/programs`, programsRoutes);
+app.use(`${API_VERSION}/rooms`, roomsRoutes);
+app.use(`${API_VERSION}/curriculum`, curriculumRoutes);
+app.use(`${API_VERSION}/packages`, packagesRoutes);
+app.use(`${API_VERSION}/pricinglists`, pricinglistsRoutes);
+app.use(`${API_VERSION}/merchandise`, merchandiseRoutes);
+app.use(`${API_VERSION}/merchandise-requests`, merchandiseRequestsRoutes);
+app.use(`${API_VERSION}/invoices`, invoicesRoutes);
+app.use(`${API_VERSION}/installment-invoices`, installmentInvoicesRoutes);
+app.use(`${API_VERSION}/acknowledgement-receipts`, acknowledgementReceiptsRoutes);
+app.use(`${API_VERSION}/guardians`, guardiansRoutes);
+app.use(`${API_VERSION}/phasesessions`, phasesessionsRoutes);
+app.use(`${API_VERSION}/payments`, paymentsRoutes);
+app.use(`${API_VERSION}/reservations`, reservationsRoutes);
+app.use(`${API_VERSION}/dashboard`, dashboardRoutes);
+app.use(`${API_VERSION}/calendar`, calendarRoutes);
+app.use(`${API_VERSION}/promos`, promosRoutes);
+app.use(`${API_VERSION}/referrals`, referralsRoutes);
+app.use(`${API_VERSION}/attendance`, attendanceRoutes);
+app.use(`${API_VERSION}/announcements`, announcementsRoutes);
+app.use(`${API_VERSION}/suspensions`, suspensionsRoutes);
+app.use(`${API_VERSION}/upload`, uploadRoutes);
+app.use(`${API_VERSION}/holidays`, holidaysRoutes);
+app.use(`${API_VERSION}/settings`, settingsRoutes);
+app.use(`${API_VERSION}/reports`, reportsRoutes);
+app.use(`${API_VERSION}/daily-summary-sales`, dailySummarySalesRoutes);
+app.use(`${API_VERSION}/cash-deposit-summaries`, cashDepositSummariesRoutes);
+app.use(`${API_VERSION}/system-logs`, systemLogsRoutes);
+
+// 404 handler
+app.use(notFoundHandler);
+
+// Error handler (must be last)
+app.use(errorHandler);
+
+// Start server - Bind to 0.0.0.0 for Replit compatibility
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Server is running on ${HOST}:${PORT}`);
+  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 Health check: http://${HOST}:${PORT}/health`);
+  console.log(`🔗 API base URL: http://${HOST}:${PORT}${API_VERSION}`);
+  
+  // Start scheduled jobs
+  startInstallmentInvoiceScheduler();
+  console.log(`⏰ Installment invoice scheduler started`);
+
+  startInstallmentDelinquencyScheduler();
+  console.log(`⏰ Installment delinquency scheduler started`);
+
+  startOverdueInvoiceEmailScheduler();
+  console.log(`⏰ Overdue invoice auto-email scheduler started`);
+
+  const emailSummary = getEmailConfigSummary();
+  if (!emailSummary.configured) {
+    console.warn(
+      '⚠️  Email not configured. Set SENDGRID_API_KEY (HTTPS, works on Linode) or SMTP_* in backend/.env.'
+    );
+  } else {
+    verifyEmailConnection()
+      .then((ok) => {
+        if (!ok && emailSummary.provider === 'smtp') {
+          console.warn(
+            '⚠️  SMTP verify failed. On Linode, ports 465/587 are often blocked — use SendGrid: set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env.'
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('⚠️  Email verify error:', err?.message || err);
+      });
+  }
+});
+
+export default app;
+

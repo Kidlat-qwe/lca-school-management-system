@@ -1,0 +1,12 @@
+{
+  "exported_at": "2026-06-11T07:50:00.000Z",
+  "count": 6,
+  "rows": [
+    { "invoice_id": 396, "invoice_ar_number": "260045" },
+    { "invoice_id": 733, "invoice_ar_number": "260388" },
+    { "invoice_id": 939, "invoice_ar_number": "260600" },
+    { "invoice_id": 955, "invoice_ar_number": "260617" },
+    { "invoice_id": 1267, "invoice_ar_number": "260932" },
+    { "invoice_id": 1278, "invoice_ar_number": "260942" }
+  ]
+}
