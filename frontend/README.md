@@ -101,6 +101,22 @@ The application will start on `http://localhost:5173` (or the next available por
 npm run build
 ```
 
+**Build on low-memory servers (Linode/VPS):** stop PM2 frontend first to free RAM, then:
+
+```bash
+pm2 stop psms-frontend
+cd frontend
+npm run build:prod
+cd ..
+pm2 restart all --update-env
+```
+
+If the build still fails with `heap out of memory`, add swap (one-time) then retry:
+
+```bash
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+```
+
 **Preview production build:**
 
 ```bash

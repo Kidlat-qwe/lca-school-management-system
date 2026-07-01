@@ -89,6 +89,27 @@ export const buildFixedRecurringCycleDates = (generationAnchorYmd, frequencyMont
 };
 
 /**
+ * Advance the installment auto-generation queue by one billing cycle.
+ * Manual advance pay consumes the pending generation slot (same as if auto-generated),
+ * so next_generation_date / next_invoice_month move forward one month (e.g. Aug 25 → Sep 25).
+ *
+ * @param {string|Date|null} nextGenerationDateYmd
+ * @param {number} [frequencyMonths=1]
+ * @returns {{ next_generation_date: string|null, next_invoice_month: string|null }}
+ */
+export const advanceInstallmentQueueByOneCycle = (nextGenerationDateYmd, frequencyMonths = 1) => {
+  const anchor = coerceToManilaYmd(nextGenerationDateYmd, { fallbackToToday: false });
+  if (!anchor) {
+    return { next_generation_date: null, next_invoice_month: null };
+  }
+  const cycle = buildFixedRecurringCycleDates(anchor, frequencyMonths);
+  return {
+    next_generation_date: formatYmdLocal(cycle.nextGenerationDate),
+    next_invoice_month: formatYmdLocal(cycle.nextInvoiceMonth),
+  };
+};
+
+/**
  * First recurring cycle after the initial (phase-tied) invoice.
  * Fixed calendar cadence: 25th issue → 5th of next month.
  *
@@ -276,17 +297,19 @@ async function resolveRecurringBillingAnchorYmd(
 export const isPhaseInstallmentProfile = (profile = {}) =>
   profile.class_id !== null && profile.class_id !== undefined;
 
-export const resolveProfilePhaseStart = (profile = {}) => {
-  if (profile.phase_start !== null && profile.phase_start !== undefined) {
-    const n = parseInt(profile.phase_start, 10);
+export const resolveProfilePhaseStart = (profile) => {
+  const safeProfile = profile ?? {};
+  if (safeProfile.phase_start !== null && safeProfile.phase_start !== undefined) {
+    const n = parseInt(safeProfile.phase_start, 10);
     return Number.isInteger(n) && n >= 1 ? n : 1;
   }
   return 1;
 };
 
 export const getCurrentInstallmentPhaseNumber = (profile = {}, generatedCountOverride = null) => {
-  const startPhase = profile.phase_start !== null && profile.phase_start !== undefined
-    ? parseInt(profile.phase_start, 10)
+  const safeProfile = profile ?? {};
+  const startPhase = safeProfile.phase_start !== null && safeProfile.phase_start !== undefined
+    ? parseInt(safeProfile.phase_start, 10)
     : 1;
   const generatedCount = generatedCountOverride !== null && generatedCountOverride !== undefined
     ? parseInt(generatedCountOverride, 10)

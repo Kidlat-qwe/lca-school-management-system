@@ -11,6 +11,7 @@ import {
 import { coerceToManilaYmd, formatYmdLocal, todayYmdManila } from '../utils/dateUtils.js';
 import {
   buildPhaseInstallmentSchedule,
+  advanceInstallmentQueueByOneCycle,
   isPhaseInstallmentProfile,
   resolveProfilePhaseStart,
 } from '../utils/phaseInstallmentUtils.js';
@@ -45,6 +46,7 @@ import {
   loadActiveEnrollmentAbsolutePhases,
   loadDroppedAbsolutePhasesForProfile,
   repairProfileTargetPhaseAlignment,
+  resolveFirstBillableAbsolutePhase,
   syncInstallmentGeneratedCountToNextUnbilled,
 } from '../utils/installmentPhaseBillingSync.js';
 import { getAdvancePayPriorPartialBlockers } from '../lib/installmentPaymentEligibility.js';
@@ -2135,9 +2137,9 @@ router.post(
  *   1. Creates an invoice in invoicestbl (status = 'Paid').
  *   2. Creates a Completed payment in paymenttbl.
  *   3. Increments generated_count on the profile.
- *   4. Advances next_generation_date on installmentinvoicestbl by the
- *      number of months being skipped (so the auto-generator skips the
- *      already-paid phase and moves to the next one).
+ *   4. Advances next_generation_date / next_invoice_month on installmentinvoicestbl
+ *      by one billing cycle from the current queue (same effect as auto-generating
+ *      that phase), so the scheduler targets the following phase.
  *   5. Enrolls the student in classstudentstbl for the absolute phase
  *      (if class_id is present and the row doesn't yet exist).
  *
@@ -2236,7 +2238,26 @@ router.post(
       );
       const { phaseChains } = await loadInstallmentProfilePhaseChains(client, id);
       const targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
-      const nextUnbilledLocal = findNextUnbilledLocalPhase(targetMapped, totalPhases);
+      const activeEnrollmentAbsolutePhases =
+        profile.student_id != null && profile.class_id != null
+          ? await loadActiveEnrollmentAbsolutePhases(
+              client,
+              Number(profile.student_id),
+              Number(profile.class_id)
+            )
+          : new Set();
+      const firstBillableAbsolutePhase = resolveFirstBillableAbsolutePhase(
+        profile,
+        activeEnrollmentAbsolutePhases,
+        phaseChains
+      );
+      const nextUnbilledLocal = findNextUnbilledLocalPhase(
+        targetMapped,
+        totalPhases,
+        profile,
+        activeEnrollmentAbsolutePhases,
+        firstBillableAbsolutePhase
+      );
 
       if (nextUnbilledLocal == null) {
         await client.query('ROLLBACK');
@@ -2248,7 +2269,7 @@ router.post(
 
       if (phaseIdx !== nextUnbilledLocal) {
         await client.query('ROLLBACK');
-        const phaseStartAdv = parseInt(profile.phase_start || 1, 10);
+        const phaseStartAdv = resolveProfilePhaseStart(profile);
         const nextAbsolute = phaseStartAdv + nextUnbilledLocal - 1;
         return res.status(400).json({
           success: false,
@@ -2357,7 +2378,7 @@ router.post(
         });
       }
       const netPayable = Math.max(0, grossPayable - discountValue);
-      const phaseStart = parseInt(profile.phase_start || 1, 10);
+      const phaseStart = resolveProfilePhaseStart(profile);
       const absolutePhaseNumber = phaseStart + (phaseIdx - 1);
       const creatorUserId = req.user.userId || req.user.user_id || null;
       const advanceRemarks = `Advance payment — Phase ${absolutePhaseNumber};TARGET_PHASE:${absolutePhaseNumber} (profile #${id})`;
@@ -2510,37 +2531,44 @@ router.post(
         let newNextGenYmd = null;
         let newNextInvMonthYmd = null;
 
-        if (!isLastPhase && isPhaseInstallmentProfile(profile)) {
-          const nextSched = await buildPhaseInstallmentSchedule({
-            db: client,
-            profile: {
-              class_id: profile.class_id,
-              phase_start: profile.phase_start,
-              total_phases: profile.total_phases,
-              generated_count: newGeneratedCount,
-            },
-            generatedCountOverride: newGeneratedCount,
+        if (!isLastPhase) {
+          const currentGenYmd = coerceToManilaYmd(profile.sched_next_gen_date, {
+            fallbackToToday: false,
           });
-          newNextGenYmd = nextSched?.current_generation_date || null;
-          newNextInvMonthYmd = nextSched?.current_invoice_month || null;
-        } else if (!isLastPhase) {
-          const nextGenRaw = profile.sched_next_gen_date || new Date();
-          const nextGenBase =
-            typeof nextGenRaw === 'string'
-              ? (() => {
-                  const [y, m, d] = nextGenRaw.slice(0, 10).split('-').map(Number);
-                  return new Date(y, m - 1, d, 12, 0, 0, 0);
-                })()
-              : new Date(nextGenRaw);
-          const phasesToAdvance = phaseIdx - generatedCount;
-          const newNextGen = new Date(nextGenBase);
-          newNextGen.setMonth(newNextGen.getMonth() + phasesToAdvance * freqMonths);
-          newNextGen.setDate(25);
-          const newNextInvMonth = new Date(newNextGen);
-          newNextInvMonth.setDate(1);
-          newNextInvMonth.setMonth(newNextInvMonth.getMonth() + 1);
-          newNextGenYmd = formatYmdLocal(newNextGen);
-          newNextInvMonthYmd = formatYmdLocal(newNextInvMonth);
+
+          if (currentGenYmd) {
+            const advanced = advanceInstallmentQueueByOneCycle(currentGenYmd, freqMonths);
+            newNextGenYmd = advanced.next_generation_date;
+            newNextInvMonthYmd = advanced.next_invoice_month;
+          } else if (isPhaseInstallmentProfile(profile)) {
+            const nextSched = await buildPhaseInstallmentSchedule({
+              db: client,
+              profile: {
+                class_id: profile.class_id,
+                phase_start: profile.phase_start,
+                total_phases: profile.total_phases,
+                generated_count: newGeneratedCount,
+              },
+              generatedCountOverride: newGeneratedCount,
+            });
+            const useFirstPhaseQueue = newGeneratedCount === 1;
+            newNextGenYmd = useFirstPhaseQueue
+              ? nextSched?.next_generation_date || nextSched?.current_generation_date || null
+              : nextSched?.current_generation_date || null;
+            newNextInvMonthYmd = useFirstPhaseQueue
+              ? nextSched?.next_invoice_month || nextSched?.current_invoice_month || null
+              : nextSched?.current_invoice_month || null;
+          } else {
+            const nextGenBase = new Date();
+            const newNextGen = new Date(nextGenBase);
+            newNextGen.setMonth(newNextGen.getMonth() + freqMonths);
+            newNextGen.setDate(25);
+            const newNextInvMonth = new Date(newNextGen);
+            newNextInvMonth.setDate(1);
+            newNextInvMonth.setMonth(newNextInvMonth.getMonth() + 1);
+            newNextGenYmd = formatYmdLocal(newNextGen);
+            newNextInvMonthYmd = formatYmdLocal(newNextInvMonth);
+          }
         }
 
         await client.query(
