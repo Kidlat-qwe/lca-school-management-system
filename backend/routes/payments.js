@@ -3226,15 +3226,29 @@ router.put(
   '/:id',
   [
     param('id').isInt().withMessage('Payment ID must be an integer'),
-    body('payment_method').optional().isString().withMessage('Payment method must be a string'),
-    body('payment_type').optional().isString().withMessage('Payment type must be a string'),
+    body('payment_method').optional({ checkFalsy: true }).isString().withMessage('Payment method must be a string'),
+    body('payment_type').optional({ checkFalsy: true }).isString().withMessage('Payment type must be a string'),
     body('payable_amount').optional().isFloat({ min: 0.01 }).withMessage('Payable amount must be greater than 0'),
     body('tip_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Tip amount must be 0 or greater'),
     body('discount_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Discount amount must be 0 or greater'),
-    body('issue_date').optional().isISO8601().withMessage('Issue date must be a valid date'),
-    body('status').optional().isString().withMessage('Status must be a string'),
-    body('reference_number').optional().isString().withMessage('Reference number must be a string'),
-    body('remarks').optional().isString().withMessage('Remarks must be a string'),
+    body('issue_date').optional({ checkFalsy: true }).isISO8601().withMessage('Issue date must be a valid date'),
+    body('status').optional({ checkFalsy: true }).isString().withMessage('Status must be a string'),
+    body('reference_number')
+      .optional({ nullable: true })
+      .custom((value, { req }) => {
+        if (value == null || value === '') return true;
+        if (typeof value !== 'string') {
+          throw new Error('Reference number must be a string');
+        }
+        const method = String(req.body.payment_method || '').trim();
+        if (method === 'Cash') return true;
+        if (!String(value).trim()) {
+          throw new Error('Reference number is required');
+        }
+        return true;
+      }),
+    body('remarks').optional({ nullable: true }).isString().withMessage('Remarks must be a string'),
+    body('attachment_url').optional({ nullable: true }).isString().withMessage('Attachment URL must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
@@ -3307,6 +3321,59 @@ router.put(
           ? issue_date
           : payment.issue_date;
 
+      const effectivePaymentType = String(
+        payment_type !== undefined ? payment_type : payment.payment_type || ''
+      ).trim();
+      const effectivePayableAmount =
+        payable_amount !== undefined ? parseFloat(payable_amount) : parseFloat(payment.payable_amount);
+      const effectiveDiscountAmount = Math.max(
+        0,
+        discount_amount !== undefined
+          ? parseFloat(discount_amount)
+          : parseFloat(payment.discount_amount || 0)
+      );
+
+      if (
+        effectivePaymentType === 'Partial Payment' &&
+        (payment_type !== undefined || payable_amount !== undefined || discount_amount !== undefined)
+      ) {
+        const invoiceCheck = await client.query(
+          'SELECT * FROM invoicestbl WHERE invoice_id = $1',
+          [payment.invoice_id]
+        );
+        if (invoiceCheck.rows.length > 0) {
+          const invoiceForPartial = invoiceCheck.rows[0];
+          const { originalInvoiceAmount } = await computeInvoiceOriginalForRecalc(
+            client,
+            payment.invoice_id,
+            invoiceForPartial
+          );
+          const otherPaymentsResult = await client.query(
+            `SELECT COALESCE(SUM(COALESCE(payable_amount, 0) + COALESCE(discount_amount, 0)), 0) AS total_settled
+             FROM paymenttbl
+             WHERE invoice_id = $1
+               AND payment_id <> $2
+               AND status = 'Completed'
+               AND COALESCE(approval_status, 'Pending') <> 'Rejected'`,
+            [payment.invoice_id, id]
+          );
+          const otherSettled = parseFloat(otherPaymentsResult.rows[0]?.total_settled) || 0;
+          const lineSettlement =
+            (Number.isFinite(effectivePayableAmount) ? effectivePayableAmount : 0) +
+            effectiveDiscountAmount;
+          const releaseCap = Math.max(0, originalInvoiceAmount - otherSettled);
+
+          if (releaseCap > 0 && lineSettlement >= releaseCap) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message:
+                'For partial payment, combined payable and discount must be less than the remaining invoice amount for this line.',
+            });
+          }
+        }
+      }
+
       // Build update query
       const updates = [];
       const params = [];
@@ -3350,11 +3417,12 @@ router.put(
       const updateSql = `UPDATE paymenttbl SET ${updates.join(', ')} WHERE payment_id = $${paramCount}`;
       await client.query(updateSql, params);
 
-      // If amount components or status changed, recalculate invoice amount and status
+      // If amount components, payment type, or status changed, recalculate invoice amount and status
       if (
         payable_amount !== undefined ||
         discount_amount !== undefined ||
         tip_amount !== undefined ||
+        payment_type !== undefined ||
         status !== undefined
       ) {
         const invoiceResult = await client.query(
@@ -3382,12 +3450,23 @@ router.put(
 
           // Calculate remaining balance (original amount - total paid)
           const remainingBalance = Math.max(0, originalInvoiceAmount - totalPaid);
-          
-          // Update invoice amount to reflect remaining balance
-          await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
-            remainingBalance,
-            payment.invoice_id,
-          ]);
+          const isPartialPaymentType = effectivePaymentType === 'Partial Payment';
+
+          if (isPartialPaymentType && remainingBalance > 0.01 && !invoice.balance_invoice_id) {
+            await createBalanceInvoiceFromPartial({
+              client,
+              parentInvoice: invoice,
+              remainingBalance,
+              createdBy: req.user.userId || payment.created_by,
+              issueDateYmd: formatYmdLocal(new Date(effectiveIssueDateForLogic)),
+            });
+          } else {
+            // Update invoice amount to reflect remaining balance
+            await client.query('UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2', [
+              remainingBalance,
+              payment.invoice_id,
+            ]);
+          }
 
           let newInvoiceStatus = invoice.status;
           if (totalPaid >= originalInvoiceAmount) {

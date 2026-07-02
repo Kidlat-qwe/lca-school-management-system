@@ -834,7 +834,6 @@ const PaymentLogs = () => {
         }
       }
       const payload = {
-        reference_number: normalizePaymentReferenceNumber(returnFixPaymentMethod, refTrim),
         attachment_url: attTrim,
         payment_method: returnFixPaymentMethod.trim(),
         payment_type: returnFixPaymentType.trim(),
@@ -843,6 +842,10 @@ const PaymentLogs = () => {
         discount_amount: discountNum,
         issue_date: issueDateTrim,
       };
+      const normalizedRef = normalizePaymentReferenceNumber(returnFixPaymentMethod, refTrim);
+      if (normalizedRef != null) {
+        payload.reference_number = normalizedRef;
+      }
       if (returnFixRemarks.trim()) {
         payload.remarks = returnFixRemarks.trim();
       }

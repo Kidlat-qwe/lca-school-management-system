@@ -53,7 +53,8 @@ const executeFetch = async (endpoint, config, tokenOverride) => {
   const data = await response.json();
 
   if (!response.ok) {
-    const error = new Error(data.message || 'An error occurred');
+    const firstFieldError = Array.isArray(data.errors) ? data.errors[0]?.msg : null;
+    const error = new Error(firstFieldError || data.message || 'An error occurred');
     error.response = { data, status: response.status };
     throw error;
   }

@@ -117,10 +117,8 @@ const AttendanceDashboardView = ({
   }, [filterOptions.classes, selectedClassId]);
 
   const {
-    sessions,
     pendingCount,
     takenCount,
-    upcomingCount,
     totalCount,
     totalMarks,
     presentCount,
@@ -129,10 +127,7 @@ const AttendanceDashboardView = ({
     lateCount,
     excusedCount,
     leaveEarlyCount,
-    sessionCompletionRate,
-    markCoverageRate,
     presentRate,
-    absentRate,
     rateSummaries,
     dailyBreakdown,
     loading,
@@ -275,11 +270,11 @@ const AttendanceDashboardView = ({
         <p className="text-xs text-amber-800">
           {loading
             ? 'Loading attendance summary…'
-            : `${formatNumber(pendingCount)} need attendance · ${formatNumber(takenCount)} taken · ${formatNumber(upcomingCount)} upcoming · ${formatNumber(totalCount)} total sessions`}
+            : `${formatNumber(pendingCount)} need attendance · ${formatNumber(takenCount)} taken · ${formatNumber(totalCount)} total sessions`}
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatsCard
           title="Total sessions"
           value={loading ? '…' : formatNumber(totalCount)}
@@ -298,29 +293,9 @@ const AttendanceDashboardView = ({
           iconName="checkCircle"
           accent="bg-emerald-500/80"
         />
-        <StatsCard
-          title="Upcoming"
-          value={loading ? '…' : formatNumber(upcomingCount)}
-          iconName="clipboardList"
-          accent="bg-indigo-500/80"
-        />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatsCard
-          title="Session completion rate"
-          value={loading ? '…' : formatRate(sessionCompletionRate)}
-          iconName="chartBar"
-          accent="bg-violet-500/80"
-          tooltip={ATTENDANCE_DASHBOARD.sessionCompletionRate}
-        />
-        <StatsCard
-          title="Mark coverage rate"
-          value={loading ? '…' : formatRate(markCoverageRate)}
-          iconName="users"
-          accent="bg-teal-500/80"
-          tooltip={ATTENDANCE_DASHBOARD.markCoverageRate}
-        />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <StatsCard
           title="Present rate"
           value={loading ? '…' : formatRate(presentRate)}
