@@ -23,6 +23,7 @@ const OperationalAttendanceShortcuts = ({
   teacherId = '',
   showBranchColumn = false,
   showHeader = true,
+  canEditAttendance = true,
 }) => {
   const [activeSession, setActiveSession] = useState(null);
 
@@ -146,7 +147,7 @@ const OperationalAttendanceShortcuts = ({
               <tbody className="divide-y divide-gray-100 text-sm text-gray-700">
                 {sessions.map((session) => {
                   const takenMeta = getOperationalAttendanceTakenMeta(session);
-                  const actionMeta = getOperationalAttendanceActionMeta(session);
+                  const actionMeta = getOperationalAttendanceActionMeta(session, { canEditAttendance });
 
                   return (
                     <tr key={getOperationalSessionRowKey(session)} className="hover:bg-gray-50/80">
@@ -204,6 +205,7 @@ const OperationalAttendanceShortcuts = ({
         onClose={() => setActiveSession(null)}
         classsessionId={activeSession?.classsession_id}
         teacherName={activeSession?.teacher_name}
+        canEditAttendance={canEditAttendance}
         onSaved={refresh}
       />
     </>

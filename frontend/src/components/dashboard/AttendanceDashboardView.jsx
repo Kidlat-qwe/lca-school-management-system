@@ -19,6 +19,7 @@ import MatrixInfoTooltip from './MatrixInfoTooltip';
 import OperationalAttendanceShortcuts from './OperationalAttendanceShortcuts';
 import OperationalAttendanceModal from './OperationalAttendanceModal';
 import AttendanceDashboardFilters from './AttendanceDashboardFilters';
+import AttendanceRateSummarySection from './AttendanceRateSummarySection';
 import useOperationalAttendanceSessions from '../../hooks/useOperationalAttendanceSessions';
 import useAttendanceDashboardFilters from '../../hooks/useAttendanceDashboardFilters';
 import { ATTENDANCE_DASHBOARD, DASHBOARD_DATE_NOTE } from '../../constants/dashboardDescriptions';
@@ -91,6 +92,7 @@ const AttendanceDashboardView = ({
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
 
   const isTeacher = userType === 'Teacher';
+  const canEditAttendance = userType === 'Admin' || userType === 'Teacher';
 
   const { options: filterOptions, loading: filtersLoading } = useAttendanceDashboardFilters({
     branchId,
@@ -123,12 +125,15 @@ const AttendanceDashboardView = ({
     totalMarks,
     presentCount,
     absentCount,
+    absentRate,
     lateCount,
     excusedCount,
     leaveEarlyCount,
     sessionCompletionRate,
     markCoverageRate,
     presentRate,
+    absentRate,
+    rateSummaries,
     dailyBreakdown,
     loading,
     error,
@@ -301,7 +306,7 @@ const AttendanceDashboardView = ({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatsCard
           title="Session completion rate"
           value={loading ? '…' : formatRate(sessionCompletionRate)}
@@ -322,6 +327,13 @@ const AttendanceDashboardView = ({
           iconName="academicCap"
           accent="bg-green-500/80"
           tooltip={ATTENDANCE_DASHBOARD.presentRate}
+        />
+        <StatsCard
+          title="Absences rate"
+          value={loading ? '…' : formatRate(absentRate)}
+          iconName="xCircle"
+          accent="bg-red-500/80"
+          tooltip={ATTENDANCE_DASHBOARD.absentRate}
         />
       </div>
 
@@ -418,6 +430,8 @@ const AttendanceDashboardView = ({
         )}
       </div>
 
+      <AttendanceRateSummarySection mode={mode} rateSummaries={rateSummaries} loading={loading} />
+
       {isTruncated ? (
         <p className="text-sm text-amber-700">
           Showing a capped session list. Use <strong>See all sessions</strong> for the full list.
@@ -433,6 +447,7 @@ const AttendanceDashboardView = ({
         classId={selectedClassId}
         teacherId={selectedTeacherId}
         showBranchColumn={showBranchColumn}
+        canEditAttendance={canEditAttendance}
       />
 
       <OperationalAttendanceModal
@@ -447,6 +462,7 @@ const AttendanceDashboardView = ({
         teacherId={selectedTeacherId}
         branchName={branchName}
         showBranchColumn={showBranchColumn}
+        canEditAttendance={canEditAttendance}
         onAttendanceSaved={refresh}
       />
     </div>

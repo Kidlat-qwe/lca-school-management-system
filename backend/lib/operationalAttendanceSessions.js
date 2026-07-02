@@ -128,8 +128,15 @@ function buildOperationalAttendanceScope(options = {}) {
         cs.status,
         c.class_name,
         c.level_tag,
+        c.program_id,
         p.program_name,
         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
+        COALESCE(
+          cs.substitute_teacher_id,
+          cs.assigned_teacher_id,
+          cs.original_teacher_id,
+          c.teacher_id
+        ) AS teacher_id,
         COALESCE(
           u_sub.full_name,
           u_assign.full_name,
@@ -168,8 +175,10 @@ function buildOperationalAttendanceScope(options = {}) {
         acs.status,
         acs.class_name,
         acs.level_tag,
+        acs.program_id,
         acs.program_name,
         acs.branch_name,
+        acs.teacher_id,
         acs.teacher_name,
         COALESCE(e.enrolled_count, 0) AS enrolled_count,
         (
@@ -317,6 +326,7 @@ async function loadOperationalAttendanceSummary(queryFn, scope) {
   const totalMarks = Number(row.total_marks) || 0;
   const totalEnrolledSlots = Number(row.total_enrolled_slots) || 0;
   const presentCount = Number(row.present_count) || 0;
+  const absentCount = Number(row.absent_count) || 0;
 
   return {
     total_count: totalCount,
@@ -326,7 +336,7 @@ async function loadOperationalAttendanceSummary(queryFn, scope) {
     upcoming_count: upcomingCount,
     total_marks: totalMarks,
     present_count: presentCount,
-    absent_count: Number(row.absent_count) || 0,
+    absent_count: absentCount,
     late_count: Number(row.late_count) || 0,
     excused_count: Number(row.excused_count) || 0,
     leave_early_count: Number(row.leave_early_count) || 0,
@@ -336,6 +346,7 @@ async function loadOperationalAttendanceSummary(queryFn, scope) {
     mark_coverage_rate:
       totalEnrolledSlots > 0 ? Math.round((totalMarks / totalEnrolledSlots) * 1000) / 10 : null,
     present_rate: totalMarks > 0 ? Math.round((presentCount / totalMarks) * 1000) / 10 : null,
+    absent_rate: totalMarks > 0 ? Math.round((absentCount / totalMarks) * 1000) / 10 : null,
   };
 }
 
@@ -365,6 +376,120 @@ async function loadOperationalAttendanceDailyBreakdown(queryFn, scope) {
     taken_sessions: Number(row.taken_sessions) || 0,
     pending_sessions: Number(row.pending_sessions) || 0,
   }));
+}
+
+function mapAttendanceRateSummaryRow(row) {
+  const totalMarks = Number(row.total_marks) || 0;
+  const presentCount = Number(row.present_count) || 0;
+  const absentCount = Number(row.absent_count) || 0;
+
+  return {
+    total_marks: totalMarks,
+    present_count: presentCount,
+    absent_count: absentCount,
+    late_count: Number(row.late_count) || 0,
+    excused_count: Number(row.excused_count) || 0,
+    leave_early_count: Number(row.leave_early_count) || 0,
+    present_rate: totalMarks > 0 ? Math.round((presentCount / totalMarks) * 1000) / 10 : null,
+    absent_rate: totalMarks > 0 ? Math.round((absentCount / totalMarks) * 1000) / 10 : null,
+  };
+}
+
+async function loadOperationalAttendanceRateSummaries(queryFn, scope) {
+  const baseMarksCte = `
+    WITH ${scope.scopedSessionsCte},
+    scoped_marks AS (
+      SELECT
+        d.teacher_id,
+        d.teacher_name,
+        d.program_id,
+        d.program_name,
+        d.class_id,
+        d.class_name,
+        a.status
+      FROM attendancetbl a
+      INNER JOIN derived_sessions d ON d.classsession_id = a.classsession_id
+    )
+  `;
+
+  const [byTeacherResult, byProgramResult, byClassResult] = await Promise.all([
+    queryFn(
+      `
+        ${baseMarksCte}
+        SELECT
+          teacher_id,
+          teacher_name,
+          COUNT(*)::int AS total_marks,
+          COUNT(*) FILTER (WHERE status = 'Present')::int AS present_count,
+          COUNT(*) FILTER (WHERE status = 'Absent')::int AS absent_count,
+          COUNT(*) FILTER (WHERE status = 'Late')::int AS late_count,
+          COUNT(*) FILTER (WHERE status = 'Excused')::int AS excused_count,
+          COUNT(*) FILTER (WHERE status = 'Leave Early')::int AS leave_early_count
+        FROM scoped_marks
+        GROUP BY teacher_id, teacher_name
+        ORDER BY teacher_name ASC NULLS LAST, teacher_id ASC NULLS LAST
+      `,
+      scope.params
+    ),
+    queryFn(
+      `
+        ${baseMarksCte}
+        SELECT
+          program_id,
+          program_name,
+          COUNT(*)::int AS total_marks,
+          COUNT(*) FILTER (WHERE status = 'Present')::int AS present_count,
+          COUNT(*) FILTER (WHERE status = 'Absent')::int AS absent_count,
+          COUNT(*) FILTER (WHERE status = 'Late')::int AS late_count,
+          COUNT(*) FILTER (WHERE status = 'Excused')::int AS excused_count,
+          COUNT(*) FILTER (WHERE status = 'Leave Early')::int AS leave_early_count
+        FROM scoped_marks
+        GROUP BY program_id, program_name
+        ORDER BY program_name ASC NULLS LAST, program_id ASC NULLS LAST
+      `,
+      scope.params
+    ),
+    queryFn(
+      `
+        ${baseMarksCte}
+        SELECT
+          class_id,
+          class_name,
+          program_name,
+          teacher_name,
+          COUNT(*)::int AS total_marks,
+          COUNT(*) FILTER (WHERE status = 'Present')::int AS present_count,
+          COUNT(*) FILTER (WHERE status = 'Absent')::int AS absent_count,
+          COUNT(*) FILTER (WHERE status = 'Late')::int AS late_count,
+          COUNT(*) FILTER (WHERE status = 'Excused')::int AS excused_count,
+          COUNT(*) FILTER (WHERE status = 'Leave Early')::int AS leave_early_count
+        FROM scoped_marks
+        GROUP BY class_id, class_name, program_name, teacher_name
+        ORDER BY class_name ASC NULLS LAST, class_id ASC NULLS LAST
+      `,
+      scope.params
+    ),
+  ]);
+
+  return {
+    by_teacher: (byTeacherResult.rows || []).map((row) => ({
+      teacher_id: row.teacher_id,
+      teacher_name: row.teacher_name || 'Unassigned',
+      ...mapAttendanceRateSummaryRow(row),
+    })),
+    by_program: (byProgramResult.rows || []).map((row) => ({
+      program_id: row.program_id,
+      program_name: row.program_name || 'Unassigned program',
+      ...mapAttendanceRateSummaryRow(row),
+    })),
+    by_class: (byClassResult.rows || []).map((row) => ({
+      class_id: row.class_id,
+      class_name: row.class_name || `Class ${row.class_id}`,
+      program_name: row.program_name || '—',
+      teacher_name: row.teacher_name || '—',
+      ...mapAttendanceRateSummaryRow(row),
+    })),
+  };
 }
 
 /**
@@ -423,10 +548,11 @@ export async function loadOperationalAttendanceSessions(queryFn, options = {}) {
     ${limitClause}
   `;
 
-  const [summary, listResult, dailyBreakdown] = await Promise.all([
+  const [summary, listResult, dailyBreakdown, rateSummaries] = await Promise.all([
     loadOperationalAttendanceSummary(queryFn, scope),
     queryFn(listSql, scope.params),
     loadOperationalAttendanceDailyBreakdown(queryFn, scope),
+    loadOperationalAttendanceRateSummaries(queryFn, scope),
   ]);
 
   const sessions = (listResult.rows || []).map(({ is_taken, scheduled_date_raw, ...row }) => ({
@@ -469,7 +595,9 @@ export async function loadOperationalAttendanceSessions(queryFn, options = {}) {
     session_completion_rate: summary.session_completion_rate,
     mark_coverage_rate: summary.mark_coverage_rate,
     present_rate: summary.present_rate,
+    absent_rate: summary.absent_rate,
     daily_breakdown: dailyBreakdown,
+    rate_summaries: rateSummaries,
     list_count: listCount,
     is_truncated: isTruncated,
     sessions,

@@ -26,6 +26,7 @@ const OperationalAttendanceCard = ({
   showBranchColumn = false,
   title = 'Take attendance',
   seeAllLabel = 'See all',
+  canEditAttendance = true,
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [activeSession, setActiveSession] = useState(null);
@@ -132,7 +133,7 @@ const OperationalAttendanceCard = ({
               <tbody className="divide-y divide-gray-100">
                 {previewSessions.map((session) => {
                   const takenMeta = getOperationalAttendanceTakenMeta(session);
-                  const actionMeta = getOperationalAttendanceActionMeta(session);
+                  const actionMeta = getOperationalAttendanceActionMeta(session, { canEditAttendance });
 
                   return (
                     <tr key={getOperationalSessionRowKey(session)} className="text-gray-800">
@@ -188,6 +189,7 @@ const OperationalAttendanceCard = ({
         branchId={branchId}
         branchName={branchName}
         showBranchColumn={showBranchColumn}
+        canEditAttendance={canEditAttendance}
         onAttendanceSaved={handleAttendanceSaved}
       />
 
@@ -196,6 +198,7 @@ const OperationalAttendanceCard = ({
         onClose={() => setActiveSession(null)}
         classsessionId={activeSession?.classsession_id}
         teacherName={activeSession?.teacher_name}
+        canEditAttendance={canEditAttendance}
         onSaved={handleAttendanceSaved}
       />
     </>

@@ -38,6 +38,7 @@ const OperationalAttendanceModal = ({
   teacherId = '',
   branchName = '',
   showBranchColumn = false,
+  canEditAttendance = true,
   onAttendanceSaved,
 }) => {
   const [attendanceFilter, setAttendanceFilter] = useState('all');
@@ -130,7 +131,7 @@ const OperationalAttendanceModal = ({
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-gray-200 bg-gradient-to-r from-teal-50/80 to-white px-5 py-4 sm:px-7">
           <div className="min-w-0 flex-1">
             <h2 id="operational-attendance-modal-title" className="text-xl font-semibold tracking-tight text-gray-900">
-              Update attendance
+              {canEditAttendance ? 'Update attendance' : 'View attendance'}
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               {periodLabel}
@@ -242,7 +243,7 @@ const OperationalAttendanceModal = ({
                   <tbody className="divide-y divide-gray-100 text-sm text-gray-700">
                     {sessions.map((session) => {
                       const takenMeta = getOperationalAttendanceTakenMeta(session);
-                      const actionMeta = getOperationalAttendanceActionMeta(session);
+                      const actionMeta = getOperationalAttendanceActionMeta(session, { canEditAttendance });
 
                       return (
                         <tr key={getOperationalSessionRowKey(session)} className="hover:bg-gray-50/80">
@@ -304,6 +305,7 @@ const OperationalAttendanceModal = ({
         onClose={() => setActiveSession(null)}
         classsessionId={activeSession?.classsession_id}
         teacherName={activeSession?.teacher_name}
+        canEditAttendance={canEditAttendance}
         onSaved={handleAttendanceSaved}
       />
     </div>,

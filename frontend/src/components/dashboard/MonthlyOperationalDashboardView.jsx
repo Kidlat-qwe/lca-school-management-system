@@ -102,6 +102,8 @@ const MonthlyOperationalDashboardView = ({
   const [merchReleasedModalOpen, setMerchReleasedModalOpen] = useState(false);
   const userType = userInfo?.user_type || userInfo?.userType || '';
   const isAdmin = userType === 'Admin';
+  const isSuperadmin = userType === 'Superadmin';
+  const canTakeAttendance = userType === 'Admin' || userType === 'Teacher';
   const basePath = getClassesBasePath(userType);
 
   const fetchDashboard = useCallback(async () => {
@@ -397,7 +399,7 @@ const MonthlyOperationalDashboardView = ({
 
         <div className="space-y-3">
           <p className="text-sm font-medium text-gray-700">{MONTHLY_OPERATIONAL.financialSection}</p>
-          <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
+          <div className={`grid grid-cols-1 items-stretch gap-4 ${isSuperadmin ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
             <div className="min-w-0">
               <CombinedStatsCard
                 title="Sales & Payments"
@@ -420,15 +422,18 @@ const MonthlyOperationalDashboardView = ({
                 onViewAll={goPaymentLogsForPeriod}
               />
             </div>
-            <div className="min-w-0">
-              <OperationalAttendanceCard
-                mode="monthly"
-                summaryMonth={selectedMonth}
-                branchId={branchId}
-                branchName={selectedBranchName}
-                showBranchColumn={canFilterAcrossBranches && !branchId}
-              />
-            </div>
+            {canTakeAttendance ? (
+              <div className="min-w-0">
+                <OperationalAttendanceCard
+                  mode="monthly"
+                  summaryMonth={selectedMonth}
+                  branchId={branchId}
+                  branchName={selectedBranchName}
+                  showBranchColumn={canFilterAcrossBranches && !branchId}
+                  canEditAttendance={canTakeAttendance}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
 

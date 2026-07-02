@@ -34,6 +34,7 @@ export default function ClassSessionAttendanceModal({
   onClose,
   classsessionId = null,
   teacherName = '',
+  canEditAttendance = true,
   onSaved,
 }) {
   const [attendanceData, setAttendanceData] = useState(null);
@@ -152,12 +153,14 @@ export default function ClassSessionAttendanceModal({
 
   const isAttendanceWindowClosed = !attendanceWindow.isOpen;
   const isAttendanceLocked =
+    !canEditAttendance ||
     justSaved ||
     attendanceData?.session?.status === 'Completed' ||
     isAttendanceWindowClosed;
 
-  const lockReason =
-    attendanceData?.session?.status === 'Completed'
+  const lockReason = !canEditAttendance
+    ? 'Only branch admins and teachers can take or update attendance.'
+    : attendanceData?.session?.status === 'Completed'
       ? 'Attendance for this session has been saved and can no longer be edited.'
       : isAttendanceWindowClosed
         ? attendanceWindow.message
@@ -371,6 +374,19 @@ export default function ClassSessionAttendanceModal({
 
               <div className="flex w-full flex-col border-t border-gray-200 bg-gray-50 p-4 sm:p-6 lg:w-80 lg:border-l lg:border-t-0">
                 <h3 className="mb-4 text-lg font-bold text-gray-900">Actions</h3>
+                {isAttendanceLocked && !canEditAttendance ? (
+                  <div className="mb-4 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 p-3">
+                    <svg className="h-5 w-5 shrink-0 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">View only</div>
+                      <div className="text-xs text-slate-700">{lockReason}</div>
+                    </div>
+                  </div>
+                ) : null}
+
                 {isAttendanceLocked && session?.status === 'Completed' ? (
                   <div className="mb-4 flex items-center gap-2 rounded-lg border border-green-200 bg-green-100 p-3">
                     <svg className="h-5 w-5 shrink-0 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -415,7 +431,7 @@ export default function ClassSessionAttendanceModal({
                   title={isAttendanceLocked ? lockReason : hasPendingStudents ? 'Mark all students before saving.' : ''}
                   className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#F7C844] to-[#F5B82E] px-6 py-4 text-lg font-bold text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : session?.status === 'Completed' || justSaved ? 'Attendance Saved' : 'Save Attendance'}
+                  {saving ? 'Saving...' : !canEditAttendance ? 'View only' : session?.status === 'Completed' || justSaved ? 'Attendance Saved' : 'Save Attendance'}
                 </button>
                 {hasPendingStudents && !isAttendanceLocked ? (
                   <p className="mt-3 text-center text-xs text-amber-600">Mark all students before saving</p>

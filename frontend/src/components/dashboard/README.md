@@ -4,7 +4,7 @@ Shared UI for operational, enrollment, and financial dashboards.
 
 ## Operational attendance shortcuts
 
-Superadmin and Admin operational dashboards use a compact **Take attendance** card in the Sales summary row (alongside Sales & Payments and Recent invoice payments).
+Superadmin and **Admin** operational dashboards use a compact **Take attendance** card in the Sales summary row (alongside Sales & Payments and Recent invoice payments). **Superadmin does not see this card** — use the dedicated Daily/Monthly Attendance dashboards to view summaries only.
 
 | Component | Role |
 |-----------|------|
@@ -44,7 +44,8 @@ Query params:
 
 | Component | Role |
 |-----------|------|
-| `AttendanceDashboardView.jsx` | Full daily/monthly attendance dashboard — KPI cards, rates, mark distribution chart, monthly daily trend, session table, modal |
+| `AttendanceDashboardView.jsx` | Full daily/monthly attendance dashboard — KPI cards, rates, mark distribution chart, monthly daily trend, rate summary tables, session table, modal |
+| `AttendanceRateSummarySection.jsx` | Tabbed tables: attendance rates by teacher, program, and class (Present + Absences rates) |
 
 **Routes (per role):**
 
@@ -56,7 +57,9 @@ Query params:
 
 Sidebar: **Dashboard → Attendance → Daily / Monthly Attendance Dashboard**
 
-Extended API fields on `GET /dashboard/operational-attendance-sessions`: `session_completion_rate`, `mark_coverage_rate`, `present_rate`, mark counts, `daily_breakdown` (monthly).
+Extended API fields on `GET /dashboard/operational-attendance-sessions`: `session_completion_rate`, `mark_coverage_rate`, `present_rate`, `absent_rate`, mark counts, `daily_breakdown` (monthly), `rate_summaries` (`by_teacher`, `by_program`, `by_class`).
+
+**Take attendance access:** Branch **Admin** and **Teacher** only. Superadmin can view sessions and summaries but cannot save attendance (`POST /attendance/session/:id` is Admin/Teacher only).
 
 Filter dropdowns: `GET /dashboard/operational-attendance-filter-options?branch_id=&program_id=`
 

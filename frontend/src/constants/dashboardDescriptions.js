@@ -296,9 +296,15 @@ export const ATTENDANCE_DASHBOARD = {
   markCoverageRate:
     'Student attendance marks recorded vs enrolled slots on sessions already marked complete.',
   presentRate: 'Present marks as a share of all attendance marks recorded in this period.',
+  absentRate: 'Absent marks as a share of all attendance marks recorded in this period.',
+  dailyRateSummaryIntro:
+    'Student attendance rates for the selected day, grouped by teacher, program, or class. Rates use recorded marks (Present, Absent, Late, Excused, Leave Early).',
+  monthlyRateSummaryIntro:
+    'Student attendance rates for the selected month, grouped by teacher, program, or class. Rates use recorded marks (Present, Absent, Late, Excused, Leave Early).',
   markDistribution: 'Breakdown of student attendance marks (Present, Absent, Late, Excused, Leave Early).',
   dailyTrend: 'Sessions taken vs still pending for each day in the month.',
   teacherScopeNote: 'Only classes and sessions assigned to you are included.',
   adminScopeNote: 'Sessions for your branch only.',
-  superadminScopeNote: 'Use the branch filter in the header to narrow results, or leave unset for all branches.',
+  superadminScopeNote:
+    'Use the branch filter in the header to narrow results, or leave unset for all branches. Superadmin can view attendance only — take or update attendance is limited to branch admins and teachers.',
 };

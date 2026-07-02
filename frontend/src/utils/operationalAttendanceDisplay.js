@@ -86,8 +86,18 @@ export const getOperationalAttendanceTakenMeta = (session) => {
   };
 };
 
-export const getOperationalAttendanceActionMeta = (session) => {
+export const getOperationalAttendanceActionMeta = (
+  session,
+  { canEditAttendance = true } = {}
+) => {
   const isTaken = isOperationalSessionAttendanceTaken(session);
+
+  if (!canEditAttendance) {
+    return {
+      actionLabel: 'View',
+      actionClass: 'text-indigo-600 hover:text-indigo-800',
+    };
+  }
 
   if (isTaken) {
     return {

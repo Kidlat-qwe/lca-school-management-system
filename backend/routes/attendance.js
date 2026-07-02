@@ -133,7 +133,7 @@ router.get(
 /**
  * POST /api/v1/attendance/session/:sessionId
  * Create or update attendance records for a class session
- * Access: Superadmin, Admin, Teacher
+ * Access: Admin, Teacher
  */
 router.post(
   '/session/:sessionId',
@@ -145,7 +145,7 @@ router.post(
     body('attendance.*.notes').optional().trim(),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireRole('Admin', 'Teacher'),
   async (req, res, next) => {
     const client = await getClient();
     try {
@@ -507,7 +507,7 @@ router.get(
 /**
  * PUT /api/v1/attendance/:attendanceId
  * Update a specific attendance record
- * Access: Superadmin, Admin, Teacher
+ * Access: Admin, Teacher
  */
 router.put(
   '/:attendanceId',
@@ -517,7 +517,7 @@ router.put(
     body('notes').optional().trim(),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireRole('Admin', 'Teacher'),
   async (req, res, next) => {
     try {
       const { attendanceId } = req.params;
