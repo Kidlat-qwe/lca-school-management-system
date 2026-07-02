@@ -283,3 +283,22 @@ export const TEACHER_DASHBOARD = {
   monthlySectionSubtitle: (monthLabel, pending, taken, total) =>
     `${pending} need attendance · ${taken} already taken · ${total} total in ${monthLabel}.`,
 };
+
+export const ATTENDANCE_DASHBOARD = {
+  dailyPageTitle: 'Daily Attendance Dashboard',
+  monthlyPageTitle: 'Monthly Attendance Dashboard',
+  dailyIntro:
+    'Session attendance for the selected date — summary counts, student mark rates, and take or update attendance in place (same data as Class Details).',
+  monthlyIntro:
+    'Attendance across the selected month — session completion, student mark breakdown, daily trends, and full session list with take/update actions.',
+  sessionCompletionRate:
+    'Share of due sessions (excluding future dates) where attendance was saved (session status Completed).',
+  markCoverageRate:
+    'Student attendance marks recorded vs enrolled slots on sessions already marked complete.',
+  presentRate: 'Present marks as a share of all attendance marks recorded in this period.',
+  markDistribution: 'Breakdown of student attendance marks (Present, Absent, Late, Excused, Leave Early).',
+  dailyTrend: 'Sessions taken vs still pending for each day in the month.',
+  teacherScopeNote: 'Only classes and sessions assigned to you are included.',
+  adminScopeNote: 'Sessions for your branch only.',
+  superadminScopeNote: 'Use the branch filter in the header to narrow results, or leave unset for all branches.',
+};

@@ -18,6 +18,9 @@ const OperationalAttendanceShortcuts = ({
   summaryDate = '',
   summaryMonth = '',
   branchId = '',
+  programId = '',
+  classId = '',
+  teacherId = '',
   showBranchColumn = false,
   showHeader = true,
 }) => {
@@ -29,6 +32,9 @@ const OperationalAttendanceShortcuts = ({
       summaryDate,
       summaryMonth,
       branchId,
+      programId,
+      classId,
+      teacherId,
       attendanceFilter: 'all',
     });
 

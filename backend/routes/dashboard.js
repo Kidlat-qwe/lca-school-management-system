@@ -4,7 +4,7 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
-import { loadOperationalAttendanceSessions } from '../lib/operationalAttendanceSessions.js';
+import { loadOperationalAttendanceSessions, loadOperationalAttendanceFilterOptions } from '../lib/operationalAttendanceSessions.js';
 import { todayYmdManila } from '../utils/dateUtils.js';
 import {
   loadEnrollmentDashboardMetrics,
@@ -2039,6 +2039,9 @@ router.get(
       .matches(/^\d{4}-\d{2}$/)
       .withMessage('summary_month must be YYYY-MM'),
     queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('program_id').optional().isInt().withMessage('Program ID must be an integer'),
+    queryValidator('class_id').optional().isInt().withMessage('Class ID must be an integer'),
+    queryValidator('teacher_id').optional().isInt().withMessage('Teacher ID must be an integer'),
     queryValidator('attendance_filter')
       .optional()
       .isIn(['all', 'pending', 'taken', 'upcoming'])
@@ -2072,6 +2075,9 @@ router.get(
         userType,
         attendanceFilter: req.query.attendance_filter || 'all',
         listLimit: req.query.list_limit ? parseInt(req.query.list_limit, 10) : null,
+        programId: req.query.program_id ? parseInt(req.query.program_id, 10) : null,
+        classId: req.query.class_id ? parseInt(req.query.class_id, 10) : null,
+        teacherFilterId: req.query.teacher_id ? parseInt(req.query.teacher_id, 10) : null,
       });
 
       res.json({
@@ -2080,6 +2086,42 @@ router.get(
       });
     } catch (error) {
       console.error('Error fetching operational attendance sessions:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/dashboard/operational-attendance-filter-options
+ * Program / class / teacher dropdowns for attendance dashboards.
+ */
+router.get(
+  '/operational-attendance-filter-options',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('program_id').optional().isInt().withMessage('Program ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Teacher'),
+  async (req, res, next) => {
+    try {
+      const userType = req.user.userType;
+
+      let branchFilter = null;
+      if (userType === 'Admin' || userType === 'Teacher') {
+        branchFilter = req.user.branchId || null;
+      } else if (req.query.branch_id) {
+        branchFilter = parseInt(req.query.branch_id, 10);
+      }
+
+      const data = await loadOperationalAttendanceFilterOptions(query, {
+        branchId: branchFilter,
+        programId: req.query.program_id ? parseInt(req.query.program_id, 10) : null,
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error fetching operational attendance filter options:', error);
       next(error);
     }
   }

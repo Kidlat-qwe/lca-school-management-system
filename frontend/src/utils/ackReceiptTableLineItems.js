@@ -151,7 +151,13 @@ function parseMerchandiseSnapshot(ar) {
 
 export function resolveArGrossPayable(ar, { selectedPackage } = {}) {
   const paymentAmount = parseFloat(ar?.payment_amount || 0) || 0;
-  const isMerchandise = String(ar?.ar_type || '').toLowerCase() === 'merchandise';
+  const arType = String(ar?.ar_type || '').toLowerCase();
+  const isMerchandise = arType === 'merchandise';
+  const isEvent = arType === 'event';
+
+  if (isEvent) {
+    return parseFloat(ar?.package_amount_snapshot || paymentAmount || 0) || paymentAmount;
+  }
 
   if (isMerchandise) {
     const items = parseMerchandiseSnapshot(ar);
@@ -199,9 +205,16 @@ export function buildAckReceiptTableRows(ar, options = {}) {
   const paymentAmount = parseFloat(ar?.payment_amount || 0) || 0;
   const tipAmount = parseFloat(ar?.tip_amount || 0) || 0;
   const isMerchandise = String(ar?.ar_type || '').toLowerCase() === 'merchandise';
+  const isEvent = String(ar?.ar_type || '').toLowerCase() === 'event';
   const rows = [];
 
-  if (isMerchandise) {
+  if (isEvent) {
+    rows.push({
+      description: ar?.package_name_snapshot || 'Little Champions Got Talent event ticket',
+      amount: parseFloat(ar?.package_amount_snapshot || paymentAmount || 0) || paymentAmount,
+      excludeFromTotal: false,
+    });
+  } else if (isMerchandise) {
     const items = parseMerchandiseSnapshot(ar);
     if (items.length > 0) {
       for (const item of items) {

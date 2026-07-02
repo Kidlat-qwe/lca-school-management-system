@@ -46,6 +46,7 @@ import {
   PAYMENT_METHOD_REQUIRED_MESSAGE,
   validateFinancePaymentApproval,
   buildArVerifyRequestBody,
+  isCashPaymentMethod,
 } from '../../constants/paymentFormLabels';
 import { getArIssuedByLabel } from '../../utils/issuedByDisplay';
 import { buildAckReceiptTableRows } from '../../utils/ackReceiptTableLineItems';
@@ -59,12 +60,21 @@ import {
   AR_STATUS_FILTER,
 } from '../../utils/acknowledgementReceiptStatus';
 import { appendArListStatusExcludeParams } from '../../utils/fetchArVerificationBucketTotals';
+import LcgtEventArCreateSection from '../../components/receipts/LcgtEventArCreateSection';
+import {
+  LCGT_EVENT_AR_TYPE,
+  LCGT_EVENT_NAME,
+  LCGT_EVENT_TICKET_PRICE,
+  LCGT_EVENT_PARTICIPANT_TYPES,
+  isLcgtEventPaymentMethod,
+  canCreateLcgtEventAr,
+} from '../../constants/lcgtEventAr';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 
-/** Non-cash merchandise AR (Unverified): Finance/Superfinance verify / return / reject on AR page. */
+/** Non-cash merchandise/event AR (Unverified): Finance/Superfinance verify / return / reject on AR page. */
 const financeCanActOnMerchandiseAr = (receipt) =>
-  receipt?.ar_type === 'Merchandise' &&
+  (receipt?.ar_type === 'Merchandise' || receipt?.ar_type === LCGT_EVENT_AR_TYPE) &&
   isArUnverifiedStatus(receipt) &&
   !isArReturnedForCorrection(receipt) &&
   !isArRejectedStatus(receipt?.status) &&
@@ -73,10 +83,10 @@ const financeCanActOnMerchandiseAr = (receipt) =>
 
 const financeCanVerifyMerchandiseAr = financeCanActOnMerchandiseAr;
 
-/** Branch admin may resubmit Package or Merchandise AR after Finance returns it. */
+/** Branch admin may resubmit Package, Merchandise, or Event AR after Finance returns it. */
 const canBranchResubmitReturnedAr = (receipt) =>
   receipt &&
-  (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise') &&
+  (receipt.ar_type === 'Package' || receipt.ar_type === 'Merchandise' || receipt.ar_type === LCGT_EVENT_AR_TYPE) &&
   isArReturnedForCorrection(receipt);
 
 /** Non-cash package AR (Unverified): Finance/Superfinance verifies on AR page. Cash package is auto-verified on issue. */
@@ -233,6 +243,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     canApplyGlobalBranchFilter ? '' : (userBranchId ? String(userBranchId) : '')
   );
 
+  const canCreateLcgtEventArOption = useMemo(() => {
+    const resolvedBranch =
+      branches.find((b) => Number(b.branch_id) === Number(userBranchId)) || null;
+    return canCreateLcgtEventAr({
+      userType,
+      branchName: resolvedBranch?.branch_name ?? userInfo?.branch_name,
+      branchNickname: resolvedBranch?.branch_nickname ?? userInfo?.branch_nickname,
+      branchId: userBranchId,
+      branches: branches.length > 0 ? branches : null,
+    });
+  }, [
+    userType,
+    userBranchId,
+    branches,
+    userInfo?.branch_name,
+    userInfo?.branch_nickname,
+  ]);
+
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerUrl, setViewerUrl] = useState('');
 
@@ -266,6 +294,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [arType, setArType] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [merchandiseSelections, setMerchandiseSelections] = useState([]);
+  const [eventParticipantType, setEventParticipantType] = useState(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
   const [createFormData, setCreateFormData] = useState({
     prospect_student_name: '',
     prospect_student_contact: '',
@@ -357,11 +386,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       fetchBranches();
     } else if (userBranchId) {
       fetchPackages(userBranchId);
+      if (userType === 'Admin') {
+        fetchUserBranchForAr(userBranchId);
+      }
     } else {
       fetchPackages(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canApplyGlobalBranchFilter, userBranchId]);
+  }, [canApplyGlobalBranchFilter, userBranchId, userType]);
 
   useEffect(() => {
     if (!canApplyGlobalBranchFilter) return;
@@ -587,6 +619,22 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
   };
 
+  const fetchUserBranchForAr = async (branchId) => {
+    if (!branchId) return;
+    try {
+      setBranchesLoading(true);
+      const response = await apiRequest(`/branches/${branchId}`);
+      const branch = response?.data;
+      if (branch) {
+        setBranches([branch]);
+      }
+    } catch (err) {
+      console.error('Error fetching user branch for AR:', err);
+    } finally {
+      setBranchesLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!searchHydratedRef.current) {
       searchHydratedRef.current = true;
@@ -691,6 +739,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setArType('');
     setSelectedPackage(null);
     setMerchandiseSelections([]);
+    setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData({
       prospect_student_name: '',
       prospect_student_contact: '',
@@ -833,6 +882,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const getArPackageOrItems = (r) => {
+    if (r.ar_type === LCGT_EVENT_AR_TYPE) {
+      return r.package_name_snapshot || LCGT_EVENT_NAME;
+    }
     if (r.ar_type !== 'Merchandise') {
       return getArListPackagePrimaryLabel(r);
     }
@@ -1011,15 +1063,26 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const handleArTypeChange = (newType) => {
+    if (newType === LCGT_EVENT_AR_TYPE && !canCreateLcgtEventArOption) {
+      appAlert('Only Superadmin and Malolos branch admin can create Little Champions Got Talent event tickets.');
+      return;
+    }
     setArType(newType);
     if (!newType) return;
     setSelectedPackage(null);
     setMerchandiseSelections([]);
+    setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData((prev) => ({
       ...prev,
       package_id: '',
       payment_amount: '',
       prospect_student_contact: prev.prospect_student_contact,
+      prospect_student_name: '',
+      prospect_student_email: '',
+      level_tag: '',
+      reference_number: '',
+      payment_attachment_url: '',
+      payment_method: '',
     }));
     const branchId = isSuperadmin ? parseInt(selectedBranchId, 10) : userBranchId;
     if (newType === 'Merchandise' && branchId) {
@@ -1413,8 +1476,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const handleViewModalResubmit = async () => {
     if (!viewReceipt?.ack_receipt_id || !canResubmitViewReceipt) return;
     const isMerchViewResubmit = viewReceipt.ar_type === 'Merchandise';
+    const isEventViewResubmit = viewReceipt.ar_type === LCGT_EVENT_AR_TYPE;
+    const isAutoPaidViewResubmit = isMerchViewResubmit || isEventViewResubmit;
     const attach = (viewModalAttachmentUrl || '').trim();
-    if (!attach) {
+    if (!attach && !(isEventViewResubmit && isCashPaymentMethod(viewFormData.payment_method))) {
       appAlert('Please upload an attachment image before resubmitting.');
       return;
     }
@@ -1425,19 +1490,19 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       return;
     }
     const phone = (viewFormData.prospect_student_phone || '').trim();
-    if (!isValidPhilippineMobile(phone)) {
+    if (!isAutoPaidViewResubmit && !isValidPhilippineMobile(phone)) {
       appAlert('Please enter a valid mobile number for SMS notifications before resubmitting.');
       return;
     }
-    if (!(viewFormData.prospect_student_name || '').trim()) {
+    if (!(viewFormData.prospect_student_name || '').trim() && !isEventViewResubmit) {
       appAlert('Student name is required.');
       return;
     }
-    if (!(viewFormData.prospect_student_contact || '').trim()) {
+    if (!(viewFormData.prospect_student_contact || '').trim() && !isAutoPaidViewResubmit) {
       appAlert('Guardian name is required.');
       return;
     }
-    if (!isMerchViewResubmit && !(viewFormData.package_id || '').trim()) {
+    if (!isAutoPaidViewResubmit && !(viewFormData.package_id || '').trim()) {
       appAlert('Package is required.');
       return;
     }
@@ -1467,7 +1532,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         ? 0
         : parseFloat(String(viewFormData.discount_amount));
     if (
-      !isMerchViewResubmit &&
+      !isAutoPaidViewResubmit &&
       viewFormData.discount_amount !== '' &&
       (Number.isNaN(discountNum) || discountNum < 0)
     ) {
@@ -1476,7 +1541,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
     const grossResubmit = Number(viewPayableAmount) || 0;
     if (
-      !isMerchViewResubmit &&
+      !isAutoPaidViewResubmit &&
       viewFormData.discount_amount !== '' &&
       grossResubmit > 0 &&
       discountNum >= grossResubmit
@@ -1485,7 +1550,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       return;
     }
     let pkgId = viewFormData.package_id ? parseInt(viewFormData.package_id, 10) : NaN;
-    if (!isMerchViewResubmit && !Number.isFinite(pkgId)) {
+    if (!isAutoPaidViewResubmit && !Number.isFinite(pkgId)) {
       appAlert('Package is missing on this receipt. Please choose a package, then resubmit.');
       return;
     }
@@ -1503,7 +1568,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         payment_method: viewFormData.payment_method,
         payment_attachment_url: attach,
       };
-      if (!isMerchViewResubmit) {
+      if (!isAutoPaidViewResubmit) {
         payload.tip_amount = tipNum;
         payload.discount_amount = discountNum > 0 ? discountNum : 0;
         payload.package_id = pkgId;
@@ -1541,13 +1606,15 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
     const isMerch = arType === 'Merchandise';
+    const isEvent = arType === LCGT_EVENT_AR_TYPE;
+    const isCash = isCashPaymentMethod(createFormData.payment_method);
 
     if (!arType) {
       errors.ar_type = 'Issue type is required';
     }
     const arEmail = (createFormData.prospect_student_email || '').trim();
 
-    if (!name) {
+    if (!isEvent && !name) {
       errors.prospect_student_name = 'Student name is required';
     }
     if (isSuperadmin && !selectedBranchId) {
@@ -1555,12 +1622,32 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
 
     if (!(createFormData.issue_date || '').trim()) {
-      errors.issue_date = isMerch ? 'Payment date is required' : 'Issue date is required';
+      errors.issue_date = isMerch || isEvent ? 'Payment date is required' : 'Issue date is required';
     }
 
-    const guardianName = (createFormData.prospect_student_contact || '').trim();
-    if (!guardianName) {
-      errors.prospect_student_contact = 'Guardian name is required';
+    if (isEvent) {
+      if (!eventParticipantType) {
+        errors.event_participant_type = 'Participant type is required';
+      }
+      if (eventParticipantType === LCGT_EVENT_PARTICIPANT_TYPES.STUDENT) {
+        if (!name) {
+          errors.prospect_student_name = 'Student name is required';
+        }
+        const levelTag = (createFormData.level_tag || '').trim();
+        if (!levelTag) {
+          errors.level_tag = 'Level tag is required';
+        }
+        if (!arEmail) {
+          errors.prospect_student_email = 'Parent email is required';
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+          errors.prospect_student_email = 'Please enter a valid email address';
+        }
+      }
+    } else {
+      const guardianName = (createFormData.prospect_student_contact || '').trim();
+      if (!guardianName) {
+        errors.prospect_student_contact = 'Guardian name is required';
+      }
     }
 
     if (isMerch) {
@@ -1588,11 +1675,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       }
     }
 
-    if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+    if (!isEvent && arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
       errors.prospect_student_email = 'Please enter a valid email address';
     }
     const arPhone = (createFormData.prospect_student_phone || '').trim();
-    if (!isValidPhilippineMobile(arPhone)) {
+    if (!isEvent && !isValidPhilippineMobile(arPhone)) {
       errors.prospect_student_phone =
         'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)';
     }
@@ -1601,7 +1688,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
     const grossPayable = isMerch
       ? merchandiseTotalAmount()
-      : parseFloat(createFormData.payment_amount || '0') || 0;
+      : isEvent
+        ? LCGT_EVENT_TICKET_PRICE
+        : parseFloat(createFormData.payment_amount || '0') || 0;
     const discountParsed =
       createFormData.discount_amount === ''
         ? 0
@@ -1611,11 +1700,20 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     } else if (createFormData.discount_amount !== '' && grossPayable > 0 && discountParsed >= grossPayable) {
       errors.discount_amount = 'Discount amount must be less than payable amount';
     }
-    if (!isPaymentMethodSelected(createFormData.payment_method)) {
+    if (isEvent) {
+      if (!isLcgtEventPaymentMethod(createFormData.payment_method)) {
+        errors.payment_method = 'Payment method must be Cash, Online Banking, or E-wallets';
+      }
+    } else if (!isPaymentMethodSelected(createFormData.payment_method)) {
       errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
     }
     if (!(createFormData.payment_attachment_url || '').trim()) {
-      errors.payment_attachment_url = 'Attachment image is required';
+      if (!(isEvent && isCash)) {
+        errors.payment_attachment_url = 'Attachment image is required';
+      }
+    }
+    if (isEvent && !isCash && !(createFormData.reference_number || '').trim()) {
+      errors.reference_number = 'Reference number is required for non-cash payments';
     }
 
     setCreateFormErrors(errors);
@@ -1624,11 +1722,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleCreateSubmit = async (e) => {
     e.preventDefault();
+    if (arType === LCGT_EVENT_AR_TYPE && !canCreateLcgtEventArOption) {
+      appAlert('Only Superadmin and Malolos branch admin can create Little Champions Got Talent event tickets.');
+      return;
+    }
     if (!validateCreateForm()) return;
 
     setCreating(true);
     try {
       const isMerch = arType === 'Merchandise';
+      const isEvent = arType === LCGT_EVENT_AR_TYPE;
       const branchId = isSuperadmin && selectedBranchId
         ? parseInt(selectedBranchId, 10)
         : !isSuperadmin && userBranchId
@@ -1636,7 +1739,39 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         : null;
 
       let payload;
-      if (isMerch) {
+      if (isEvent) {
+        payload = {
+          ar_type: LCGT_EVENT_AR_TYPE,
+          event_participant_type: eventParticipantType,
+          prospect_student_name:
+            eventParticipantType === LCGT_EVENT_PARTICIPANT_TYPES.STUDENT
+              ? (createFormData.prospect_student_name || '').trim()
+              : undefined,
+          prospect_student_email:
+            eventParticipantType === LCGT_EVENT_PARTICIPANT_TYPES.STUDENT
+              ? (createFormData.prospect_student_email || '').trim()
+              : undefined,
+          level_tag:
+            eventParticipantType === LCGT_EVENT_PARTICIPANT_TYPES.STUDENT
+              ? (createFormData.level_tag || '').trim()
+              : undefined,
+          payment_amount: LCGT_EVENT_TICKET_PRICE,
+          reference_number: (createFormData.reference_number || '').trim() || undefined,
+          payment_attachment_url: createFormData.payment_attachment_url || undefined,
+          tip_amount:
+            createFormData.tip_amount === '' ? undefined : Math.max(0, parseFloat(createFormData.tip_amount || '0')),
+          discount_amount:
+            createFormData.discount_amount === ''
+              ? undefined
+              : Math.max(0, parseFloat(createFormData.discount_amount || '0')),
+          payment_method: createFormData.payment_method,
+          issue_date: (createFormData.issue_date || '').trim() || todayManilaYMD(),
+          branch_id: branchId,
+        };
+        if (!payload.reference_number) delete payload.reference_number;
+        if (!payload.payment_attachment_url) delete payload.payment_attachment_url;
+        if (payload.discount_amount === 0) delete payload.discount_amount;
+      } else if (isMerch) {
         payload = {
           ar_type: 'Merchandise',
           prospect_student_name: (createFormData.prospect_student_name || '').trim(),
@@ -1707,7 +1842,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       });
 
       const created = result?.data;
-      if (isMerch && created?.ack_receipt_id) {
+      if ((isMerch || isEvent) && created?.ack_receipt_id) {
         setShowCreateModal(false);
         let invoiceArNumber = null;
         if (created.invoice_id) {
@@ -1724,10 +1859,12 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
           invoiceArNumber,
           summaryMessage:
             result.message ||
-            'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.',
+            (isEvent
+              ? 'Little Champions Got Talent event ticket created successfully.'
+              : 'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated.'),
         });
         resetCreateForm();
-      } else if (!isMerch && created?.ack_receipt_id) {
+      } else if (!isMerch && !isEvent && created?.ack_receipt_id) {
         // Package AR: show receipt preview modal with dedicated PDF endpoint
         setShowCreateModal(false);
         setPackageArCreatedSummary({
@@ -2745,6 +2882,17 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                               : 'Merchandise';
                             })()}
                           </div>
+                        ) : r.ar_type === LCGT_EVENT_AR_TYPE ? (
+                          <>
+                            <div className="text-gray-900">{r.package_name_snapshot || LCGT_EVENT_NAME}</div>
+                            <div className="text-xs text-gray-500">
+                              ₱
+                              {Number(r.package_amount_snapshot || LCGT_EVENT_TICKET_PRICE).toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </div>
+                          </>
                         ) : (
                           <>
                             <div className="text-gray-900">
@@ -3192,6 +3340,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <option value="">Select type...</option>
                       <option value="Package">Package</option>
                       <option value="Merchandise">Merchandise</option>
+                      {canCreateLcgtEventArOption && (
+                        <option value={LCGT_EVENT_AR_TYPE}>{LCGT_EVENT_NAME}</option>
+                      )}
                     </select>
                   </div>
                 )}
@@ -3260,9 +3411,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   <p className="text-xs text-gray-500 mt-1">
                     {arType === 'Merchandise'
                       ? 'Record a merchandise payment without creating the full student record yet.'
-                      : arType === 'Package'
-                        ? 'Record a payment for a package without creating the full student record yet.'
-                        : 'Select an issue type to continue.'}
+                      : arType === LCGT_EVENT_AR_TYPE
+                        ? `Record a ${LCGT_EVENT_NAME} ticket payment.`
+                        : arType === 'Package'
+                          ? 'Record a payment for a package without creating the full student record yet.'
+                          : 'Select an issue type to continue.'}
                   </p>
                 </div>
                 <button
@@ -3338,6 +3491,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <option value="">Select type...</option>
                       <option value="Package">Package</option>
                       {isAdminOrSuperadmin && <option value="Merchandise">Merchandise</option>}
+                      {canCreateLcgtEventArOption && (
+                        <option value={LCGT_EVENT_AR_TYPE}>{LCGT_EVENT_NAME}</option>
+                      )}
                     </select>
                     {createFormErrors.ar_type && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.ar_type}</p>
@@ -3346,8 +3502,28 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 )}
                 {!arType ? (
                   <p className="text-sm text-gray-500 py-2">
-                    Choose Package or Merchandise above to continue filling out this form.
+                    Choose an issue type above to continue filling out this form.
                   </p>
+                ) : arType === LCGT_EVENT_AR_TYPE ? (
+                  <LcgtEventArCreateSection
+                    eventParticipantType={eventParticipantType}
+                    onParticipantTypeChange={(type) => {
+                      setEventParticipantType(type);
+                      setCreateFormErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.event_participant_type;
+                        return next;
+                      });
+                    }}
+                    createFormData={createFormData}
+                    createFormErrors={createFormErrors}
+                    handleCreateInputChange={handleCreateInputChange}
+                    handleAttachmentChange={handleAttachmentChange}
+                    attachmentUploading={attachmentUploading}
+                    creating={creating}
+                    openAttachmentViewer={openAttachmentViewer}
+                    clearAttachment={clearAttachment}
+                  />
                 ) : arType === 'Merchandise' ? (
                   <>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -4060,7 +4236,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       creating ||
                       attachmentUploading ||
                       !arType ||
-                      !(createFormData.payment_attachment_url || '').trim() ||
+                      (!(createFormData.payment_attachment_url || '').trim() &&
+                        !(
+                          arType === LCGT_EVENT_AR_TYPE &&
+                          isCashPaymentMethod(createFormData.payment_method)
+                        )) ||
                       (arType === 'Package' &&
                         (!createFormData.package_id ||
                           !(parseFloat(createFormData.payment_amount) > 0))) ||

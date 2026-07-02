@@ -6,6 +6,9 @@ export default function useOperationalAttendanceSessions({
   summaryDate = '',
   summaryMonth = '',
   branchId = '',
+  programId = '',
+  classId = '',
+  teacherId = '',
   attendanceFilter = 'all',
   listLimit = null,
   enabled = true,
@@ -27,6 +30,9 @@ export default function useOperationalAttendanceSessions({
         params.set('summary_date', summaryDate);
       }
       if (branchId) params.set('branch_id', branchId);
+      if (programId) params.set('program_id', programId);
+      if (classId) params.set('class_id', classId);
+      if (teacherId) params.set('teacher_id', teacherId);
       if (listLimit != null) params.set('list_limit', String(listLimit));
 
       const response = await apiRequest(
@@ -39,7 +45,7 @@ export default function useOperationalAttendanceSessions({
     } finally {
       setLoading(false);
     }
-  }, [mode, summaryDate, summaryMonth, branchId, attendanceFilter, listLimit, enabled]);
+  }, [mode, summaryDate, summaryMonth, branchId, programId, classId, teacherId, attendanceFilter, listLimit, enabled]);
 
   useEffect(() => {
     fetchSessions();
@@ -55,6 +61,17 @@ export default function useOperationalAttendanceSessions({
       partiallyTakenCount: data?.partially_taken_count || 0,
       upcomingCount: data?.upcoming_count || 0,
       totalCount: data?.total_count || 0,
+      totalMarks: data?.total_marks || 0,
+      presentCount: data?.present_count || 0,
+      absentCount: data?.absent_count || 0,
+      lateCount: data?.late_count || 0,
+      excusedCount: data?.excused_count || 0,
+      leaveEarlyCount: data?.leave_early_count || 0,
+      totalEnrolledSlots: data?.total_enrolled_slots || 0,
+      sessionCompletionRate: data?.session_completion_rate,
+      markCoverageRate: data?.mark_coverage_rate,
+      presentRate: data?.present_rate,
+      dailyBreakdown: data?.daily_breakdown || [],
       listCount: data?.list_count || 0,
       isTruncated: Boolean(data?.is_truncated),
     },
@@ -63,6 +80,17 @@ export default function useOperationalAttendanceSessions({
     completedCount: data?.completed_count || 0,
     upcomingCount: data?.upcoming_count || 0,
     totalCount: data?.total_count || 0,
+    totalMarks: data?.total_marks || 0,
+    presentCount: data?.present_count || 0,
+    absentCount: data?.absent_count || 0,
+    lateCount: data?.late_count || 0,
+    excusedCount: data?.excused_count || 0,
+    leaveEarlyCount: data?.leave_early_count || 0,
+    totalEnrolledSlots: data?.total_enrolled_slots || 0,
+    sessionCompletionRate: data?.session_completion_rate,
+    markCoverageRate: data?.mark_coverage_rate,
+    presentRate: data?.present_rate,
+    dailyBreakdown: data?.daily_breakdown || [],
     isTruncated: Boolean(data?.is_truncated),
     loading,
     error,

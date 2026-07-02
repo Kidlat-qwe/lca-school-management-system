@@ -11,6 +11,11 @@ Single unified dashboard for teachers (`TeacherDashboardView`). No separate dail
 3. **My assigned classes** — preview table with link to `/teacher/classes`
 4. **Monthly attendance** — month picker + compact card with See all modal
 
+**Dedicated attendance dashboards** (sidebar: Dashboard → Attendance):
+
+- `/teacher/daily-attendance-dashboard` — full daily stats, rates, charts, take/update attendance
+- `/teacher/monthly-attendance-dashboard` — monthly summary, daily trend chart, full session list
+
 **APIs:**
 
 - `GET /dashboard/operational-attendance-sessions` (teacher-scoped via auth)

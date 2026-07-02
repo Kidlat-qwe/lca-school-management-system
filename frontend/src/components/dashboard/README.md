@@ -22,6 +22,9 @@ Query params:
 | `mode` | `daily` or `monthly` |
 | `summary_date` / `summary_month` | Period scope |
 | `branch_id` | Optional branch filter |
+| `program_id` | Optional program filter |
+| `class_id` | Optional class filter |
+| `teacher_id` | Optional teacher filter (Superadmin/Admin) |
 | `attendance_filter` | `all`, `pending`, `taken`, or `upcoming` |
 | `list_limit` | Optional row cap for card preview (summary counts always use full period) |
 
@@ -36,6 +39,31 @@ Query params:
 **Modal filter tabs:** All · Needs attendance · Already taken · Upcoming
 
 **Take / View attendance:** Opens `ClassSessionAttendanceModal` in place (no navigation to Classes). Saves via `POST /attendance/session/:classsessionId` — same data as **Classes → View class details → Attendance**.
+
+## Dedicated Attendance dashboards
+
+| Component | Role |
+|-----------|------|
+| `AttendanceDashboardView.jsx` | Full daily/monthly attendance dashboard — KPI cards, rates, mark distribution chart, monthly daily trend, session table, modal |
+
+**Routes (per role):**
+
+| Role | Daily | Monthly |
+|------|-------|---------|
+| Superadmin | `/superadmin/daily-attendance-dashboard` | `/superadmin/monthly-attendance-dashboard` |
+| Admin | `/admin/daily-attendance-dashboard` | `/admin/monthly-attendance-dashboard` |
+| Teacher | `/teacher/daily-attendance-dashboard` | `/teacher/monthly-attendance-dashboard` |
+
+Sidebar: **Dashboard → Attendance → Daily / Monthly Attendance Dashboard**
+
+Extended API fields on `GET /dashboard/operational-attendance-sessions`: `session_completion_rate`, `mark_coverage_rate`, `present_rate`, mark counts, `daily_breakdown` (monthly).
+
+Filter dropdowns: `GET /dashboard/operational-attendance-filter-options?branch_id=&program_id=`
+
+| Component | Role |
+|-----------|------|
+| `AttendanceDashboardFilters.jsx` | Program / class / teacher selects on attendance dashboards |
+| `useAttendanceDashboardFilters.js` | Loads filter option lists for the selected branch |
 
 **List columns:** Class, Branch (when multi-branch), Teacher, Session, Schedule, Attendance status, Action
 

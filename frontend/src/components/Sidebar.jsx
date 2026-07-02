@@ -67,6 +67,22 @@ const Sidebar = ({ isOpen, onClose }) => {
           ],
         },
         {
+          name: 'Attendance',
+          roles: ['Superadmin', 'Admin', 'Teacher'],
+          children: [
+            {
+              name: 'Daily Attendance Dashboard',
+              path: `${basePath}/daily-attendance-dashboard`,
+              roles: ['Superadmin', 'Admin', 'Teacher'],
+            },
+            {
+              name: 'Monthly Attendance Dashboard',
+              path: `${basePath}/monthly-attendance-dashboard`,
+              roles: ['Superadmin', 'Admin', 'Teacher'],
+            },
+          ],
+        },
+        {
           name: 'Financial Dashboard',
           path: `${basePath}/financial-dashboard`,
         },
@@ -98,7 +114,29 @@ const Sidebar = ({ isOpen, onClose }) => {
         </svg>
       ),
       roles: ['Teacher'],
-      path: '/teacher',
+      children: [
+        {
+          name: 'Overview',
+          path: '/teacher',
+          roles: ['Teacher'],
+        },
+        {
+          name: 'Attendance',
+          roles: ['Teacher'],
+          children: [
+            {
+              name: 'Daily Attendance Dashboard',
+              path: '/teacher/daily-attendance-dashboard',
+              roles: ['Teacher'],
+            },
+            {
+              name: 'Monthly Attendance Dashboard',
+              path: '/teacher/monthly-attendance-dashboard',
+              roles: ['Teacher'],
+            },
+          ],
+        },
+      ],
     },
     {
       name: 'Dashboard',
@@ -462,6 +500,8 @@ const Sidebar = ({ isOpen, onClose }) => {
           if (child.name === 'Financial Dashboard') path = `${basePath}/financial-dashboard`;
           if (child.name === 'Daily Operational Dashboard') path = `${basePath}/daily-operational-dashboard`;
           if (child.name === 'Monthly Operational Dashboard') path = `${basePath}/monthly-operational-dashboard`;
+          if (child.name === 'Daily Attendance Dashboard') path = `${basePath}/daily-attendance-dashboard`;
+          if (child.name === 'Monthly Attendance Dashboard') path = `${basePath}/monthly-attendance-dashboard`;
           if (child.name === 'Operational summary') path = `${basePath}/operational-dashboard`;
           if (child.name === 'Phase Re-enrollment Dashboard') path = `${basePath}/phase-enrollment-dashboard`;
           if (child.name === 'Month Re-enrollment') path = `${basePath}/monthly-enrollment-dashboard`;

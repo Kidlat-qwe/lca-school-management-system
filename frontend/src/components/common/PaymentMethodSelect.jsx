@@ -16,8 +16,12 @@ const PaymentMethodSelect = ({
   required = true,
   className = 'input-field text-sm',
   id,
+  options: optionsOverride = null,
 }) => {
-  const options = resolvePaymentMethodOptions(value);
+  const options =
+    Array.isArray(optionsOverride) && optionsOverride.length > 0
+      ? optionsOverride
+      : resolvePaymentMethodOptions(value);
   const errorClass = error ? 'border-red-500' : '';
 
   return (

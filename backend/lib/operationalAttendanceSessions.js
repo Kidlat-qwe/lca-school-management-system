@@ -19,6 +19,9 @@ function buildOperationalAttendanceScope(options = {}) {
     branchId = null,
     teacherId = null,
     userType = null,
+    programId = null,
+    classId = null,
+    teacherFilterId = null,
   } = options;
 
   const todayManila = todayYmdManila();
@@ -63,6 +66,36 @@ function buildOperationalAttendanceScope(options = {}) {
       )
     )`;
     params.push(teacherId);
+  }
+
+  let programClause = '';
+  if (programId) {
+    paramCount += 1;
+    programClause = ` AND c.program_id = $${paramCount}`;
+    params.push(programId);
+  }
+
+  let classClause = '';
+  if (classId) {
+    paramCount += 1;
+    classClause = ` AND c.class_id = $${paramCount}`;
+    params.push(classId);
+  }
+
+  let teacherFilterClause = '';
+  if (userType !== 'Teacher' && teacherFilterId) {
+    paramCount += 1;
+    teacherFilterClause = ` AND (
+      c.teacher_id = $${paramCount}
+      OR cs.original_teacher_id = $${paramCount}
+      OR cs.assigned_teacher_id = $${paramCount}
+      OR cs.substitute_teacher_id = $${paramCount}
+      OR EXISTS (
+        SELECT 1 FROM classteacherstbl ct
+        WHERE ct.class_id = c.class_id AND ct.teacher_id = $${paramCount}
+      )
+    )`;
+    params.push(teacherFilterId);
   }
 
   paramCount += 1;
@@ -118,6 +151,9 @@ function buildOperationalAttendanceScope(options = {}) {
       WHERE COALESCE(c.status, 'Active') = 'Active'
         ${branchClause}
         ${teacherClause}
+        ${programClause}
+        ${classClause}
+        ${teacherFilterClause}
     ),
     canonical_sessions AS (
       SELECT
@@ -226,26 +262,109 @@ function buildOrderClause(attendanceFilter) {
 
 async function loadOperationalAttendanceSummary(queryFn, scope) {
   const summarySql = `
-    WITH ${scope.scopedSessionsCte}
+    WITH ${scope.scopedSessionsCte},
+    session_summary AS (
+      SELECT
+        COUNT(*)::int AS total_count,
+        COUNT(*) FILTER (
+          WHERE d.attendance_status = 'pending' AND d.is_taken = false
+        )::int AS pending_count,
+        COUNT(*) FILTER (WHERE d.is_taken)::int AS taken_count,
+        COUNT(*) FILTER (WHERE d.attendance_status = 'completed')::int AS completed_count,
+        COUNT(*) FILTER (WHERE d.attendance_status = 'upcoming')::int AS upcoming_count
+      FROM derived_sessions d
+    ),
+    mark_stats AS (
+      SELECT
+        COUNT(*)::int AS total_marks,
+        COUNT(*) FILTER (WHERE a.status = 'Present')::int AS present_count,
+        COUNT(*) FILTER (WHERE a.status = 'Absent')::int AS absent_count,
+        COUNT(*) FILTER (WHERE a.status = 'Late')::int AS late_count,
+        COUNT(*) FILTER (WHERE a.status = 'Excused')::int AS excused_count,
+        COUNT(*) FILTER (WHERE a.status = 'Leave Early')::int AS leave_early_count
+      FROM attendancetbl a
+      INNER JOIN derived_sessions d ON d.classsession_id = a.classsession_id
+    ),
+    enrolled_in_taken AS (
+      SELECT COALESCE(SUM(d.enrolled_count), 0)::int AS total_enrolled_slots
+      FROM derived_sessions d
+      WHERE d.is_taken = true
+    )
     SELECT
-      COUNT(*)::int AS total_count,
-      COUNT(*) FILTER (
-        WHERE d.attendance_status = 'pending' AND d.is_taken = false
-      )::int AS pending_count,
-      COUNT(*) FILTER (WHERE d.is_taken)::int AS taken_count,
-      COUNT(*) FILTER (WHERE d.attendance_status = 'completed')::int AS completed_count,
-      COUNT(*) FILTER (WHERE d.attendance_status = 'upcoming')::int AS upcoming_count
-    FROM derived_sessions d
+      ss.total_count,
+      ss.pending_count,
+      ss.taken_count,
+      ss.completed_count,
+      ss.upcoming_count,
+      COALESCE(ms.total_marks, 0)::int AS total_marks,
+      COALESCE(ms.present_count, 0)::int AS present_count,
+      COALESCE(ms.absent_count, 0)::int AS absent_count,
+      COALESCE(ms.late_count, 0)::int AS late_count,
+      COALESCE(ms.excused_count, 0)::int AS excused_count,
+      COALESCE(ms.leave_early_count, 0)::int AS leave_early_count,
+      COALESCE(eit.total_enrolled_slots, 0)::int AS total_enrolled_slots
+    FROM session_summary ss
+    CROSS JOIN mark_stats ms
+    CROSS JOIN enrolled_in_taken eit
   `;
 
   const result = await queryFn(summarySql, scope.params);
-  return result.rows[0] || {
-    total_count: 0,
-    pending_count: 0,
-    taken_count: 0,
-    completed_count: 0,
-    upcoming_count: 0,
+  const row = result.rows[0] || {};
+  const totalCount = Number(row.total_count) || 0;
+  const takenCount = Number(row.taken_count) || 0;
+  const upcomingCount = Number(row.upcoming_count) || 0;
+  const dueSessions = Math.max(0, totalCount - upcomingCount);
+  const totalMarks = Number(row.total_marks) || 0;
+  const totalEnrolledSlots = Number(row.total_enrolled_slots) || 0;
+  const presentCount = Number(row.present_count) || 0;
+
+  return {
+    total_count: totalCount,
+    pending_count: Number(row.pending_count) || 0,
+    taken_count: takenCount,
+    completed_count: Number(row.completed_count) || 0,
+    upcoming_count: upcomingCount,
+    total_marks: totalMarks,
+    present_count: presentCount,
+    absent_count: Number(row.absent_count) || 0,
+    late_count: Number(row.late_count) || 0,
+    excused_count: Number(row.excused_count) || 0,
+    leave_early_count: Number(row.leave_early_count) || 0,
+    total_enrolled_slots: totalEnrolledSlots,
+    session_completion_rate:
+      dueSessions > 0 ? Math.round((takenCount / dueSessions) * 1000) / 10 : null,
+    mark_coverage_rate:
+      totalEnrolledSlots > 0 ? Math.round((totalMarks / totalEnrolledSlots) * 1000) / 10 : null,
+    present_rate: totalMarks > 0 ? Math.round((presentCount / totalMarks) * 1000) / 10 : null,
   };
+}
+
+async function loadOperationalAttendanceDailyBreakdown(queryFn, scope) {
+  if (scope.mode !== 'monthly') {
+    return [];
+  }
+
+  const breakdownSql = `
+    WITH ${scope.scopedSessionsCte}
+    SELECT
+      d.scheduled_date AS session_date,
+      COUNT(*)::int AS total_sessions,
+      COUNT(*) FILTER (WHERE d.is_taken)::int AS taken_sessions,
+      COUNT(*) FILTER (
+        WHERE d.attendance_status = 'pending' AND d.is_taken = false
+      )::int AS pending_sessions
+    FROM derived_sessions d
+    GROUP BY d.scheduled_date
+    ORDER BY d.scheduled_date ASC
+  `;
+
+  const result = await queryFn(breakdownSql, scope.params);
+  return (result.rows || []).map((row) => ({
+    session_date: row.session_date,
+    total_sessions: Number(row.total_sessions) || 0,
+    taken_sessions: Number(row.taken_sessions) || 0,
+    pending_sessions: Number(row.pending_sessions) || 0,
+  }));
 }
 
 /**
@@ -256,9 +375,17 @@ export async function loadOperationalAttendanceSessions(queryFn, options = {}) {
   const {
     attendanceFilter = 'all',
     listLimit = null,
+    programId = null,
+    classId = null,
+    teacherFilterId = null,
   } = options;
 
-  const scope = buildOperationalAttendanceScope(options);
+  const scope = buildOperationalAttendanceScope({
+    ...options,
+    programId,
+    classId,
+    teacherFilterId,
+  });
   const filterClause = buildAttendanceFilterClause(attendanceFilter);
   const orderClause = buildOrderClause(attendanceFilter);
 
@@ -296,9 +423,10 @@ export async function loadOperationalAttendanceSessions(queryFn, options = {}) {
     ${limitClause}
   `;
 
-  const [summary, listResult] = await Promise.all([
+  const [summary, listResult, dailyBreakdown] = await Promise.all([
     loadOperationalAttendanceSummary(queryFn, scope),
     queryFn(listSql, scope.params),
+    loadOperationalAttendanceDailyBreakdown(queryFn, scope),
   ]);
 
   const sessions = (listResult.rows || []).map(({ is_taken, scheduled_date_raw, ...row }) => ({
@@ -331,8 +459,110 @@ export async function loadOperationalAttendanceSessions(queryFn, options = {}) {
     completed_count: Number(summary.completed_count) || 0,
     upcoming_count: Number(summary.upcoming_count) || 0,
     total_count: totalCount,
+    total_marks: Number(summary.total_marks) || 0,
+    present_count: Number(summary.present_count) || 0,
+    absent_count: Number(summary.absent_count) || 0,
+    late_count: Number(summary.late_count) || 0,
+    excused_count: Number(summary.excused_count) || 0,
+    leave_early_count: Number(summary.leave_early_count) || 0,
+    total_enrolled_slots: Number(summary.total_enrolled_slots) || 0,
+    session_completion_rate: summary.session_completion_rate,
+    mark_coverage_rate: summary.mark_coverage_rate,
+    present_rate: summary.present_rate,
+    daily_breakdown: dailyBreakdown,
     list_count: listCount,
     is_truncated: isTruncated,
     sessions,
+  };
+}
+
+/**
+ * Dropdown options for attendance dashboard filters (scoped to branch / program).
+ */
+export async function loadOperationalAttendanceFilterOptions(queryFn, options = {}) {
+  const { branchId = null, programId = null } = options;
+
+  const branchParams = [];
+  let branchWhere = '';
+  if (branchId) {
+    branchParams.push(branchId);
+    branchWhere = ' AND c.branch_id = $1';
+  }
+
+  const programsResult = await queryFn(
+    `
+      SELECT DISTINCT p.program_id, p.program_name
+      FROM programstbl p
+      INNER JOIN classestbl c ON c.program_id = p.program_id
+      WHERE COALESCE(c.status, 'Active') = 'Active'
+      ${branchWhere}
+      ORDER BY p.program_name ASC NULLS LAST, p.program_id ASC
+    `,
+    branchParams
+  );
+
+  const classParams = [...branchParams];
+  let classWhere = branchWhere;
+  if (programId) {
+    classParams.push(programId);
+    classWhere += ` AND c.program_id = $${classParams.length}`;
+  }
+  const classesResult = await queryFn(
+    `
+      SELECT c.class_id, c.class_name, c.program_id
+      FROM classestbl c
+      WHERE COALESCE(c.status, 'Active') = 'Active'
+      ${classWhere}
+      ORDER BY c.class_name ASC NULLS LAST, c.class_id DESC
+    `,
+    classParams
+  );
+
+  const teacherParams = [...branchParams];
+  const teacherExtraConditions = [];
+  if (programId) {
+    teacherParams.push(programId);
+    teacherExtraConditions.push(` AND c.program_id = $${teacherParams.length}`);
+  }
+  const teacherExtraWhere = teacherExtraConditions.join('');
+  const teachersResult = await queryFn(
+    `
+      SELECT DISTINCT u.user_id, u.full_name
+      FROM (
+        SELECT c.teacher_id AS user_id
+        FROM classestbl c
+        WHERE c.teacher_id IS NOT NULL
+          AND COALESCE(c.status, 'Active') = 'Active'
+          ${branchWhere}
+          ${teacherExtraWhere}
+        UNION
+        SELECT ct.teacher_id AS user_id
+        FROM classteacherstbl ct
+        INNER JOIN classestbl c ON c.class_id = ct.class_id
+        WHERE COALESCE(c.status, 'Active') = 'Active'
+          ${branchWhere}
+          ${teacherExtraWhere}
+      ) scoped_teachers
+      INNER JOIN userstbl u ON u.user_id = scoped_teachers.user_id
+      WHERE u.user_type = 'Teacher'
+      ORDER BY u.full_name ASC NULLS LAST, u.user_id ASC
+    `,
+    teacherParams
+  );
+
+  return {
+    programs: (programsResult.rows || []).map((row) => ({
+      program_id: row.program_id,
+      program_name: row.program_name,
+    })),
+    classes: (classesResult.rows || []).map((row) => ({
+      class_id: row.class_id,
+      class_name: row.class_name,
+      program_id: row.program_id,
+    })),
+    teachers: (teachersResult.rows || []).map((row) => ({
+      user_id: row.user_id,
+      full_name: row.full_name,
+    })),
   };
 }

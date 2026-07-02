@@ -9,6 +9,8 @@ const SUPPORTED_ROUTE_PREFIXES = ['/superadmin/', '/superfinance/'];
 const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'daily-operational-dashboard',
   'monthly-operational-dashboard',
+  'daily-attendance-dashboard',
+  'monthly-attendance-dashboard',
   'financial-dashboard',
   'operational-dashboard',
   'phase-enrollment-dashboard',

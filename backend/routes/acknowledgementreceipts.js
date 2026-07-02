@@ -47,6 +47,16 @@ import {
   buildArReturnedOnlySql,
   buildArExcludeReturnedSql,
 } from '../utils/acknowledgementReceiptStatus.js';
+import {
+  LCGT_EVENT_NAME,
+  LCGT_EVENT_TICKET_PRICE,
+  LCGT_EVENT_OUTSIDER_DISPLAY_NAME,
+  buildLcgtParticipantNotes,
+  isLcgtEventPaymentMethod,
+  isLcgtEventAr,
+  assertLcgtEventArAccess,
+} from '../utils/lcgtEventAr.js';
+import { createLcgtEventArInvoiceAndPayment } from '../lib/lcgtEventArInvoice.js';
 
 const router = express.Router();
 const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
@@ -886,17 +896,33 @@ router.get(
 /**
  * POST /api/sms/acknowledgement-receipts
  * Create a new acknowledgement receipt (front-desk fast payment)
- * Supports Package (enrollment) and Merchandise (buy merchandise) types
- * Access: Superadmin, Admin (branch admin) - Merchandise; Superadmin, Admin, Finance, Superfinance - Package
+ * Supports Package (enrollment), Merchandise (buy merchandise), and Event (LCGT ticket) types
+ * Access: Superadmin, Admin (branch admin) - Merchandise/Event; Superadmin, Admin, Finance, Superfinance - Package
  */
 router.post(
   '/',
   [
     body('ar_type')
       .optional({ nullable: true })
-      .isIn(['Package', 'Merchandise'])
-      .withMessage('ar_type must be Package or Merchandise'),
-    body('prospect_student_name').notEmpty().isString().withMessage('Student name is required'),
+      .isIn(['Package', 'Merchandise', 'Event'])
+      .withMessage('ar_type must be Package, Merchandise, or Event'),
+    body('event_participant_type')
+      .optional({ nullable: true })
+      .isIn(['student', 'outsider'])
+      .withMessage('event_participant_type must be student or outsider'),
+    body('prospect_student_name')
+      .optional({ nullable: true })
+      .isString()
+      .custom((value, { req }) => {
+        const arType = req.body.ar_type || 'Package';
+        if (arType === 'Event' && req.body.event_participant_type === 'outsider') {
+          return true;
+        }
+        if (!value || !String(value).trim()) {
+          throw new Error('Student name is required');
+        }
+        return true;
+      }),
     body('prospect_student_contact').optional({ nullable: true }).isString().withMessage('Guardian name must be a string'),
     body('prospect_student_email').optional({ nullable: true, checkFalsy: true }).isEmail().withMessage('Client email must be a valid email'),
     body('prospect_student_phone').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Phone number must be a string'),
@@ -926,8 +952,18 @@ router.post(
         return true;
       }),
     body('payment_attachment_url')
-      .custom((value) => typeof value === 'string' && value.trim().length > 0)
-      .withMessage('Attachment image is required'),
+      .optional({ nullable: true })
+      .custom((value, { req }) => {
+        const method = String(req.body.payment_method || 'Cash').trim();
+        const arType = req.body.ar_type || 'Package';
+        if (method === 'Cash' && arType === 'Event') {
+          return true;
+        }
+        if (!value || !String(value).trim()) {
+          throw new Error('Attachment image is required');
+        }
+        return true;
+      }),
     body('level_tag').optional({ nullable: true }).isString().withMessage('Level tag must be a string'),
     body('installment_option')
       .optional({ nullable: true })
@@ -943,14 +979,16 @@ router.post(
   async (req, res, next) => {
     const arType = req.body.ar_type || 'Package';
     const isMerchandise = arType === 'Merchandise';
+    const isEvent = arType === 'Event';
+    const isAutoPaidInvoiceAr = isMerchandise || isEvent;
 
-    // Merchandise AR: Superadmin and Admin only (branch admin)
-    if (isMerchandise) {
+    // Merchandise / Event AR: Superadmin and Admin only (branch admin)
+    if (isAutoPaidInvoiceAr) {
       const allowed = ['Superadmin', 'Admin'];
       if (!allowed.includes(req.user?.userType)) {
         return res.status(403).json({
           success: false,
-          message: 'Only Superadmin and Branch Admin can create merchandise acknowledgement receipts',
+          message: `Only Superadmin and Branch Admin can create ${isEvent ? 'event' : 'merchandise'} acknowledgement receipts`,
         });
       }
     }
@@ -977,29 +1015,37 @@ router.post(
         branch_id: bodyBranchId,
         merchandise_items = [],
         student_id: linkedStudentId,
+        event_participant_type,
       } = req.body;
 
       const discountValue = Math.max(0, parseFloat(discount_amount || 0) || 0);
 
       let branchId = bodyBranchId || req.user.branchId || null;
+      let resolvedProspectStudentName = String(prospect_student_name || '').trim();
+      let resolvedProspectNotes = prospect_student_notes?.trim() || null;
+      let resolvedLevelTag = level_tag?.trim() || null;
+      let resolvedProspectEmail = prospect_student_email?.trim()?.toLowerCase() || null;
+      let normalizedProspectPhone = null;
 
-      const arPhoneNumbers = collectPhilippineMobiles(prospect_student_phone);
-      if (arPhoneNumbers.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message:
-            'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
-        });
-      }
-      const normalizedProspectPhone = arPhoneNumbers[0];
+      if (!isEvent) {
+        const arPhoneNumbers = collectPhilippineMobiles(prospect_student_phone);
+        if (arPhoneNumbers.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)',
+          });
+        }
+        normalizedProspectPhone = arPhoneNumbers[0];
 
-      if (!prospect_student_contact?.trim()) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Guardian name is required for acknowledgement receipt',
-        });
+        if (!prospect_student_contact?.trim()) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Guardian name is required for acknowledgement receipt',
+          });
+        }
       }
 
       /** When true, create two Package AR rows (sequential AR numbers); leader links phase via paired_ack_receipt_id. */
@@ -1016,7 +1062,84 @@ router.post(
       let totalPaymentAmount = 0;
       let merchandiseItemsSnapshot = null;
 
-      if (isMerchandise) {
+      if (isEvent) {
+        const participantType = String(event_participant_type || '').trim().toLowerCase();
+        if (participantType !== 'student' && participantType !== 'outsider') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Event participant type must be student or outsider',
+          });
+        }
+
+        if (!isLcgtEventPaymentMethod(normalizedPaymentMethod)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Event ticket payment method must be Cash, Online Banking, or E-wallets',
+          });
+        }
+
+        if (!bodyBranchId && !req.user.branchId) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Branch is required for event acknowledgement receipt',
+          });
+        }
+
+        const eventBranchRow = (
+          await client.query(
+            `SELECT branch_id, branch_name, branch_nickname FROM branchestbl WHERE branch_id = $1`,
+            [branchId]
+          )
+        ).rows[0];
+        const lcgtAccessError = assertLcgtEventArAccess({
+          userType: req.user?.userType,
+          userBranchId: req.user?.branchId,
+          branchRow: eventBranchRow,
+        });
+        if (lcgtAccessError) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            success: false,
+            message: lcgtAccessError,
+          });
+        }
+
+        if (participantType === 'student') {
+          if (!resolvedProspectStudentName) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Student name is required for student event tickets',
+            });
+          }
+          if (!resolvedLevelTag) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Level tag is required for student event tickets',
+            });
+          }
+          if (!resolvedProspectEmail) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'Parent email is required for student event tickets',
+            });
+          }
+        } else {
+          resolvedProspectStudentName = LCGT_EVENT_OUTSIDER_DISPLAY_NAME;
+          resolvedLevelTag = null;
+          resolvedProspectEmail = null;
+        }
+
+        resolvedProspectNotes = buildLcgtParticipantNotes(participantType);
+        packageNameSnapshot = LCGT_EVENT_NAME;
+        packageAmountSnapshot = LCGT_EVENT_TICKET_PRICE;
+        totalPaymentAmount = LCGT_EVENT_TICKET_PRICE;
+      } else if (isMerchandise) {
         // ── MERCHANDISE AR ─────────────────────────────────────────────────
         if (!merchandise_items || merchandise_items.length === 0) {
           await client.query('ROLLBACK');
@@ -1191,8 +1314,8 @@ router.post(
       const initialPackageStatus = isCashPayment ? AR_STATUS.VERIFIED : AR_STATUS.UNVERIFIED;
       const hasVerifierCols = await ackReceiptHasVerifierColumns();
 
-      const arVerifiedByOnCreate = isCashPayment && !isMerchandise ? createdBy : null;
-      const arVerifiedAtOnCreate = isCashPayment && !isMerchandise ? new Date() : null;
+      const arVerifiedByOnCreate = isCashPayment && !isAutoPaidInvoiceAr ? createdBy : null;
+      const arVerifiedAtOnCreate = isCashPayment && !isAutoPaidInvoiceAr ? new Date() : null;
 
       let ackReceipt;
       let pairedAckReceipt = null;
@@ -1212,11 +1335,11 @@ router.post(
           ackNum,
           statusVal,
           arTypeVal,
-          prospect_student_name,
+          resolvedProspectStudentName,
           prospect_student_contact?.trim() || null,
-          prospect_student_email?.trim()?.toLowerCase() || null,
+          resolvedProspectEmail,
           normalizedProspectPhone,
-          prospect_student_notes?.trim() || null,
+          resolvedProspectNotes,
           linkedStudentId || null,
           branchId,
           pkgId,
@@ -1229,7 +1352,7 @@ router.post(
           normalizedPaymentMethod,
           reference_number?.trim() || null,
           payment_attachment_url || null,
-          level_tag?.trim() || null,
+          resolvedLevelTag,
           installmentOpt,
           createdBy,
         ];
@@ -1313,7 +1436,7 @@ router.post(
         return insResult.rows[0];
       };
 
-      if (isSplitDualPackageAr && !isMerchandise) {
+      if (isSplitDualPackageAr && !isAutoPaidInvoiceAr) {
         const hasPairedCol = await ackReceiptHasPairedAckReceiptIdColumn();
         if (!hasPairedCol) {
           await client.query('ROLLBACK');
@@ -1363,14 +1486,14 @@ router.post(
         const ackNumber = await allocateNextArStyleNumber(client);
         ackReceipt = await insertAcknowledgementRow({
           ackNum: ackNumber,
-          statusVal: isMerchandise ? AR_STATUS.UNVERIFIED : initialPackageStatus,
-          arTypeVal: isMerchandise ? 'Merchandise' : 'Package',
+          statusVal: isAutoPaidInvoiceAr ? AR_STATUS.UNVERIFIED : initialPackageStatus,
+          arTypeVal: isEvent ? 'Event' : isMerchandise ? 'Merchandise' : 'Package',
           payAmt: Math.max(0, totalPaymentAmount - discountValue),
           tipAmt: tip_amount || 0,
           pkgSnapName: packageNameSnapshot,
           pkgSnapAmt: packageAmountSnapshot,
           merchJson: merchandiseItemsSnapshot ? JSON.stringify(merchandiseItemsSnapshot) : null,
-          installmentOpt: isMerchandise ? null : installment_option || null,
+          installmentOpt: isAutoPaidInvoiceAr ? null : installment_option || null,
         });
       }
 
@@ -1556,14 +1679,33 @@ router.post(
         }
       }
 
+      // ── For Event AR (LCGT): auto-generate invoice ────────────────────────
+      if (isEvent) {
+        await createLcgtEventArInvoiceAndPayment({
+          client,
+          ackReceipt,
+          branchId,
+          createdBy,
+          prospectStudentName: resolvedProspectStudentName,
+          issueDate: issue_date,
+          totalPaymentAmount: Math.max(0, totalPaymentAmount - discountValue),
+          normalizedPaymentMethod,
+          referenceNumber: reference_number,
+          paymentAttachmentUrl: payment_attachment_url,
+          tipAmount: tip_amount,
+          linkedStudentId,
+          hasVerifierCols,
+        });
+      }
+
       await client.query('COMMIT');
 
       createArSubmissionNotification({
         ackReceiptId: ackReceipt.ack_receipt_id,
         branchId,
         createdByUserId: createdBy,
-        studentName: prospect_student_name,
-        arType: isMerchandise ? 'Merchandise' : 'Package',
+        studentName: resolvedProspectStudentName,
+        arType: isEvent ? 'Event' : isMerchandise ? 'Merchandise' : 'Package',
         paymentMethod: normalizedPaymentMethod,
         status: ackReceipt.status,
       });
@@ -1625,7 +1767,7 @@ router.post(
                   : 'Two sequential AR numbers were issued (downpayment, then Phase 1). Both appear on the AR list as separate rows; verifying either marks both as Verified.',
             }
           : {}),
-        ...(!isMerchandise && !pairedAckReceipt && isCashPayment
+        ...(!isAutoPaidInvoiceAr && !pairedAckReceipt && isCashPayment
           ? {
               message:
                 'Package acknowledgement receipt created and auto-verified (cash). You can apply it to enrollment now. Finance will approve the payment in Payment Logs.',
@@ -1637,6 +1779,14 @@ router.post(
                 String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash'
                   ? 'Merchandise acknowledgement receipt created and auto-verified (cash). Invoice is Paid and stock updated. Finance approves the payment in Payment Logs.'
                   : 'Merchandise acknowledgement receipt created. Invoice is marked Paid, payment recorded, and stock updated. Finance must verify non-cash merchandise on the AR page.',
+            }
+          : {}),
+        ...(isEvent && ackReceipt.invoice_id && !pairedAckReceipt
+          ? {
+              message:
+                String(normalizedPaymentMethod || '').trim().toLowerCase() === 'cash'
+                  ? 'Little Champions Got Talent event ticket created and auto-verified (cash). Invoice is Paid.'
+                  : 'Little Champions Got Talent event ticket created. Invoice is marked Paid and payment recorded. Finance must verify non-cash event tickets on the AR page.',
             }
           : {}),
       });
@@ -3022,47 +3172,49 @@ router.put(
       const ack = ackResult.rows[0];
       const isPackageAr = ack.ar_type === 'Package';
       const isMerchandiseAr = ack.ar_type === 'Merchandise';
+      const isEventAr = isLcgtEventAr(ack.ar_type);
+      const isAutoPaidAr = isMerchandiseAr || isEventAr;
+      const autoPaidArLabel = isEventAr ? 'Event' : 'Merchandise';
 
-      if (!isPackageAr && !isMerchandiseAr) {
+      if (!isPackageAr && !isAutoPaidAr) {
         return res.status(400).json({
           success: false,
-          message: 'Only Package or Merchandise acknowledgement receipts can be verified in this flow',
+          message: 'Only Package, Merchandise, or Event acknowledgement receipts can be verified in this flow',
         });
       }
 
-      if (isMerchandiseAr) {
+      if (isAutoPaidAr) {
         if (action === 'unverify') {
           // handled below in unverify block
         } else if (String(ack.payment_method || '').trim().toLowerCase() === 'cash' && action === 'verify') {
           return res.status(400).json({
             success: false,
-            message: 'Cash merchandise acknowledgement receipts are auto-verified when issued',
+            message: `Cash ${autoPaidArLabel.toLowerCase()} acknowledgement receipts are auto-verified when issued`,
           });
         } else if (action === 'verify') {
           if (!isArUnverifiedStatus(ack.status)) {
             return res.status(400).json({
               success: false,
-              message: 'Merchandise acknowledgement receipt must be Unverified before finance verification',
+              message: `${autoPaidArLabel} acknowledgement receipt must be Unverified before finance verification`,
             });
           }
           if (ack.verified_by_user_id != null) {
             return res.status(400).json({
               success: false,
-              message: 'This merchandise acknowledgement receipt is already verified',
+              message: `This ${autoPaidArLabel.toLowerCase()} acknowledgement receipt is already verified`,
             });
           }
         } else if (action === 'return' || action === 'reject') {
           if (!isArUnverifiedStatus(ack.status)) {
             return res.status(400).json({
               success: false,
-              message:
-                'Merchandise acknowledgement receipt must be Unverified before it can be returned or rejected',
+              message: `${autoPaidArLabel} acknowledgement receipt must be Unverified before it can be returned or rejected`,
             });
           }
           if (ack.verified_by_user_id != null) {
             return res.status(400).json({
               success: false,
-              message: 'Verified merchandise acknowledgement receipts cannot be returned or rejected',
+              message: `Verified ${autoPaidArLabel.toLowerCase()} acknowledgement receipts cannot be returned or rejected`,
             });
           }
         }
@@ -3131,10 +3283,10 @@ router.put(
             message: 'This acknowledgement receipt is not verified',
           });
         }
-        if (isMerchandiseAr && String(ack.status || '').trim() !== 'Verified') {
+        if (isAutoPaidAr && String(ack.status || '').trim() !== 'Verified') {
           return res.status(400).json({
             success: false,
-            message: 'Only verified merchandise acknowledgement receipts can be unverified',
+            message: `Only verified ${autoPaidArLabel.toLowerCase()} acknowledgement receipts can be unverified`,
           });
         }
         if (isPackageAr && String(ack.status || '').trim() !== 'Verified') {
@@ -3312,7 +3464,7 @@ router.put(
 
       const returnedByUserId = req.user.userId || req.user.user_id || null;
 
-      if (isMerchandiseAr && (action === 'return' || action === 'reject')) {
+      if (isAutoPaidAr && (action === 'return' || action === 'reject')) {
         for (const linkedPaymentId of linkedPaymentIds) {
           if (action === 'reject') {
             const payRow = await query(
@@ -3435,11 +3587,13 @@ router.put(
 
       const ack = ackResult.rows[0];
       const isMerchandiseAr = ack.ar_type === 'Merchandise';
+      const isEventAr = isLcgtEventAr(ack.ar_type);
+      const isAutoPaidAr = isMerchandiseAr || isEventAr;
       const isPackageAr = ack.ar_type === 'Package';
-      if (!isMerchandiseAr && !isPackageAr) {
+      if (!isAutoPaidAr && !isPackageAr) {
         return res.status(400).json({
           success: false,
-          message: 'Only Package or Merchandise acknowledgement receipts can be resubmitted in this flow',
+          message: 'Only Package, Merchandise, or Event acknowledgement receipts can be resubmitted in this flow',
         });
       }
 
@@ -3530,7 +3684,7 @@ router.put(
         updatedRows.find((row) => Number(row.ack_receipt_id) === Number(id)) ||
         updatedRows[0];
 
-      if (isMerchandiseAr && primaryUpdatedRow?.payment_id) {
+      if (isAutoPaidAr && primaryUpdatedRow?.payment_id) {
         await query(
           `UPDATE paymenttbl
            SET approval_status = 'Pending',
@@ -3556,8 +3710,8 @@ router.put(
 
       return res.json({
         success: true,
-        message: isMerchandiseAr
-          ? 'Merchandise acknowledgement receipt resubmitted successfully. Finance will verify it again on the AR page.'
+        message: isAutoPaidAr
+          ? `${isEventAr ? 'Event' : 'Merchandise'} acknowledgement receipt resubmitted successfully. Finance will verify it again on the AR page.`
           : pairedIds.length > 1
             ? 'Downpayment and Phase 1 acknowledgement receipts resubmitted successfully'
             : 'Acknowledgement receipt resubmitted successfully',

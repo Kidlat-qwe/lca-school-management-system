@@ -9,6 +9,8 @@ import Signup from './pages/Signup';
 import FinancialDashboard from './pages/superadmin/FinancialDashboard';
 import DailyOperationalDashboard from './pages/superadmin/DailyOperationalDashboard';
 import MonthlyOperationalDashboard from './pages/superadmin/MonthlyOperationalDashboard';
+import DailyAttendanceDashboard from './pages/superadmin/DailyAttendanceDashboard';
+import MonthlyAttendanceDashboard from './pages/superadmin/MonthlyAttendanceDashboard';
 import OperationalDashboard from './pages/superadmin/OperationalDashboard';
 import PhaseEnrollmentDashboard from './pages/superadmin/PhaseEnrollmentDashboard';
 import MonthlyEnrollmentDashboard from './pages/superadmin/MonthlyEnrollmentDashboard';
@@ -38,6 +40,8 @@ import SystemLogs from './pages/superadmin/SystemLogs';
 import AdminFinancialDashboard from './pages/admin/adminFinancialDashboard';
 import AdminDailyOperationalDashboard from './pages/admin/adminDailyOperationalDashboard';
 import AdminMonthlyOperationalDashboard from './pages/admin/adminMonthlyOperationalDashboard';
+import AdminDailyAttendanceDashboard from './pages/admin/adminDailyAttendanceDashboard';
+import AdminMonthlyAttendanceDashboard from './pages/admin/adminMonthlyAttendanceDashboard';
 import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
@@ -60,6 +64,8 @@ import AdminDailySummary from './pages/admin/adminDailySummary';
 import AdminReport from './pages/admin/adminReport';
 import AdminSettings from './pages/admin/adminSettings';
 import TeacherDashboard from './pages/teacher/teacherDashboard';
+import TeacherDailyAttendanceDashboard from './pages/teacher/teacherDailyAttendanceDashboard';
+import TeacherMonthlyAttendanceDashboard from './pages/teacher/teacherMonthlyAttendanceDashboard';
 import TeacherCalendar from './pages/teacher/teacherCalendar';
 import TeacherClasses from './pages/teacher/teacherClasses';
 import TeacherAnnouncements from './pages/teacher/teacherAnnouncements';
@@ -109,6 +115,8 @@ function App() {
             <Route index element={<Navigate to="monthly-operational-dashboard" replace />} />
             <Route path="daily-operational-dashboard" element={<DailyOperationalDashboard />} />
             <Route path="monthly-operational-dashboard" element={<MonthlyOperationalDashboard />} />
+            <Route path="daily-attendance-dashboard" element={<DailyAttendanceDashboard />} />
+            <Route path="monthly-attendance-dashboard" element={<MonthlyAttendanceDashboard />} />
             <Route path="financial-dashboard" element={<FinancialDashboard />} />
             <Route path="operational-dashboard" element={<OperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
@@ -151,6 +159,8 @@ function App() {
             <Route index element={<Navigate to="monthly-operational-dashboard" replace />} />
             <Route path="daily-operational-dashboard" element={<AdminDailyOperationalDashboard />} />
             <Route path="monthly-operational-dashboard" element={<AdminMonthlyOperationalDashboard />} />
+            <Route path="daily-attendance-dashboard" element={<AdminDailyAttendanceDashboard />} />
+            <Route path="monthly-attendance-dashboard" element={<AdminMonthlyAttendanceDashboard />} />
             <Route path="financial-dashboard" element={<AdminFinancialDashboard />} />
             <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
@@ -190,6 +200,8 @@ function App() {
             }
           >
             <Route index element={<TeacherDashboard />} />
+            <Route path="daily-attendance-dashboard" element={<TeacherDailyAttendanceDashboard />} />
+            <Route path="monthly-attendance-dashboard" element={<TeacherMonthlyAttendanceDashboard />} />
             <Route path="daily-operational-dashboard" element={<Navigate to="/teacher" replace />} />
             <Route path="monthly-operational-dashboard" element={<Navigate to="/teacher" replace />} />
             <Route path="calendar" element={<TeacherCalendar />} />
