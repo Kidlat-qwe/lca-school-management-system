@@ -13,8 +13,8 @@ Temporary override for **past-phase enrollment** (installment / per-phase enroll
 
 `ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES`
 
-- **`true` (current)** — Minimum enrollable phase is **Phase 1** regardless of class schedule floor.
-- **`false`** — Restore default: enrollment floor follows `getInstallmentEnrollmentFloorPhase` (previous phase last session rule).
+- **`true`** — Minimum enrollable phase is **Phase 1** regardless of class schedule floor (temporary override).
+- **`false` (current)** — Default: enrollment floor follows `getInstallmentEnrollmentFloorPhase` (previous phase last session rule).
 
 ## Used by
 

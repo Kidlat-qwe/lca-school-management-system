@@ -724,7 +724,7 @@ const FinancePaymentLogs = () => {
           BRANCH: getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
           'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
           'Payment Date': payment.payment_date ? formatDate(payment.payment_date) : '-',
-          'Updated At': formatPaymentLogUpdatedAtMultiline(payment),
+          'Created At': formatPaymentLogUpdatedAtMultiline(payment),
           'Student Name': payment.student_name || 'N/A',
           'PACKAGE/ITEM': getPaymentLogPackageItemDisplayText(payment),
           'LEVEL TAG': payment.student_level_tag || '-',
@@ -1088,7 +1088,7 @@ const FinancePaymentLogs = () => {
                   <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} align="center" className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <SortableHeader label="Updated At" sortKey="updated_at" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Created At" sortKey="created_at" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Student Name" sortKey="student_name" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]" />
                   <SortableHeader sortKey="package_item" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <span className="leading-tight">package/<br />item</span>

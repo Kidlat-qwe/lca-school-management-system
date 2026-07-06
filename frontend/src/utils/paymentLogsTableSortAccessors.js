@@ -39,8 +39,8 @@ export function buildPaymentLogsTableSortAccessors({ branchAccessor, issuedByAcc
     branch: { accessor: branchAccessor, type: 'string' },
     issue_date: { accessor: 'issue_date', type: 'date' },
     payment_date: { accessor: 'payment_date', type: 'date' },
-    updated_at: {
-      accessor: (p) => p?.updated_at || p?.created_at || '',
+    created_at: {
+      accessor: (p) => p?.created_at || '',
       type: 'date',
     },
     student_name: { accessor: (p) => String(p?.student_name ?? '').trim(), type: 'string' },

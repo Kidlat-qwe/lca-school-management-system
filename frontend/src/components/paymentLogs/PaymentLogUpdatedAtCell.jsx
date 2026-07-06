@@ -1,11 +1,11 @@
-import { getPaymentLogUpdatedAtRaw, getPaymentLogUpdatedAtDisplayParts } from '../../utils/paymentLogUpdatedAt';
+import { getPaymentLogCreatedAtRaw, getPaymentLogCreatedAtDisplayParts } from '../../utils/paymentLogUpdatedAt';
 
 /**
- * Two-line Updated At cell (Philippines date/time).
+ * Two-line Created At cell — when the payment was encoded (Philippines date/time).
  * @param {{ payment: object }} props
  */
 export function PaymentLogUpdatedAtCell({ payment }) {
-  const parts = getPaymentLogUpdatedAtDisplayParts(getPaymentLogUpdatedAtRaw(payment));
+  const parts = getPaymentLogCreatedAtDisplayParts(getPaymentLogCreatedAtRaw(payment));
   if (!parts) return <span>-</span>;
 
   return (

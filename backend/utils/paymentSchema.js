@@ -47,6 +47,11 @@ export function paymentUpdatedAtSelectSql(hasUpdatedAtColumn) {
   return paymentLogTimestampManilaSelectSql('p.created_at', 'updated_at');
 }
 
+/** Payment Logs "Created At" — when the payment row was first encoded (Manila wall clock). */
+export function paymentCreatedAtSelectSql(columnSql = 'p.created_at', alias = 'created_at') {
+  return paymentLogTimestampManilaSelectSql(columnSql, alias);
+}
+
 let cachedPaymentUpdatedAtSelectSql = null;
 
 /**

@@ -7,7 +7,7 @@
  * Set to false (or remove the override) to restore the default rule:
  * enrollment cannot start before the schedule-based minimum phase.
  */
-export const ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES = true;
+export const ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES = false;
 
 /**
  * @param {number} computedFloor Phase from schedule (previous phase last session rule).

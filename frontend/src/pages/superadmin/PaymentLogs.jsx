@@ -1099,7 +1099,7 @@ const PaymentLogs = () => {
           BRANCH: getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
           'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
           'Payment Date': payment.payment_date ? formatDate(payment.payment_date) : '-',
-          'Updated At': formatPaymentLogUpdatedAtMultiline(payment),
+          'Created At': formatPaymentLogUpdatedAtMultiline(payment),
           'Student Name': payment.student_name || 'N/A',
           'PACKAGE/ITEM': getPaymentLogPackageItemDisplayText(payment),
           'LEVEL TAG': payment.student_level_tag || '-',
@@ -1401,7 +1401,7 @@ const PaymentLogs = () => {
             {branchLogTab === 'rejected' || branchLogTab === 'return'
               ? 'Returned and Rejected tabs list all matching audit rows (no month filter). Use search or branch to narrow results.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
-              ? 'Month filter uses payment issue date (paymenttbl.issue_date), same as Invoice and Monthly Operational Dashboard — not Updated At. Updated At is when the row was saved or last changed in the system (recorded, approved, returned, or rejected), which can be in a different month if the payment date was set forward or back. Clear the month to show all dates.'
+              ? 'Month filter uses payment issue date (paymenttbl.issue_date), same as Invoice and Monthly Operational Dashboard. Created At shows when the payment was encoded in the system. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
               : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}
@@ -1480,7 +1480,7 @@ const PaymentLogs = () => {
                   <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} align="center" className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
-                  <SortableHeader label="Updated At" sortKey="updated_at" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Created At" sortKey="created_at" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Student Name" sortKey="student_name" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]" />
                   <SortableHeader sortKey="package_item" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <span className="leading-tight">package/<br />item</span>

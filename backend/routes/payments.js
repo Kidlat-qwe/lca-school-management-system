@@ -39,6 +39,7 @@ import {
 import {
   paymenttblHasActionOwnerUserIdColumn,
   resolvePaymentUpdatedAtSelectSql,
+  paymentCreatedAtSelectSql,
   paymentLogTimestampManilaSelectSql,
 } from '../utils/paymentSchema.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../utils/paymentConfirmationEmailService.js';
@@ -950,10 +951,8 @@ router.get(
       const limitNum = parseInt(limit) || 20;
       const offset = (pageNum - 1) * limitNum;
 
-      const [hasActionOwnerCol, updatedAtSelect] = await Promise.all([
-        paymenttblHasActionOwnerUserIdColumn(),
-        resolvePaymentUpdatedAtSelectSql(),
-      ]);
+      const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+      const createdAtSelect = paymentCreatedAtSelectSql();
       const ownerSelectSql = hasActionOwnerCol
         ? 'p.action_owner_user_id'
         : 'NULL::integer AS action_owner_user_id';
@@ -965,8 +964,7 @@ router.get(
                         TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
-                        TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
-                           ${updatedAtSelect},
+                        ${createdAtSelect},
                         p.approval_status, p.approved_by,
                         TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                         p.return_reason,
@@ -1576,7 +1574,7 @@ router.get(
   requireRole('Finance', 'Superfinance', 'Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
-      const updatedAtSelect = await resolvePaymentUpdatedAtSelectSql();
+      const createdAtSelect = paymentCreatedAtSelectSql();
       const {
         branch_id,
         issue_date,
@@ -1645,8 +1643,7 @@ router.get(
                            TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
                            TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
                            p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
-                           TO_CHAR(p.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
-                           ${updatedAtSelect},
+                           ${createdAtSelect},
                            p.approval_status, p.approved_by,
                            TO_CHAR(p.approved_at, 'YYYY-MM-DD HH24:MI:SS') as approved_at,
                            p.return_reason,
@@ -1816,7 +1813,7 @@ router.get(
                           ar.status,
                           ar.verified_by_user_id,
                           TO_CHAR(ar.verified_at, 'YYYY-MM-DD HH24:MI:SS') as verified_at,
-                          ${paymentLogTimestampManilaSelectSql('COALESCE(ar.verified_at, ar.created_at)', 'updated_at')},
+                          ${paymentCreatedAtSelectSql('ar.created_at', 'created_at')},
                           TO_CHAR(ar.issue_date, 'YYYY-MM-DD') as issue_date,
                           ar.ack_receipt_number,
                           ar.created_by,
@@ -1929,8 +1926,7 @@ router.get(
             remarks: 'Awaiting enrollment attachment',
             payment_attachment_url: row.payment_attachment_url,
             created_by: row.created_by,
-            created_at: null,
-            updated_at: row.updated_at,
+            created_at: row.created_at,
             approval_status: plApproval.approval_status,
             approved_by: plApproval.approved_by,
             approved_at: plApproval.approved_at,

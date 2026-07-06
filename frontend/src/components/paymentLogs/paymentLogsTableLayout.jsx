@@ -4,9 +4,9 @@
 
 export const PAYMENT_LOGS_TABLE_MIN_WIDTH_PX = 2080;
 
-/** Issue date, payment date, updated at — wide enough for "February 28, 2026" + two-line updated at. */
+/** Issue date, payment date, created at — wide enough for "February 28, 2026" + two-line created at. */
 const DATE_COL = 142;
-const UPDATED_AT_COL = 158;
+const CREATED_AT_COL = 158;
 
 /** @type {Record<'main' | 'return', number[]>} */
 export const PAYMENT_LOGS_COL_WIDTHS = {
@@ -15,7 +15,7 @@ export const PAYMENT_LOGS_COL_WIDTHS = {
     150, // Branch
     DATE_COL, // Issue Date
     DATE_COL, // Payment Date
-    UPDATED_AT_COL, // Updated At
+    CREATED_AT_COL, // Created At
     200, // Student Name
     180, // package/item
     130, // Level Tag
@@ -32,7 +32,7 @@ export const PAYMENT_LOGS_COL_WIDTHS = {
     150,
     DATE_COL,
     DATE_COL,
-    UPDATED_AT_COL,
+    CREATED_AT_COL,
     200,
     180,
     130,

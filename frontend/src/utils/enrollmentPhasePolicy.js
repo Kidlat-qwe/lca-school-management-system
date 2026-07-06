@@ -3,7 +3,7 @@
  *
  * Set ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES to false to restore schedule-based floor.
  */
-export const ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES = true;
+export const ALLOW_ENROLLMENT_FROM_PREVIOUS_PHASES = false;
 
 /**
  * @param {number} computedFloor
