@@ -474,7 +474,7 @@ const FinancePaymentLogs = () => {
                 ...p,
                 approval_status: 'Approved',
                 ...(trimmedDate
-                  ? { payment_date: trimmedDate, issue_date: trimmedDate }
+                  ? { payment_date: trimmedDate }
                   : {}),
               }
             : p

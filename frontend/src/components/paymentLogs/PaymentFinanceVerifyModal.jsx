@@ -152,7 +152,9 @@ export default function PaymentFinanceVerifyModal({
                       Issue date
                     </span>
                     <p className="mt-0.5 text-gray-900">
-                      {payment.issue_date ? formatDateManila(payment.issue_date) : '—'}
+                      {payment.invoice_issue_date || payment.issue_date
+                        ? formatDateManila(payment.invoice_issue_date || payment.issue_date)
+                        : '—'}
                     </p>
                   </div>
                   <div>
@@ -238,7 +240,7 @@ export default function PaymentFinanceVerifyModal({
                           disabled={submitting}
                         />
                         <p className="mt-1 text-xs text-gray-500">
-                          Adjust the date if needed. Saving will update the payment date everywhere it is shown.
+                          Adjust the payment date if needed. Invoice issue date is not changed.
                         </p>
                       </div>
                     ) : null}

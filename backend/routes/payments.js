@@ -73,9 +73,12 @@ import {
 
 const router = express.Router();
 
-// Payment Logs / dashboard "payment date" uses paymenttbl.issue_date: the calendar date
-// entered when recording payment (actual client-paid date), not when the row was created.
+// Payment Logs: payment_date = when client paid (paymenttbl.issue_date, editable on finance approve).
+// issue_date column in logs = invoicestbl.issue_date (invoice date; not changed on approve).
 const PAYMENT_LOG_BUSINESS_DATE_SQL = `p.issue_date`;
+const PAYMENT_LOG_INVOICE_ISSUE_DATE_SQL = `i.issue_date`;
+const PAYMENT_LOG_LIST_ISSUE_DATE_SELECT = `TO_CHAR(${PAYMENT_LOG_INVOICE_ISSUE_DATE_SQL}, 'YYYY-MM-DD') AS issue_date`;
+const PAYMENT_LOG_LIST_PAYMENT_DATE_SELECT = `TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') AS payment_date`;
 const AR_PAYMENT_BUSINESS_DATE_SQL = `ar.issue_date`;
 
 const getFullPaymentPhaseEnrollmentStatus = async ({ client, studentId, classId, phaseNumber, phaseStart }) => {
@@ -959,9 +962,9 @@ router.get(
 
       let sql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id, 
                         p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
-                        TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date, 
+                        ${PAYMENT_LOG_LIST_ISSUE_DATE_SELECT},
                         TO_CHAR(i.issue_date, 'YYYY-MM-DD') AS invoice_issue_date,
-                        TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
+                        ${PAYMENT_LOG_LIST_PAYMENT_DATE_SELECT},
                         p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                         ${ownerSelectSql},
                         ${createdAtSelect},
@@ -1640,8 +1643,8 @@ router.get(
       // ---------- 1) Normal payment rows ----------
       let paySql = `SELECT p.payment_id, p.invoice_id, p.student_id, p.branch_id,
                            p.payment_method, p.payment_type, p.payable_amount, COALESCE(p.discount_amount, 0) AS discount_amount, COALESCE(p.tip_amount, 0) AS tip_amount,
-                           TO_CHAR(p.issue_date, 'YYYY-MM-DD') as issue_date,
-                           TO_CHAR(${PAYMENT_LOG_BUSINESS_DATE_SQL}, 'YYYY-MM-DD') as payment_date,
+                           ${PAYMENT_LOG_LIST_ISSUE_DATE_SELECT},
+                           ${PAYMENT_LOG_LIST_PAYMENT_DATE_SELECT},
                            p.status, p.reference_number, p.remarks, p.payment_attachment_url, p.created_by,
                            ${createdAtSelect},
                            p.approval_status, p.approved_by,
@@ -4302,8 +4305,7 @@ router.put(
       const financeVerifiedReferenceNumber = String(
         req.body?.finance_verified_reference_number || ''
       ).trim();
-      // Optional updated payment date (stored in paymenttbl.issue_date, which is
-      // the source column aliased as payment_date everywhere in payment logs).
+      // Optional corrected payment date (stored in paymenttbl.issue_date; aliased as payment_date in logs).
       const rawPaymentDate = req.body?.payment_date;
       const paymentDateUpdate =
         typeof rawPaymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawPaymentDate.trim())
@@ -4396,9 +4398,8 @@ router.put(
 
       // Superadmin and Superfinance can approve any payment (no branch restriction)
 
-      // Update approval status. When approving, optionally also update issue_date
-      // so the corrected payment date is reflected wherever payment_date is shown
-      // (payment_date in queries is a SQL alias for paymenttbl.issue_date).
+      // Update approval status. When approving, optionally update payment date (paymenttbl.issue_date).
+      // Invoice issue date (invoicestbl.issue_date) is unchanged.
       const verifiedRefForUpdate = isCashPayment
         ? null
         : financeVerifiedReferenceNumber || null;

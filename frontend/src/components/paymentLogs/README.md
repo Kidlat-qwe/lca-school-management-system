@@ -7,7 +7,9 @@
 - **`PaymentAttachmentViewerModal.jsx`** — View payment attachment images.
 - **`PaymentFinanceVerifyModal.jsx`** — Finance/Superfinance landscape payment review modal (verify, return, reject). Matches AR verify layout; includes reference number entry for verification.
 
-Payment log tables include a **Created At** column (after **Payment Date**) showing when the payment row was first encoded in the system. This is distinct from **Payment Date** / **Issue Date** (the business date on the receipt).
+Payment log tables include a **Created At** column (after **Payment Date**) showing when the payment row was first encoded in the system.
+
+**Issue Date** = invoice date (`invoicestbl.issue_date`). **Payment Date** = client-paid date (`paymenttbl.issue_date`). Finance approve may update Payment Date only.
 
 - DB: `paymenttbl.created_at` (UTC stored; API converts to Manila for display)
 - Formatting: `formatPaymentLogCreatedAt` in `frontend/src/utils/paymentLogUpdatedAt.js`

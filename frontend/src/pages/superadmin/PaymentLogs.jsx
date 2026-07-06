@@ -576,7 +576,7 @@ const PaymentLogs = () => {
                 ...p,
                 approval_status: 'Approved',
                 ...(trimmedDate
-                  ? { payment_date: trimmedDate, issue_date: trimmedDate }
+                  ? { payment_date: trimmedDate }
                   : {}),
               }
             : p
@@ -1401,7 +1401,7 @@ const PaymentLogs = () => {
             {branchLogTab === 'rejected' || branchLogTab === 'return'
               ? 'Returned and Rejected tabs list all matching audit rows (no month filter). Use search or branch to narrow results.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.MONTH
-              ? 'Month filter uses payment issue date (paymenttbl.issue_date), same as Invoice and Monthly Operational Dashboard. Created At shows when the payment was encoded in the system. Clear the month to show all dates.'
+              ? 'Month filter uses payment date (paymenttbl.issue_date), same as Invoice and Monthly Operational Dashboard. Issue Date is the invoice date and does not change when finance corrects payment date. Clear the month to show all dates.'
               : dateFilterMode === PAYMENT_LOG_DATE_MODES.PAYMENT_DATE
               ? 'Date range is inclusive on payment date. Leave both dates empty for all dates.'
               : 'Date range is inclusive on the payment issue date (same as the Issue Date column). Leave both empty for all dates.'}

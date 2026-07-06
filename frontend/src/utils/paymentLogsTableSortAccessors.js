@@ -37,7 +37,10 @@ export function buildPaymentLogsTableSortAccessors({ branchAccessor, issuedByAcc
   return {
     invoice: { accessor: paymentLogsInvoiceSortKey, type: 'string' },
     branch: { accessor: branchAccessor, type: 'string' },
-    issue_date: { accessor: 'issue_date', type: 'date' },
+    issue_date: {
+      accessor: (p) => p?.invoice_issue_date || p?.issue_date || '',
+      type: 'date',
+    },
     payment_date: { accessor: 'payment_date', type: 'date' },
     created_at: {
       accessor: (p) => p?.created_at || '',
