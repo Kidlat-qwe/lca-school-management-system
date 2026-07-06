@@ -23,6 +23,8 @@ import {
 } from '../utils/invoiceArNumber.js';
 import { syncProgramPaymentStatusForInvoice } from '../utils/programPaymentStatusService.js';
 import { checkScheduleConflict, checkTeacherScheduleConflict } from '../utils/scheduleConflict.js';
+import { setClassStatus } from '../utils/classStatusService.js';
+import { syncInstallmentProfilesWithClassStatus } from '../utils/billingNotificationEligibility.js';
 import {
   MERCH_RELEASE_SOURCE,
   appendMerchPendingToRemarks,
@@ -502,6 +504,7 @@ router.get(
          AND end_date IS NOT NULL 
          AND end_date < CURRENT_DATE`
       );
+      await syncInstallmentProfilesWithClassStatus(query);
 
       const { branch_id, program_id, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
@@ -1605,6 +1608,137 @@ router.post(
 );
 
 /**
+ * PATCH /api/sms/classes/:id/status
+ * Set class Active or Inactive. Inactive releases all teacher assignments so teachers can join other classes.
+ */
+router.patch(
+  '/:id/status',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    body('status').isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      await client.query('BEGIN');
+
+      const existing = await client.query(
+        `SELECT class_id, branch_id, status FROM classestbl WHERE class_id = $1`,
+        [id]
+      );
+      if (existing.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Class not found' });
+      }
+
+      const classBranchId = existing.rows[0].branch_id;
+      if (req.user.userType !== 'Superadmin' && req.user.branchId != null) {
+        if (Number(classBranchId) !== Number(req.user.branchId)) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. You can only update classes in your branch.',
+          });
+        }
+      }
+
+      const {
+        classRow,
+        teachersReleased,
+        installmentProfilesUpdated,
+        teachersRestored,
+        teachersSkipped,
+        needsTeacherAssignment,
+      } = await setClassStatus(client, id, status);
+
+      await client.query('COMMIT');
+
+      if (needsTeacherAssignment) {
+        return res.json({
+          success: true,
+          message:
+            teachersSkipped > 0
+              ? 'Assign a teacher to activate this class. The previous teacher is already on another active class.'
+              : 'Assign a teacher to activate this class.',
+          data: {
+            class_id: classRow.class_id,
+            status: classRow.status,
+            teacher_id: classRow.teacher_id,
+            teachers_released: teachersReleased,
+            teachers_restored: teachersRestored,
+            teachers_skipped: teachersSkipped,
+            needs_teacher_assignment: true,
+            installment_profiles_updated: 0,
+          },
+        });
+      }
+
+      const inactiveParts = [];
+      if (teachersReleased > 0) {
+        inactiveParts.push(`${teachersReleased} teacher assignment(s) released`);
+      }
+      if (installmentProfilesUpdated > 0) {
+        inactiveParts.push(
+          `${installmentProfilesUpdated} installment plan(s) paused (no new invoices, email, or SMS)`
+        );
+      }
+
+      const activeParts = [];
+      if (installmentProfilesUpdated > 0) {
+        activeParts.push(
+          `${installmentProfilesUpdated} installment plan(s) resumed for enrolled students`
+        );
+      }
+      if (teachersRestored > 0) {
+        activeParts.push(
+          `${teachersRestored} teacher assignment(s) restored (still available for this class)`
+        );
+      }
+      if (teachersSkipped > 0) {
+        activeParts.push(
+          `${teachersSkipped} teacher(s) already assigned elsewhere — assign a teacher manually`
+        );
+      }
+
+      res.json({
+        success: true,
+        message:
+          status === 'Inactive'
+            ? inactiveParts.length > 0
+              ? `Class marked inactive. ${inactiveParts.join('; ')}.`
+              : 'Class marked inactive.'
+            : activeParts.length > 0
+              ? `Class marked active. ${activeParts.join('; ')}.`
+              : 'Class marked active.',
+        data: {
+          class_id: classRow.class_id,
+          status: classRow.status,
+          teacher_id: classRow.teacher_id,
+          teachers_released: teachersReleased,
+          teachers_restored: teachersRestored,
+          teachers_skipped: teachersSkipped,
+          needs_teacher_assignment: needsTeacherAssignment,
+          installment_profiles_updated: installmentProfilesUpdated,
+        },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ success: false, message: error.message });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * GET /api/v1/classes/:id
  * Get class by ID
  */
@@ -1704,6 +1838,7 @@ router.get(
          AND end_date < CURRENT_DATE`,
         [id]
       );
+      await syncInstallmentProfilesWithClassStatus(client);
 
       const result = await client.query(
         `SELECT c.class_id,
@@ -2926,6 +3061,7 @@ router.get(
          AND end_date < CURRENT_DATE`,
         [id]
       );
+      await syncInstallmentProfilesWithClassStatus(query);
 
       // Get class with program and curriculum info
       const classResult = await query(

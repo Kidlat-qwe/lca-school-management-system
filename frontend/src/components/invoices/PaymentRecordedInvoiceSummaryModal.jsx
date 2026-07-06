@@ -2,6 +2,10 @@ import { createPortal } from 'react-dom';
 import { formatDateManila } from '../../utils/dateUtils';
 import { buildInvoiceLinkedArTableRows } from '../../utils/ackReceiptTableLineItems';
 import AcknowledgementReceiptStylePreview from '../receipts/AcknowledgementReceiptStylePreview';
+import {
+  getInvoiceIssuedByLabel,
+  getInvoiceReceivedByLabel,
+} from '../../utils/issuedByDisplay';
 
 /**
  * After recording a payment on the invoice page: receipt-style preview + Print (AR PDF).
@@ -46,8 +50,19 @@ export default function PaymentRecordedInvoiceSummaryModal({
   const receiptDateRaw = snapYmd || lastPayYmd || issueYmd;
   const receiptDateDisplay = receiptDateRaw ? formatDateManila(receiptDateRaw) : '—';
 
-  const preparedByText = invoice?.prepared_by_name || '';
-  const receivedByText = invoice?.received_by_guardian_name || '';
+  // Issued by = invoice generator (System Generated or staff). Received by = payment recorder.
+  const issuedByLabel = getInvoiceIssuedByLabel(invoice);
+  const receivedByLabel = getInvoiceReceivedByLabel({
+    ...invoice,
+    payment_recorded_by_name:
+      invoice?.payment_recorded_by_name ||
+      invoice?.received_by_name ||
+      paymentSnapshot?.recorded_by_name ||
+      paymentSnapshot?.created_by_name ||
+      null,
+  });
+  const preparedByText = issuedByLabel === '—' ? '' : issuedByLabel;
+  const receivedByText = receivedByLabel === '—' ? '' : receivedByLabel;
 
   const invoiceDescription = (invoice.invoice_description || '').trim();
   const looksLikeInvoiceCodeOnly = /^INV-\d+$/i.test(invoiceDescription);

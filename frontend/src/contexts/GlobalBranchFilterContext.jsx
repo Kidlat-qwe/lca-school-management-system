@@ -16,6 +16,7 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'phase-enrollment-dashboard',
   'monthly-enrollment-dashboard',
   'personnel',
+  'teachers',
   'student',
   'guardians',
   'classes',

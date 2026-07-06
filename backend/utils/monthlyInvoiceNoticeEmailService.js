@@ -131,8 +131,12 @@ export const sendMonthlyInvoiceGeneratedNotice = async ({ invoiceId }) => {
     });
     if (!eligibility.allowed) {
       summary.skipped += 1;
+      const skipReason =
+        eligibility.reason === 'class_inactive'
+          ? 'class inactive'
+          : 'dropped, not rejoined';
       console.log(
-        `[monthlyInvoiceNotice] Skipping student ${row.student_id} — dropped, not rejoined (invoice ${invoiceId}, class ${eligibility.classId ?? 'n/a'})`
+        `[monthlyInvoiceNotice] Skipping student ${row.student_id} — ${skipReason} (invoice ${invoiceId}, class ${eligibility.classId ?? 'n/a'})`
       );
       continue;
     }

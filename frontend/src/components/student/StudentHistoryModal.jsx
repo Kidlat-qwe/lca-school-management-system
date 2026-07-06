@@ -1049,7 +1049,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                         WebkitOverflowScrolling: 'touch',
                       }}
                     >
-                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '720px' }}>
+                      <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '860px' }}>
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1063,6 +1063,9 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                               Room
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Assigned teacher
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                               Start — End
@@ -1087,6 +1090,13 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                               <td className="px-3 py-3 text-sm text-gray-900">{row.class_name || '—'}</td>
                               <td className="px-3 py-3 text-sm text-gray-900">{row.level_tag || '—'}</td>
                               <td className="px-3 py-3 text-sm text-gray-900">{row.room_name || '—'}</td>
+                              <td className="px-3 py-3 text-sm text-gray-900">
+                                {row.teacher_names ||
+                                  (Array.isArray(row.teachers) && row.teachers.length > 0
+                                    ? row.teachers.map((t) => t.teacher_name).filter(Boolean).join(', ')
+                                    : null) ||
+                                  '—'}
+                              </td>
                               <td className="px-3 py-3 text-sm text-gray-900 whitespace-nowrap">
                                 {row.start_date || '—'} — {row.end_date || '—'}
                               </td>

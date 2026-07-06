@@ -4,9 +4,12 @@
  * @module utils/installmentDelinquencyDrop
  */
 
-import { deactivateInstallmentProfileForClassDrop } from './billingNotificationEligibility.js';
+import {
+  deactivateInstallmentProfileForClassDrop,
+  isClassActiveForBilling,
+} from './billingNotificationEligibility.js';
 import { getChainFinancialSummary, getChainRootInvoiceId } from './balanceInvoice.js';
-import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from './dateUtils.js';
 import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
 import { resolveLocalPhaseForInstallmentInvoice } from './installmentPenaltyExempt.js';
 import { resolveProfilePhaseStart } from './phaseInstallmentUtils.js';
@@ -168,7 +171,19 @@ export async function applyDelinquencyDropForInvoiceChain(
   client,
   { invoiceId, profileId, studentId, classId, branchId, dueDate }
 ) {
+  if (classId && !(await isClassActiveForBilling(client, classId))) {
+    return { applied: false, reason: 'class_inactive' };
+  }
+
   const chainRootId = await getChainRootInvoiceId(client, invoiceId);
+
+  const remarksRes = await client.query(`SELECT remarks FROM invoicestbl WHERE invoice_id = $1`, [
+    chainRootId,
+  ]);
+  if (String(remarksRes.rows[0]?.remarks || '').includes('DELINQUENCY_DROP_WAIVED')) {
+    return { applied: false, reason: 'drop_waived' };
+  }
+
   const evaluation = await evaluateDelinquencyDropForChain(client, {
     chainRootId,
     dueDate,
@@ -220,6 +235,10 @@ export async function syncInstallmentDelinquencyDropsForProfile(client, profileI
     return { dropsApplied: 0, scanned: 0 };
   }
 
+  if (!(await isClassActiveForBilling(client, profile.class_id))) {
+    return { dropsApplied: 0, scanned: 0, skipped: true, reason: 'class_inactive' };
+  }
+
   const invoicesRes = await client.query(
     `SELECT DISTINCT ON (COALESCE(i.invoice_chain_root_id, i.invoice_id))
             i.invoice_id,
@@ -252,3 +271,181 @@ export async function syncInstallmentDelinquencyDropsForProfile(client, profileI
 
   return { dropsApplied, scanned };
 }
+
+/**
+ * Students whose unpaid installment phase will auto-drop within `withinDays`.
+ * Drop date = due_date + installment_final_dropoff_days. Excludes settled, partial-paid,
+ * and already-dropped phases.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {{ branchId?: number|null, withinDays?: number }} options
+ *   - branchId: limit to one branch; omit/null for all branches (Superadmin)
+ */
+export async function listUpcomingDelinquencyDrops(client, { branchId = null, withinDays = 7 } = {}) {
+  const bid =
+    branchId != null && branchId !== '' && Number.isFinite(Number(branchId))
+      ? Number(branchId)
+      : null;
+  const windowDays = Math.max(0, Math.min(30, Number(withinDays) || 7));
+  const asOf = todayYmdManila();
+
+  // SQL window uses branch setting when scoped; default when listing all branches.
+  // Per-row evaluation still uses each invoice's branch settings.
+  const finalDropoffDays = bid
+    ? await loadFinalDropoffDays(client, bid)
+    : SETTINGS_DEFINITIONS.installment_final_dropoff_days.defaultValue;
+
+  const candidates = bid
+    ? await client.query(
+        `SELECT DISTINCT ON (COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                i.invoice_id,
+                COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
+                i.due_date,
+                TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_ymd,
+                TO_CHAR((i.due_date + ($2::int * INTERVAL '1 day'))::date, 'YYYY-MM-DD') AS drop_ymd,
+                ((i.due_date + ($2::int * INTERVAL '1 day'))::date - CURRENT_DATE)::int AS days_until_drop,
+                i.status,
+                i.invoice_ar_number,
+                i.amount,
+                i.installmentinvoiceprofiles_id,
+                ip.student_id,
+                ip.class_id,
+                COALESCE(ip.branch_id, i.branch_id) AS branch_id,
+                u.full_name AS student_name,
+                u.email AS student_email,
+                c.class_name,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+         FROM invoicestbl i
+         INNER JOIN installmentinvoiceprofilestbl ip
+           ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         INNER JOIN userstbl u ON u.user_id = ip.student_id
+         LEFT JOIN classestbl c ON c.class_id = ip.class_id
+         LEFT JOIN branchestbl b ON b.branch_id = COALESCE(ip.branch_id, i.branch_id)
+         WHERE COALESCE(ip.branch_id, i.branch_id) = $1
+           AND i.status NOT IN ('Paid', 'Cancelled')
+           AND i.due_date IS NOT NULL
+           AND (i.issue_date IS NULL OR i.due_date >= i.issue_date)
+           AND (i.due_date + ($2::int * INTERVAL '1 day'))::date >= CURRENT_DATE
+           AND (i.due_date + ($2::int * INTERVAL '1 day'))::date
+               <= (CURRENT_DATE + ($3::int * INTERVAL '1 day'))
+         ORDER BY COALESCE(i.invoice_chain_root_id, i.invoice_id), i.invoice_id DESC`,
+        [bid, finalDropoffDays, windowDays]
+      )
+    : await client.query(
+        `SELECT DISTINCT ON (COALESCE(i.invoice_chain_root_id, i.invoice_id))
+                i.invoice_id,
+                COALESCE(i.invoice_chain_root_id, i.invoice_id) AS chain_root_id,
+                i.due_date,
+                TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_ymd,
+                TO_CHAR((i.due_date + ($1::int * INTERVAL '1 day'))::date, 'YYYY-MM-DD') AS drop_ymd,
+                ((i.due_date + ($1::int * INTERVAL '1 day'))::date - CURRENT_DATE)::int AS days_until_drop,
+                i.status,
+                i.invoice_ar_number,
+                i.amount,
+                i.installmentinvoiceprofiles_id,
+                ip.student_id,
+                ip.class_id,
+                COALESCE(ip.branch_id, i.branch_id) AS branch_id,
+                u.full_name AS student_name,
+                u.email AS student_email,
+                c.class_name,
+                COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+         FROM invoicestbl i
+         INNER JOIN installmentinvoiceprofilestbl ip
+           ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         INNER JOIN userstbl u ON u.user_id = ip.student_id
+         LEFT JOIN classestbl c ON c.class_id = ip.class_id
+         LEFT JOIN branchestbl b ON b.branch_id = COALESCE(ip.branch_id, i.branch_id)
+         WHERE i.status NOT IN ('Paid', 'Cancelled')
+           AND i.due_date IS NOT NULL
+           AND (i.issue_date IS NULL OR i.due_date >= i.issue_date)
+           AND (i.due_date + ($1::int * INTERVAL '1 day'))::date >= CURRENT_DATE
+           AND (i.due_date + ($1::int * INTERVAL '1 day'))::date
+               <= (CURRENT_DATE + ($2::int * INTERVAL '1 day'))
+         ORDER BY COALESCE(i.invoice_chain_root_id, i.invoice_id), i.invoice_id DESC`,
+        [finalDropoffDays, windowDays]
+      );
+
+  const students = [];
+
+  for (const row of candidates.rows) {
+    const rowBranchId = row.branch_id != null ? Number(row.branch_id) : bid;
+    const evaluation = await evaluateDelinquencyDropForChain(client, {
+      chainRootId: row.chain_root_id,
+      dueDate: row.due_date,
+      branchId: rowBranchId,
+    });
+
+    if (evaluation.reason === 'settled' || evaluation.reason === 'partial_payment') {
+      continue;
+    }
+    if (evaluation.reason === 'missing_chain_or_due_date') {
+      continue;
+    }
+
+    const absolutePhase = await resolveAbsolutePhaseForInstallmentInvoice(client, {
+      invoiceId: row.chain_root_id,
+      profileId: row.installmentinvoiceprofiles_id,
+    });
+
+    if (absolutePhase != null && row.class_id) {
+      const droppedRes = await client.query(
+        `SELECT 1
+         FROM classstudentstbl
+         WHERE student_id = $1
+           AND class_id = $2
+           AND COALESCE(phase_number, 1) = $3
+           AND program_enrollment_status = 'dropped'
+         LIMIT 1`,
+        [row.student_id, row.class_id, absolutePhase]
+      );
+      if (droppedRes.rows.length > 0) {
+        continue;
+      }
+    }
+
+    const remaining =
+      evaluation.summary?.remaining_on_leaf != null
+        ? Number(evaluation.summary.remaining_on_leaf)
+        : parseFloat(row.amount) || 0;
+
+    students.push({
+      student_id: row.student_id,
+      student_name: row.student_name,
+      student_email: row.student_email,
+      class_id: row.class_id,
+      class_name: row.class_name,
+      branch_id: row.branch_id,
+      branch_name: row.branch_name || null,
+      phase_number: absolutePhase,
+      invoice_id: row.invoice_id,
+      invoice_ar_number: row.invoice_ar_number,
+      due_date: row.due_ymd,
+      drop_date: row.drop_ymd,
+      days_until_drop: Number(row.days_until_drop),
+      amount: remaining,
+      status: row.status,
+      installmentinvoiceprofiles_id: row.installmentinvoiceprofiles_id,
+    });
+  }
+
+  students.sort((a, b) => {
+    if (a.days_until_drop !== b.days_until_drop) {
+      return a.days_until_drop - b.days_until_drop;
+    }
+    const branchCmp = String(a.branch_name || '').localeCompare(String(b.branch_name || ''));
+    if (branchCmp !== 0) return branchCmp;
+    return String(a.student_name || '').localeCompare(String(b.student_name || ''));
+  });
+
+  return {
+    students,
+    count: students.length,
+    within_days: windowDays,
+    final_dropoff_days: finalDropoffDays,
+    as_of: asOf,
+    branch_id: bid,
+    scope: bid ? 'branch' : 'all',
+  };
+}
+

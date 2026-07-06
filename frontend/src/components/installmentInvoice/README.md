@@ -10,6 +10,7 @@
   | ---- | ------- |
   | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments`, or advance pay via `POST .../advance-pay`. **late_start_gap** plan slots (enrollment started after phase 1) are hidden from the table; progress shows **complete** as addressed visible slots / (total − gaps), **paid** as downpayment + paid phases / total. Before opening payment, calls `GET /invoices/:id` and blocks with an alert if an earlier phase has unsettled partial-payment balance (`prior_partial_balance_block`). Reused inline by other dialogs. |
   | `InstallmentInvoicePhasesModal.jsx`  | Modal shell around `InstallmentPlanDetails` for the "View Details" action on the Installment Invoice Logs pages. |
+  | `StudentDropOffListPanel.jsx`        | Shared table + self-fetching panel for students due to auto-drop within 7 days (`GET /installment-invoices/upcoming-delinquency-drops`). Used by the Branch Admin urgent modal and the Admin/Superadmin Installment Invoice **Student drop off list** tab. Superadmin can scope by global branch filter or show all branches (Branch column). |
 
   ## `InstallmentPlanDetails`
 

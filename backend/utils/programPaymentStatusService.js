@@ -127,6 +127,7 @@ export function computeInstallmentPhaseDisplayStatus({
   const normalized = raw.toLowerCase();
   if (normalized === 'paid') return 'Paid';
   if (normalized === 'cancelled' || normalized === 'canceled') return 'Cancelled';
+  if (normalized === 'unpaid') return 'Unpaid';
 
   const today = todayYmd || formatYmdLocal(new Date());
 

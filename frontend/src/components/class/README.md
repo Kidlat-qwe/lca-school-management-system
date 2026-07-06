@@ -2,6 +2,25 @@
 
 Reusable UI for class detail views.
 
+## ClassStatusToggle
+
+Status **dropdown** for **Active / Inactive** class status on the Superadmin and Branch Admin classes list (pill button with chevron; options shown in uppercase).
+
+- **API:** `PATCH /classes/:id/status` with body `{ status: 'Active' | 'Inactive' }`
+- Reactivating a class **auto-restores** teachers from the last inactive release when they are **not** assigned to another active class.
+- **Cannot activate** without at least one assigned teacher. If restore fails, status stays **Inactive** and the **Assign teacher** modal opens (`ClassReactivateAssignTeacherModal`); after assign, the class is marked **Active**.
+- Deactivating a class releases all teacher assignments (`classestbl.teacher_id`, `classteacherstbl`) and closes open rows in `teacher_class_historytbl` with `end_reason = class_inactive`, so teachers can be assigned to other active classes.
+- Installment plans for that class are paused (`installmentinvoiceprofilestbl.is_active = false`): no new auto/manual installment invoices, monthly notices, overdue email/SMS, or delinquency auto-drop. Existing invoices, payments, enrollments, and profiles remain in the database.
+- Backend logic: `backend/utils/classStatusService.js`, `backend/utils/billingNotificationEligibility.js`
+
+**Props:** `classId`, `status`, `enrolledStudents`, `teacherLabel`, `onStatusChanged`, `onNeedsTeacherAssignment`, `disabled`
+
+## ClassReactivateAssignTeacherModal
+
+Opens when activating a class (**Inactive → Active**) requires a teacher assignment (none on file or previous teacher on another class). Uses schedule conflict checks; **Assign & activate** saves teachers then `PATCH`es status to Active.
+
+**Props:** `open`, `classItem` (`pending_activation`, `teachers_skipped`), `onClose`, `onAssigned`, `activateOnAssign`
+
 ## ClassPhaseHeader
 
 Collapsible phase row with an **Attendance History** action for attendance summary. Used on superadmin, admin, and teacher class detail pages.

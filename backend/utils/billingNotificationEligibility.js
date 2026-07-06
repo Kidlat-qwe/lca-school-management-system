@@ -1,6 +1,6 @@
 /**
- * Gate billing-related email/SMS for class-linked invoices.
- * Skips notifications when the student is dropped from the class and has not rejoined.
+ * Gate billing-related email/SMS and installment generation for class-linked billing.
+ * Skips notifications and generation when the class is inactive or the student is dropped.
  *
  * @module utils/billingNotificationEligibility
  */
@@ -8,11 +8,50 @@
 import { ACTIVE_ENROLLMENT_STATUSES, PROGRAM_ENROLLMENT_STATUS } from './enrollmentStatus.js';
 
 const runQuery = (db, text, params) => {
+  if (typeof db === 'function') {
+    return db(text, params);
+  }
   if (typeof db?.query === 'function') {
     return db.query(text, params);
   }
   throw new Error('billingNotificationEligibility requires a database client or pool with query()');
 };
+
+/**
+ * @param {import('pg').Pool | import('pg').PoolClient} db
+ * @param {number|null|undefined} classId
+ * @returns {Promise<boolean>}
+ */
+export async function isClassActiveForBilling(db, classId) {
+  const cid = Number(classId);
+  if (!cid) return true;
+
+  const res = await runQuery(
+    db,
+    `SELECT status FROM classestbl WHERE class_id = $1 LIMIT 1`,
+    [cid]
+  );
+  if (res.rows.length === 0) return true;
+  return String(res.rows[0].status || 'Active').trim() !== 'Inactive';
+}
+
+/**
+ * @param {import('pg').Pool | import('pg').PoolClient} db
+ * @param {number|null|undefined} classId
+ * @returns {Promise<{ allowed: boolean, reason?: string, classId?: number|null }>}
+ */
+export async function evaluateClassInstallmentBillingEligibility(db, classId) {
+  const cid = Number(classId);
+  if (!cid) {
+    return { allowed: true, reason: 'not_class_linked', classId: null };
+  }
+
+  if (!(await isClassActiveForBilling(db, cid))) {
+    return { allowed: false, reason: 'class_inactive', classId: cid };
+  }
+
+  return { allowed: true, reason: 'class_active', classId: cid };
+}
 
 /**
  * @param {import('pg').Pool | import('pg').PoolClient} db
@@ -118,6 +157,14 @@ export async function evaluateBillingNotificationEligibility(db, { invoiceId, st
     return { allowed: true, reason: 'not_class_linked', classId: null };
   }
 
+  if (!(await isClassActiveForBilling(db, classId))) {
+    return {
+      allowed: false,
+      reason: 'class_inactive',
+      classId,
+    };
+  }
+
   if (await hasActiveClassEnrollment(db, sid, classId)) {
     return { allowed: true, reason: 'active_enrollment', classId };
   }
@@ -174,4 +221,98 @@ export async function deactivateInstallmentProfileForClassDrop(client, { student
     [sid, cid]
   );
   return res.rowCount || 0;
+}
+
+/**
+ * Pause all installment profiles for an inactive class (records preserved).
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {number} classId
+ * @returns {Promise<number>}
+ */
+export async function deactivateInstallmentProfilesForInactiveClass(client, classId) {
+  const cid = Number(classId);
+  if (!cid) return 0;
+
+  const res = await client.query(
+    `UPDATE installmentinvoiceprofilestbl
+     SET is_active = false
+     WHERE class_id = $1
+       AND is_active = true`,
+    [cid]
+  );
+  return res.rowCount || 0;
+}
+
+/**
+ * Resume installment profiles when a class is reactivated (enrolled students only).
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {number} classId
+ * @returns {Promise<number>}
+ */
+export async function reactivateInstallmentProfilesForActiveClass(client, classId) {
+  const cid = Number(classId);
+  if (!cid) return 0;
+
+  const res = await client.query(
+    `UPDATE installmentinvoiceprofilestbl ip
+     SET is_active = true
+     WHERE ip.class_id = $1
+       AND ip.is_active = false
+       AND EXISTS (
+         SELECT 1
+         FROM classstudentstbl cs
+         WHERE cs.student_id = ip.student_id
+           AND cs.class_id = ip.class_id
+           AND cs.program_enrollment_status = ANY($2::text[])
+           AND cs.removed_at IS NULL
+       )`,
+    [cid, ACTIVE_ENROLLMENT_STATUSES]
+  );
+  return res.rowCount || 0;
+}
+
+/**
+ * Keep installment profile is_active aligned with class status (e.g. end_date auto-inactive).
+ *
+ * @param {import('pg').Pool | import('pg').PoolClient} db
+ */
+export async function syncInstallmentProfilesWithClassStatus(db) {
+  await runQuery(
+    db,
+    `UPDATE installmentinvoiceprofilestbl ip
+     SET is_active = false
+     WHERE ip.is_active = true
+       AND ip.class_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM classestbl c
+         WHERE c.class_id = ip.class_id
+           AND COALESCE(c.status, 'Active') = 'Inactive'
+       )`
+  );
+
+  await runQuery(
+    db,
+    `UPDATE installmentinvoiceprofilestbl ip
+     SET is_active = true
+     WHERE ip.is_active = false
+       AND ip.class_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM classestbl c
+         WHERE c.class_id = ip.class_id
+           AND COALESCE(c.status, 'Active') = 'Active'
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM classstudentstbl cs
+         WHERE cs.student_id = ip.student_id
+           AND cs.class_id = ip.class_id
+           AND cs.program_enrollment_status = ANY($1::text[])
+           AND cs.removed_at IS NULL
+       )`,
+    [ACTIVE_ENROLLMENT_STATUSES]
+  );
 }

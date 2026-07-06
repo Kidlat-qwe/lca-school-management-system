@@ -11,6 +11,7 @@ import {
 } from './phaseInstallmentUtils.js';
 import { syncProgramPaymentStatusForInvoice } from './programPaymentStatusService.js';
 import { syncInstallmentGeneratedCountToNextUnbilled } from './installmentPhaseBillingSync.js';
+import { evaluateClassInstallmentBillingEligibility } from './billingNotificationEligibility.js';
 
 /**
  * Parse frequency string (e.g., "1 month(s)", "2 month(s)") and return number of months
@@ -117,6 +118,18 @@ export const generateInvoiceFromInstallment = async (
   
   try {
     await client.query('BEGIN');
+
+    if (profile?.class_id) {
+      const billingEligibility = await evaluateClassInstallmentBillingEligibility(
+        client,
+        profile.class_id
+      );
+      if (!billingEligibility.allowed) {
+        throw new Error(
+          'Installment invoice generation is paused while the class is inactive. Existing records are preserved.'
+        );
+      }
+    }
     
     // Get student information
     const studentResult = await client.query(
@@ -583,6 +596,15 @@ export const processDueInstallmentInvoices = async () => {
          AND ip.is_active = true
          AND (ip.total_phases IS NULL OR ip.generated_count < ip.total_phases)
          AND (ip.downpayment_invoice_id IS NULL OR ip.downpayment_paid = true)
+         AND (
+           ip.class_id IS NULL
+           OR EXISTS (
+             SELECT 1
+             FROM classestbl c
+             WHERE c.class_id = ip.class_id
+               AND COALESCE(c.status, 'Active') = 'Active'
+           )
+         )
        ORDER BY ii.next_generation_date ASC`,
       [todayStr]
     );

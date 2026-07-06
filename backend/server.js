@@ -9,6 +9,7 @@ import morgan from 'morgan';
 // Import routes
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
+import teachersRoutes from './routes/teachers.js';
 import branchesRoutes from './routes/branches.js';
 import classesRoutes from './routes/classes.js';
 import studentsRoutes from './routes/students.js';
@@ -144,6 +145,7 @@ app.use(API_VERSION, activityLogger);
 
 app.use(`${API_VERSION}/auth`, authRoutes);
 app.use(`${API_VERSION}/users`, usersRoutes);
+app.use(`${API_VERSION}/teachers`, teachersRoutes);
 app.use(`${API_VERSION}/branches`, branchesRoutes);
 app.use(`${API_VERSION}/classes`, classesRoutes);
 app.use(`${API_VERSION}/students`, studentsRoutes);

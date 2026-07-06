@@ -10,6 +10,7 @@ When an installment phase invoice remains **fully unpaid** after `due_date + ins
 
 - **Daily cron** — `jobs/installmentDelinquencyScheduler.js` → `processInstallmentDelinquencies()`
 - **Installment plan UI** — `GET /installment-invoices/profiles/:id/phases` calls `syncInstallmentDelinquencyDropsForProfile()` before loading enrollment
+- **Branch Admin alert** — `GET /installment-invoices/upcoming-delinquency-drops` → `listUpcomingDelinquencyDrops()` (students whose drop date falls within the next 7 days; powers the Admin login-time urgent modal and Admin/Superadmin Installment Invoice **Student drop off list** tab). Superadmin has no login modal; Superadmin may pass optional `?branch_id=` or list all branches.
 
 ## UI expectations
 
@@ -21,6 +22,7 @@ When an installment phase invoice remains **fully unpaid** after `due_date + ins
 
 - **Partial payment** — any amount paid on the invoice chain skips auto-drop
 - **Paid / cancelled** invoices
+- **Manual repair waiver** — invoice `remarks` containing `DELINQUENCY_DROP_WAIVED` (one-off ops repairs; see `backend/scripts/repairCelestineMendozaInstallmentPhases.js`)
 
 ## After drop
 

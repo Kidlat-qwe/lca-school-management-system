@@ -24,6 +24,8 @@ import { getEnrollmentAckReceiptLineTotal } from '../../utils/enrollmentAckRecei
 import EnrollmentAckReceiptPickerTable from '../../components/enrollment/EnrollmentAckReceiptPickerTable';
 import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
 import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
+import ClassStatusToggle from '../../components/class/ClassStatusToggle';
+import ClassReactivateAssignTeacherModal from '../../components/class/ClassReactivateAssignTeacherModal';
 import {
   formatProgramEnrollmentStatus,
   pickGroupedProgramEnrollmentStatus,
@@ -56,6 +58,7 @@ const AdminClasses = () => {
   // Removed filterBranch - admin only sees their branch
   const [filterProgram, setFilterProgram] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [reactivateAssignTeacherClass, setReactivateAssignTeacherClass] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: undefined, bottom: undefined, right: undefined, left: undefined });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openProgramDropdown, setOpenProgramDropdown] = useState(false);
@@ -1219,6 +1222,41 @@ const initializePackageMerchSelections = useCallback(
         hasLoadedOnceRef.current = true;
       }
     }
+  };
+
+  const getClassTeacherLabel = (classItem) => {
+    if (classItem.teachers && Array.isArray(classItem.teachers) && classItem.teachers.length > 0) {
+      return classItem.teachers
+        .map((teacher) =>
+          typeof teacher === 'object' ? teacher.teacher_name || teacher.full_name : teacher
+        )
+        .filter(Boolean)
+        .join(', ');
+    }
+    return classItem.teacher_names || classItem.teacher_name || '';
+  };
+
+  const handleClassStatusChanged = () => {
+    fetchClasses();
+  };
+
+  const handleNeedsTeacherAssignment = (payload) => {
+    const match = classes.find((c) => Number(c.class_id) === Number(payload?.class_id));
+    setReactivateAssignTeacherClass(
+      match
+        ? {
+            class_id: match.class_id,
+            class_name: match.class_name,
+            branch_id: match.branch_id,
+            days_of_week: match.days_of_week,
+            start_date: match.start_date,
+            end_date: match.end_date,
+            teachers_skipped: payload?.teachers_skipped,
+            pending_activation: payload?.pending_activation === true,
+          }
+        : payload
+    );
+    fetchClasses();
   };
 
   const fetchBranches = async () => {
@@ -8264,7 +8302,7 @@ const resolvedBranchId =
         )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
           <div className="max-h-[600px] overflow-y-auto relative">
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1100px' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px' }}>
             <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
@@ -8283,6 +8321,9 @@ const resolvedBranchId =
                     TEACHER
                   </th>
                   <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
+                    STATUS
+                  </th>
+                  <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
                     ENROLLED / MAX
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6 sm:py-3">
@@ -8296,7 +8337,7 @@ const resolvedBranchId =
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {filteredClasses.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center sm:px-6 sm:py-12">
+                    <td colSpan={9} className="px-4 py-10 text-center sm:px-6 sm:py-12">
                       <p className="text-gray-500">
                         {nameSearchTerm || filterProgram
                           ? 'No matching classes. Try adjusting your search or filters.'
@@ -8336,9 +8377,19 @@ const resolvedBranchId =
                   };
 
                   const hasInactivatedSchedule = classesWithInactivatedSchedules.has(classItem.class_id);
+                  const isClassInactive = String(classItem.status || 'Active').trim() === 'Inactive';
 
                   return (
-                    <tr key={classItem.class_id} className={hasInactivatedSchedule ? 'bg-yellow-50' : ''}>
+                    <tr
+                      key={classItem.class_id}
+                      className={
+                        hasInactivatedSchedule
+                          ? 'bg-yellow-50'
+                          : isClassInactive
+                            ? 'bg-gray-50 opacity-80'
+                            : ''
+                      }
+                    >
                       <td className="px-3 py-3 sm:px-6 sm:py-4 max-w-[100px]">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="text-sm font-medium text-gray-900 truncate" title={classItem.program_code || classItem.program_name || ''}>
@@ -8426,6 +8477,20 @@ const resolvedBranchId =
                         </div>
                       </td>
                       <td className="px-3 py-3 sm:px-6 sm:py-4 whitespace-nowrap">
+                        <div className="flex justify-center">
+                          <ClassStatusToggle
+                            classId={classItem.class_id}
+                            className={classItem.class_name}
+                            branchId={classItem.branch_id}
+                            status={classItem.status}
+                            enrolledStudents={classItem.enrolled_students}
+                            teacherLabel={getClassTeacherLabel(classItem)}
+                            onStatusChanged={() => handleClassStatusChanged()}
+                            onNeedsTeacherAssignment={handleNeedsTeacherAssignment}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 sm:px-6 sm:py-4 whitespace-nowrap">
                         <div className="flex justify-center text-sm text-gray-900">
                           {(() => {
                             const enrolled = Number(classItem.enrolled_students ?? 0);
@@ -8481,6 +8546,16 @@ const resolvedBranchId =
             onPageChange={setCurrentPage}
           />
         </div>
+
+      <ClassReactivateAssignTeacherModal
+        open={Boolean(reactivateAssignTeacherClass)}
+        classItem={reactivateAssignTeacherClass}
+        onClose={() => setReactivateAssignTeacherClass(null)}
+        onAssigned={() => {
+          setReactivateAssignTeacherClass(null);
+          fetchClasses();
+        }}
+      />
 
       {/* Action Menu Overlay Modal */}
       {openMenuId && createPortal(

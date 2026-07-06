@@ -921,9 +921,64 @@ router.get(
         return new Date(b.earliest_enrollment) - new Date(a.earliest_enrollment);
       });
 
+      // Attach assigned teachers (classteacherstbl; fall back to classestbl.teacher_id)
+      const classIds = uniqueClasses.map((c) => c.class_id);
+      const teachersByClass = new Map();
+      if (classIds.length > 0) {
+        try {
+          const teachersResult = await query(
+            `SELECT ct.class_id, ct.teacher_id, u.full_name AS teacher_name
+             FROM classteacherstbl ct
+             INNER JOIN userstbl u ON ct.teacher_id = u.user_id
+             WHERE ct.class_id = ANY($1::int[])
+             ORDER BY ct.class_id, ct.created_at`,
+            [classIds]
+          );
+          for (const t of teachersResult.rows) {
+            if (!teachersByClass.has(t.class_id)) teachersByClass.set(t.class_id, []);
+            teachersByClass.get(t.class_id).push({
+              teacher_id: t.teacher_id,
+              teacher_name: t.teacher_name,
+            });
+          }
+        } catch {
+          /* junction table may be missing on older DBs */
+        }
+
+        const missingIds = classIds.filter((id) => !teachersByClass.has(id));
+        if (missingIds.length > 0) {
+          try {
+            const legacy = await query(
+              `SELECT c.class_id, c.teacher_id, u.full_name AS teacher_name
+               FROM classestbl c
+               INNER JOIN userstbl u ON c.teacher_id = u.user_id
+               WHERE c.class_id = ANY($1::int[])
+                 AND c.teacher_id IS NOT NULL`,
+              [missingIds]
+            );
+            for (const t of legacy.rows) {
+              teachersByClass.set(t.class_id, [
+                { teacher_id: t.teacher_id, teacher_name: t.teacher_name },
+              ]);
+            }
+          } catch {
+            /* classestbl.teacher_id may not exist */
+          }
+        }
+      }
+
+      const data = uniqueClasses.map((c) => {
+        const teachers = teachersByClass.get(c.class_id) || [];
+        return {
+          ...c,
+          teachers,
+          teacher_names: teachers.map((t) => t.teacher_name).filter(Boolean).join(', ') || null,
+        };
+      });
+
       res.json({
         success: true,
-        data: uniqueClasses,
+        data,
       });
     } catch (error) {
       next(error);

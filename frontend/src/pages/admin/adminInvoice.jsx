@@ -51,7 +51,7 @@ import {
   useOpenInvoiceFromPaymentLogsNavigation,
   useScrollToFocusedInvoiceRow,
 } from '../../utils/invoiceFocusNavigation';
-import { getInvoiceIssuedByLabel } from '../../utils/issuedByDisplay';
+import { getInvoiceIssuedByLabel, getInvoiceReceivedByLabel } from '../../utils/issuedByDisplay';
 import { InvoiceArNumberLink } from '../../components/billing/BillingCrossLinks';
 import {
   getInitialInvoiceSearchFromParams,
@@ -1844,7 +1844,7 @@ const AdminInvoice = () => {
           />
         )}
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1410px', tableLayout: 'fixed' }}>
+            <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1540px', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '170px' }} />
                 <col style={{ width: '150px' }} />
@@ -1855,8 +1855,9 @@ const AdminInvoice = () => {
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '120px' }} />
                 <col style={{ width: '130px' }} />
-                <col style={{ width: '130px' }} />
                 <col style={{ width: '120px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '90px' }} />
               </colgroup>
               <thead className="bg-white table-header-stable">
@@ -1887,6 +1888,9 @@ const AdminInvoice = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
                     Issued by
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '130px', minWidth: '130px' }}>
+                    Received by
+                  </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '90px', minWidth: '90px' }}>
                     Actions
                   </th>
@@ -1895,7 +1899,7 @@ const AdminInvoice = () => {
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={12} className="px-6 py-10 text-center">
+                    <td colSpan={13} className="px-6 py-10 text-center">
                       <div className="inline-flex items-center gap-2 text-sm text-gray-600">
                         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600" />
                         Loading invoices...
@@ -1904,7 +1908,7 @@ const AdminInvoice = () => {
                   </tr>
                 ) : sortedInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="px-6 py-12 text-center">
+                    <td colSpan={13} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {nameSearchTerm || studentNameSearch || filterStatuses.length > 0
                           ? 'No matching invoices. Try adjusting your search or filters.'
@@ -2056,6 +2060,14 @@ const AdminInvoice = () => {
                         title={getInvoiceIssuedByLabel(invoice) === '—' ? undefined : getInvoiceIssuedByLabel(invoice)}
                       >
                         {getInvoiceIssuedByLabel(invoice)}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 align-middle whitespace-nowrap" style={{ maxWidth: '160px' }}>
+                      <div
+                        className="text-sm text-gray-900 truncate"
+                        title={getInvoiceReceivedByLabel(invoice) === '—' ? undefined : getInvoiceReceivedByLabel(invoice)}
+                      >
+                        {getInvoiceReceivedByLabel(invoice)}
                       </div>
                     </td>
                     <td className="px-6 py-4 align-middle whitespace-nowrap text-right text-sm font-medium">

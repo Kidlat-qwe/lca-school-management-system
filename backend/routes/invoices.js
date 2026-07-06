@@ -663,6 +663,11 @@ router.get(
                          LIMIT 1
                        ) AS payment_recorded_by_name,
                         i.created_by,
+                        (
+                          SELECT u.full_name
+                          FROM userstbl u
+                          WHERE u.user_id = i.created_by
+                        ) AS created_by_name,
                         i.installmentinvoiceprofiles_id,
                         i.parent_invoice_id, i.balance_invoice_id, i.invoice_chain_root_id,
                         i.ack_receipt_id,
@@ -1084,9 +1089,18 @@ router.get(
         )
       ).rows?.[0]?.last_payment_date || null;
 
-      const preparedByResult = await query(
+      const issuerResult = await query(
+        `SELECT u.full_name AS created_by_name
+         FROM userstbl u
+         WHERE u.user_id = $1`,
+        [invoiceRow.created_by]
+      );
+      const created_by_name = issuerResult.rows?.[0]?.created_by_name || null;
+
+      // Staff who recorded the latest completed payment ("Received by")
+      const paymentRecorderResult = await query(
         `SELECT
-           u.full_name AS prepared_by_name
+           u.full_name AS payment_recorded_by_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON u.user_id = p.created_by
          WHERE p.invoice_id = $1
@@ -1096,7 +1110,8 @@ router.get(
          LIMIT 1`,
         [id]
       );
-      const prepared_by_name = preparedByResult.rows?.[0]?.prepared_by_name || null;
+      const payment_recorded_by_name =
+        paymentRecorderResult.rows?.[0]?.payment_recorded_by_name || null;
 
       const receivedByResult = await query(
         `SELECT COALESCE(
@@ -1136,8 +1151,12 @@ router.get(
           total_tip_amount: totalTip,
           total_received_amount: totalPaid + totalTip,
           last_payment_date: lastPaymentDateYmd,
-          prepared_by_name,
+          created_by_name,
+          payment_recorded_by_name,
+          // Receipt "Prepared by" = invoice issuer; "Received by" = payment recorder
+          prepared_by_name: created_by_name,
           prepared_by_date_ymd: lastPaymentDateYmd,
+          received_by_name: payment_recorded_by_name,
           received_by_guardian_name,
           display_description: displayDescription,
           items,

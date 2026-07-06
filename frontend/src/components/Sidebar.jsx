@@ -71,13 +71,13 @@ const Sidebar = ({ isOpen, onClose }) => {
           roles: ['Superadmin', 'Admin', 'Teacher'],
           children: [
             {
-              name: 'Daily Attendance Dashboard',
-              path: `${basePath}/daily-attendance-dashboard`,
+              name: 'Monthly Attendance Dashboard',
+              path: `${basePath}/monthly-attendance-dashboard`,
               roles: ['Superadmin', 'Admin', 'Teacher'],
             },
             {
-              name: 'Monthly Attendance Dashboard',
-              path: `${basePath}/monthly-attendance-dashboard`,
+              name: 'Daily Attendance Dashboard',
+              path: `${basePath}/daily-attendance-dashboard`,
               roles: ['Superadmin', 'Admin', 'Teacher'],
             },
           ],
@@ -200,6 +200,10 @@ const Sidebar = ({ isOpen, onClose }) => {
         {
           name: 'Personnel',
           path: '/superadmin/personnel', // Will be overridden in map function for Admin
+        },
+        {
+          name: 'Teachers',
+          path: '/superadmin/teachers', // Will be overridden in map function for Admin
         },
         {
           name: 'Student',
@@ -517,6 +521,9 @@ const Sidebar = ({ isOpen, onClose }) => {
         children = item.children?.map(child => {
           if (child.name === 'Personnel') {
             return { ...child, path: '/admin/personnel' };
+          }
+          if (child.name === 'Teachers') {
+            return { ...child, path: '/admin/teachers' };
           }
           if (child.name === 'Student') {
             return { ...child, path: '/admin/student' };

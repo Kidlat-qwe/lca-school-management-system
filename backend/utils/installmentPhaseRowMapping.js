@@ -114,7 +114,11 @@ export function normalizeAdjacentPhaseDisplayDates(phases, computeStatus) {
         if (row.status === 'Paid' || row.status === 'Cancelled') continue;
         if (row.penalty_exempt) continue;
         if (isInstallmentPlanSlotAddressed(row)) continue;
-        row.status = computeStatus('pending', row.due_date, row.issue_date);
+        const invoiceStatus =
+          row.invoice_status ||
+          (String(row.status || '').toLowerCase() === 'pending' ? 'Unpaid' : row.status) ||
+          'Unpaid';
+        row.status = computeStatus(invoiceStatus, row.due_date, row.issue_date);
       }
     }
   }
@@ -265,9 +269,15 @@ export function inferInstallmentPhaseEnrollmentStatus({
   let latestDroppedPhase = 0;
   for (let prior = start; prior < phase; prior += 1) {
     const priorRow = enrollmentByAbsolutePhase?.get(prior);
-    if (normalizeEnrollmentKey(priorRow?.program_enrollment_status) === 'dropped') {
-      latestDroppedPhase = Math.max(latestDroppedPhase, prior);
+    if (normalizeEnrollmentKey(priorRow?.program_enrollment_status) !== 'dropped') {
+      continue;
     }
+    // Delinquency-only drops on still-unpaid phases are not a rejoin gap — student may pay the skipped slot.
+    const removedReason = String(priorRow?.removed_reason || '');
+    if (/installment delinquency/i.test(removedReason)) {
+      continue;
+    }
+    latestDroppedPhase = Math.max(latestDroppedPhase, prior);
   }
 
   if (latestDroppedPhase > 0) {
@@ -306,6 +316,10 @@ export function resolveInstallmentPhaseEnrollmentStatus({
   const enroll = enrollmentByAbsolutePhase?.get(absolutePhase);
   const dbStatus = normalizeEnrollmentKey(enroll?.program_enrollment_status);
   if (dbStatus === 'dropped') {
+    // Unpaid generated slot: not enrolled until payment — show blank, keep Pay Now actionable.
+    if (!isPaidInstallmentPhaseRow(phaseRow)) {
+      return null;
+    }
     return 'dropped';
   }
 

@@ -16,6 +16,7 @@ import PhaseEnrollmentDashboard from './pages/superadmin/PhaseEnrollmentDashboar
 import MonthlyEnrollmentDashboard from './pages/superadmin/MonthlyEnrollmentDashboard';
 import Branch from './pages/superadmin/Branch';
 import Personnel from './pages/superadmin/Personnel';
+import Teachers from './pages/superadmin/Teachers';
 import Student from './pages/superadmin/Student';
 import Curriculum from './pages/superadmin/Curriculum';
 import Program from './pages/superadmin/Program';
@@ -45,6 +46,7 @@ import AdminMonthlyAttendanceDashboard from './pages/admin/adminMonthlyAttendanc
 import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
+import AdminTeachers from './pages/admin/adminTeachers';
 import AdminStudent from './pages/admin/adminStudent';
 import AdminGuardians from './pages/admin/adminGuardians';
 import AdminCurriculum from './pages/admin/adminCurriculum';
@@ -124,6 +126,7 @@ function App() {
             <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
             <Route path="branch" element={<Branch />} />
             <Route path="personnel" element={<Personnel />} />
+            <Route path="teachers" element={<Teachers />} />
             <Route path="student" element={<Student />} />
             <Route path="guardians" element={<Guardians />} />
             <Route path="curriculum" element={<Curriculum />} />
@@ -169,6 +172,7 @@ function App() {
             <Route path="calendar" element={<AdminCalendar />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="personnel" element={<AdminPersonnel />} />
+            <Route path="teachers" element={<AdminTeachers />} />
             <Route path="student" element={<AdminStudent />} />
             <Route path="guardians" element={<AdminGuardians />} />
             <Route path="curriculum" element={<AdminCurriculum />} />
