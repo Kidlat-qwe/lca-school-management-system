@@ -11,6 +11,10 @@ import {
 } from '../../utils/paymentLogTableAmounts';
 import { buildPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
+import { formatPaymentLogUpdatedAtMultiline } from '../../utils/paymentLogUpdatedAt';
+import { PaymentLogBranchCell } from '../../components/paymentLogs/PaymentLogBranchCell';
+import { PaymentLogUpdatedAtCell } from '../../components/paymentLogs/PaymentLogUpdatedAtCell';
+import { PaymentLogsTableColgroup, PAYMENT_LOGS_TABLE_MIN_WIDTH_PX } from '../../components/paymentLogs/paymentLogsTableLayout';
 import {
   PAYMENT_LOG_DATE_MODES,
   PAYMENT_LOG_DATE_MODE_LABELS,
@@ -1431,6 +1435,7 @@ const AdminPaymentLogs = () => {
           BRANCH: selectedBranchName || getBranchName(payment.branch_id) || payment.branch_name || 'N/A',
           'Issue Date': payment.issue_date ? formatDate(payment.issue_date) : '-',
           'Payment Date': payment.payment_date ? formatDate(payment.payment_date) : '-',
+          'Updated At': formatPaymentLogUpdatedAtMultiline(payment),
           'Student Name': payment.student_name || 'N/A',
           'PACKAGE/ITEM': getPaymentLogPackageItemDisplayText(payment),
           'LEVEL TAG': payment.student_level_tag || '-',
@@ -1461,6 +1466,7 @@ const AdminPaymentLogs = () => {
         22, // Branch
         12, // Issue date
         12, // Payment date
+        18, // Updated at
         24, // Student Name
         28, // Package/Item
         14, // Level tag
@@ -2639,49 +2645,19 @@ const AdminPaymentLogs = () => {
           className="overflow-x-auto rounded-lg"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}
         >
-          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: '1820px' }}>
+          <table className="divide-y divide-gray-200 w-full" style={{ tableLayout: 'fixed', minWidth: `${PAYMENT_LOGS_TABLE_MIN_WIDTH_PX}px` }}>
               {branchLogTab !== 'main' ? (
-                <colgroup>
-                  <col style={{ width: '120px' }} />
-                  <col style={{ width: '150px' }} />
-                  <col style={{ width: '115px' }} />
-                  <col style={{ width: '115px' }} />
-                  <col style={{ width: '200px' }} />
-                  <col style={{ width: '180px' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '145px' }} />
-                  <col style={{ width: '120px' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '170px' }} />
-                  <col style={{ width: '145px' }} />
-                  <col style={{ width: '160px' }} />
-                  <col style={{ width: '150px' }} />
-                  <col style={{ width: '170px' }} />
-                </colgroup>
+                <PaymentLogsTableColgroup variant="return" />
               ) : (
-                <colgroup>
-                  <col style={{ width: '120px' }} />
-                  <col style={{ width: '150px' }} />
-                  <col style={{ width: '115px' }} />
-                  <col style={{ width: '115px' }} />
-                  <col style={{ width: '200px' }} />
-                  <col style={{ width: '180px' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '145px' }} />
-                  <col style={{ width: '120px' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '170px' }} />
-                  <col style={{ width: '160px' }} />
-                  <col style={{ width: '150px' }} />
-                  <col style={{ width: '170px' }} />
-                </colgroup>
+                <PaymentLogsTableColgroup variant="main" />
               )}
               <thead className="bg-gray-50 table-header-stable">
                 <tr>
                   <SortableHeader label="Invoice" sortKey="invoice" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
-                  <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
+                  <SortableHeader label="Branch" sortKey="branch" sortConfig={sortConfig} onSort={handleSort} align="center" className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wider w-[11%]" />
                   <SortableHeader label="Issue Date" sortKey="issue_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Payment Date" sortKey="payment_date" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
+                  <SortableHeader label="Updated At" sortKey="updated_at" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" />
                   <SortableHeader label="Student Name" sortKey="student_name" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[13%]" />
                   <SortableHeader sortKey="package_item" sortConfig={sortConfig} onSort={handleSort} className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[9%]">
                     <span className="leading-tight">package/<br />item</span>
@@ -2711,7 +2687,7 @@ const AdminPaymentLogs = () => {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={branchLogTab !== 'main' ? 15 : 14} className="px-6 py-12 text-center">
+                    <td colSpan={branchLogTab !== 'main' ? 16 : 15} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
                         {searchTerm || filterFinanceApproval || filterPaymentMethod
                           ? 'No matching payments. Try adjusting your search or filters.'
@@ -2725,14 +2701,17 @@ const AdminPaymentLogs = () => {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm font-semibold text-gray-900 min-w-0">
                       {payment.invoice_id ? `INV-${payment.invoice_id}` : '-'}
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-900 align-top min-w-0">
-                      <span className="truncate block" title={selectedBranchName || '-'}>{selectedBranchName || '-'}</span>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 align-middle min-w-0">
+                      <PaymentLogBranchCell branchName={selectedBranchName || payment.branch_name} />
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0 overflow-hidden">
                       {payment.issue_date ? formatDate(payment.issue_date) : '-'}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0">
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm text-gray-500 min-w-0 overflow-hidden">
                       {payment.payment_date ? formatDate(payment.payment_date) : '-'}
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-gray-500 min-w-0 overflow-hidden">
+                      <PaymentLogUpdatedAtCell payment={payment} />
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 min-w-0">
                       <div className="flex flex-col min-w-0">

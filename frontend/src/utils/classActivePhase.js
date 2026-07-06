@@ -1,5 +1,6 @@
 import { calculateSessionDate } from './sessionCalculation';
 import { todayManilaYMD } from './dateUtils';
+import { resolveEnrollmentFloorPhase } from './enrollmentPhasePolicy';
 
 const normalizeYmd = (value) => {
   if (value == null || value === '') return null;
@@ -188,12 +189,14 @@ export const getInstallmentEnrollmentFloorPhase = (
   const daysOfWeek = classDetails?.days_of_week || [];
   const sessionsPerPhase = classDetails?.number_of_session_per_phase;
 
-  return calculateActivePhase(
-    phaseSessions,
-    classSessions,
-    classDetails,
-    daysOfWeek,
-    sessionsPerPhase
+  return resolveEnrollmentFloorPhase(
+    calculateActivePhase(
+      phaseSessions,
+      classSessions,
+      classDetails,
+      daysOfWeek,
+      sessionsPerPhase
+    )
   );
 };
 

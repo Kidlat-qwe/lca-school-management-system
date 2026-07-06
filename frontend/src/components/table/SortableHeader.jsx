@@ -24,6 +24,7 @@ const SortableHeader = ({
 }) => {
   const active = sortConfig?.key === sortKey;
   const justifyClass = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+  const textAlignClass = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
   const ariaSort = active ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none';
 
   return (
@@ -31,7 +32,7 @@ const SortableHeader = ({
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        className={`inline-flex w-full items-center gap-1 text-left uppercase ${justifyClass}`}
+        className={`inline-flex w-full items-center gap-1 uppercase ${justifyClass} ${textAlignClass}`}
       >
         <span>{children || label}</span>
         <SortIcon active={active} direction={sortConfig?.direction} />

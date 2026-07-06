@@ -109,7 +109,7 @@ async function main() {
 
     const paymentsRes = await client.query(
       `SELECT COALESCE(SUM(payable_amount), 0) as total_payments
-       FROM paymentstbl
+       FROM paymenttbl
        WHERE invoice_id = $1`,
       [invoice.invoice_id]
     );

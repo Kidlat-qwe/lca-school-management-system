@@ -25,19 +25,27 @@ export const parseDateForDisplay = (dateInput) => {
   }
 
   const str = String(dateInput).trim();
-  const ymd = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+  // YYYY-MM-DD HH:MM:SS — API timestamps from payment logs (UTC stored, formatted as Manila wall clock)
+  const ymdHms = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (ymdHms) {
+    const isoManila = `${ymdHms[1]}-${ymdHms[2]}-${ymdHms[3]}T${ymdHms[4]}:${ymdHms[5]}:${ymdHms[6] || '00'}+08:00`;
+    const parsed = new Date(isoManila);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  // YYYY-MM-DD date only (issue/payment business dates)
+  const ymd = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (ymd) {
     const y = parseInt(ymd[1], 10);
     const m = parseInt(ymd[2], 10);
     const d = parseInt(ymd[3], 10);
     if (!y || m < 1 || m > 12 || d < 1 || d > 31) return null;
-    return new Date(y, m - 1, d, 12, 0, 0, 0);
+    const parsed = new Date(`${ymd[1]}-${ymd[2]}-${ymd[3]}T12:00:00+08:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
-  const isoWithTz = str.includes(' ') && !str.includes('T')
-    ? str.replace(' ', 'T') + '+08:00'
-    : str;
-  const parsed = new Date(isoWithTz);
+  const parsed = new Date(str);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
@@ -67,6 +75,7 @@ export const formatDateTimeManila = (dateInput, options = {}) => {
     timeZone: MANILA_TZ,
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12,
   });
   return `${datePart}, ${timePart}`;

@@ -151,7 +151,7 @@ export async function processOverdueInvoiceAutoEmails({ batchLimit = 50 } = {}) 
       const grandTotal = totals.subtotal - totals.discount + totals.penalty + totals.tax;
 
       const paymentsResult = await client.query(
-        `SELECT COALESCE(SUM(payable_amount), 0) as total_payments FROM paymentstbl WHERE invoice_id = $1`,
+        `SELECT COALESCE(SUM(payable_amount), 0) as total_payments FROM paymenttbl WHERE invoice_id = $1`,
         [invoiceId]
       );
       const totalPayments = Number(paymentsResult.rows[0]?.total_payments || 0);

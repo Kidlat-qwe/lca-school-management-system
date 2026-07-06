@@ -8,7 +8,8 @@ const __dirname = dirname(__filename);
 const backendDir = resolve(__dirname, '..');
 const envPath = resolve(backendDir, '.env');
 
-// Read NODE_ENV directly from .env file so DB choice always follows the file (avoids PM2/shell overriding on Linode)
+// Read NODE_ENV from .env file (avoids PM2/shell overriding on Linode).
+// Scripts may pass --production or --development to target the other database once.
 let nodeEnv = 'development';
 if (existsSync(envPath)) {
   try {
@@ -19,6 +20,16 @@ if (existsSync(envPath)) {
       if (val === 'production' || val === 'development') nodeEnv = val;
     }
   } catch (_) {}
+}
+const cliProduction = process.argv.includes('--production');
+const cliDevelopment = process.argv.includes('--development');
+if (cliProduction && cliDevelopment) {
+  console.warn('⚠️ Both --production and --development passed; using --production.');
+  nodeEnv = 'production';
+} else if (cliProduction) {
+  nodeEnv = 'production';
+} else if (cliDevelopment) {
+  nodeEnv = 'development';
 }
 
 // Load .env for all vars; override so .env wins over process env
@@ -38,4 +49,4 @@ for (const key of dbKeys) {
   }
 }
 
-console.log(`🔧 NODE_ENV=${nodeEnv} (from .env file) | DB: ${process.env.DB_NAME || '(not set)'}`);
+console.log(`🔧 NODE_ENV=${nodeEnv}${cliProduction || cliDevelopment ? ' (CLI override)' : ' (from .env file)'} | DB: ${process.env.DB_NAME || '(not set)'}`);
