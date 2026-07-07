@@ -1083,6 +1083,7 @@ router.get(
     queryValidator('curriculum_id').optional().isInt().withMessage('Curriculum ID must be an integer'),
     queryValidator('program_id').optional().isInt().withMessage('Program ID must be an integer'),
     queryValidator('class_id').optional().isInt().withMessage('Class ID must be an integer'),
+    queryValidator('teacher_id').optional().isInt().withMessage('Teacher ID must be an integer'),
     queryValidator('enrollment_rate_scope')
       .optional()
       .isIn(['month', 'overall'])
@@ -1101,6 +1102,7 @@ router.get(
       const curriculumFilter = req.query.curriculum_id ? parseInt(req.query.curriculum_id, 10) : null;
       const programFilter = req.query.program_id ? parseInt(req.query.program_id, 10) : null;
       const classFilter = req.query.class_id ? parseInt(req.query.class_id, 10) : null;
+      const teacherFilter = req.query.teacher_id ? parseInt(req.query.teacher_id, 10) : null;
       const monthRange = parseMonthRange(req.query.month);
       const currentCalendarYear = parseInt(getTodayManila().slice(0, 4), 10);
       const matrixYear = req.query.year ? parseInt(req.query.year, 10) : null;
@@ -1425,6 +1427,7 @@ router.get(
         curriculumId: curriculumFilter,
         programId: programFilter,
         classId: classFilter,
+        teacherId: teacherFilter,
         maxPhase: matrixMaxPhase,
         enrolledFrom: phaseMatrixScope === 'month' ? periodStartDate : null,
         enrolledTo: phaseMatrixScope === 'month' ? periodEndDate : null,
@@ -1435,6 +1438,7 @@ router.get(
         branchId: branchFilter,
         programId: programFilter,
         classId: classFilter,
+        teacherId: teacherFilter,
         year: matrixYear || currentCalendarYear,
       });
 
@@ -1460,6 +1464,17 @@ router.get(
         programsListConditions.push(`c.branch_id = $${programsListParams.length + 1}`);
         programsListParams.push(branchFilter);
       }
+      if (teacherFilter) {
+        programsListConditions.push(`(
+          c.teacher_id = $${programsListParams.length + 1}
+          OR EXISTS (
+            SELECT 1 FROM classteacherstbl ct
+            WHERE ct.class_id = c.class_id
+              AND ct.teacher_id = $${programsListParams.length + 1}
+          )
+        )`);
+        programsListParams.push(teacherFilter);
+      }
       const programsListWhere = programsListConditions.length
         ? `WHERE ${programsListConditions.join(' AND ')}`
         : '';
@@ -1474,7 +1489,7 @@ router.get(
         programsListParams
       );
 
-      // Classes for dropdown filter (scoped to branch and program when provided)
+      // Classes for dropdown filter (scoped to branch, program, and teacher when provided)
       const classFilterParams = [];
       const classFilterConditions = [];
       if (branchFilter) {
@@ -1484,6 +1499,17 @@ router.get(
       if (programFilter) {
         classFilterConditions.push(`c.program_id = $${classFilterParams.length + 1}`);
         classFilterParams.push(programFilter);
+      }
+      if (teacherFilter) {
+        classFilterConditions.push(`(
+          c.teacher_id = $${classFilterParams.length + 1}
+          OR EXISTS (
+            SELECT 1 FROM classteacherstbl ct
+            WHERE ct.class_id = c.class_id
+              AND ct.teacher_id = $${classFilterParams.length + 1}
+          )
+        )`);
+        classFilterParams.push(teacherFilter);
       }
       const classFilterWhere = classFilterConditions.length
         ? `WHERE ${classFilterConditions.join(' AND ')}`
@@ -1496,6 +1522,42 @@ router.get(
           ORDER BY c.class_name ASC NULLS LAST, c.class_id DESC
         `,
         classFilterParams
+      );
+
+      // Teachers for matrix filter dropdown (primary + associated teachers in branch scope)
+      const teachersListParams = [];
+      let teachersBranchWhere = '';
+      if (branchFilter) {
+        teachersListParams.push(branchFilter);
+        teachersBranchWhere = ' AND c.branch_id = $1';
+      }
+      let teachersProgramWhere = '';
+      if (programFilter) {
+        teachersListParams.push(programFilter);
+        teachersProgramWhere = ` AND c.program_id = $${teachersListParams.length}`;
+      }
+      const teachersResult = await query(
+        `
+          SELECT DISTINCT u.user_id, u.full_name
+          FROM (
+            SELECT c.teacher_id AS user_id
+            FROM classestbl c
+            WHERE c.teacher_id IS NOT NULL
+              ${teachersBranchWhere}
+              ${teachersProgramWhere}
+            UNION
+            SELECT ct.teacher_id AS user_id
+            FROM classteacherstbl ct
+            INNER JOIN classestbl c ON c.class_id = ct.class_id
+            WHERE 1=1
+              ${teachersBranchWhere}
+              ${teachersProgramWhere}
+          ) scoped_teachers
+          INNER JOIN userstbl u ON u.user_id = scoped_teachers.user_id
+          WHERE u.user_type = 'Teacher'
+          ORDER BY u.full_name ASC NULLS LAST, u.user_id ASC
+        `,
+        teachersListParams
       );
 
       const classYearRangeResult = await query(
@@ -1577,6 +1639,10 @@ router.get(
             class_name: row.class_name,
             program_id: row.program_id,
           })),
+          teachers: teachersResult.rows.map((row) => ({
+            teacher_id: row.user_id,
+            teacher_name: row.full_name,
+          })),
           selected_month: monthRange?.key ?? null,
           selected_year: yearRange
             ? parseInt(yearRange.key, 10)
@@ -1589,6 +1655,7 @@ router.get(
           selected_branch_id: branchFilter,
           selected_program_id: programFilter,
           selected_class_id: classFilter,
+          selected_teacher_id: teacherFilter,
         },
       });
     } catch (error) {

@@ -40,6 +40,7 @@ const PhaseEnrollmentDashboard = () => {
   const [selectedYear, setSelectedYear] = useState(String(CURRENT_YEAR));
   const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [verifyPhase, setVerifyPhase] = useState(null);
 
   const yearRange = useMemo(() => {
@@ -66,6 +67,7 @@ const PhaseEnrollmentDashboard = () => {
     if (selectedYear) params.set('year', selectedYear);
     if (selectedProgramId) params.set('program_id', selectedProgramId);
     if (selectedClassId) params.set('class_id', selectedClassId);
+    if (selectedTeacherId) params.set('teacher_id', selectedTeacherId);
     params.set('enrollment_rate_scope', 'month');
     params.set('phase_matrix_scope', 'month');
     return params;
@@ -100,7 +102,7 @@ const PhaseEnrollmentDashboard = () => {
 
   useEffect(() => {
     fetchData();
-  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId]);
+  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId, selectedTeacherId]);
 
   useEffect(() => {
     if (!data?.year_range) return;
@@ -115,6 +117,7 @@ const PhaseEnrollmentDashboard = () => {
   const studentPhaseMatrix = useMemo(() => data?.student_phase_enrollment_matrix ?? null, [data]);
   const programs = useMemo(() => data?.programs ?? [], [data]);
   const classes = useMemo(() => data?.classes ?? [], [data]);
+  const teachers = useMemo(() => data?.teachers ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
 
   useEffect(() => {
@@ -123,7 +126,7 @@ const PhaseEnrollmentDashboard = () => {
       setSelectedProgramId('');
       setSelectedClassId('');
     }
-  }, [programs, selectedBranchId]);
+  }, [programs, selectedBranchId, selectedTeacherId]);
 
   useEffect(() => {
     if (!selectedClassId) return;
@@ -131,6 +134,14 @@ const PhaseEnrollmentDashboard = () => {
       setSelectedClassId('');
     }
   }, [classes, selectedProgramId]);
+
+  useEffect(() => {
+    if (!selectedTeacherId) return;
+    if (!teachers.some((t) => String(t.teacher_id) === String(selectedTeacherId))) {
+      setSelectedTeacherId('');
+      setSelectedClassId('');
+    }
+  }, [teachers, selectedBranchId, selectedProgramId]);
 
   const selectedProgramName = useMemo(() => {
     if (!selectedProgramId) return 'All programs';
@@ -144,6 +155,12 @@ const PhaseEnrollmentDashboard = () => {
     return row?.class_name ?? 'Selected class';
   }, [classes, selectedClassId]);
 
+  const selectedTeacherName = useMemo(() => {
+    if (!selectedTeacherId) return 'All teachers';
+    const row = teachers.find((t) => String(t.teacher_id) === String(selectedTeacherId));
+    return row?.teacher_name ?? 'Selected teacher';
+  }, [teachers, selectedTeacherId]);
+
   const selectedBranchName = useMemo(() => {
     if (!selectedBranchId) return 'All Branches';
     const b = branches.find((x) => String(x.branch_id) === String(selectedBranchId));
@@ -156,9 +173,9 @@ const PhaseEnrollmentDashboard = () => {
   );
 
   const enrollmentVerifyScopeLabel = useMemo(() => {
-    const parts = [selectedBranchName, `Year: ${displayYear}`];
+    const parts = [selectedBranchName, selectedTeacherName, `Year: ${displayYear}`];
     return parts.filter(Boolean).join(' · ');
-  }, [selectedBranchName, displayYear]);
+  }, [selectedBranchName, selectedTeacherName, displayYear]);
 
   if (loading) {
     return (
@@ -218,8 +235,8 @@ const PhaseEnrollmentDashboard = () => {
       )}
 
       <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
+          <div className="min-w-0 shrink">
             <h3 className="text-lg font-semibold text-gray-900">
               Student Phase Re-enrollment Matrix — {displayYear}
             </h3>
@@ -228,8 +245,27 @@ const PhaseEnrollmentDashboard = () => {
             </p>
             <p className="mt-1 text-xs font-medium text-amber-800">{phaseMatrixScopeLabel}</p>
           </div>
-          <div className="flex w-full flex-shrink-0 flex-col gap-3 sm:w-auto sm:flex-row">
-            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-end lg:shrink-0">
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Teacher</span>
+              <select
+                value={selectedTeacherId}
+                onChange={(e) => {
+                  setSelectedTeacherId(e.target.value);
+                  setSelectedClassId('');
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              >
+                <option value="">All teachers</option>
+                {teachers.map((t) => (
+                  <option key={t.teacher_id} value={String(t.teacher_id)}>
+                    {t.teacher_name}
+                  </option>
+                ))}
+              </select>
+              <span className="sr-only">Selected: {selectedTeacherName}</span>
+            </label>
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Program</span>
               <select
                 value={selectedProgramId}
@@ -248,7 +284,7 @@ const PhaseEnrollmentDashboard = () => {
               </select>
               <span className="sr-only">Selected: {selectedProgramName}</span>
             </label>
-            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Class</span>
               <select
                 value={selectedClassId}

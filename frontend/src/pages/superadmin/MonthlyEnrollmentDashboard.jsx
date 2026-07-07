@@ -54,6 +54,7 @@ const MonthlyEnrollmentDashboard = () => {
   const [selectedYear, setSelectedYear] = useState(String(CURRENT_YEAR));
   const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedTeacherId, setSelectedTeacherId] = useState('');
 
   const yearRange = useMemo(() => {
     const minYear = data?.year_range?.min_year ?? DEFAULT_MIN_YEAR;
@@ -77,6 +78,7 @@ const MonthlyEnrollmentDashboard = () => {
     if (selectedYear) params.set('year', selectedYear);
     if (selectedProgramId) params.set('program_id', selectedProgramId);
     if (selectedClassId) params.set('class_id', selectedClassId);
+    if (selectedTeacherId) params.set('teacher_id', selectedTeacherId);
     params.set('enrollment_rate_scope', 'month');
     params.set('phase_matrix_scope', 'overall');
     return params;
@@ -97,7 +99,7 @@ const MonthlyEnrollmentDashboard = () => {
 
   useEffect(() => {
     fetchData();
-  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId]);
+  }, [selectedBranchId, selectedYear, selectedProgramId, selectedClassId, selectedTeacherId]);
 
   useEffect(() => {
     if (!data?.year_range) return;
@@ -112,6 +114,7 @@ const MonthlyEnrollmentDashboard = () => {
   const studentMonthMatrix = useMemo(() => data?.student_month_enrollment_matrix ?? null, [data]);
   const programs = useMemo(() => data?.programs ?? [], [data]);
   const classes = useMemo(() => data?.classes ?? [], [data]);
+  const teachers = useMemo(() => data?.teachers ?? [], [data]);
   const branches = useMemo(() => data?.branches ?? [], [data]);
 
   useEffect(() => {
@@ -120,7 +123,7 @@ const MonthlyEnrollmentDashboard = () => {
       setSelectedProgramId('');
       setSelectedClassId('');
     }
-  }, [programs, selectedBranchId]);
+  }, [programs, selectedBranchId, selectedTeacherId]);
 
   useEffect(() => {
     if (!selectedClassId) return;
@@ -128,6 +131,14 @@ const MonthlyEnrollmentDashboard = () => {
       setSelectedClassId('');
     }
   }, [classes, selectedProgramId]);
+
+  useEffect(() => {
+    if (!selectedTeacherId) return;
+    if (!teachers.some((t) => String(t.teacher_id) === String(selectedTeacherId))) {
+      setSelectedTeacherId('');
+      setSelectedClassId('');
+    }
+  }, [teachers, selectedBranchId, selectedProgramId]);
   const displayYear = data?.selected_year ?? selectedYear;
 
   const currentMonthKey = manilaMonthYYYYMM();
@@ -393,15 +404,32 @@ const MonthlyEnrollmentDashboard = () => {
       </div>
 
       <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-          <div className="min-w-0 flex-1">
-            <h3 className="flex flex-wrap items-center gap-1 text-lg font-semibold text-gray-900">
-              <span>Month Student Re-enrollment Matrix — {displayYear}</span>
-              
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
+          <div className="min-w-0 shrink">
+            <h3 className="text-lg font-semibold text-gray-900">
+              Month Student Re-enrollment Matrix — {displayYear}
             </h3>
           </div>
-          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-end lg:shrink-0">
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Teacher</span>
+              <select
+                value={selectedTeacherId}
+                onChange={(e) => {
+                  setSelectedTeacherId(e.target.value);
+                  setSelectedClassId('');
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/40"
+              >
+                <option value="">All teachers</option>
+                {teachers.map((t) => (
+                  <option key={t.teacher_id} value={String(t.teacher_id)}>
+                    {t.teacher_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Program</span>
               <select
                 value={selectedProgramId}
@@ -419,7 +447,7 @@ const MonthlyEnrollmentDashboard = () => {
                 ))}
               </select>
             </label>
-            <label className="inline-flex w-full flex-col gap-1 sm:min-w-[200px] sm:max-w-[280px]">
+            <label className="inline-flex min-w-0 flex-1 flex-col gap-1 sm:min-w-[140px] sm:max-w-[200px]">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Class</span>
               <select
                 value={selectedClassId}

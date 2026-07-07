@@ -54,7 +54,7 @@ router.post(
       // Fetch updated user info including last_login (formatted in Philippines timezone)
       if (req.user.userId) {
         const userResult = await query(
-          `SELECT user_id, email, full_name, user_type, branch_id, firebase_uid, profile_picture_url, 
+          `SELECT user_id, email, full_name, nickname, user_type, branch_id, firebase_uid, profile_picture_url, 
                   TO_CHAR(last_login, 'YYYY-MM-DD HH24:MI:SS') as last_login
            FROM userstbl WHERE user_id = $1`,
           [req.user.userId]
@@ -85,6 +85,7 @@ router.post(
     body('firebase_uid').notEmpty().withMessage('Firebase UID is required'),
     body('email').isEmail().withMessage('Valid email is required'),
     body('full_name').notEmpty().withMessage('Full name is required'),
+    body('nickname').optional().isString().withMessage('Nickname must be a string'),
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     handleValidationErrors,
   ],
@@ -95,6 +96,7 @@ router.post(
         firebase_uid,
         email,
         full_name,
+        nickname,
         user_type,
         branch_id,
         gender,
@@ -131,13 +133,14 @@ router.post(
           lrn !== undefined
             ? await query(
                 `UPDATE userstbl 
-                 SET email = $1, full_name = $2, user_type = $3, branch_id = $4, 
-                     gender = $5, date_of_birth = $6, phone_number = $7, level_tag = $8, lrn = $9
-                 WHERE firebase_uid = $10
+                 SET email = $1, full_name = $2, nickname = $3, user_type = $4, branch_id = $5, 
+                     gender = $6, date_of_birth = $7, phone_number = $8, level_tag = $9, lrn = $10
+                 WHERE firebase_uid = $11
                  RETURNING *`,
                 [
                   email,
                   full_name,
+                  nickname || null,
                   user_type,
                   branch_id || null,
                   gender || null,
@@ -150,13 +153,14 @@ router.post(
               )
             : await query(
                 `UPDATE userstbl 
-                 SET email = $1, full_name = $2, user_type = $3, branch_id = $4, 
-                     gender = $5, date_of_birth = $6, phone_number = $7, level_tag = $8
-                 WHERE firebase_uid = $9
+                 SET email = $1, full_name = $2, nickname = $3, user_type = $4, branch_id = $5, 
+                     gender = $6, date_of_birth = $7, phone_number = $8, level_tag = $9
+                 WHERE firebase_uid = $10
                  RETURNING *`,
                 [
                   email,
                   full_name,
+                  nickname || null,
                   user_type,
                   branch_id || null,
                   gender || null,
@@ -178,13 +182,14 @@ router.post(
         // Create new user in PostgreSQL
         console.log('Creating new user in PostgreSQL...');
         const result = await query(
-          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO userstbl (firebase_uid, email, full_name, nickname, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING *`,
           [
             firebase_uid,
             email,
             full_name,
+            nickname || null,
             user_type,
             branch_id || null,
             gender || null,
@@ -221,6 +226,7 @@ router.post(
     body('email').isEmail().withMessage('Valid email is required'),
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
     body('full_name').notEmpty().withMessage('Full name is required'),
+    body('nickname').optional().isString().withMessage('Nickname must be a string'),
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     handleValidationErrors,
   ],
@@ -239,6 +245,7 @@ router.post(
         email,
         password,
         full_name,
+        nickname,
         user_type,
         branch_id,
         gender,
@@ -279,13 +286,14 @@ router.post(
       // Step 2: Create user in PostgreSQL
       try {
         const result = await query(
-          `INSERT INTO userstbl (firebase_uid, email, full_name, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO userstbl (firebase_uid, email, full_name, nickname, user_type, branch_id, gender, date_of_birth, phone_number, level_tag, lrn)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING *`,
           [
             firebaseUser.uid,
             email,
             full_name,
+            nickname || null,
             user_type,
             branch_id || null,
             gender || null,

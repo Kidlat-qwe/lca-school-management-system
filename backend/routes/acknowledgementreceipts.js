@@ -602,7 +602,7 @@ router.get(
       let sql = `
         SELECT
           ar.*,
-          prep_u.full_name AS prepared_by_name,
+          COALESCE(NULLIF(TRIM(prep_u.nickname), ''), prep_u.full_name) AS prepared_by_name,
           TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           p.package_name,
@@ -1815,7 +1815,7 @@ router.get(
       const sql = `
         SELECT
           ar.*,
-          prep_u.full_name AS prepared_by_name,
+          COALESCE(NULLIF(TRIM(prep_u.nickname), ''), prep_u.full_name) AS prepared_by_name,
           TO_CHAR(ar.created_at, 'YYYY-MM-DD') AS prepared_by_date_ymd,
           COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
           p.package_name,

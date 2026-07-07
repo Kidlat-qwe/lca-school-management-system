@@ -35,9 +35,10 @@ const TeachersPage = () => {
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
 
   const [turnoverTeacher, setTurnoverTeacher] = useState(null);
-  const [toTeacherId, setToTeacherId] = useState('');
+  const [classTeacherMap, setClassTeacherMap] = useState({});
+  const [availableTeachersByClass, setAvailableTeachersByClass] = useState({});
   const [selectedClassIds, setSelectedClassIds] = useState([]);
-  const [candidateTeachers, setCandidateTeachers] = useState([]);
+  const [turnoverOptionsLoading, setTurnoverOptionsLoading] = useState(false);
   const [turnoverLoading, setTurnoverLoading] = useState(false);
   const [turnoverError, setTurnoverError] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -165,39 +166,67 @@ const TeachersPage = () => {
     setOpenMenuId(null);
     setTurnoverTeacher(teacher);
     setSelectedClassIds([]);
-    setToTeacherId('');
+    setClassTeacherMap({});
+    setAvailableTeachersByClass({});
     setTurnoverError('');
     setClassFit([]);
     setPreviewLoading(false);
+    setTurnoverOptionsLoading(true);
 
     try {
-      const params = new URLSearchParams({ page: '1', limit: '100' });
-      if (teacher.branch_id) params.set('branch_id', String(teacher.branch_id));
-      else if (branchQuery != null) params.set('branch_id', String(branchQuery));
-      const res = await apiRequest(`/teachers?${params.toString()}`);
-      const list = (Array.isArray(res?.data) ? res.data : []).filter(
-        (t) => Number(t.user_id) !== Number(teacher.user_id)
-      );
-      setCandidateTeachers(list);
+      const allClassIds = (teacher.classes || []).map((c) => c.class_id);
+      const optionRes = await apiRequest(`/teachers/${teacher.user_id}/turnover/options`, {
+        method: 'POST',
+        body: JSON.stringify({ class_ids: allClassIds }),
+      });
+      const classOptions = Array.isArray(optionRes?.data?.class_options)
+        ? optionRes.data.class_options
+        : [];
+      const byClass = {};
+      const defaults = {};
+      for (const row of classOptions) {
+        const available = Array.isArray(row.available_teachers) ? row.available_teachers : [];
+        byClass[row.class_id] = available;
+        if (available.length > 0) {
+          defaults[row.class_id] = available[0].user_id;
+        }
+      }
+      setAvailableTeachersByClass(byClass);
+      setClassTeacherMap(defaults);
     } catch (err) {
-      setCandidateTeachers([]);
       setTurnoverError(err.message || 'Failed to load destination teachers');
+    } finally {
+      setTurnoverOptionsLoading(false);
     }
   };
 
   const closeTurnover = () => {
     if (turnoverLoading) return;
     setTurnoverTeacher(null);
-    setToTeacherId('');
+    setClassTeacherMap({});
+    setAvailableTeachersByClass({});
     setSelectedClassIds([]);
     setClassFit([]);
     setPreviewLoading(false);
+    setTurnoverOptionsLoading(false);
     setTurnoverError('');
   };
 
   // Live schedule fit as soon as a destination teacher is selected.
   useEffect(() => {
-    if (!turnoverTeacher || !toTeacherId) {
+    if (!turnoverTeacher) {
+      setClassFit([]);
+      setPreviewLoading(false);
+      return undefined;
+    }
+    const allClassIds = (turnoverTeacher.classes || []).map((c) => c.class_id);
+    const classAssignments = allClassIds
+      .map((classId) => ({
+        class_id: classId,
+        to_teacher_id: Number(classTeacherMap[classId]),
+      }))
+      .filter((row) => Number.isFinite(row.to_teacher_id));
+    if (classAssignments.length === 0) {
       setClassFit([]);
       setPreviewLoading(false);
       return undefined;
@@ -208,12 +237,11 @@ const TeachersPage = () => {
       setPreviewLoading(true);
       setTurnoverError('');
       try {
-        const allClassIds = (turnoverTeacher.classes || []).map((c) => c.class_id);
         const res = await apiRequest(`/teachers/${turnoverTeacher.user_id}/turnover/preview`, {
           method: 'POST',
           body: JSON.stringify({
-            to_teacher_id: Number(toTeacherId),
             class_ids: allClassIds,
+            class_assignments: classAssignments,
           }),
         });
         if (cancelled) return;
@@ -239,7 +267,7 @@ const TeachersPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [turnoverTeacher, toTeacherId]);
+  }, [turnoverTeacher, classTeacherMap]);
 
   const toggleClass = (classId) => {
     setSelectedClassIds((prev) =>
@@ -263,13 +291,19 @@ const TeachersPage = () => {
 
   const submitTurnover = async () => {
     if (!turnoverTeacher) return;
-    if (!toTeacherId) {
-      setTurnoverError('Please select the teacher who will receive the classes.');
-      return;
-    }
     const allowedSelected = selectedClassIds.filter((id) => transferableIds.includes(id));
     if (allowedSelected.length === 0) {
       setTurnoverError('No transferable classes selected. Resolve schedule conflicts first.');
+      return;
+    }
+    const missingTeacher = allowedSelected.find(
+      (classId) => !Number.isFinite(Number(classTeacherMap[classId]))
+    );
+    if (missingTeacher != null) {
+      const className =
+        (turnoverTeacher.classes || []).find((c) => c.class_id === missingTeacher)?.class_name ||
+        `Class ${missingTeacher}`;
+      setTurnoverError(`Please select a destination teacher for ${className}.`);
       return;
     }
 
@@ -279,8 +313,11 @@ const TeachersPage = () => {
       const res = await apiRequest(`/teachers/${turnoverTeacher.user_id}/turnover`, {
         method: 'POST',
         body: JSON.stringify({
-          to_teacher_id: Number(toTeacherId),
           class_ids: allowedSelected,
+          class_assignments: allowedSelected.map((classId) => ({
+            class_id: classId,
+            to_teacher_id: Number(classTeacherMap[classId]),
+          })),
         }),
       });
       appAlert(res.message || 'Classes turned over successfully.');
@@ -314,6 +351,21 @@ const TeachersPage = () => {
     for (const row of classFit) map.set(row.class_id, row);
     return map;
   }, [classFit]);
+
+  const assignedTeacherIds = useMemo(
+    () => [...new Set(Object.values(classTeacherMap).filter(Boolean).map(Number))],
+    [classTeacherMap]
+  );
+
+  const assignedTeacherNames = useMemo(() => {
+    const nameById = new Map();
+    for (const teachers of Object.values(availableTeachersByClass)) {
+      for (const teacher of teachers || []) {
+        nameById.set(teacher.user_id, teacher.full_name);
+      }
+    }
+    return assignedTeacherIds.map((id) => nameById.get(id)).filter(Boolean);
+  }, [assignedTeacherIds, availableTeachersByClass]);
 
   const formatClassRange = (cls) => {
     if (!cls.start_date && !cls.end_date) return '—';
@@ -613,116 +665,77 @@ const TeachersPage = () => {
                   </div>
                   <div className="flex-1 rounded-xl bg-white/15 backdrop-blur-sm px-3 py-2.5 min-w-0">
                     <p className="text-[11px] uppercase tracking-wide text-white/80 font-semibold">To</p>
-                    {toTeacherId ? (
+                    {assignedTeacherIds.length > 0 ? (
                       <>
                         <p className="text-sm font-semibold truncate">
-                          {candidateTeachers.find((t) => String(t.user_id) === String(toTeacherId))
-                            ?.full_name || 'Selected teacher'}
+                          {assignedTeacherIds.length} assigned teacher
+                          {assignedTeacherIds.length > 1 ? 's' : ''}
                         </p>
                         <p className="text-xs text-white/80 truncate">
-                          {candidateTeachers.find((t) => String(t.user_id) === String(toTeacherId))
-                            ?.branch_label || '—'}
+                          {assignedTeacherNames.join(', ') || '—'}
                         </p>
                       </>
                     ) : (
-                      <p className="text-sm text-white/80 italic">Select a teacher below</p>
+                      <p className="text-sm text-white/80 italic">Assign per class below</p>
                     )}
                   </div>
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-5 space-y-5">
-                <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-                {/* Destination picker */}
-                <div className="lg:col-span-2 rounded-xl border border-primary-100 bg-primary-50/40 p-4">
-                  <label
-                    className="block text-sm font-semibold text-gray-900 mb-2"
-                    htmlFor="to-teacher"
-                  >
-                    New teacher
-                  </label>
-                  <select
-                    id="to-teacher"
-                    value={toTeacherId}
-                    onChange={(e) => setToTeacherId(e.target.value)}
-                    className="w-full rounded-xl border border-primary-200 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
-                  >
-                    <option value="">Select teacher who will receive the classes...</option>
-                    {candidateTeachers.map((t) => (
-                      <option key={t.user_id} value={t.user_id}>
-                        {t.full_name}
-                        {t.branch_label ? ` · ${t.branch_label}` : ''}
-                      </option>
-                    ))}
-                  </select>
-
-                {/* Summary chips after preview */}
-                {toTeacherId && !previewLoading && classFit.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-2 mt-4">
-                    <div className="rounded-xl border border-green-200 bg-green-50 px-2 py-2 text-center">
-                      <p className="text-lg font-bold text-green-800">
-                        {classFit.filter((c) => c.status === 'ok').length}
-                      </p>
-                      <p className="text-[10px] font-medium text-green-700">Can transfer</p>
-                    </div>
-                    <div className="rounded-xl border border-red-200 bg-red-50 px-2 py-2 text-center">
-                      <p className="text-lg font-bold text-red-800">
-                        {classFit.filter((c) => c.status === 'conflict').length}
-                      </p>
-                      <p className="text-[10px] font-medium text-red-700">Conflicts</p>
-                    </div>
-                    <div className="rounded-xl border border-primary-200 bg-primary-50 px-2 py-2 text-center">
-                      <p className="text-lg font-bold text-primary-800">
-                        {classFit.filter((c) => c.status === 'already_assigned').length}
-                      </p>
-                      <p className="text-[10px] font-medium text-primary-700">Already on</p>
-                    </div>
-                  </div>
-                ) : null}
-                </div>
-
-                {/* Class list */}
-                <div className="lg:col-span-3 min-w-0">
-                  <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
                     <div>
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        {toTeacherId ? 'Schedule fit by class' : 'Classes to transfer'}
-                      </h3>
+                      <h3 className="text-sm font-semibold text-gray-900">Schedule fit by class</h3>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {(turnoverTeacher.classes || []).length} class
                         {(turnoverTeacher.classes || []).length === 1 ? '' : 'es'} assigned to{' '}
-                        {turnoverTeacher.full_name.split(' ')[0]}
+                        {turnoverTeacher.full_name.split(' ')[0]}. Assign each class to an available
+                        teacher.
                       </p>
                     </div>
-                    {toTeacherId && transferableIds.length > 0 && !previewLoading ? (
-                      <button
-                        type="button"
-                        onClick={toggleAllClasses}
-                        className="shrink-0 text-xs font-semibold text-primary-700 hover:text-primary-800 px-2 py-1 rounded-md hover:bg-primary-50"
-                      >
-                        {selectedClassIds.length === transferableIds.length
-                          ? 'Clear selection'
-                          : 'Select all OK'}
-                      </button>
-                    ) : null}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {!previewLoading && classFit.length > 0 ? (
+                        <>
+                          <div className="rounded-xl border border-green-200 bg-green-50 px-2.5 py-1.5 text-center min-w-[5.5rem]">
+                            <p className="text-base font-bold text-green-800 leading-tight">
+                              {classFit.filter((c) => c.status === 'ok').length}
+                            </p>
+                            <p className="text-[10px] font-medium text-green-700">Can transfer</p>
+                          </div>
+                          <div className="rounded-xl border border-red-200 bg-red-50 px-2.5 py-1.5 text-center min-w-[5.5rem]">
+                            <p className="text-base font-bold text-red-800 leading-tight">
+                              {classFit.filter((c) => c.status === 'conflict').length}
+                            </p>
+                            <p className="text-[10px] font-medium text-red-700">Conflicts</p>
+                          </div>
+                          <div className="rounded-xl border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-center min-w-[5.5rem]">
+                            <p className="text-base font-bold text-primary-800 leading-tight">
+                              {classFit.filter((c) => c.status === 'already_assigned').length}
+                            </p>
+                            <p className="text-[10px] font-medium text-primary-700">Already on</p>
+                          </div>
+                        </>
+                      ) : null}
+                      {transferableIds.length > 0 && !previewLoading && !turnoverOptionsLoading ? (
+                        <button
+                          type="button"
+                          onClick={toggleAllClasses}
+                          className="text-xs font-semibold text-primary-700 hover:text-primary-800 px-2 py-1 rounded-md hover:bg-primary-50"
+                        >
+                          {selectedClassIds.length === transferableIds.length
+                            ? 'Clear selection'
+                            : 'Select all OK'}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
 
-                  {!toTeacherId ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
-                      <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-gray-200 text-gray-500">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                          />
-                        </svg>
-                      </div>
-                      <p className="text-sm font-medium text-gray-700">Choose a new teacher first</p>
-                      <p className="text-xs text-gray-500 mt-1 max-w-xs mx-auto">
-                        We will check each class against their schedule and show conflicts instantly.
-                      </p>
+                  {turnoverOptionsLoading ? (
+                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-10 text-center">
+                      <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-600" />
+                      <p className="text-sm font-medium text-gray-700">Loading available teachers…</p>
+                      <p className="text-xs text-gray-500 mt-1">Checking schedule fit per class</p>
                     </div>
                   ) : previewLoading ? (
                     <div className="rounded-xl border border-gray-200 bg-white px-4 py-10 text-center">
@@ -813,6 +826,33 @@ const TeachersPage = () => {
                                   {cls.program_name ? <span>{cls.program_name}</span> : null}
                                   {cls.room_name ? <span>{cls.room_name}</span> : null}
                                 </span>
+                                {Array.isArray(availableTeachersByClass[cls.class_id]) ? (
+                                  <div className="mt-2 max-w-xs">
+                                    <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                                      Assign to
+                                    </label>
+                                    <select
+                                      className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                                      value={String(classTeacherMap[cls.class_id] || '')}
+                                      onChange={(e) =>
+                                        setClassTeacherMap((prev) => ({
+                                          ...prev,
+                                          [cls.class_id]: Number(e.target.value),
+                                        }))
+                                      }
+                                      disabled={(availableTeachersByClass[cls.class_id] || []).length === 0}
+                                    >
+                                      {(availableTeachersByClass[cls.class_id] || []).length === 0 ? (
+                                        <option value="">No available teacher</option>
+                                      ) : null}
+                                      {(availableTeachersByClass[cls.class_id] || []).map((t) => (
+                                          <option key={t.user_id} value={t.user_id}>
+                                            {t.full_name}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                ) : null}
                                 {isConflict && (fit?.conflicts || []).length > 0 ? (
                                   <div className="mt-2 rounded-lg border border-red-200 bg-white/70 px-2.5 py-2">
                                     <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 mb-1">
@@ -838,7 +878,6 @@ const TeachersPage = () => {
                     </div>
                   )}
                 </div>
-                </div>
 
                 {turnoverError ? (
                   <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex gap-2">
@@ -857,7 +896,7 @@ const TeachersPage = () => {
               {/* Footer */}
               <div className="px-4 sm:px-8 py-4 bg-primary-50/50 border-t border-primary-100 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-xs text-gray-500 text-center sm:text-left">
-                  {toTeacherId && !previewLoading
+                  {Object.keys(classTeacherMap).length > 0 && !previewLoading
                     ? `${selectedClassIds.filter((id) => transferableIds.includes(id)).length} of ${transferableIds.length} transferable class(es) selected`
                     : 'Conflicts cannot be transferred until the schedule is free'}
                 </p>
@@ -876,7 +915,8 @@ const TeachersPage = () => {
                     disabled={
                       turnoverLoading ||
                       previewLoading ||
-                      !toTeacherId ||
+                      turnoverOptionsLoading ||
+                      Object.keys(classTeacherMap).length === 0 ||
                       selectedClassIds.filter((id) => transferableIds.includes(id)).length === 0
                     }
                     className="px-5 py-2.5 text-sm font-semibold rounded-xl bg-primary-600 text-white hover:bg-primary-700 shadow-sm disabled:opacity-50 disabled:shadow-none"

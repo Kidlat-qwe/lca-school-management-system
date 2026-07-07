@@ -652,8 +652,8 @@ router.get(
                            AND p.status = 'Completed'
                            AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
                        ) AS last_payment_date,
-                       (
-                         SELECT enc.full_name
+                      (
+                        SELECT COALESCE(NULLIF(TRIM(enc.nickname), ''), enc.full_name)
                          FROM paymenttbl p
                          LEFT JOIN userstbl enc ON enc.user_id = p.created_by
                          WHERE p.invoice_id = i.invoice_id
@@ -664,7 +664,7 @@ router.get(
                        ) AS payment_recorded_by_name,
                         i.created_by,
                         (
-                          SELECT u.full_name
+                          SELECT COALESCE(NULLIF(TRIM(u.nickname), ''), u.full_name)
                           FROM userstbl u
                           WHERE u.user_id = i.created_by
                         ) AS created_by_name,
@@ -1090,7 +1090,7 @@ router.get(
       ).rows?.[0]?.last_payment_date || null;
 
       const issuerResult = await query(
-        `SELECT u.full_name AS created_by_name
+        `SELECT COALESCE(NULLIF(TRIM(u.nickname), ''), u.full_name) AS created_by_name
          FROM userstbl u
          WHERE u.user_id = $1`,
         [invoiceRow.created_by]
@@ -1100,7 +1100,7 @@ router.get(
       // Staff who recorded the latest completed payment ("Received by")
       const paymentRecorderResult = await query(
         `SELECT
-           u.full_name AS payment_recorded_by_name
+           COALESCE(NULLIF(TRIM(u.nickname), ''), u.full_name) AS payment_recorded_by_name
          FROM paymenttbl p
          LEFT JOIN userstbl u ON u.user_id = p.created_by
          WHERE p.invoice_id = $1
@@ -1561,7 +1561,7 @@ router.get(
         let receivedByName = '-';
         try {
           const preparedByRes = await query(
-            `SELECT u.full_name AS prepared_by_name
+            `SELECT COALESCE(NULLIF(TRIM(u.nickname), ''), u.full_name) AS prepared_by_name
              FROM paymenttbl p
              LEFT JOIN userstbl u ON u.user_id = p.created_by
              WHERE p.invoice_id = $1

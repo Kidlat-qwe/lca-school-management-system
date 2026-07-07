@@ -188,6 +188,29 @@ async function loadClassScheduleDays(classId) {
   }));
 }
 
+async function loadCandidateDestinationTeachers(req, sourceTeacher) {
+  const params = [];
+  let where = `WHERE user_type = 'Teacher' AND user_id <> $1`;
+  params.push(sourceTeacher.user_id);
+
+  if (req.user.userType === 'Admin') {
+    where += ` AND branch_id = $2`;
+    params.push(req.user.branchId);
+  } else if (sourceTeacher.branch_id != null) {
+    where += ` AND branch_id = $2`;
+    params.push(sourceTeacher.branch_id);
+  }
+
+  const res = await query(
+    `SELECT user_id, full_name, email, branch_id
+     FROM userstbl
+     ${where}
+     ORDER BY full_name ASC`,
+    params
+  );
+  return res.rows;
+}
+
 /**
  * Per-class turnover fit for destination teacher.
  * @returns {Promise<{ class_id, class_name, status: 'ok'|'conflict'|'already_assigned', conflicts?: array }>}
@@ -275,6 +298,55 @@ async function resolveTurnoverTeachers(req, fromTeacherId, toTeacherId) {
   }
 
   return { fromTeacher, toTeacher };
+}
+
+async function resolveDestinationTeacherOrError(req, fromTeacher, toTeacherId) {
+  if (!Number.isFinite(toTeacherId)) {
+    return {
+      error: {
+        status: 400,
+        body: { success: false, message: 'Invalid destination teacher.' },
+      },
+    };
+  }
+  if (Number(fromTeacher.user_id) === Number(toTeacherId)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          success: false,
+          message: 'Source and destination teacher must be different.',
+        },
+      },
+    };
+  }
+
+  const toTeacher = await loadTeacherOr404(toTeacherId);
+  if (!toTeacher) {
+    return {
+      error: {
+        status: 404,
+        body: { success: false, message: `Destination teacher not found: ${toTeacherId}` },
+      },
+    };
+  }
+
+  if (req.user.userType === 'Admin') {
+    const branchId = req.user.branchId;
+    if (!branchId || fromTeacher.branch_id !== branchId || toTeacher.branch_id !== branchId) {
+      return {
+        error: {
+          status: 403,
+          body: {
+            success: false,
+            message: 'You can only turn over classes between teachers in your branch.',
+          },
+        },
+      };
+    }
+  }
+
+  return { toTeacher };
 }
 
 /**
@@ -566,11 +638,10 @@ router.get(
  * Body: { to_teacher_id: number, class_ids?: number[] }
  */
 router.post(
-  '/:id/turnover/preview',
+  '/:id/turnover/options',
   requireRole('Superadmin', 'Admin'),
   [
     param('id').isInt().withMessage('Teacher ID must be an integer'),
-    body('to_teacher_id').isInt().withMessage('to_teacher_id must be an integer'),
     body('class_ids').optional().isArray().withMessage('class_ids must be an array'),
     body('class_ids.*').optional().isInt().withMessage('Each class_id must be an integer'),
     handleValidationErrors,
@@ -578,12 +649,115 @@ router.post(
   async (req, res, next) => {
     try {
       const fromTeacherId = Number(req.params.id);
-      const toTeacherId = Number(req.body.to_teacher_id);
-      const resolved = await resolveTurnoverTeachers(req, fromTeacherId, toTeacherId);
-      if (resolved.error) {
-        return res.status(resolved.error.status).json(resolved.error.body);
+      const fromTeacher = await loadTeacherOr404(fromTeacherId);
+      if (!fromTeacher) {
+        return res.status(404).json({ success: false, message: 'Source teacher not found' });
       }
-      const { fromTeacher, toTeacher } = resolved;
+      if (
+        req.user.userType === 'Admin' &&
+        req.user.branchId &&
+        fromTeacher.branch_id !== req.user.branchId
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+
+      const assigned = await loadAssignedClasses(fromTeacherId);
+      const assignedIds = new Set(assigned.map((c) => Number(c.class_id)));
+      const requestedIds = Array.isArray(req.body.class_ids)
+        ? req.body.class_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+        : assigned.map((c) => Number(c.class_id));
+      const classIds = [...new Set(requestedIds)];
+      const classesToCheck = assigned.filter((c) => classIds.includes(Number(c.class_id)));
+      const notAssigned = classIds.filter((id) => !assignedIds.has(id));
+
+      const candidateTeachers = await loadCandidateDestinationTeachers(req, fromTeacher);
+      const classOptions = [];
+      for (const cls of classesToCheck) {
+        const available_teachers = [];
+        const conflict_teachers = [];
+
+        for (const teacher of candidateTeachers) {
+          const evalRow = await evaluateClassForTurnover(cls, Number(teacher.user_id));
+          if (evalRow.status === 'ok' || evalRow.status === 'already_assigned') {
+            available_teachers.push({
+              user_id: teacher.user_id,
+              full_name: teacher.full_name,
+              email: teacher.email,
+              status: evalRow.status,
+            });
+          } else {
+            conflict_teachers.push({
+              user_id: teacher.user_id,
+              full_name: teacher.full_name,
+              conflicts: evalRow.conflicts || [],
+            });
+          }
+        }
+
+        classOptions.push({
+          class_id: cls.class_id,
+          class_name: cls.class_name,
+          available_teachers,
+          conflict_teachers,
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          from_teacher: {
+            user_id: fromTeacher.user_id,
+            full_name: fromTeacher.full_name,
+          },
+          class_options: classOptions,
+          not_assigned: notAssigned,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/turnover/preview',
+  requireRole('Superadmin', 'Admin'),
+  [
+    param('id').isInt().withMessage('Teacher ID must be an integer'),
+    body('to_teacher_id')
+      .optional()
+      .isInt()
+      .withMessage('to_teacher_id must be an integer'),
+    body('class_ids').optional().isArray().withMessage('class_ids must be an array'),
+    body('class_ids.*').optional().isInt().withMessage('Each class_id must be an integer'),
+    body('class_assignments')
+      .optional()
+      .isArray()
+      .withMessage('class_assignments must be an array'),
+    body('class_assignments.*.class_id')
+      .optional()
+      .isInt()
+      .withMessage('Each class assignment class_id must be an integer'),
+    body('class_assignments.*.to_teacher_id')
+      .optional()
+      .isInt()
+      .withMessage('Each class assignment to_teacher_id must be an integer'),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const fromTeacherId = Number(req.params.id);
+      const sourceTeacher = await loadTeacherOr404(fromTeacherId);
+      if (!sourceTeacher) {
+        return res.status(404).json({ success: false, message: 'Source teacher not found' });
+      }
+      if (
+        req.user.userType === 'Admin' &&
+        req.user.branchId &&
+        sourceTeacher.branch_id !== req.user.branchId
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
 
       const assigned = await loadAssignedClasses(fromTeacherId);
       const assignedIds = new Set(assigned.map((c) => Number(c.class_id)));
@@ -595,9 +769,60 @@ router.post(
       const classesToCheck = assigned.filter((c) => classIds.includes(Number(c.class_id)));
       const notAssigned = classIds.filter((id) => !assignedIds.has(id));
 
+      const rawAssignments = Array.isArray(req.body.class_assignments)
+        ? req.body.class_assignments
+            .map((row) => ({
+              class_id: Number(row?.class_id),
+              to_teacher_id: Number(row?.to_teacher_id),
+            }))
+            .filter((row) => Number.isFinite(row.class_id) && Number.isFinite(row.to_teacher_id))
+        : [];
+
+      const assignmentsByClass = new Map();
+      if (rawAssignments.length > 0) {
+        for (const row of rawAssignments) assignmentsByClass.set(row.class_id, row.to_teacher_id);
+      } else {
+        const fallbackToTeacherId = Number(req.body.to_teacher_id);
+        if (!Number.isFinite(fallbackToTeacherId)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Provide either to_teacher_id for all classes or class_assignments for per-class turnover.',
+          });
+        }
+        for (const classId of classIds) assignmentsByClass.set(classId, fallbackToTeacherId);
+      }
+
+      const destinationTeacherIds = [...new Set([...assignmentsByClass.values()])];
+      const teacherNameById = new Map();
+      for (const destinationId of destinationTeacherIds) {
+        const resolvedDest = await resolveDestinationTeacherOrError(req, sourceTeacher, destinationId);
+        if (resolvedDest.error) {
+          return res.status(resolvedDest.error.status).json(resolvedDest.error.body);
+        }
+        teacherNameById.set(destinationId, resolvedDest.toTeacher.full_name);
+      }
+
       const classes = [];
       for (const cls of classesToCheck) {
-        classes.push(await evaluateClassForTurnover(cls, toTeacherId));
+        const destinationId = assignmentsByClass.get(Number(cls.class_id));
+        if (!Number.isFinite(destinationId)) {
+          classes.push({
+            class_id: cls.class_id,
+            class_name: cls.class_name,
+            status: 'conflict',
+            conflicts: [{ message: 'No destination teacher selected for this class.' }],
+            to_teacher_id: null,
+            to_teacher_name: null,
+          });
+          continue;
+        }
+        const evaluated = await evaluateClassForTurnover(cls, destinationId);
+        classes.push({
+          ...evaluated,
+          to_teacher_id: destinationId,
+          to_teacher_name: teacherNameById.get(destinationId) || null,
+        });
       }
 
       const transferable = classes.filter((c) => c.status === 'ok' || c.status === 'already_assigned');
@@ -607,13 +832,13 @@ router.post(
         success: true,
         data: {
           from_teacher: {
-            user_id: fromTeacher.user_id,
-            full_name: fromTeacher.full_name,
+            user_id: sourceTeacher.user_id,
+            full_name: sourceTeacher.full_name,
           },
-          to_teacher: {
-            user_id: toTeacher.user_id,
-            full_name: toTeacher.full_name,
-          },
+          destination_teachers: destinationTeacherIds.map((id) => ({
+            user_id: id,
+            full_name: teacherNameById.get(id) || null,
+          })),
           classes,
           transferable_count: transferable.length,
           blocked_count: blocked.length,
@@ -638,21 +863,41 @@ router.post(
   requireRole('Superadmin', 'Admin'),
   [
     param('id').isInt().withMessage('Teacher ID must be an integer'),
-    body('to_teacher_id').isInt().withMessage('to_teacher_id must be an integer'),
+    body('to_teacher_id')
+      .optional()
+      .isInt()
+      .withMessage('to_teacher_id must be an integer'),
     body('class_ids').optional().isArray().withMessage('class_ids must be an array'),
     body('class_ids.*').optional().isInt().withMessage('Each class_id must be an integer'),
+    body('class_assignments')
+      .optional()
+      .isArray()
+      .withMessage('class_assignments must be an array'),
+    body('class_assignments.*.class_id')
+      .optional()
+      .isInt()
+      .withMessage('Each class assignment class_id must be an integer'),
+    body('class_assignments.*.to_teacher_id')
+      .optional()
+      .isInt()
+      .withMessage('Each class assignment to_teacher_id must be an integer'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     const client = await getClient();
     try {
       const fromTeacherId = Number(req.params.id);
-      const toTeacherId = Number(req.body.to_teacher_id);
-      const resolved = await resolveTurnoverTeachers(req, fromTeacherId, toTeacherId);
-      if (resolved.error) {
-        return res.status(resolved.error.status).json(resolved.error.body);
+      const fromTeacher = await loadTeacherOr404(fromTeacherId);
+      if (!fromTeacher) {
+        return res.status(404).json({ success: false, message: 'Source teacher not found' });
       }
-      const { fromTeacher, toTeacher } = resolved;
+      if (
+        req.user.userType === 'Admin' &&
+        req.user.branchId &&
+        fromTeacher.branch_id !== req.user.branchId
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
 
       const assigned = await loadAssignedClasses(fromTeacherId);
       const assignedIds = new Set(assigned.map((c) => Number(c.class_id)));
@@ -677,9 +922,60 @@ router.post(
       }
 
       const classesToTransfer = assigned.filter((c) => classIds.includes(Number(c.class_id)));
+      const rawAssignments = Array.isArray(req.body.class_assignments)
+        ? req.body.class_assignments
+            .map((row) => ({
+              class_id: Number(row?.class_id),
+              to_teacher_id: Number(row?.to_teacher_id),
+            }))
+            .filter((row) => Number.isFinite(row.class_id) && Number.isFinite(row.to_teacher_id))
+        : [];
+
+      const assignmentsByClass = new Map();
+      if (rawAssignments.length > 0) {
+        for (const row of rawAssignments) assignmentsByClass.set(row.class_id, row.to_teacher_id);
+      } else {
+        const fallbackToTeacherId = Number(req.body.to_teacher_id);
+        if (!Number.isFinite(fallbackToTeacherId)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Provide either to_teacher_id for all classes or class_assignments for per-class turnover.',
+          });
+        }
+        for (const classId of classIds) assignmentsByClass.set(classId, fallbackToTeacherId);
+      }
+
+      const destinationTeacherIds = [...new Set([...assignmentsByClass.values()])];
+      const teacherNameById = new Map();
+      for (const destinationId of destinationTeacherIds) {
+        const resolvedDest = await resolveDestinationTeacherOrError(req, fromTeacher, destinationId);
+        if (resolvedDest.error) {
+          return res.status(resolvedDest.error.status).json(resolvedDest.error.body);
+        }
+        teacherNameById.set(destinationId, resolvedDest.toTeacher.full_name);
+      }
+
       const evaluations = [];
       for (const cls of classesToTransfer) {
-        evaluations.push(await evaluateClassForTurnover(cls, toTeacherId));
+        const destinationId = assignmentsByClass.get(Number(cls.class_id));
+        if (!Number.isFinite(destinationId)) {
+          evaluations.push({
+            class_id: cls.class_id,
+            class_name: cls.class_name,
+            status: 'conflict',
+            conflicts: [{ message: 'No destination teacher selected for this class.' }],
+            to_teacher_id: null,
+            to_teacher_name: null,
+          });
+          continue;
+        }
+        const evaluated = await evaluateClassForTurnover(cls, destinationId);
+        evaluations.push({
+          ...evaluated,
+          to_teacher_id: destinationId,
+          to_teacher_name: teacherNameById.get(destinationId) || null,
+        });
       }
 
       const conflictBlocks = evaluations.filter((e) => e.status === 'conflict');
@@ -695,9 +991,12 @@ router.post(
 
       const transferred = [];
       for (const cls of classesToTransfer) {
+        const destinationId = assignmentsByClass.get(Number(cls.class_id));
+        if (!Number.isFinite(destinationId)) continue;
+
         await closeHistoryForTurnover(client, {
           fromTeacherId,
-          toTeacherId,
+          toTeacherId: destinationId,
           classId: cls.class_id,
         });
 
@@ -711,19 +1010,21 @@ router.post(
           `INSERT INTO classteacherstbl (class_id, teacher_id)
            VALUES ($1, $2)
            ON CONFLICT (class_id, teacher_id) DO NOTHING`,
-          [cls.class_id, toTeacherId]
+          [cls.class_id, destinationId]
         );
 
         await client.query(
           `UPDATE classestbl
            SET teacher_id = $1
            WHERE class_id = $2 AND teacher_id = $3`,
-          [toTeacherId, cls.class_id, fromTeacherId]
+          [destinationId, cls.class_id, fromTeacherId]
         );
 
         transferred.push({
           class_id: cls.class_id,
           class_name: cls.class_name,
+          to_teacher_id: destinationId,
+          to_teacher_name: teacherNameById.get(destinationId) || null,
         });
       }
 
@@ -731,16 +1032,16 @@ router.post(
 
       res.json({
         success: true,
-        message: `Turned over ${transferred.length} class(es) from ${fromTeacher.full_name} to ${toTeacher.full_name}.`,
+        message: `Turned over ${transferred.length} class(es) from ${fromTeacher.full_name}.`,
         data: {
           from_teacher: {
             user_id: fromTeacher.user_id,
             full_name: fromTeacher.full_name,
           },
-          to_teacher: {
-            user_id: toTeacher.user_id,
-            full_name: toTeacher.full_name,
-          },
+          destination_teachers: destinationTeacherIds.map((id) => ({
+            user_id: id,
+            full_name: teacherNameById.get(id) || null,
+          })),
           transferred,
         },
       });

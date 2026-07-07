@@ -46,7 +46,14 @@ const EnrollmentMatrixStatusLegend = ({
         ) : null}
         {ENROLLMENT_MATRIX_STATUS_ITEMS.map((item) => {
           const isActive = selectedKeys.includes(item.key);
-          const badgeSymbol = item.key === 'not_enrolled' ? '—' : 'n';
+          const badgeSymbol =
+            item.key === 'not_enrolled'
+              ? '—'
+              : item.key === 'active'
+                ? '✓'
+                : item.key === 'inactive'
+                  ? 'X'
+                  : 'n';
 
           if (!isInteractive) {
             return (

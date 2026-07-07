@@ -33,7 +33,13 @@ export function getInvoiceIssuedByLabel(invoice) {
     return 'System Generated';
   }
   const name = String(
-    invoice.created_by_name || invoice.issued_by_name || invoice.prepared_by_name || ''
+    invoice.created_by_nickname ||
+      invoice.issued_by_nickname ||
+      invoice.prepared_by_nickname ||
+      invoice.created_by_name ||
+      invoice.issued_by_name ||
+      invoice.prepared_by_name ||
+      ''
   ).trim();
   if (name) return name;
   if (invoice.created_by) return `User #${invoice.created_by}`;
@@ -43,7 +49,10 @@ export function getInvoiceIssuedByLabel(invoice) {
 export function getInvoiceReceivedByLabel(invoice) {
   if (!invoice) return '—';
   const name = String(
-    invoice.payment_recorded_by_name ||
+    invoice.payment_recorded_by_nickname ||
+      invoice.received_by_nickname ||
+      invoice.payment_created_by_nickname ||
+      invoice.payment_recorded_by_name ||
       invoice.received_by_name ||
       invoice.payment_created_by_name ||
       ''
@@ -52,5 +61,5 @@ export function getInvoiceReceivedByLabel(invoice) {
 }
 
 export function getArIssuedByLabel(receipt) {
-  return formatIssuedByDisplayName(receipt?.prepared_by_name);
+  return formatIssuedByDisplayName(receipt?.prepared_by_nickname || receipt?.prepared_by_name);
 }

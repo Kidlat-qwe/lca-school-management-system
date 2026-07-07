@@ -42,6 +42,7 @@ const Personnel = () => {
   const [branches, setBranches] = useState([]);
   const [formData, setFormData] = useState({
     full_name: '',
+    nickname: '',
     email: '',
     password: '',
     user_type: 'Teacher',
@@ -63,6 +64,12 @@ const Personnel = () => {
   const [existingGuardian, setExistingGuardian] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const isAllBranchesRole =
+    formData.user_type === 'Superadmin' ||
+    (formData.user_type === 'Finance' &&
+      (isSuperAccount ||
+        ((editingPersonnel?.branch_id == null) &&
+          (formData.branch_id == null || formData.branch_id === ''))));
 
   useEffect(() => {
     fetchBranches();
@@ -217,6 +224,7 @@ const Personnel = () => {
     setExistingGuardian(null);
     setFormData({
       full_name: '',
+      nickname: '',
       email: '',
       password: getDefaultPasswordForUserType('Teacher'),
       user_type: 'Teacher',
@@ -260,6 +268,7 @@ const Personnel = () => {
     
     setFormData({
       full_name: person.full_name || '',
+      nickname: person.nickname || '',
       email: person.email || '',
       password: '', // Don't pre-fill password for editing
       user_type: person.user_type || 'Teacher',
@@ -347,6 +356,14 @@ const Personnel = () => {
       };
       // Clear level_tag and guardian fields if role changes from Student to something else
       if (name === 'user_type') {
+        // Superadmin is always an all-branches role (no branch selection needed).
+        if (value === 'Superadmin') {
+          updated.branch_id = '';
+        } else if (!editingPersonnel && !isSuperAccount && selectedBranch?.branch_id) {
+          // Keep the branch selected in step 1 for branch-scoped roles.
+          updated.branch_id = String(selectedBranch.branch_id);
+        }
+
         if (value !== 'Student') {
           updated.level_tag = '';
           updated.guardian_name = '';
@@ -434,6 +451,7 @@ const Personnel = () => {
         const payload = {
           email: formData.email.trim(),
           full_name: formData.full_name.trim(),
+          nickname: formData.nickname && formData.nickname.trim() ? formData.nickname.trim() : null,
           user_type: formData.user_type,
         };
         
@@ -547,6 +565,7 @@ const Personnel = () => {
         
         const userData = {
           full_name: formData.full_name.trim(),
+          nickname: formData.nickname && formData.nickname.trim() ? formData.nickname.trim() : null,
           user_type: formData.user_type,
           phone_number: formData.phone_number || null,
           branch_id: isSuperAccount ? null : (formData.branch_id ? parseInt(formData.branch_id) : null),
@@ -1268,6 +1287,21 @@ const formattedDate = formatDateManila(date);
                       </div>
 
                       <div>
+                        <label htmlFor="nickname" className="label-field">
+                          Nickname
+                        </label>
+                        <input
+                          type="text"
+                          id="nickname"
+                          name="nickname"
+                          value={formData.nickname}
+                          onChange={handleInputChange}
+                          className="input-field"
+                          placeholder="Optional display name"
+                        />
+                      </div>
+
+                      <div>
                         <label htmlFor="email" className="label-field">
                           Email <span className="text-red-500">*</span>
                         </label>
@@ -1357,7 +1391,7 @@ const formattedDate = formatDateManila(date);
                         )}
                       </div>
 
-                      {!isSuperAccount && (
+                      {!isAllBranchesRole && (
                         <div>
                           <label htmlFor="branch_id" className="label-field">
                             Branch <span className="text-red-500">*</span>
@@ -1392,7 +1426,7 @@ const formattedDate = formatDateManila(date);
                         </div>
                       )}
                       
-                      {isSuperAccount && (
+                      {isAllBranchesRole && (
                         <div>
                           <label className="label-field">
                             Branch Access

@@ -990,9 +990,9 @@ router.get(
                         i.invoice_ar_number AS invoice_ar_number,
                         COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                         approver.full_name as approved_by_name,
-                        payment_creator.full_name as payment_created_by_name,
+                        COALESCE(NULLIF(TRIM(payment_creator.nickname), ''), payment_creator.full_name) as payment_created_by_name,
                         payment_creator.email as payment_created_by_email,
-                        invoice_issuer.full_name as invoice_issued_by_name,
+                        COALESCE(NULLIF(TRIM(invoice_issuer.nickname), ''), invoice_issuer.full_name) as invoice_issued_by_name,
                         invoice_issuer.email as invoice_issued_by_email,
                         ar.prospect_student_name as ar_prospect_student_name
                  FROM paymenttbl p
@@ -1669,9 +1669,9 @@ router.get(
                            i.invoice_ar_number AS invoice_ar_number,
                            COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                            approver.full_name as approved_by_name,
-                           payment_creator.full_name as payment_created_by_name,
+                           COALESCE(NULLIF(TRIM(payment_creator.nickname), ''), payment_creator.full_name) as payment_created_by_name,
                            payment_creator.email as payment_created_by_email,
-                           invoice_issuer.full_name as invoice_issued_by_name,
+                           COALESCE(NULLIF(TRIM(invoice_issuer.nickname), ''), invoice_issuer.full_name) as invoice_issued_by_name,
                            invoice_issuer.email as invoice_issued_by_email,
                            ar.prospect_student_name as ar_prospect_student_name
                     FROM paymenttbl p
@@ -1820,7 +1820,7 @@ router.get(
                           TO_CHAR(ar.issue_date, 'YYYY-MM-DD') as issue_date,
                           ar.ack_receipt_number,
                           ar.created_by,
-                          creator.full_name AS created_by_name,
+                          COALESCE(NULLIF(TRIM(creator.nickname), ''), creator.full_name) AS created_by_name,
                           creator.email AS created_by_email,
                           verifier.full_name AS verified_by_name,
                           verifier.user_type AS verifier_user_type,

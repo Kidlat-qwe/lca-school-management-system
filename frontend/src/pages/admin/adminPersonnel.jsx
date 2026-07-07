@@ -32,6 +32,7 @@ const AdminPersonnel = () => {
   const [editingPersonnel, setEditingPersonnel] = useState(null);
   const [formData, setFormData] = useState({
     full_name: '',
+    nickname: '',
     email: '',
     password: '',
     user_type: 'Teacher',
@@ -200,6 +201,7 @@ const AdminPersonnel = () => {
     setExistingGuardian(null);
     setFormData({
       full_name: '',
+      nickname: '',
       email: '',
       password: getDefaultPasswordForUserType('Teacher'),
       user_type: 'Teacher',
@@ -242,6 +244,7 @@ const AdminPersonnel = () => {
     
     setFormData({
       full_name: person.full_name || '',
+      nickname: person.nickname || '',
       email: person.email || '',
       password: '',
       user_type: person.user_type || 'Teacher',
@@ -397,6 +400,7 @@ const AdminPersonnel = () => {
         const payload = {
           email: formData.email.trim(),
           full_name: formData.full_name.trim(),
+          nickname: formData.nickname && formData.nickname.trim() ? formData.nickname.trim() : null,
           user_type: formData.user_type,
         };
         
@@ -459,6 +463,7 @@ const AdminPersonnel = () => {
       } else {
         const userData = {
           full_name: formData.full_name.trim(),
+          nickname: formData.nickname && formData.nickname.trim() ? formData.nickname.trim() : null,
           user_type: formData.user_type,
           phone_number: formData.phone_number || null,
           branch_id: finalBranchId,
@@ -958,6 +963,21 @@ const AdminPersonnel = () => {
                       {formErrors.full_name && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.full_name}</p>
                       )}
+                    </div>
+
+                    <div>
+                      <label htmlFor="nickname" className="label-field">
+                        Nickname
+                      </label>
+                      <input
+                        type="text"
+                        id="nickname"
+                        name="nickname"
+                        value={formData.nickname}
+                        onChange={handleInputChange}
+                        className="input-field"
+                        placeholder="Optional display name"
+                      />
                     </div>
 
                     <div>

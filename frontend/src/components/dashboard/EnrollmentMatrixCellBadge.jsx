@@ -9,9 +9,13 @@ const EnrollmentMatrixCellBadge = ({ cell, sequence = null, periodKey = null }) 
   const tone = enrollmentMatrixCellTone(cell);
   const cellTitle = enrollmentMatrixCellHoverTitle(cell, { periodKey });
   const showsSequence = enrollmentMatrixCellShowsSequence(cell);
-  const displayValue = showsSequence
-    ? String(sequence != null && sequence > 0 ? sequence : 1)
-    : '-';
+  const lifecycleMark =
+    cell?.status === 'active' ? '✓' : cell?.status === 'inactive' ? 'X' : null;
+  const displayValue = lifecycleMark
+    ? lifecycleMark
+    : showsSequence
+      ? String(sequence != null && sequence > 0 ? sequence : 1)
+      : '-';
 
   return (
     <div className="flex flex-col items-center gap-0.5">

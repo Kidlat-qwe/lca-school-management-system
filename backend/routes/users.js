@@ -50,7 +50,7 @@ router.get(
       // Since last_login is stored as timestamp without time zone in Philippines time,
       // we format it directly (it's already in Philippines timezone)
       let sql = hasLastLoginColumn
-        ? `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, lrn,
+        ? `SELECT user_id, email, full_name, nickname, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
                   CASE 
                     WHEN last_login IS NOT NULL 
@@ -58,7 +58,7 @@ router.get(
                     ELSE NULL
                   END as last_login
            FROM userstbl WHERE 1=1`
-        : `SELECT user_id, email, full_name, user_type, gender, date_of_birth, phone_number, lrn,
+        : `SELECT user_id, email, full_name, nickname, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
                   NULL as last_login
            FROM userstbl WHERE 1=1`;
@@ -98,6 +98,7 @@ router.get(
         paramCount++;
         sql += ` AND (
           COALESCE(full_name, '') ILIKE $${paramCount}
+          OR COALESCE(nickname, '') ILIKE $${paramCount}
           OR COALESCE(email, '') ILIKE $${paramCount}
           OR COALESCE(phone_number, '') ILIKE $${paramCount}
           OR COALESCE(lrn, '') ILIKE $${paramCount}
@@ -154,6 +155,7 @@ router.get(
         countParamCount++;
         countSql += ` AND (
           COALESCE(full_name, '') ILIKE $${countParamCount}
+          OR COALESCE(nickname, '') ILIKE $${countParamCount}
           OR COALESCE(email, '') ILIKE $${countParamCount}
           OR COALESCE(phone_number, '') ILIKE $${countParamCount}
           OR COALESCE(lrn, '') ILIKE $${countParamCount}
@@ -239,6 +241,7 @@ router.post(
   [
     body('email').isEmail().withMessage('Valid email is required'),
     body('full_name').notEmpty().withMessage('Full name is required'),
+    body('nickname').optional().isString().withMessage('Nickname must be a string'),
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     handleValidationErrors,
@@ -249,6 +252,7 @@ router.post(
       const {
         email,
         full_name,
+        nickname,
         user_type,
         gender,
         date_of_birth,
@@ -269,13 +273,14 @@ router.post(
 
       const result = await query(
         `INSERT INTO userstbl (
-          email, full_name, user_type, gender, date_of_birth, 
+          email, full_name, nickname, user_type, gender, date_of_birth, 
           phone_number, branch_id, level_tag, profile_picture_url
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *`,
         [
           email,
           full_name,
+          nickname || null,
           user_type,
           gender || null,
           date_of_birth || null,
@@ -317,6 +322,7 @@ router.put(
   [
     param('id').isInt().withMessage('User ID must be an integer'),
     body('full_name').optional().notEmpty().withMessage('Full name cannot be empty'),
+    body('nickname').optional().isString().withMessage('Nickname must be a string'),
     body('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     body('phone_number')
@@ -334,6 +340,7 @@ router.put(
       const { id } = req.params;
       const {
         full_name,
+        nickname,
         user_type,
         gender,
         date_of_birth,
@@ -421,6 +428,7 @@ router.put(
       const fields = {
         email,
         full_name,
+        nickname,
         user_type,
         gender,
         date_of_birth,
@@ -436,7 +444,7 @@ router.put(
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           // Convert empty strings to null for optional fields
-          const optionalFields = ['gender', 'date_of_birth', 'phone_number', 'branch_id', 'level_tag', 'profile_picture_url', 'lrn'];
+        const optionalFields = ['nickname', 'gender', 'date_of_birth', 'phone_number', 'branch_id', 'level_tag', 'profile_picture_url', 'lrn'];
           if (optionalFields.includes(key)) {
             if (value === '' || value === null) {
               params.push(null);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallmentInvoicePages';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -39,6 +40,10 @@ const TABS = [
       'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
   },
 ];
+
+/** Finance / Superfinance: enrollment-dashboard student history — read-only operational tabs only. */
+const FINANCE_LIMITED_TAB_IDS = new Set(['classes', 'attendance', 'invoices']);
+const FINANCE_DEFAULT_TAB = 'classes';
 
 const LEVEL_TAG_OPTIONS = [
   'Playgroup',
@@ -426,7 +431,8 @@ const isFormDirty = (form, user) => {
 };
 
 /**
- * Superadmin / Admin: full read-only student snapshot with sidebar tabs.
+ * Superadmin / Admin: full student snapshot with sidebar tabs.
+ * Finance / Superfinance (e.g. re-enrollment dashboards): enrolled class, attendance, invoices only.
  *
  * Props:
  *   - isOpen, student (must include user_id), onClose
@@ -434,6 +440,15 @@ const isFormDirty = (form, user) => {
  *                 so the parent list can refresh.
  */
 const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
+  const { userInfo } = useAuth();
+  const userType = userInfo?.userType || userInfo?.user_type;
+  const isFinanceLimitedView = userType === 'Finance' || userType === 'Superfinance';
+
+  const visibleTabs = useMemo(
+    () => (isFinanceLimitedView ? TABS.filter((tab) => FINANCE_LIMITED_TAB_IDS.has(tab.id)) : TABS),
+    [isFinanceLimitedView]
+  );
+
   const [activeTab, setActiveTab] = useState('student');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -483,23 +498,39 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
     setLoading(true);
     setError('');
     try {
-      const [userRes, guardiansRes, classesRes, branchesRes, installmentData] = await Promise.all([
-        apiRequest(`/users/${studentId}`),
-        apiRequest(`/guardians/student/${studentId}`),
-        apiRequest(`/students/${studentId}/classes`),
-        apiRequest('/branches?limit=100'),
-        fetchAllInstallmentInvoicePages(apiRequest, {
-          extraSearchParams: { student_id: String(studentId) },
-        }),
-      ]);
-      const user = userRes?.data || null;
-      setDetailUser(user);
-      setFormData(buildFormFromUser(user));
-      setFormErrors({});
-      setGuardians(Array.isArray(guardiansRes?.data) ? guardiansRes.data : []);
-      setClassRows(Array.isArray(classesRes?.data) ? classesRes.data : []);
-      setInstallmentRows(Array.isArray(installmentData) ? installmentData : []);
-      setBranches(Array.isArray(branchesRes?.data) ? branchesRes.data : []);
+      if (isFinanceLimitedView) {
+        const [classesRes, installmentData] = await Promise.all([
+          apiRequest(`/students/${studentId}/classes`),
+          fetchAllInstallmentInvoicePages(apiRequest, {
+            extraSearchParams: { student_id: String(studentId) },
+          }),
+        ]);
+        setDetailUser(null);
+        setFormData(buildFormFromUser(null));
+        setFormErrors({});
+        setGuardians([]);
+        setClassRows(Array.isArray(classesRes?.data) ? classesRes.data : []);
+        setInstallmentRows(Array.isArray(installmentData) ? installmentData : []);
+        setBranches([]);
+      } else {
+        const [userRes, guardiansRes, classesRes, branchesRes, installmentData] = await Promise.all([
+          apiRequest(`/users/${studentId}`),
+          apiRequest(`/guardians/student/${studentId}`),
+          apiRequest(`/students/${studentId}/classes`),
+          apiRequest('/branches?limit=100'),
+          fetchAllInstallmentInvoicePages(apiRequest, {
+            extraSearchParams: { student_id: String(studentId) },
+          }),
+        ]);
+        const user = userRes?.data || null;
+        setDetailUser(user);
+        setFormData(buildFormFromUser(user));
+        setFormErrors({});
+        setGuardians(Array.isArray(guardiansRes?.data) ? guardiansRes.data : []);
+        setClassRows(Array.isArray(classesRes?.data) ? classesRes.data : []);
+        setInstallmentRows(Array.isArray(installmentData) ? installmentData : []);
+        setBranches(Array.isArray(branchesRes?.data) ? branchesRes.data : []);
+      }
     } catch (err) {
       console.error(err);
       setError(err.message || 'Failed to load student history.');
@@ -511,11 +542,11 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
     } finally {
       setLoading(false);
     }
-  }, [studentId]);
+  }, [studentId, isFinanceLimitedView]);
 
   useEffect(() => {
     if (isOpen && studentId) {
-      setActiveTab('student');
+      setActiveTab(isFinanceLimitedView ? FINANCE_DEFAULT_TAB : 'student');
       loadData();
     } else if (!isOpen) {
       setDetailUser(null);
@@ -531,7 +562,13 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
       setSaving(false);
       setSavingMessage('');
     }
-  }, [isOpen, studentId, loadData]);
+  }, [isOpen, studentId, loadData, isFinanceLimitedView]);
+
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab(visibleTabs[0]?.id || 'student');
+    }
+  }, [visibleTabs, activeTab]);
 
   const requestClose = useCallback(async () => {
     if (saving || uploadingPicture) return;
@@ -753,7 +790,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
             {/* Sidebar (lg+) */}
             <aside className="hidden lg:block lg:w-52 xl:w-56 lg:shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto">
               <nav className="p-3 space-y-1" aria-label="Student history sections">
-                {TABS.map((t) => {
+                {visibleTabs.map((t) => {
                   const isActive = activeTab === t.id;
                   return (
                     <button
@@ -790,7 +827,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
             {/* Mobile / tablet top tab bar */}
             <div className="lg:hidden border-b border-gray-200 px-2 sm:px-4 flex-shrink-0 overflow-x-auto bg-gray-50">
               <nav className="flex gap-1 min-w-min py-2" aria-label="Student history sections (mobile)">
-                {TABS.map((t) => (
+                {visibleTabs.map((t) => (
                   <button
                     key={t.id}
                     type="button"
@@ -827,7 +864,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                 </div>
               )}
 
-              {!loading && !error && activeTab === 'student' && (
+              {!loading && !error && !isFinanceLimitedView && activeTab === 'student' && (
                 <div className="space-y-6">
                   {/* Profile picture card */}
                   <section className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
@@ -1011,7 +1048,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                 </div>
               )}
 
-              {!loading && !error && activeTab === 'guardian' && (
+              {!loading && !error && !isFinanceLimitedView && activeTab === 'guardian' && (
                 <div className="space-y-6">
                   {guardians.length === 0 ? (
                     <p className="text-sm text-gray-500">No guardian records for this student.</p>

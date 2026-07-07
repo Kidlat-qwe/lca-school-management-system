@@ -96,6 +96,7 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 - **Installment delinquency drop → pay again**: after a **dropped** billing month, the first empty comeback month shows **rejoin** and the next active month shows **re-enrolled** (e.g. Mar=new, Apr=dropped, May=rejoin, Jun=re-enrolled). Dropped cells use label `dropped`.
 - **Installment `phase_start` > 1**: class phases before the plan start are omitted from month-matrix billing (anchor begins at `phase_start`). The first visible billing month shows **new**; later paid months show **re-enrolled**. Matrix hover on **new** shows **Enrolled in Phase N** (e.g. phase 2 → “Enrolled in Phase 2”).
 - **Installment plan enrollment column**: the first **paid** phase on the plan shows **new** even when `phase_start` is 1 and billing begins at a later absolute phase (e.g. Phase 2 after a skipped late-start gap).
+- **Active / Inactive (recurring installment)**: on installment tracks, the billing month/phase **immediately after** the latest enrolled cell (new / re-enrolled / upsell / rejoin / completed) shows **✓ Active** by default — even before the next invoice is generated. **X Inactive** only when that period has an **unpaid** invoice and today (Manila) is **after** the invoice due date. Once paid, the cell shows **re-enrolled** / **new** from enrollment rows and the next period becomes Active again.
 
 ## `operationalDashboardRecentPayments.js`
 

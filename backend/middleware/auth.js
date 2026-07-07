@@ -33,7 +33,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
 
     // Fetch user from database to get additional info
     const userResult = await query(
-      'SELECT user_id, email, full_name, user_type, branch_id, firebase_uid, profile_picture_url FROM userstbl WHERE firebase_uid = $1',
+      'SELECT user_id, email, full_name, nickname, user_type, branch_id, firebase_uid, profile_picture_url FROM userstbl WHERE firebase_uid = $1',
       [decodedToken.uid]
     );
 
@@ -43,6 +43,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
       req.user.user_id = dbUser.user_id;
       req.user.fullName = dbUser.full_name;
       req.user.full_name = dbUser.full_name;
+      req.user.nickname = dbUser.nickname;
       req.user.userType = dbUser.user_type;
       req.user.user_type = dbUser.user_type;
       req.user.branchId = dbUser.branch_id;

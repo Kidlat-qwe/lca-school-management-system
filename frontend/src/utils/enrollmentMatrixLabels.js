@@ -32,6 +32,8 @@ const LABEL_ALIASES = {
   reserved: MATRIX_CELL_LABEL.RESERVED,
   'pending enrollment': 'pending enrollment',
   completed: MATRIX_CELL_LABEL.COMPLETED,
+  active: 'active',
+  inactive: 'inactive',
 };
 
 /** Map API/UI matrix cell labels to canonical keys for KPI switches. */
