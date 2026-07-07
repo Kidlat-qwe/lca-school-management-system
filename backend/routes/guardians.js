@@ -1,6 +1,6 @@
 import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
-import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
+import { verifyFirebaseToken, requireRole, assertCanViewStudentUserProfile } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 
@@ -140,6 +140,7 @@ router.get(
 /**
  * GET /api/sms/guardians/student/:studentId
  * Get guardians for a specific student
+ * Access: Superadmin, Admin, Superfinance, branch Finance (same branch), or own student profile
  */
 router.get(
   '/student/:studentId',
@@ -147,10 +148,18 @@ router.get(
     param('studentId').isInt().withMessage('Student ID must be an integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
       const { studentId } = req.params;
+
+      const access = await assertCanViewStudentUserProfile(req, studentId);
+      if (!access.allowed) {
+        return res.status(403).json({
+          success: false,
+          message: access.message || 'Access denied.',
+        });
+      }
+
       const result = await query(
         `SELECT g.*, u.full_name AS student_name, u.email AS student_email
          FROM guardianstbl g

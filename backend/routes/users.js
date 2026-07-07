@@ -1,6 +1,6 @@
 import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
-import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { verifyFirebaseToken, requireRole, requireBranchAccess, assertCanViewStudentUserProfile } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import admin from '../config/firebase.js';
@@ -201,11 +201,11 @@ router.get(
     try {
       const { id } = req.params;
 
-      // Check if user can access this profile
-      if (req.user.userType !== 'Superadmin' && req.user.userType !== 'Admin' && req.user.userId !== parseInt(id)) {
+      const access = await assertCanViewStudentUserProfile(req, id);
+      if (!access.allowed) {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. You can only view your own profile.',
+          message: access.message || 'Access denied.',
         });
       }
 

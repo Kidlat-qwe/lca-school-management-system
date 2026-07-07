@@ -2,7 +2,9 @@
 
 ## `StudentHistoryModal.jsx`
 
-**Student history** dialog used on the Superadmin and Admin **Student** list pages (ellipsis → **View Student History**).
+**Student history** dialog used on Superadmin / Admin **Student** lists and on **re-enrollment dashboards** (phase/month matrix — click student name). Finance / Superfinance have **read-only** access (view tabs; edits remain Admin/Superadmin only).
+
+- **Access (API):** `GET /users/:id` and `GET /guardians/student/:id` allow Superfinance (Finance with no branch), branch Finance (same-branch students), Admin, and Superadmin — see `assertCanViewStudentUserProfile` in `backend/middleware/auth.js`.
 
 - **Layout:** Wide (“landscape”) shell (`max-w-[min(96vw,1320px)]`) with a **left sidebar** for tab navigation on `lg+` screens. Mobile / tablet falls back to a horizontal scrolling tab bar at the top.
 - **Tabs:** Student info, Guardian info, Enrolled class, **Attendance**, Invoices.
@@ -26,3 +28,4 @@
 
 - `frontend/src/pages/superadmin/Student.jsx`
 - `frontend/src/pages/admin/adminStudent.jsx`
+- `frontend/src/pages/superadmin/PhaseEnrollmentDashboard.jsx` / `MonthlyEnrollmentDashboard.jsx` (and Finance / Superfinance routes)

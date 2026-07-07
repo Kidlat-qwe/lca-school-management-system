@@ -64,6 +64,59 @@ export const verifyFirebaseToken = async (req, res, next) => {
 };
 
 /**
+ * Superfinance: explicit Superfinance role or Finance with no branch (legacy routing).
+ */
+export function isSuperfinanceOperator(userType, branchId) {
+  return (
+    userType === 'Superfinance' ||
+    (userType === 'Finance' && (branchId === null || branchId === undefined))
+  );
+}
+
+/**
+ * Whether the authenticated user may view another user's profile (student history modal, etc.).
+ * @returns {Promise<{ allowed: boolean, message?: string }>}
+ */
+export async function assertCanViewStudentUserProfile(req, targetUserId) {
+  const targetId = parseInt(String(targetUserId), 10);
+  if (!Number.isInteger(targetId)) {
+    return { allowed: false, message: 'Invalid user ID' };
+  }
+
+  const requesterId = parseInt(String(req.user?.userId ?? req.user?.user_id), 10);
+  if (requesterId === targetId) {
+    return { allowed: true };
+  }
+
+  const userType = req.user?.userType || req.user?.user_type;
+  if (userType === 'Superadmin' || userType === 'Admin') {
+    return { allowed: true };
+  }
+
+  const branchId = req.user?.branchId ?? req.user?.branch_id;
+  if (isSuperfinanceOperator(userType, branchId)) {
+    return { allowed: true };
+  }
+
+  if (userType === 'Finance' && branchId != null) {
+    const targetRes = await query(
+      `SELECT user_type, branch_id FROM userstbl WHERE user_id = $1`,
+      [targetId]
+    );
+    if (targetRes.rows.length === 0) {
+      return { allowed: false, message: 'User not found' };
+    }
+    const target = targetRes.rows[0];
+    if (target.user_type === 'Student' && target.branch_id === branchId) {
+      return { allowed: true };
+    }
+    return { allowed: false, message: 'Access denied. You can only view students in your branch.' };
+  }
+
+  return { allowed: false, message: 'Access denied. You can only view your own profile.' };
+}
+
+/**
  * Middleware to check if user has required role(s)
  * @param {string[]} allowedRoles - Array of allowed user types
  */
