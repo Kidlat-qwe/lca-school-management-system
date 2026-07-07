@@ -636,7 +636,7 @@ router.get(
                TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
-               c.reference_number, c.deposit_attachment_url,
+               c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                sub.full_name AS submitted_by_name,
                app.full_name AS approved_by_name
@@ -903,6 +903,14 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('deposit_attachment_url is required'),
+    body('deposit_attachment_url_2')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('deposit_attachment_url_2 must be a string'),
+    body('submission_remarks')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('submission_remarks must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -913,6 +921,8 @@ router.post(
       const endDate = String(req.body?.end_date || '').slice(0, 10);
       const referenceNumber = String(req.body?.reference_number || '').trim();
       const depositAttachmentUrl = String(req.body?.deposit_attachment_url || '').trim();
+      const depositAttachmentUrl2 = String(req.body?.deposit_attachment_url_2 || '').trim() || null;
+      const submissionRemarks = String(req.body?.submission_remarks || '').trim() || null;
 
       if (!userBranchId) {
         return res.status(403).json({
@@ -952,14 +962,16 @@ router.post(
       const insertRes = await query(
         `INSERT INTO cash_deposit_summarytbl (
            branch_id, start_date, end_date, total_deposit_amount, total_cash_amount,
-           payment_count, completed_cash_count, status, submitted_by, reference_number, deposit_attachment_url, cash_payment_snapshot
+           payment_count, completed_cash_count, status, submitted_by, reference_number,
+           deposit_attachment_url, deposit_attachment_url_2, submission_remarks, cash_payment_snapshot
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8, $9, $10, $11::jsonb)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8, $9, $10, $11, $12, $13::jsonb)
          RETURNING cash_deposit_summary_id, branch_id,
                    TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                    TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
                    total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
-                   status, submitted_at, reference_number, deposit_attachment_url`,
+                   status, submitted_at, reference_number, deposit_attachment_url,
+                   deposit_attachment_url_2, submission_remarks`,
         [
           userBranchId,
           startDate,
@@ -971,6 +983,8 @@ router.post(
           userId,
           referenceNumber,
           depositAttachmentUrl,
+          depositAttachmentUrl2,
+          submissionRemarks,
           JSON.stringify(snapshot.payments || []),
         ]
       );
@@ -1106,7 +1120,7 @@ router.put(
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                 c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                 c.status, c.approved_by, c.approved_at, c.remarks,
-                c.reference_number, c.deposit_attachment_url,
+                c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 app.full_name AS approved_by_name
          FROM cash_deposit_summarytbl c
@@ -1147,6 +1161,14 @@ router.put(
       .optional({ nullable: true })
       .isString()
       .withMessage('deposit_attachment_url must be a string'),
+    body('deposit_attachment_url_2')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('deposit_attachment_url_2 must be a string'),
+    body('submission_remarks')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('submission_remarks must be a string'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -1166,7 +1188,8 @@ router.put(
         `SELECT cash_deposit_summary_id, branch_id,
                 TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                 TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
-                status, submitted_by, reference_number, deposit_attachment_url
+                status, submitted_by, reference_number, deposit_attachment_url,
+                deposit_attachment_url_2, submission_remarks
          FROM cash_deposit_summarytbl
          WHERE cash_deposit_summary_id = $1`,
         [id]
@@ -1202,6 +1225,12 @@ router.put(
       const nextAttach = Object.prototype.hasOwnProperty.call(raw, 'deposit_attachment_url')
         ? String(raw.deposit_attachment_url || '').trim()
         : String(rec.deposit_attachment_url || '').trim();
+      const nextAttach2 = Object.prototype.hasOwnProperty.call(raw, 'deposit_attachment_url_2')
+        ? String(raw.deposit_attachment_url_2 || '').trim() || null
+        : String(rec.deposit_attachment_url_2 || '').trim() || null;
+      const nextSubmissionRemarks = Object.prototype.hasOwnProperty.call(raw, 'submission_remarks')
+        ? String(raw.submission_remarks || '').trim() || null
+        : String(rec.submission_remarks || '').trim() || null;
 
       if (!nextRef) {
         return res.status(400).json({
@@ -1231,16 +1260,20 @@ router.put(
              cash_payment_snapshot = $5::jsonb,
              reference_number = $6,
              deposit_attachment_url = $7,
+             deposit_attachment_url_2 = $8,
+             submission_remarks = $9,
+             remarks = NULL,
              status = 'Pending',
              approved_by = NULL,
              approved_at = NULL,
              updated_at = CURRENT_TIMESTAMP
-         WHERE cash_deposit_summary_id = $8
+         WHERE cash_deposit_summary_id = $10
          RETURNING cash_deposit_summary_id, branch_id,
                    TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
                    TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
                    total_deposit_amount, total_cash_amount, payment_count, completed_cash_count,
-                   status, submitted_at, reference_number, deposit_attachment_url`,
+                   status, submitted_at, reference_number, deposit_attachment_url,
+                   deposit_attachment_url_2, submission_remarks`,
         [
           snapshot.total_deposit_amount,
           snapshot.total_cash_amount,
@@ -1249,6 +1282,8 @@ router.put(
           JSON.stringify(snapshot.payments || []),
           nextRef,
           nextAttach,
+          nextAttach2,
+          nextSubmissionRemarks,
           id,
         ]
       );
@@ -1280,7 +1315,7 @@ router.get(
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                 c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                 c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
-                c.reference_number, c.deposit_attachment_url,
+                c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
                 COALESCE(c.cash_payment_snapshot, '[]'::jsonb) AS cash_payment_snapshot,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 sub.full_name AS submitted_by_name,

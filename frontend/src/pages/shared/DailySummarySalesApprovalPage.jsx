@@ -40,6 +40,7 @@ import {
   getPaymentLogTableTotalAmountColumn,
 } from '../../utils/paymentLogTableAmounts';
 import CashDepositPaymentEditModal from '../../components/dailySummary/CashDepositPaymentEditModal';
+import CashDepositProofLinks from '../../components/dailySummary/CashDepositProofLinks';
 import CashDepositPaymentInvoiceCell from '../../components/dailySummary/CashDepositPaymentInvoiceCell';
 import { canEditCashDepositPayments } from '../../utils/cashDepositPaymentEdit';
 import {
@@ -1443,19 +1444,21 @@ const DailySummarySalesApprovalPage = ({ summaryKind = TAB_END_OF_SHIFT }) => {
                   </div>
                 ) : null}
                 {isCashDepositTab ? (
-                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
                     <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Deposit Proof</p>
-                    {detailModal.record.deposit_attachment_url ? (
-                      <button
-                        type="button"
-                        onClick={() => setAttachmentPreviewUrl(detailModal.record.deposit_attachment_url)}
-                        className="mt-1 inline-block text-sm text-primary-700 hover:text-primary-800 underline break-all text-left"
-                      >
-                        View attachment
-                      </button>
-                    ) : (
-                      <p className="mt-1 text-gray-900 font-medium">-</p>
-                    )}
+                    <CashDepositProofLinks
+                      record={detailModal.record}
+                      onView={setAttachmentPreviewUrl}
+                      className="mt-1"
+                    />
+                  </div>
+                ) : null}
+                {isCashDepositTab && detailModal.record.submission_remarks ? (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
+                    <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Admin Notes</p>
+                    <p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">
+                      {detailModal.record.submission_remarks}
+                    </p>
                   </div>
                 ) : null}
               </div>

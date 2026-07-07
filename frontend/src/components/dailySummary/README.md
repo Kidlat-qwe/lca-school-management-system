@@ -17,6 +17,17 @@ When a **cash deposit** is **Returned**, invoice IDs in the payment table are cl
 
 **Review & resubmit** modal for returned cash deposits (branch Admin → Daily Summary Sales). Layout matches Payment Logs → **Deposit Cash** submission: date range, reference/proof, summary cards, and full payment-lines table.
 
+- Up to **2** deposit proof images (`deposit_attachment_url`, `deposit_attachment_url_2`).
+- Optional **Notes / Remarks** (`submission_remarks`) for Superfinance; finance return notes stay read-only in `remarks`.
+
+## `CashDepositProofImagesField.jsx`
+
+Shared upload UI (max 2 images) used by resubmit and Payment Logs deposit modals.
+
+## `CashDepositProofLinks.jsx`
+
+Read-only view links for detail/verify modals (image 1 / image 2).
+
 ## `CashDepositPaymentsTable.jsx`
 
 Shared cash payment lines table (Payment date, Invoice, Student, Method, Amount, Total Amount, Status, AR#, Reference).

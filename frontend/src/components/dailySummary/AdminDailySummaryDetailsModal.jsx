@@ -5,6 +5,7 @@ import { apiRequest } from '../../config/api';
 import { formatDateManila } from '../../utils/dateUtils';
 import PaymentAttachmentViewerModal from '../paymentLogs/PaymentAttachmentViewerModal';
 import CashDepositPaymentEditModal from './CashDepositPaymentEditModal';
+import CashDepositProofLinks from './CashDepositProofLinks';
 import CashDepositPaymentInvoiceCell from './CashDepositPaymentInvoiceCell';
 import { canEditCashDepositPayments } from '../../utils/cashDepositPaymentEdit';
 import {
@@ -317,19 +318,19 @@ export default function AdminDailySummaryDetailsModal({
                   </div>
                 ) : null}
                 {isCashDeposit ? (
-                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
                     <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Deposit Proof</p>
-                    {record.deposit_attachment_url ? (
-                      <button
-                        type="button"
-                        onClick={() => setAttachmentPreviewUrl(record.deposit_attachment_url)}
-                        className="mt-1 inline-block text-sm text-primary-700 hover:text-primary-800 underline break-all text-left"
-                      >
-                        View attachment
-                      </button>
-                    ) : (
-                      <p className="mt-1 text-gray-900 font-medium">-</p>
-                    )}
+                    <CashDepositProofLinks
+                      record={record}
+                      onView={setAttachmentPreviewUrl}
+                      className="mt-1"
+                    />
+                  </div>
+                ) : null}
+                {isCashDeposit && record.submission_remarks ? (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
+                    <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Admin Notes</p>
+                    <p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">{record.submission_remarks}</p>
                   </div>
                 ) : null}
               </div>

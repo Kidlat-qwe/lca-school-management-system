@@ -27,6 +27,8 @@ import FixedTablePagination, { TablePaginationSummary } from '../../components/t
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert } from '../../utils/appAlert';
 import { uploadInvoicePaymentImage } from '../../utils/uploadInvoicePaymentImage';
+import { serializeCashDepositAttachments } from '../../utils/cashDepositAttachments';
+import CashDepositProofImagesField from '../../components/dailySummary/CashDepositProofImagesField';
 import { BranchPaymentLogTabs } from '../../components/paymentLogs/PaymentLogsViewTabs';
 import PaymentAttachmentViewerModal from '../../components/paymentLogs/PaymentAttachmentViewerModal';
 import { PaymentLogPackageItemCell } from '../../components/paymentLogs/PaymentLogPackageItemCell';
@@ -184,7 +186,8 @@ const AdminPaymentLogs = () => {
   const [depositExistingRanges, setDepositExistingRanges] = useState([]);
   const [depositRangesLoading, setDepositRangesLoading] = useState(false);
   const [depositReferenceNumber, setDepositReferenceNumber] = useState('');
-  const [depositAttachmentUrl, setDepositAttachmentUrl] = useState('');
+  const [depositAttachmentUrls, setDepositAttachmentUrls] = useState([]);
+  const [depositSubmissionRemarks, setDepositSubmissionRemarks] = useState('');
   const [depositAttachmentUploading, setDepositAttachmentUploading] = useState(false);
   const depositAlertRef = useRef('');
   const depositThresholdAlertRef = useRef('');
@@ -233,7 +236,8 @@ const AdminPaymentLogs = () => {
     setDepositStartDate('');
     setDepositEndDate('');
     setDepositReferenceNumber('');
-    setDepositAttachmentUrl('');
+    setDepositAttachmentUrls([]);
+    setDepositSubmissionRemarks('');
     setDepositAttachmentUploading(false);
     depositAlertRef.current = '';
     depositThresholdAlertRef.current = '';
@@ -241,16 +245,16 @@ const AdminPaymentLogs = () => {
   };
 
   const uploadDepositAttachment = async (file) => {
-    if (!file) return;
+    if (!file) return null;
     setDepositAttachmentUploading(true);
     try {
       const imageUrl = await uploadInvoicePaymentImage(file);
       if (!imageUrl) throw new Error('Upload returned empty URL');
-      setDepositAttachmentUrl(imageUrl);
-      appAlert('Deposit proof image uploaded.');
+      return imageUrl;
     } catch (err) {
       console.error('Deposit attachment upload:', err);
       appAlert(err?.message || 'Failed to upload deposit proof image.');
+      return null;
     } finally {
       setDepositAttachmentUploading(false);
     }
@@ -453,15 +457,15 @@ const AdminPaymentLogs = () => {
     }
 
     const refTrim = depositReferenceNumber.trim();
-    const attTrim = depositAttachmentUrl.trim();
+    const serialized = serializeCashDepositAttachments(depositAttachmentUrls);
 
     if (!refTrim) {
       showDepositAlert('Reference number is required before submitting cash deposit.');
       return;
     }
 
-    if (!attTrim) {
-      showDepositAlert('Deposit proof image is required before submitting cash deposit.');
+    if (!serialized.deposit_attachment_url) {
+      showDepositAlert('At least one deposit proof image is required before submitting cash deposit.');
       return;
     }
 
@@ -476,7 +480,9 @@ const AdminPaymentLogs = () => {
           start_date: depositStartDate,
           end_date: depositEndDate,
           reference_number: refTrim,
-          deposit_attachment_url: attTrim,
+          deposit_attachment_url: serialized.deposit_attachment_url,
+          deposit_attachment_url_2: serialized.deposit_attachment_url_2,
+          submission_remarks: depositSubmissionRemarks.trim() || null,
         }),
       });
 
@@ -486,7 +492,8 @@ const AdminPaymentLogs = () => {
       setDepositStartDate('');
       setDepositEndDate('');
       setDepositReferenceNumber('');
-      setDepositAttachmentUrl('');
+      setDepositAttachmentUrls([]);
+      setDepositSubmissionRemarks('');
       setDepositAttachmentUploading(false);
       setDepositError('');
       depositAlertRef.current = '';
@@ -1911,6 +1918,20 @@ const AdminPaymentLogs = () => {
                   </p>
                 </div>
               </div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                <label htmlFor="deposit-submission-remarks" className="block text-xs font-medium text-gray-700 mb-1">
+                  Notes / Remarks
+                </label>
+                <textarea
+                  id="deposit-submission-remarks"
+                  value={depositSubmissionRemarks}
+                  onChange={(e) => setDepositSubmissionRemarks(e.target.value)}
+                  rows={3}
+                  placeholder="Optional notes for Superfinance (e.g. deposit details)"
+                  disabled={depositSubmitLoading}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-y min-h-[4.5rem] bg-white"
+                />
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -1926,49 +1947,19 @@ const AdminPaymentLogs = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Deposit Proof Image <span className="text-red-500">*</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <label className={`px-3 py-2 text-xs sm:text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 cursor-pointer ${depositSubmitLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                      {depositAttachmentUploading ? 'Uploading...' : (depositAttachmentUrl ? 'Replace Image' : 'Upload Image')}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        disabled={depositSubmitLoading || depositAttachmentUploading}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (file) await uploadDepositAttachment(file);
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
-                    {depositAttachmentUrl && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAttachmentViewerUrl(depositAttachmentUrl);
-                          setShowAttachmentViewer(true);
-                        }}
-                        className="px-3 py-2 text-xs sm:text-sm rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
-                      >
-                        View
-                      </button>
-                    )}
-                  </div>
-                  <p className="mt-1 text-xs text-gray-500">
-                    Upload the deposit slip / bank proof image before submission.
-                  </p>
-                  {depositAttachmentUrl && (
-                    <div className="mt-2">
-                      <img
-                        src={depositAttachmentUrl}
-                        alt="Deposit proof preview"
-                        className="h-24 w-24 object-cover rounded-lg border border-gray-200"
-                      />
-                    </div>
-                  )}
+                  <CashDepositProofImagesField
+                    variant="grid"
+                    attachments={depositAttachmentUrls}
+                    onChange={setDepositAttachmentUrls}
+                    uploading={depositAttachmentUploading}
+                    disabled={depositSubmitLoading}
+                    onView={(url) => {
+                      setAttachmentViewerUrl(url);
+                      setShowAttachmentViewer(true);
+                    }}
+                    onUploadFile={uploadDepositAttachment}
+                    helperText="JPEG or PNG. First image is required; second is optional."
+                  />
                 </div>
               </div>
               <p className="text-xs text-gray-500">
