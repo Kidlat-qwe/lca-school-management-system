@@ -636,7 +636,10 @@ router.get(
                TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
-               c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
+               c.reference_number,
+               c.deposit_attachment_url,
+               (to_jsonb(c)->>'deposit_attachment_url_2') AS deposit_attachment_url_2,
+               (to_jsonb(c)->>'submission_remarks') AS submission_remarks,
                COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                sub.full_name AS submitted_by_name,
                app.full_name AS approved_by_name
@@ -1120,7 +1123,10 @@ router.put(
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                 c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                 c.status, c.approved_by, c.approved_at, c.remarks,
-                c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
+                c.reference_number,
+                c.deposit_attachment_url,
+                (to_jsonb(c)->>'deposit_attachment_url_2') AS deposit_attachment_url_2,
+                (to_jsonb(c)->>'submission_remarks') AS submission_remarks,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 app.full_name AS approved_by_name
          FROM cash_deposit_summarytbl c
@@ -1185,12 +1191,13 @@ router.put(
       }
 
       const rowRes = await query(
-        `SELECT cash_deposit_summary_id, branch_id,
-                TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
-                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,
-                status, submitted_by, reference_number, deposit_attachment_url,
-                deposit_attachment_url_2, submission_remarks
-         FROM cash_deposit_summarytbl
+        `SELECT c.cash_deposit_summary_id, c.branch_id,
+                TO_CHAR(c.start_date, 'YYYY-MM-DD') AS start_date,
+                TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
+                c.status, c.submitted_by, c.reference_number, c.deposit_attachment_url,
+                (to_jsonb(c)->>'deposit_attachment_url_2') AS deposit_attachment_url_2,
+                (to_jsonb(c)->>'submission_remarks') AS submission_remarks
+         FROM cash_deposit_summarytbl c
          WHERE cash_deposit_summary_id = $1`,
         [id]
       );
@@ -1315,7 +1322,10 @@ router.get(
                 TO_CHAR(c.end_date, 'YYYY-MM-DD') AS end_date,
                 c.total_deposit_amount, c.total_cash_amount, c.payment_count, c.completed_cash_count,
                 c.status, c.submitted_by, c.submitted_at, c.approved_by, c.approved_at, c.remarks,
-                c.reference_number, c.deposit_attachment_url, c.deposit_attachment_url_2, c.submission_remarks,
+                c.reference_number,
+                c.deposit_attachment_url,
+                (to_jsonb(c)->>'deposit_attachment_url_2') AS deposit_attachment_url_2,
+                (to_jsonb(c)->>'submission_remarks') AS submission_remarks,
                 COALESCE(c.cash_payment_snapshot, '[]'::jsonb) AS cash_payment_snapshot,
                 COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
                 sub.full_name AS submitted_by_name,
