@@ -32,9 +32,14 @@ import {
   cashDepositStatusBadgeClass,
   formatCashDepositStatus,
 } from '../../utils/cashDepositStatus';
+import {
+  DAILY_SUMMARY_KIND,
+  getDailySummaryKindFromPathname,
+  getDailySummaryPageTitle,
+} from '../../utils/dailySummaryNav';
 
-const TAB_EOD = 'eod';
-const TAB_CASH = 'cash';
+const TAB_EOD = DAILY_SUMMARY_KIND.END_OF_SHIFT;
+const TAB_CASH = DAILY_SUMMARY_KIND.CASH_DEPOSIT;
 const VIEW_MAIN = 'main';
 const VIEW_RETURN = 'return';
 
@@ -69,7 +74,7 @@ const AdminDailySummary = () => {
   const branchId = userInfo?.branch_id || userInfo?.branchId;
   const branchName = userInfo?.branch_nickname || userInfo?.branch_name || 'Your branch';
 
-  const [summaryKind, setSummaryKind] = useState(TAB_EOD);
+  const summaryKind = getDailySummaryKindFromPathname(location.pathname);
   const [viewTab, setViewTab] = useState(VIEW_MAIN);
 
   const [records, setRecords] = useState([]);
@@ -103,6 +108,7 @@ const AdminDailySummary = () => {
   const userType = userInfo?.user_type || userInfo?.userType || '';
 
   const isCash = summaryKind === TAB_CASH;
+  const pageTitle = getDailySummaryPageTitle(summaryKind);
   const dateModeLabels = getDailySummaryDateModeLabels(isCash);
   const summaryRecordIdField = isCash ? 'cash_deposit_summary_id' : 'daily_summary_id';
 
@@ -156,17 +162,19 @@ const AdminDailySummary = () => {
         } else if (filterStatus) {
           params.set('status', filterStatus);
         }
-        const dateParams = buildDailySummaryListDateQueryParams(isCash, {
-          mode: dateFilterMode,
-          month: filterIssueMonth,
-          paymentFrom: filterIssueDateFrom,
-          paymentTo: filterIssueDateTo,
-          createdFrom: filterCreatedDateFrom,
-          createdTo: filterCreatedDateTo,
-        });
-        Object.entries(dateParams).forEach(([key, value]) => {
-          if (value) params.set(key, value);
-        });
+        if (viewTab !== VIEW_RETURN) {
+          const dateParams = buildDailySummaryListDateQueryParams(isCash, {
+            mode: dateFilterMode,
+            month: filterIssueMonth,
+            paymentFrom: filterIssueDateFrom,
+            paymentTo: filterIssueDateTo,
+            createdFrom: filterCreatedDateFrom,
+            createdTo: filterCreatedDateTo,
+          });
+          Object.entries(dateParams).forEach(([key, value]) => {
+            if (value) params.set(key, value);
+          });
+        }
         const endpoint = isCash ? '/cash-deposit-summaries' : '/daily-summary-sales';
         const res = await apiRequest(`${endpoint}?${params.toString()}`);
         setRecords(res.data || []);
@@ -213,8 +221,14 @@ const AdminDailySummary = () => {
   }, [summaryKind, viewTab]);
 
   useEffect(() => {
+    if (viewTab === VIEW_RETURN) return;
     fetchRecords(1);
   }, [fetchRecords, summaryKind, viewTab, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo]);
+
+  useEffect(() => {
+    if (viewTab !== VIEW_RETURN) return;
+    fetchRecords(1);
+  }, [fetchRecords, summaryKind, viewTab]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -317,41 +331,11 @@ const AdminDailySummary = () => {
   return (
     <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
       <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily summary</h1>
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Daily Summary Sales</p>
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{pageTitle}</h1>
         <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
           Submission history and returned items for <span className="font-semibold text-gray-800">{branchName}</span>.
         </p>
-      </div>
-
-      <div className="border-b border-gray-200 -mx-1 px-1 sm:mx-0 sm:px-0">
-        <nav
-          className="flex gap-2 overflow-x-auto pb-px [-webkit-overflow-scrolling:touch] sm:flex-wrap sm:gap-4 sm:overflow-visible sm:pb-0"
-          aria-label="Summary type"
-          style={{ scrollbarWidth: 'thin' }}
-        >
-          <button
-            type="button"
-            onClick={() => setSummaryKind(TAB_EOD)}
-            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors ${
-              summaryKind === TAB_EOD
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            End of shift
-          </button>
-          <button
-            type="button"
-            onClick={() => setSummaryKind(TAB_CASH)}
-            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-              summaryKind === TAB_CASH
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Cash deposit
-          </button>
-        </nav>
       </div>
 
       <div className="flex flex-col gap-3 min-w-0 xl:flex-row xl:items-center xl:justify-between">

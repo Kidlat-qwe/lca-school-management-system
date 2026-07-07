@@ -92,6 +92,7 @@ import SuperfinanceInstallmentInvoice from './pages/superfinance/superfinanceIns
 import SuperfinancePaymentLogs from './pages/superfinance/superfinancePaymentLogs';
 import SuperfinanceAcknowledgementReceipts from './pages/superfinance/superfinanceAcknowledgementReceipts';
 import SuperfinanceDailySummarySales from './pages/superfinance/superfinanceDailySummarySales';
+import DailySummarySalesIndexRedirect from './components/dailySummary/DailySummarySalesIndexRedirect';
 
 function App() {
   usePreventWheelChangingNumberInputs();
@@ -141,7 +142,9 @@ function App() {
             <Route path="installment-invoice" element={<InstallmentInvoice />} />
             <Route path="payment-logs" element={<PaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AcknowledgementReceipts />} />
-            <Route path="daily-summary-sales" element={<DailySummarySales />} />
+            <Route path="daily-summary-sales" element={<DailySummarySalesIndexRedirect />} />
+            <Route path="daily-summary-sales/end-of-shift" element={<DailySummarySales />} />
+            <Route path="daily-summary-sales/cash-deposit-summary" element={<DailySummarySales />} />
             <Route path="report" element={<Report />} />
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="holidays" element={<Holidays />} />
@@ -188,7 +191,9 @@ function App() {
             <Route path="installment-invoice" element={<AdminInstallmentInvoice />} />
             <Route path="payment-logs" element={<AdminPaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<AdminAcknowledgementReceipts />} />
-            <Route path="daily-summary-sales" element={<AdminDailySummary />} />
+            <Route path="daily-summary-sales" element={<DailySummarySalesIndexRedirect />} />
+            <Route path="daily-summary-sales/end-of-shift" element={<AdminDailySummary />} />
+            <Route path="daily-summary-sales/cash-deposit-summary" element={<AdminDailySummary />} />
             <Route path="report" element={<AdminReport />} />
             <Route path="settings" element={<AdminSettings />} />
             <Route path="system-logs" element={<SystemLogs />} />
@@ -252,7 +257,9 @@ function App() {
             <Route path="installment-invoice" element={<FinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<FinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<FinanceAcknowledgementReceipts />} />
-            <Route path="daily-summary-sales" element={<SuperfinanceDailySummarySales />} />
+            <Route path="daily-summary-sales" element={<DailySummarySalesIndexRedirect />} />
+            <Route path="daily-summary-sales/end-of-shift" element={<SuperfinanceDailySummarySales />} />
+            <Route path="daily-summary-sales/cash-deposit-summary" element={<SuperfinanceDailySummarySales />} />
             <Route path="announcements" element={<TeacherAnnouncements />} />
           </Route>
           
@@ -274,7 +281,9 @@ function App() {
             <Route path="installment-invoice" element={<SuperfinanceInstallmentInvoice />} />
             <Route path="payment-logs" element={<SuperfinancePaymentLogs />} />
             <Route path="acknowledgement-receipts" element={<SuperfinanceAcknowledgementReceipts />} />
-            <Route path="daily-summary-sales" element={<SuperfinanceDailySummarySales />} />
+            <Route path="daily-summary-sales" element={<DailySummarySalesIndexRedirect />} />
+            <Route path="daily-summary-sales/end-of-shift" element={<SuperfinanceDailySummarySales />} />
+            <Route path="daily-summary-sales/cash-deposit-summary" element={<SuperfinanceDailySummarySales />} />
             <Route path="announcements" element={<TeacherAnnouncements />} />
           </Route>
           

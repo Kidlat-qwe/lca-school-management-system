@@ -1,4 +1,9 @@
 import { getAnnouncementsPathForUser } from './announcementsNav';
+import {
+  buildDailySummaryPath,
+  DAILY_SUMMARY_KIND,
+  getDailySummaryBasePath,
+} from './dailySummaryNav';
 
 function getNotificationBasePath(navigationKey, userInfo) {
   if (!userInfo) return '/';
@@ -25,14 +30,7 @@ function getNotificationBasePath(navigationKey, userInfo) {
       return getAnnouncementsPathForUser(userInfo);
 
     case 'daily-summary-sales':
-      if (userType === 'Superadmin') return '/superadmin/daily-summary-sales';
-      if (userType === 'Superfinance') return '/superfinance/daily-summary-sales';
-      if (userType === 'Finance') {
-        return branchId === null || branchId === undefined
-          ? '/superfinance/daily-summary-sales'
-          : '/finance/daily-summary-sales';
-      }
-      return getAnnouncementsPathForUser(userInfo);
+      return getDailySummaryBasePath(userInfo);
 
     case 'acknowledgement-receipts':
       if (userType === 'Superadmin') return '/superadmin/acknowledgement-receipts';
@@ -69,17 +67,38 @@ function inferNotificationNavigation(notification) {
   if (title.includes('cash deposit summary')) {
     return {
       navigationKey: 'daily-summary-sales',
-      navigationQuery: 'notificationTab=cashDeposit',
+      navigationQuery: '',
+      dailySummaryKind: DAILY_SUMMARY_KIND.CASH_DEPOSIT,
     };
   }
   if (title.includes('end of shift')) {
-    return { navigationKey: 'daily-summary-sales', navigationQuery: 'notificationTab=endOfShift' };
+    return {
+      navigationKey: 'daily-summary-sales',
+      navigationQuery: '',
+      dailySummaryKind: DAILY_SUMMARY_KIND.END_OF_SHIFT,
+    };
   }
   if (title.includes('acknowledgement receipt')) {
     return { navigationKey: 'acknowledgement-receipts', navigationQuery: 'page=1' };
   }
 
   return { navigationKey: 'announcements', navigationQuery: '' };
+}
+
+function resolveDailySummaryNotificationPath(userInfo, navigationQuery, dailySummaryKind) {
+  let kind = dailySummaryKind || DAILY_SUMMARY_KIND.END_OF_SHIFT;
+
+  if (!dailySummaryKind && navigationQuery) {
+    const legacyParams = new URLSearchParams(navigationQuery);
+    const tab = legacyParams.get('notificationTab');
+    if (tab === DAILY_SUMMARY_KIND.CASH_DEPOSIT || tab === 'cashDeposit') {
+      kind = DAILY_SUMMARY_KIND.CASH_DEPOSIT;
+    } else if (tab === DAILY_SUMMARY_KIND.END_OF_SHIFT || tab === 'endOfShift') {
+      kind = DAILY_SUMMARY_KIND.END_OF_SHIFT;
+    }
+  }
+
+  return buildDailySummaryPath(userInfo, kind);
 }
 
 export function getNotificationDestination(notification, userInfo) {
@@ -90,8 +109,17 @@ export function getNotificationDestination(notification, userInfo) {
   const inferred = inferNotificationNavigation(notification);
   const navigationKey = notification.navigation_key || inferred.navigationKey;
   const navigationQuery = notification.navigation_query || inferred.navigationQuery || '';
-  const basePath = getNotificationBasePath(navigationKey, userInfo);
+  const dailySummaryKind = inferred.dailySummaryKind;
+  let basePath = getNotificationBasePath(navigationKey, userInfo);
+
+  if (navigationKey === 'daily-summary-sales') {
+    basePath = resolveDailySummaryNotificationPath(userInfo, navigationQuery, dailySummaryKind);
+  }
   const params = new URLSearchParams(navigationQuery);
+
+  if (navigationKey === 'daily-summary-sales') {
+    params.delete('notificationTab');
+  }
 
   if (navigationKey === 'announcements') {
     params.set('highlight', String(notification.announcement_id));

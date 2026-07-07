@@ -802,6 +802,7 @@ CREATE TABLE IF NOT EXISTS public.paymenttbl
     rejected_by integer,
     rejected_at timestamp without time zone,
     discount_amount numeric(10, 2) DEFAULT 0,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT paymenttbl_pkey PRIMARY KEY (payment_id)
 );
 
@@ -843,6 +844,9 @@ COMMENT ON COLUMN public.paymenttbl.rejected_at
 
 COMMENT ON COLUMN public.paymenttbl.discount_amount
     IS 'Discount applied at payment time. Counts toward invoice settlement, not revenue.';
+
+COMMENT ON COLUMN public.paymenttbl.updated_at
+    IS 'When this payment row was last saved in the system (distinct from issue_date payment date).';
 
 CREATE TABLE IF NOT EXISTS public.phasesessionstbl
 (
@@ -1216,6 +1220,20 @@ COMMENT ON COLUMN public.system_settingstbl.setting_type
 
 COMMENT ON COLUMN public.system_settingstbl.branch_id
     IS 'NULL = global default. Non-NULL = per-branch override.';
+
+CREATE TABLE IF NOT EXISTS public.teacher_class_historytbl
+(
+    history_id serial NOT NULL,
+    teacher_id integer NOT NULL,
+    class_id integer NOT NULL,
+    assigned_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at timestamp without time zone,
+    end_reason character varying(50) COLLATE pg_catalog."default",
+    turned_over_to_teacher_id integer,
+    notes text COLLATE pg_catalog."default",
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT teacher_class_historytbl_pkey PRIMARY KEY (history_id)
+);
 
 CREATE TABLE IF NOT EXISTS public.userstbl
 (
@@ -2249,6 +2267,29 @@ CREATE INDEX IF NOT EXISTS idx_system_settings_branch_id
 
 ALTER TABLE IF EXISTS public.system_settingstbl
     ADD CONSTRAINT system_settingstbl_updated_by_fkey FOREIGN KEY (updated_by)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE SET NULL;
+
+
+ALTER TABLE IF EXISTS public.teacher_class_historytbl
+    ADD CONSTRAINT teacher_class_historytbl_class_id_fkey FOREIGN KEY (class_id)
+    REFERENCES public.classestbl (class_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+
+
+ALTER TABLE IF EXISTS public.teacher_class_historytbl
+    ADD CONSTRAINT teacher_class_historytbl_teacher_id_fkey FOREIGN KEY (teacher_id)
+    REFERENCES public.userstbl (user_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_teacher_class_history_teacher
+    ON public.teacher_class_historytbl(teacher_id);
+
+
+ALTER TABLE IF EXISTS public.teacher_class_historytbl
+    ADD CONSTRAINT teacher_class_historytbl_turned_over_to_teacher_id_fkey FOREIGN KEY (turned_over_to_teacher_id)
     REFERENCES public.userstbl (user_id) MATCH SIMPLE
     ON UPDATE NO ACTION
     ON DELETE SET NULL;

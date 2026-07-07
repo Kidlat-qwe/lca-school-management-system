@@ -150,13 +150,16 @@ const Sidebar = ({ isOpen, onClose }) => {
     },
     {
       name: 'Daily Summary Sales',
-      path: '/superadmin/daily-summary-sales',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
         </svg>
       ),
       roles: ['Superadmin', 'Finance', 'Admin'],
+      children: [
+        { name: 'End of Shift' },
+        { name: 'Cash Deposit Summary' },
+      ],
     },
     {
       name: 'Calendar',
@@ -413,17 +416,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     .map(item => {
       // Handle dynamic paths based on user role
       let itemPath = item.path;
-      if (item.name === 'Daily Summary Sales') {
-        if (basePath === '/superfinance') {
-          itemPath = '/superfinance/daily-summary-sales';
-        } else if (basePath === '/finance') {
-          itemPath = '/finance/daily-summary-sales';
-        } else if (basePath === '/admin') {
-          itemPath = '/admin/daily-summary-sales';
-        } else {
-          itemPath = '/superadmin/daily-summary-sales';
-        }
-      } else if (item.name === 'Calendar') {
+      if (item.name === 'Calendar') {
         if (basePath === '/superadmin') {
           itemPath = '/superadmin/calendar-schedule';
         } else if (basePath === '/admin') {
@@ -492,6 +485,13 @@ const Sidebar = ({ isOpen, onClose }) => {
       }
       // Handle Dashboard children paths for Superadmin, Admin, Finance/Superfinance
       let children = item.children;
+      if (item.name === 'Daily Summary Sales' && item.children) {
+        children = item.children.map((child) => {
+          const segment =
+            child.name === 'Cash Deposit Summary' ? 'cash-deposit-summary' : 'end-of-shift';
+          return { ...child, path: `${basePath}/daily-summary-sales/${segment}` };
+        });
+      }
       if (item.name === 'Dashboard' && item.children && (basePath === '/superadmin' || basePath === '/admin' || basePath === '/finance' || basePath === '/superfinance' || basePath === '/teacher')) {
         const mapDashboardChild = (child) => {
           if (child.children?.length) {
@@ -840,9 +840,9 @@ const Sidebar = ({ isOpen, onClose }) => {
                     }
                   `}
                 >
-                  <span className="flex items-center space-x-3">
+                  <span className="flex min-w-0 flex-1 items-center space-x-3">
                     {item.icon}
-                    <span>{item.name}</span>
+                    <span className="text-sm whitespace-nowrap">{item.name}</span>
                   </span>
                   {isExpanded ? (
                     <svg
@@ -885,7 +885,7 @@ const Sidebar = ({ isOpen, onClose }) => {
               `}
             >
               {item.icon}
-              <span className="text-sm">{item.name}</span>
+              <span className="text-sm whitespace-nowrap">{item.name}</span>
             </NavLink>
           );
         })}

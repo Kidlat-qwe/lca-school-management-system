@@ -32,3 +32,14 @@ Clickable invoice column when `canEditCashDepositPayments` is true (`frontend/sr
 ## List date filtering (admin + approval page)
 
 The **Daily summary** list UIs use the same three-mode pattern as **Invoices** (Month | primary business dates | Date created). Query translation lives in `frontend/src/utils/dailySummaryListDateFilters.js`; APIs accept `created_date_from` / `created_date_to` on `GET /daily-summary-sales` and `GET /cash-deposit-summaries` (filters `created_at::date`).
+
+On branch **Admin → Daily summary → Return** tab (End of Shift and Cash Deposit), date filters are **not** sent — all returned rows for the branch are listed.
+
+## Sidebar navigation
+
+**Daily Summary Sales** in the sidebar is a dropdown (like Dashboard) with:
+
+- **End of Shift** → `…/daily-summary-sales/end-of-shift`
+- **Cash Deposit Summary** → `…/daily-summary-sales/cash-deposit-summary`
+
+Route helpers: `frontend/src/utils/dailySummaryNav.js`. Legacy `/daily-summary-sales` URLs redirect via `DailySummarySalesIndexRedirect.jsx`.

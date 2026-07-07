@@ -42,9 +42,13 @@ import {
 import CashDepositPaymentEditModal from '../../components/dailySummary/CashDepositPaymentEditModal';
 import CashDepositPaymentInvoiceCell from '../../components/dailySummary/CashDepositPaymentInvoiceCell';
 import { canEditCashDepositPayments } from '../../utils/cashDepositPaymentEdit';
+import {
+  DAILY_SUMMARY_KIND,
+  getDailySummaryPageTitle,
+} from '../../utils/dailySummaryNav';
 
-const TAB_END_OF_SHIFT = 'endOfShift';
-const TAB_CASH_DEPOSIT = 'cashDeposit';
+const TAB_END_OF_SHIFT = DAILY_SUMMARY_KIND.END_OF_SHIFT;
+const TAB_CASH_DEPOSIT = DAILY_SUMMARY_KIND.CASH_DEPOSIT;
 const PIE_COLORS = ['#16A34A', '#2563EB', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#6366F1', '#EC4899'];
 
 const paymentLogRowKey = (payment, index, prefix) => {
@@ -56,12 +60,11 @@ const paymentLogRowKey = (payment, index, prefix) => {
   return `${prefix}-${index}-${invoiceId || 'na'}-${issueDate}-${ref}`;
 };
 
-const DailySummarySalesApprovalPage = () => {
+const DailySummarySalesApprovalPage = ({ summaryKind = TAB_END_OF_SHIFT }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { userInfo } = useAuth();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
-  const [activeTab, setActiveTab] = useState(TAB_END_OF_SHIFT);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -91,7 +94,8 @@ const DailySummarySalesApprovalPage = () => {
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const openedNotificationDetailRef = useRef(null);
 
-  const isCashDepositTab = activeTab === TAB_CASH_DEPOSIT;
+  const isCashDepositTab = summaryKind === TAB_CASH_DEPOSIT;
+  const pageTitle = getDailySummaryPageTitle(summaryKind);
   const declineActionLabel = isCashDepositTab ? 'Return' : 'Reject';
   const declineActionProgressLabel = isCashDepositTab ? 'Returning...' : 'Rejecting...';
   const declineModalTitle = isCashDepositTab ? 'Return submission' : 'Reject submission';
@@ -269,11 +273,10 @@ const DailySummarySalesApprovalPage = () => {
     setDetailData(null);
     setVerifyData(null);
     fetchRecords(1);
-  }, [activeTab, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo, globalBranchId, fetchRecords]);
+  }, [summaryKind, filterStatus, dateFilterMode, filterIssueMonth, filterIssueDateFrom, filterIssueDateTo, filterCreatedDateFrom, filterCreatedDateTo, globalBranchId, fetchRecords]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const notificationTab = params.get('notificationTab');
     const fromNotification = params.get('fromNotification') === '1';
 
     // Do not clear opened-notification ref on every search change — it breaks deep-link
@@ -285,12 +288,6 @@ const DailySummarySalesApprovalPage = () => {
     if (fromNotification) {
       setOpenMenuId(null);
     }
-
-    if (notificationTab === TAB_CASH_DEPOSIT) {
-      setActiveTab(TAB_CASH_DEPOSIT);
-    } else if (notificationTab === TAB_END_OF_SHIFT) {
-      setActiveTab(TAB_END_OF_SHIFT);
-    }
   }, [location.search]);
 
   useEffect(() => {
@@ -300,7 +297,7 @@ const DailySummarySalesApprovalPage = () => {
     setFilterIssueDateTo('');
     setFilterCreatedDateFrom('');
     setFilterCreatedDateTo('');
-  }, [activeTab]);
+  }, [summaryKind]);
 
   useEffect(() => {
     if (loading) return;
@@ -369,7 +366,7 @@ const DailySummarySalesApprovalPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [detailModal.open, detailModal.record, recordIdField, fetchRecordDetails, activeTab]);
+  }, [detailModal.open, detailModal.record, recordIdField, fetchRecordDetails, summaryKind]);
 
   useEffect(() => {
     if (!verifyModal.open || !verifyModal.record?.[recordIdField]) {
@@ -393,7 +390,7 @@ const DailySummarySalesApprovalPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [verifyModal.open, verifyModal.record, recordIdField, fetchRecordDetails, activeTab]);
+  }, [verifyModal.open, verifyModal.record, recordIdField, fetchRecordDetails, summaryKind]);
 
   const handleVerify = async (id) => {
     setApprovingId(id);
@@ -659,42 +656,13 @@ const DailySummarySalesApprovalPage = () => {
   return (
     <div className="min-w-0 max-w-full space-y-4 sm:space-y-6 px-1 sm:px-0">
       <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Daily Summary Sales</h1>
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Daily Summary Sales</p>
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{pageTitle}</h1>
         <p className="mt-1 text-xs sm:text-sm text-gray-600 leading-snug">
-          Branch admin cash deposits appear as Pending until Superfinance verifies. End of Shift: Superadmin, Finance, or Superfinance can verify or reject.
-          Cash deposit: Superfinance only can verify or return.
+          {isCashDepositTab
+            ? 'Branch admin cash deposits appear as Pending until Superfinance verifies or returns them.'
+            : 'End of Shift submissions from branch admins. Superadmin, Finance, or Superfinance can verify or reject.'}
         </p>
-      </div>
-
-      <div className="border-b border-gray-200 -mx-1 px-1 sm:mx-0 sm:px-0">
-        <nav
-          className="flex gap-2 overflow-x-auto pb-px [-webkit-overflow-scrolling:touch] sm:flex-wrap sm:gap-4 sm:overflow-visible sm:pb-0"
-          aria-label="Summary type tabs"
-          style={{ scrollbarWidth: 'thin' }}
-        >
-          <button
-            type="button"
-            onClick={() => setActiveTab(TAB_END_OF_SHIFT)}
-            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === TAB_END_OF_SHIFT
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            End of Shift
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab(TAB_CASH_DEPOSIT)}
-            className={`shrink-0 py-3 px-2 sm:px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-              activeTab === TAB_CASH_DEPOSIT
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Cash Deposit Summary
-          </button>
-        </nav>
       </div>
 
       {error && (
