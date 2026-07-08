@@ -28,6 +28,7 @@ import {
   computePaymentDateNetTotals,
   formatPaymentDateNetTotalsSummary,
 } from '../lib/paymentDateNetTotals.js';
+import { resolveInvoicePaymentDueStatusLabel } from '../utils/programPaymentStatusService.js';
 
 const router = express.Router();
 
@@ -1142,11 +1143,22 @@ router.get(
       const received_by_guardian_name =
         receivedByResult.rows?.[0]?.guardian_name || null;
 
+      let paymentDueStatusLabel = null;
+      try {
+        paymentDueStatusLabel = await resolveInvoicePaymentDueStatusLabel(pool, {
+          ...invoiceRow,
+          status: effectiveStatus,
+        });
+      } catch (dueStatusErr) {
+        console.error('resolveInvoicePaymentDueStatusLabel:', dueStatusErr);
+      }
+
       res.json({
         success: true,
         data: {
           ...invoiceRow,
           status: effectiveStatus,
+          payment_due_status_label: paymentDueStatusLabel,
           amount: effectiveAmount,
           total_tip_amount: totalTip,
           total_received_amount: totalPaid + totalTip,

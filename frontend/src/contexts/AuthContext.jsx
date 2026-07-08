@@ -58,13 +58,10 @@ export const AuthProvider = ({ children }) => {
         console.log('💼 Superadmin creating personnel via Admin SDK...', { email, user_type: userData.user_type });
         
         // Use the backend endpoint that creates users without signing them in
-        const response = await apiRequest('/auth/create-user', {
-          method: 'POST',
-          body: JSON.stringify({
+        const createUserPayload = {
             email: email,
             password: password,
             full_name: userData.full_name,
-            nickname: userData.nickname || null,
             user_type: userData.user_type || 'Student',
             branch_id: userData.branch_id || null,
             gender: userData.gender || null,
@@ -74,7 +71,14 @@ export const AuthProvider = ({ children }) => {
             lrn: userData.lrn !== undefined && userData.lrn !== null && String(userData.lrn).trim()
               ? String(userData.lrn).trim().slice(0, 50)
               : null,
-          }),
+          };
+        if (userData.nickname != null && String(userData.nickname).trim()) {
+          createUserPayload.nickname = String(userData.nickname).trim();
+        }
+
+        const response = await apiRequest('/auth/create-user', {
+          method: 'POST',
+          body: JSON.stringify(createUserPayload),
         });
         
         console.log('✅ Personnel created successfully:', response.user);
@@ -116,7 +120,6 @@ export const AuthProvider = ({ children }) => {
         firebase_uid: firebaseUser.uid,
         email: email,
         full_name: userData.full_name,
-        nickname: userData.nickname || null,
         user_type: userData.user_type || 'Student',
         branch_id: userData.branch_id || null,
         gender: userData.gender || null,
@@ -124,6 +127,9 @@ export const AuthProvider = ({ children }) => {
         phone_number: userData.phone_number || null,
         level_tag: userData.level_tag || null,
       };
+      if (userData.nickname != null && String(userData.nickname).trim()) {
+        syncData.nickname = String(userData.nickname).trim();
+      }
       
       // Temporarily set the new user's token for the API request
       localStorage.setItem('firebase_token', newUserToken);

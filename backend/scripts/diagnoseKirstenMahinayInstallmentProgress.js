@@ -194,7 +194,7 @@ const displayPhaseProgress = Math.min(
   Number(profile.total_phases || 0) || billedPhaseProgress
 );
 const listNumerator = displayPhaseProgress + phaseStartOffset;
-const listDenominator = Number(profile.total_phases || 0) + phaseStartOffset;
+const listDenominator = Number(profile.total_phases || 0);
 
 console.log({
   paid_phases_sql: paidPhases,
@@ -339,7 +339,7 @@ const lateStartGaps = normalizedPhases.filter((p) => p.billing_kind === 'late_st
 
 const historyPaidDisplay = paidCount + phaseStartOffset;
 const historyGeneratedDisplay = generatedCount + phaseStartOffset;
-const historyDenominator = totalPhases + phaseStartOffset;
+const historyDenominator = totalPhases;
 
 console.log('\nStudent History UI (InstallmentPlanDetails):');
 console.log({

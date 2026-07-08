@@ -11,7 +11,26 @@ Shared AR status constants and list-filter SQL helpers for `routes/acknowledgeme
 
 Frontend mirror: `frontend/src/utils/acknowledgementReceiptStatus.js`.
 
-## `installmentEnrollmentSync.js`
+## `classSessionTeacherSync.js`
+
+Aligns `classsessionstbl` teacher fields with the class primary teacher (`classestbl.teacher_id` / `classteacherstbl`).
+
+| Rule | Behavior |
+|------|----------|
+| Substitute sessions | Left unchanged when `substitute_teacher_id` is set |
+| Class teacher update | `PUT /classes/:id` syncs non-substitute sessions after teacher change |
+| Session regeneration | UPSERT updates `assigned_teacher_id` unless a substitute is active |
+
+Used by: `routes/classes.js`, repair scripts under `scripts/`.
+
+## `cashDepositSummarySchema.js`
+
+Idempotent schema guard for `cash_deposit_summarytbl` extended columns (`deposit_attachment_url_2`, `submission_remarks` — migration 121).
+
+Called before cash deposit **create** and **resubmit** so writes do not fail when migration 121 was not applied yet.
+
+Used by: `routes/cashDepositSummaries.js`.
+
 
 Enrolls a student in the class phase after an installment phase invoice receives payment.
 
@@ -56,7 +75,7 @@ Phase API rows include `amount`, `paid_amount`, `remaining_balance` / `balance` 
 
 Maps invoice chains to profile-local phase rows for Student History / Installment Plan tables. See `normalizeAdjacentPhaseDisplayDates` for issue-date display ordering.
 
-`resolveInstallmentPhaseEnrollmentStatus` / `inferInstallmentPhaseEnrollmentStatus`: the first **paid** plan phase shows **new** (e.g. display Phase 2 when Phase 1 is a late-start gap); later paid phases show **re_enrolled** unless a prior **dropped** phase triggers **rejoin**.
+`resolveInstallmentPhaseEnrollmentStatus` / `inferInstallmentPhaseEnrollmentStatus`: the first **paid** plan phase shows **new** (e.g. display Phase 2 when Phase 1 is a late-start gap); later paid phases show **re_enrolled** unless a prior **dropped** phase triggers **rejoin**. When all plan slots are paid, the **final** phase shows **completed** (matches re-enrollment matrix terminal cell). **One-phase** plans (`total_phases = 1`) show **completed** once the single slot is paid.
 
 `isInstallmentPlanSlotAddressed` / `annotateInstallmentPhasePlanSlots` mark a phase as cleared when it is paid, skipped, or has no outstanding balance — used so **Pay Now** / advance-pay unlocks the next phase when prior slots are settled.
 

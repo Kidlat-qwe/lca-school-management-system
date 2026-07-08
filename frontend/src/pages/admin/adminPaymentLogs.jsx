@@ -11,6 +11,7 @@ import {
 } from '../../utils/paymentLogTableAmounts';
 import { buildPaymentLogsTableSortAccessors } from '../../utils/paymentLogsTableSortAccessors';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
+import InvoicePaymentDueStatusBadge from '../../components/invoices/InvoicePaymentDueStatusBadge';
 import { formatPaymentLogUpdatedAtMultiline } from '../../utils/paymentLogUpdatedAt';
 import { PaymentLogBranchCell } from '../../components/paymentLogs/PaymentLogBranchCell';
 import { PaymentLogUpdatedAtCell } from '../../components/paymentLogs/PaymentLogUpdatedAtCell';
@@ -3192,7 +3193,10 @@ const AdminPaymentLogs = () => {
                     const projectedRemaining = Math.max(0, breakdown.totalDue - projectedPaid);
                     return (
                       <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                        <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                          <InvoicePaymentDueStatusBadge invoice={inv} />
+                        </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                           <div>
                             <p className="text-xs text-gray-600">Invoice ID</p>

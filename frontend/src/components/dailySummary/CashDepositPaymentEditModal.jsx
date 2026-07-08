@@ -8,6 +8,7 @@ import { getInvoicePaymentBreakdown } from '../../utils/invoicePaymentBreakdown'
 import { isPaymentMethodSelected, PAYMENT_METHOD_REQUIRED_MESSAGE } from '../../constants/paymentFormLabels';
 import PaymentMethodSelect from '../common/PaymentMethodSelect';
 import PaymentAttachmentViewerModal from '../paymentLogs/PaymentAttachmentViewerModal';
+import InvoicePaymentDueStatusBadge from '../invoices/InvoicePaymentDueStatusBadge';
 
 /**
  * Edit an existing payment line from a returned cash deposit (invoice-page style).
@@ -533,7 +534,10 @@ export default function CashDepositPaymentEditModal({ payment, onClose, onSaved 
                 ) : null}
                 {!invoiceLoading && inv && breakdown ? (
                   <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                    <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                      <InvoicePaymentDueStatusBadge invoice={inv} />
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-gray-600">Invoice</p>

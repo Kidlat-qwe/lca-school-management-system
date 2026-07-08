@@ -93,6 +93,7 @@ export const INSTALLMENT_PLAN_ENROLLMENT_STATUSES = new Set([
   'dropped',
   'rejoin',
   're_enrolled',
+  'completed',
 ]);
 
 /** Installment plan phases table — labels match re-enrollment month matrix cells. */
@@ -101,6 +102,8 @@ export function formatInstallmentPlanPhaseEnrollment(status) {
   switch (key) {
     case 'dropped':
       return 'dropped';
+    case 'completed':
+      return 'completed';
     case 're_enrolled':
     case 'upsell':
       return 're enrolled';

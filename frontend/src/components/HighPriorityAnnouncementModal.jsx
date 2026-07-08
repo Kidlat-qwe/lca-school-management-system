@@ -42,7 +42,8 @@ const HighPriorityAnnouncementModal = () => {
 
   // Check for announcements when userInfo is available
   useEffect(() => {
-    if (userInfo && userInfo.userId) {
+    const userId = userInfo?.userId || userInfo?.user_id;
+    if (userInfo && userId) {
       // Small delay to ensure user is fully logged in
       const timer = setTimeout(() => {
         checkHighPriorityAnnouncements();

@@ -10,6 +10,7 @@ import {
 } from '../utils/templateRenderService.js';
 import { syncArVerifiedFromPaymentApproval } from '../lib/arPaymentVerificationSync.js';
 import { getCashDepositRecoveryGaps } from '../lib/cashDepositRecovery.js';
+import { ensureCashDepositSummaryExtendedColumns } from '../utils/cashDepositSummarySchema.js';
 
 const router = express.Router();
 
@@ -918,6 +919,8 @@ router.post(
   ],
   async (req, res, next) => {
     try {
+      await ensureCashDepositSummaryExtendedColumns();
+
       const userBranchId = req.user.branchId;
       const userId = req.user.userId;
       const startDate = String(req.body?.start_date || '').slice(0, 10);
@@ -1179,6 +1182,8 @@ router.put(
   ],
   async (req, res, next) => {
     try {
+      await ensureCashDepositSummaryExtendedColumns();
+
       const { id } = req.params;
       const userBranchId = req.user.branchId;
       const userId = req.user.userId;

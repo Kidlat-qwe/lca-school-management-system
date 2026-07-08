@@ -201,8 +201,7 @@ const enrichInstallmentInvoiceRow = async (row) => {
   // For profiles starting at phase 1 (or with no phase_start) the absolute
   // numbers equal the relative numbers, so the display is unchanged.
   const phaseProgressNumerator = displayPhaseProgress + phaseStartOffset;
-  const phaseProgressDenominator =
-    totalPhases != null ? totalPhases + phaseStartOffset : null;
+  const phaseProgressDenominator = totalPhases != null ? totalPhases : null;
 
   const queueNextGenYmd = coerceToManilaYmd(row.next_generation_date, { fallbackToToday: false });
   const queueNextMonthYmd = coerceToManilaYmd(row.next_invoice_month, { fallbackToToday: false });
@@ -770,7 +769,9 @@ router.get(
       normalizedPhases = attachEnrollmentToInstallmentPhaseRows(normalizedPhases, {
         phaseStart,
         enrollmentByAbsolutePhase: enrollmentByPhase,
+        totalPhases,
       });
+      normalizedPhases = annotateInstallmentPhasePlanSlots(normalizedPhases);
 
       const downpaymentRep = downpaymentChain?.representative || null;
       const downpayment = downpaymentRep

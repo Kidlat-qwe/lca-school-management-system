@@ -1,4 +1,5 @@
 # Invoice UI components
 
 - **`PaymentRecordedInvoiceSummaryModal.jsx`** — After a successful invoice payment: toolbar + **receipt-style preview** (`AcknowledgementReceiptStylePreview`) and **Print** (acknowledgement receipt PDF). Line amounts use `utils/invoiceReceiptLineItems.js` (net = amount − discount, so package-change credits display correctly). Optional **`overlayClassName`** stacks the overlay above other modals (e.g. installment plan details).
+- **`InvoicePaymentDueStatusBadge.jsx`** — Amber **Under grace period** or red **Overdue for penalty** badge for invoice detail and Record Payment modals. Uses `payment_due_status_label` from `GET /invoices/:id` (branch grace days + penalty-exempt rules). Shared util: `utils/invoicePaymentDueStatus.js`.
 - **`InvoiceListAmountCell.jsx`** — Shared **Amount** and **Total Amount** table cells for invoice list pages. Single-line amounts use `align-middle`; partial-payment parent rows (with `balance_invoice_id`) use `align-top` with a stacked label-then-amount layout (e.g. `Remaining (INV-567):` on one line, `₱2000.00` on the next). Amount helpers live in `utils/invoiceListAmount.js`.

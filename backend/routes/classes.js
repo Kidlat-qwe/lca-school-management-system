@@ -4,6 +4,7 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { generateClassSessions } from '../utils/sessionCalculation.js';
+import { syncClassSessionTeachersFromClass } from '../utils/classSessionTeacherSync.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
 import { addDaysToYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
@@ -2782,8 +2783,16 @@ router.put(
                         phasesessiondetail_id = EXCLUDED.phasesessiondetail_id,
                         scheduled_start_time = EXCLUDED.scheduled_start_time,
                         scheduled_end_time = EXCLUDED.scheduled_end_time,
-                        original_teacher_id = EXCLUDED.original_teacher_id,
-                        assigned_teacher_id = COALESCE(classsessionstbl.assigned_teacher_id, EXCLUDED.assigned_teacher_id),
+                        original_teacher_id = CASE
+                          WHEN classsessionstbl.substitute_teacher_id IS NOT NULL
+                            THEN classsessionstbl.original_teacher_id
+                          ELSE EXCLUDED.original_teacher_id
+                        END,
+                        assigned_teacher_id = CASE
+                          WHEN classsessionstbl.substitute_teacher_id IS NOT NULL
+                            THEN classsessionstbl.assigned_teacher_id
+                          ELSE EXCLUDED.assigned_teacher_id
+                        END,
                         class_code = COALESCE(EXCLUDED.class_code, classsessionstbl.class_code),
                         updated_at = CURRENT_TIMESTAMP`,
                       [
@@ -2864,6 +2873,19 @@ router.put(
         } catch (sessionGenError) {
           // Log error but don't fail the update
           console.error('❌ Error regenerating sessions:', sessionGenError);
+        }
+      }
+
+      if (primaryTeacherId !== undefined && primaryTeacherId !== null) {
+        try {
+          const syncResult = await syncClassSessionTeachersFromClass(client, id, primaryTeacherId);
+          if (syncResult.updated > 0) {
+            console.log(
+              `✅ Synced ${syncResult.updated} session teacher assignment(s) for class ${id}`
+            );
+          }
+        } catch (syncError) {
+          console.error('⚠️ Error syncing session teachers from class teacher:', syncError);
         }
       }
 

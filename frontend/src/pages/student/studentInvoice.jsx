@@ -8,6 +8,7 @@ import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { paymentAndIssueDateFilterUtil as invoiceDateFilterUtil, DATE_FILTER_MODES, clearInactivePaymentIssueDateModeFields } from '../../utils/dateFilterModes';
 import { formatDateManila } from '../../utils/dateUtils';
+import InvoicePaymentDueStatusBadge from '../../components/invoices/InvoicePaymentDueStatusBadge';
 
 const ITEMS_PER_PAGE = 10;
 const DEFAULT_INVOICE_FILTER_MONTH = invoiceDateFilterUtil.defaultMonth();
@@ -732,7 +733,10 @@ const StudentInvoice = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 border-b border-gray-200">
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</label>
-                    <p className="mt-1">{getStatusBadge(selectedInvoiceForDetails.status)}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      {getStatusBadge(selectedInvoiceForDetails.status)}
+                      <InvoicePaymentDueStatusBadge invoice={selectedInvoiceForDetails} />
+                    </div>
                   </div>
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Issue Date</label>

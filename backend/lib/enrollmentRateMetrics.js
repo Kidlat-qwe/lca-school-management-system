@@ -42,6 +42,17 @@ const INSTALLMENT_PROFILE_PHASE_START_SUBQUERY = `
     LIMIT 1
   )`;
 
+/** Latest installment profile total_phases for matrix row (0 when no profile). */
+const INSTALLMENT_PROFILE_TOTAL_PHASES_SUBQUERY = `
+  (
+    SELECT COALESCE(NULLIF(ip.total_phases, 0), 0)
+    FROM installmentinvoiceprofilestbl ip
+    WHERE ip.student_id = cs.student_id
+      AND ip.class_id = cs.class_id
+    ORDER BY ip.installmentinvoiceprofiles_id DESC
+    LIMIT 1
+  )`;
+
 /** Dropped rows below installment package phase_start are orphan repair artifacts — omit from matrix. */
 const MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL = `
   AND NOT (
@@ -67,6 +78,135 @@ const MATRIX_EXCLUDE_INSTALLMENT_PRE_START_PHASE_ROWS_SQL = `
 const MATRIX_EXCLUDE_INSTALLMENT_PHASE_START_SQL = `
   ${MATRIX_EXCLUDE_ORPHAN_DROPPED_BELOW_PHASE_START_SQL}
   ${MATRIX_EXCLUDE_INSTALLMENT_PRE_START_PHASE_ROWS_SQL}`;
+
+/** Installment profiles included in matrix/lifecycle (active or with generated invoice history). */
+const INSTALLMENT_PROFILE_MATRIX_VISIBILITY_SQL = (lifecycleScope) =>
+  lifecycleScope
+    ? `AND (
+        COALESCE(ip.is_active, true) = true
+        OR COALESCE(ip.generated_count, 0) > 0
+      )`
+    : `AND COALESCE(ip.is_active, true) = true`;
+
+/**
+ * Billing class ids per student for installment plans (includes inactive profiles with history).
+ * Used to skip calendar overlays on profile classes and link display-class rows.
+ */
+const loadInstallmentProfileBillingClassMap = async (queryFn, studentIds = []) => {
+  const map = new Map();
+  if (!studentIds.length) return map;
+
+  const result = await queryFn(
+    `
+      SELECT ip.student_id, ip.class_id
+      FROM installmentinvoiceprofilestbl ip
+      WHERE ip.student_id = ANY($1::int[])
+        AND (
+          COALESCE(ip.is_active, true) = true
+          OR COALESCE(ip.generated_count, 0) > 0
+        )
+    `,
+    [studentIds]
+  );
+
+  for (const row of result.rows || []) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    if (!Number.isFinite(studentId) || !Number.isFinite(classId)) continue;
+    if (!map.has(studentId)) map.set(studentId, new Set());
+    map.get(studentId).add(classId);
+  }
+  return map;
+};
+
+const copyInstallmentBillingMonthsOntoTrack = (displayTrack, billingTrack, monthKeys) => {
+  if (!displayTrack?.months || !billingTrack?.months) return;
+  for (const monthKey of monthKeys) {
+    const billingCell = billingTrack.months[monthKey];
+    if (!billingCell) continue;
+    const hasBillingLabel =
+      billingCell.mark === '1' ||
+      billingCell.status === 'dropped' ||
+      billingCell.label === 'dropped/unenrolled' ||
+      billingCell.label === 'dropped';
+    if (!hasBillingLabel) continue;
+    displayTrack.months[monthKey] = {
+      ...billingCell,
+      matrix_billing_from_class_id: billingTrack.class_id,
+    };
+  }
+  if (billingTrack.first_enrolled_month_key) {
+    displayTrack.first_enrolled_month_key = billingTrack.first_enrolled_month_key;
+  }
+  if (billingTrack.first_enrolled_at) {
+    displayTrack.first_enrolled_at = billingTrack.first_enrolled_at;
+  }
+};
+
+const billingTrackHasMatrixMonthCell = (track, monthKey) => {
+  const cell = track?.months?.[monthKey];
+  if (!cell) return false;
+  if (isDroppedMonthMatrixCell(cell)) return true;
+  return (
+    cell.mark === '1' &&
+    ENROLLED_STATUSES_LIST.includes(String(cell?.status || '').toLowerCase())
+  );
+};
+
+/**
+ * (e.g. auto-enroll on teacher class), copy billing-month cells onto the display row.
+ */
+const applyInstallmentCrossClassDisplayMatrixLink = (students, profileBillingClassByStudent) => {
+  if (!profileBillingClassByStudent?.size) return;
+
+  const trackByKey = new Map(
+    (students || []).map((track) => [track.enrollment_track_key, track])
+  );
+
+  for (const [studentId, billingClassIds] of profileBillingClassByStudent) {
+    for (const billingClassId of billingClassIds) {
+      const billingTrack = trackByKey.get(enrollmentTrackKey(studentId, billingClassId));
+      if (!billingTrack) continue;
+
+      for (const track of students) {
+        if (track.student_id !== studentId) continue;
+        if (track.class_id === billingClassId) continue;
+        if (track.hide_from_matrix) continue;
+
+        const hasDisplayEnrollment = Object.values(track.months || {}).some(
+          (cell) =>
+            cell?.mark === '1' &&
+            ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'].includes(
+              String(cell?.status || '').toLowerCase()
+            )
+        );
+        if (!hasDisplayEnrollment) continue;
+
+        track.matrix_installment_class_id = billingClassId;
+        const monthKeys = new Set([
+          ...Object.keys(billingTrack.months || {}),
+          ...Object.keys(track.months || {}),
+        ]);
+        copyInstallmentBillingMonthsOntoTrack(track, billingTrack, monthKeys);
+
+        for (const monthKey of Object.keys(track.months || {})) {
+          const cell = track.months[monthKey];
+          if (cell?.matrix_billing_from_class_id != null) continue;
+          if (
+            cell?.mark === '1' &&
+            ENROLLED_STATUSES_LIST.includes(String(cell?.status || '').toLowerCase()) &&
+            !billingTrackHasMatrixMonthCell(billingTrack, monthKey)
+          ) {
+            delete track.months[monthKey];
+          }
+        }
+
+        billingTrack.hide_from_matrix = true;
+        billingTrack.matrix_merged_into_anchor = track.enrollment_track_key;
+      }
+    }
+  }
+};
 
 /** Dashboard "reserved" from reservedstudentstbl only after the reservation fee is paid. */
 const RESERVATION_FEE_PAID_SQL = `(
@@ -155,6 +295,7 @@ export const buildEnrollmentMatrixTrackRow = ({
   firstEnrolledMonthKey = null,
   lastFullPayMonthKey = null,
   classNumberOfPhase = null,
+  installmentPlanTotalPhases = null,
   installmentPackageComplete = false,
   packageCompleteMonthKey = null,
   phases = undefined,
@@ -174,6 +315,10 @@ export const buildEnrollmentMatrixTrackRow = ({
     last_full_pay_month_key: lastFullPayMonthKey || null,
     class_number_of_phase:
       classNumberOfPhase != null ? parseInt(classNumberOfPhase, 10) || 1 : null,
+    installment_plan_total_phases:
+      installmentPlanTotalPhases != null
+        ? parseInt(installmentPlanTotalPhases, 10) || 0
+        : null,
     installment_package_complete: Boolean(installmentPackageComplete),
     package_complete_month_key: packageCompleteMonthKey || null,
   };
@@ -339,6 +484,7 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
 
   for (const student of students) {
     if (!student.months) continue;
+    if (student.matrix_installment_class_id != null) continue;
 
     for (const key of monthKeys) {
       const cell = student.months[key];
@@ -368,20 +514,27 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
       const gapEnd = comebackIdx - 1;
 
       if (gapStart <= gapEnd) {
-        const rejoinKey = monthKeys[gapStart];
-        const inferPhase =
-          dropCell.phase_number != null ? Number(dropCell.phase_number) + 1 : null;
-        student.months[rejoinKey] = {
-          mark: '1',
-          label: 'rejoin',
-          status: 'rejoin',
-          phase_number: matrixCellPhaseNumber(
-            student.months[rejoinKey]?.phase_number,
-            inferPhase
-          ),
-          matrix_drop_rejoin_gap: true,
-          is_full_payment: Boolean(dropCell?.is_full_payment),
-        };
+        for (let g = gapStart; g <= gapEnd; g += 1) {
+          // Immediate month after drop is reserved for installment lifecycle (Inactive).
+          if (g === i + 1) continue;
+
+          const rejoinKey = monthKeys[g];
+          const inferPhase =
+            dropCell.phase_number != null
+              ? Number(dropCell.phase_number) + (g - i)
+              : null;
+          student.months[rejoinKey] = {
+            mark: '1',
+            label: 'rejoin',
+            status: 'rejoin',
+            phase_number: matrixCellPhaseNumber(
+              student.months[rejoinKey]?.phase_number,
+              inferPhase
+            ),
+            matrix_drop_rejoin_gap: true,
+            is_full_payment: Boolean(dropCell?.is_full_payment),
+          };
+        }
 
         const comebackCell = student.months[monthKeys[comebackIdx]];
         if (
@@ -394,17 +547,8 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
           comebackCell.matrix_rejoin_shifted = true;
         }
       } else if (comebackIdx === i + 1) {
-        const comebackCell = student.months[monthKeys[comebackIdx]];
-        if (
-          comebackCell &&
-          comebackCell.label !== 'rejoin' &&
-          comebackCell.status !== 'rejoin' &&
-          (comebackCell.status === 're_enrolled' || comebackCell.label === 're-enrolled')
-        ) {
-          comebackCell.label = 'rejoin';
-          comebackCell.status = 'rejoin';
-          comebackCell.matrix_after_drop_rejoin = true;
-        }
+        // Immediate post-drop month uses Inactive lifecycle, not rejoin.
+        continue;
       }
     }
   }
@@ -664,6 +808,10 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     if (upsellPlaced || mergedMonthKeys.size > 0) {
       anchor.matrix_merged_upsell_anchor = true;
       anchor.display_name = anchor.full_name;
+      const primaryHigher = higherTracksForMerge[higherTracksForMerge.length - 1];
+      if (primaryHigher?.class_id != null) {
+        anchor.matrix_installment_class_id = primaryHigher.class_id;
+      }
       let maxMergedHigherPhases = parseInt(anchor.matrix_merged_higher_number_of_phase, 10) || 0;
       for (const higher of higherTracksForMerge) {
         const higherPhases = parseInt(higher.class_number_of_phase, 10) || 0;
@@ -866,7 +1014,37 @@ const applyPhaseMatrixTerminalCompletedLabel = (student, phases, normalizeStatus
     return;
   }
 
-  if (classPhases !== 1) return;
+  const planPhases = resolveInstallmentPlanTotalPhases(student);
+  const singlePhaseTrack = isSinglePhaseEnrollmentTrack(student);
+
+  if (student.installment_package_complete && singlePhaseTrack) {
+    const terminalCell = student.phases[firstEnrolledPhase];
+    if (terminalCell?.mark === '1') {
+      terminalCell.label = 'completed';
+      terminalCell.status = 'completed';
+    }
+    return;
+  }
+
+  if (student.installment_package_complete && classPhases > 1 && planPhases !== 1) {
+    let maxEnrolledPhase = 0;
+    for (const p of phases) {
+      const cell = student.phases?.[p.key];
+      if (cell?.mark === '1') {
+        maxEnrolledPhase = Math.max(maxEnrolledPhase, p.key);
+      }
+    }
+    if (maxEnrolledPhase > firstEnrolledPhase) {
+      const terminalCell = student.phases[maxEnrolledPhase];
+      if (terminalCell?.mark === '1') {
+        terminalCell.label = 'completed';
+        terminalCell.status = 'completed';
+      }
+    }
+    return;
+  }
+
+  if (!singlePhaseTrack) return;
 
   const terminalCell = student.phases[firstEnrolledPhase];
   if (terminalCell?.mark !== '1') return;
@@ -882,23 +1060,35 @@ const applyPhaseMatrixTerminalCompletedLabel = (student, phases, normalizeStatus
   }
 };
 
+const resolveInstallmentPlanTotalPhases = (student) => {
+  const parsed = parseInt(student?.installment_plan_total_phases, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+/** True when the track is a one-phase class or a one-phase installment plan. */
+const isSinglePhaseEnrollmentTrack = (student) => {
+  const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
+  const planPhases = resolveInstallmentPlanTotalPhases(student);
+  return classPhases === 1 || planPhases === 1;
+};
+
 /** Resolve billing month that should display as completed on the month matrix. */
 const resolveTerminalCompletionMonthKey = (student, firstEnrolledKey) => {
   if (!firstEnrolledKey) return null;
 
-  const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
+  const singlePhaseTrack = isSinglePhaseEnrollmentTrack(student);
   let terminalKey =
     student.package_complete_month_key ||
     student.last_full_pay_month_key ||
     null;
 
-  if (!terminalKey && classPhases === 1 && student.installment_package_complete) {
+  if (!terminalKey && singlePhaseTrack && student.installment_package_complete) {
     terminalKey = firstEnrolledKey;
   }
 
   if (!terminalKey) return null;
 
-  const allowSameMonth = classPhases === 1;
+  const allowSameMonth = singlePhaseTrack;
   if (allowSameMonth ? terminalKey >= firstEnrolledKey : terminalKey > firstEnrolledKey) {
     return terminalKey;
   }
@@ -2286,7 +2476,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           cs.enrolled_at,
           ${IS_FULL_PAYMENT_SQL} AS is_full_payment,
           ${CLASS_NUMBER_OF_PHASE_SQL} AS class_number_of_phase,
-          ${INSTALLMENT_PACKAGE_COMPLETE_SQL} AS installment_package_complete
+          ${INSTALLMENT_PACKAGE_COMPLETE_SQL} AS installment_package_complete,
+          ${INSTALLMENT_PROFILE_TOTAL_PHASES_SUBQUERY} AS installment_plan_total_phases
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
         ${curriculumJoin}
@@ -2312,7 +2503,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           student_id,
           class_id,
           class_number_of_phase,
-          installment_package_complete
+          installment_package_complete,
+          installment_plan_total_phases
         FROM scoped_rows
         ORDER BY student_id, class_id, classstudent_id DESC
       ),
@@ -2360,7 +2552,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         m.is_full_payment,
         tfe.first_enrolled_at,
         tm.class_number_of_phase,
-        tm.installment_package_complete
+        tm.installment_package_complete,
+        tm.installment_plan_total_phases
       FROM matrix m
       INNER JOIN userstbl u ON u.user_id = m.student_id
       INNER JOIN classestbl c ON c.class_id = m.class_id
@@ -2410,6 +2603,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           classLevelTag: row.class_level_tag,
           firstEnrolledAt: row.first_enrolled_at,
           classNumberOfPhase: row.class_number_of_phase,
+          installmentPlanTotalPhases: row.installment_plan_total_phases,
           installmentPackageComplete: row.installment_package_complete,
           phases: {},
         })
@@ -2491,8 +2685,10 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     programId,
     classId,
     teacherId,
+    lifecycleScope: true,
   };
-  const installmentTrackKeys = await loadInstallmentTrackKeys(queryFn, lifecycleScope);
+  const { installmentTrackKeys, installmentCompleteByTrack } =
+    await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
   const paymentLifecycleRows = await loadInstallmentInvoiceBillingLifecycle(
     queryFn,
     lifecycleScope
@@ -2500,6 +2696,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
   applyMatrixPaymentLifecycleOverlay(students, phases, paymentLifecycleRows, {
     periodKey: 'phases',
     installmentTrackKeys,
+    installmentCompleteByTrack,
   });
 
   const visibleStudents = filterHiddenMatrixTracks(students);
@@ -2539,9 +2736,6 @@ const normalizeEnrollmentLabel = (status) => {
   }
 };
 
-const getTodayManilaYmd = () =>
-  new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-
 const MATRIX_ENROLLED_OVERLAY_BLOCK_STATUSES = new Set([
   'new',
   're_enrolled',
@@ -2570,6 +2764,119 @@ const buildPaymentLifecycleCell = (isActive, phaseNumber, dueDateYmd = null) => 
   invoice_due_date: dueDateYmd,
 });
 
+/** Map student_id → installment track keys (student_id:class_id) in matrix scope. */
+const buildInstallmentTrackKeysByStudent = (installmentTrackKeys) => {
+  const byStudent = new Map();
+  for (const trackKey of installmentTrackKeys || []) {
+    const [studentIdRaw, classIdRaw] = String(trackKey).split(':');
+    const studentId = parseInt(studentIdRaw, 10);
+    const classId = parseInt(classIdRaw, 10);
+    if (!Number.isFinite(studentId) || !Number.isFinite(classId)) continue;
+    if (!byStudent.has(studentId)) byStudent.set(studentId, []);
+    byStudent.get(studentId).push({ trackKey, classId });
+  }
+  return byStudent;
+};
+
+/** Collect class_ids merged onto an upsell anchor row (higher program billing). */
+const collectMergedUpsellClassIds = (student, periodKey = 'months') => {
+  const mergedClassIds = new Set();
+  const bucket = student?.[periodKey] || {};
+  for (const cell of Object.values(bucket)) {
+    const mergedClassId = parseInt(cell?.merged_from_class_id, 10);
+    if (Number.isFinite(mergedClassId)) mergedClassIds.add(mergedClassId);
+  }
+  return mergedClassIds;
+};
+
+/**
+ * Resolve which installment profile track applies to a matrix row.
+ * Upsell-merged anchor rows use the lower-program class_id while billing lives on the higher class.
+ */
+const resolveInstallmentTrackKeyForMatrixRow = (
+  student,
+  installmentTrackKeys,
+  periodKey = 'months',
+  installmentCompleteByTrack = null
+) => {
+  if (!student?.student_id || !installmentTrackKeys?.size) return null;
+
+  const studentId = parseInt(student.student_id, 10);
+  const pickIncompleteCandidate = (candidates = []) => {
+    for (const candidate of candidates) {
+      if (!installmentTrackKeys.has(candidate.trackKey)) continue;
+      if (installmentCompleteByTrack?.get(candidate.trackKey)) continue;
+      return candidate.trackKey;
+    }
+    for (const candidate of candidates) {
+      if (installmentTrackKeys.has(candidate.trackKey)) return candidate.trackKey;
+    }
+    return null;
+  };
+
+  if (student.matrix_installment_class_id != null) {
+    const mergedInstallmentKey = enrollmentTrackKey(
+      student.student_id,
+      student.matrix_installment_class_id
+    );
+    if (installmentTrackKeys.has(mergedInstallmentKey)) {
+      return mergedInstallmentKey;
+    }
+  }
+
+  const directKey =
+    student.enrollment_track_key ||
+    enrollmentTrackKey(student.student_id, student.class_id);
+  if (installmentTrackKeys.has(directKey)) return directKey;
+
+  const byStudent = buildInstallmentTrackKeysByStudent(installmentTrackKeys);
+  const candidateKeys = byStudent.get(studentId) || [];
+  if (!candidateKeys.length) return null;
+
+  const mergedClassIds = collectMergedUpsellClassIds(student, periodKey);
+  if (mergedClassIds.size) {
+    const mergedCandidates = candidateKeys.filter((c) => mergedClassIds.has(c.classId));
+    const mergedMatch = pickIncompleteCandidate(mergedCandidates);
+    if (mergedMatch) return mergedMatch;
+  }
+
+  const hasUpsellCell = Object.values(student?.[periodKey] || {}).some((cell) => {
+    const status = String(cell?.status || '').toLowerCase();
+    return status === 'upsell' || cell?.calendar_upsell || cell?.display_upsell_synthetic;
+  });
+  if (hasUpsellCell || student.matrix_upsell_track) {
+    const upsellRowCandidate = candidateKeys.find((c) => c.classId === student.class_id);
+    if (upsellRowCandidate && installmentTrackKeys.has(upsellRowCandidate.trackKey)) {
+      return upsellRowCandidate.trackKey;
+    }
+  }
+
+  return pickIncompleteCandidate(candidateKeys);
+};
+
+const resolveInstallmentLifecycleRow = (
+  installmentTrackKey,
+  studentId,
+  periodValue,
+  lifecycleByTrackPeriod
+) => {
+  const direct = lifecycleByTrackPeriod.get(`${installmentTrackKey}|${periodValue}`);
+  if (direct) return direct;
+
+  const sid = parseInt(studentId, 10);
+  if (!Number.isFinite(sid)) return null;
+  const periodText = String(periodValue);
+  for (const [key, row] of lifecycleByTrackPeriod.entries()) {
+    const sep = key.lastIndexOf('|');
+    if (sep < 0) continue;
+    const trackKeyPart = key.slice(0, sep);
+    const periodPart = key.slice(sep + 1);
+    if (parseInt(trackKeyPart.split(':')[0], 10) !== sid) continue;
+    if (periodPart === periodText) return row;
+  }
+  return null;
+};
+
 /** student_id|class_id keys for tracks on an installment invoice profile (recurring billing). */
 const loadInstallmentTrackKeys = async (queryFn, options = {}) => {
   const {
@@ -2578,6 +2885,7 @@ const loadInstallmentTrackKeys = async (queryFn, options = {}) => {
     programId = null,
     classId = null,
     teacherId = null,
+    lifecycleScope = false,
   } = options;
   if (!studentIds.length) return new Set();
 
@@ -2592,17 +2900,17 @@ const loadInstallmentTrackKeys = async (queryFn, options = {}) => {
     params.push(branchId);
     paramIdx += 1;
   }
-  if (programId) {
+  if (!lifecycleScope && programId) {
     programJoin = `AND c.program_id = $${paramIdx}`;
     params.push(programId);
     paramIdx += 1;
   }
-  if (classId) {
+  if (!lifecycleScope && classId) {
     classJoin = `AND ip.class_id = $${paramIdx}`;
     params.push(classId);
     paramIdx += 1;
   }
-  if (teacherId) {
+  if (!lifecycleScope && teacherId) {
     const teacherScope = appendClassTeacherScope(teacherId, paramIdx, params);
     teacherJoin = teacherScope.sql;
   }
@@ -2613,6 +2921,7 @@ const loadInstallmentTrackKeys = async (queryFn, options = {}) => {
       FROM installmentinvoiceprofilestbl ip
       INNER JOIN classestbl c ON c.class_id = ip.class_id ${branchJoin}
       WHERE ip.student_id = ANY($1::int[])
+        ${INSTALLMENT_PROFILE_MATRIX_VISIBILITY_SQL(lifecycleScope)}
         ${programJoin}
         ${classJoin}
         ${teacherJoin}
@@ -2623,6 +2932,65 @@ const loadInstallmentTrackKeys = async (queryFn, options = {}) => {
   return new Set(
     (result.rows || []).map((row) => enrollmentTrackKey(row.student_id, row.class_id))
   );
+};
+
+/** Package-complete flag per installment track for payment-lifecycle overlay. */
+const loadInstallmentPackageCompleteByTrack = async (queryFn, options = {}) => {
+  const { studentIds = [], branchId = null, lifecycleScope = false } = options;
+  if (!studentIds.length) return new Map();
+
+  const params = [studentIds];
+  let branchJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $2`;
+    params.push(branchId);
+  }
+
+  const result = await queryFn(
+    `
+      SELECT
+        ip.student_id,
+        ip.class_id,
+        (
+          COALESCE(ip.total_phases, 0) > 0
+          AND (
+            SELECT COUNT(DISTINCT CASE
+              WHEN i.status = 'Paid' THEN COALESCE(i.invoice_chain_root_id, i.invoice_id)
+              ELSE NULL
+            END)::integer
+            FROM invoicestbl i
+            WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+              AND (
+                ip.downpayment_invoice_id IS NULL
+                OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id::INTEGER
+              )
+          ) >= COALESCE(ip.total_phases, 0)
+        ) AS installment_package_complete
+      FROM installmentinvoiceprofilestbl ip
+      INNER JOIN classestbl c ON c.class_id = ip.class_id ${branchJoin}
+      WHERE ip.student_id = ANY($1::int[])
+        ${INSTALLMENT_PROFILE_MATRIX_VISIBILITY_SQL(lifecycleScope)}
+    `,
+    params
+  );
+
+  const completeByTrack = new Map();
+  for (const row of result.rows || []) {
+    completeByTrack.set(
+      enrollmentTrackKey(row.student_id, row.class_id),
+      Boolean(row.installment_package_complete)
+    );
+  }
+  return completeByTrack;
+};
+
+const loadInstallmentPaymentLifecycleContext = async (queryFn, options = {}) => {
+  const lifecycleOptions = { ...options, lifecycleScope: true };
+  const [installmentTrackKeys, installmentCompleteByTrack] = await Promise.all([
+    loadInstallmentTrackKeys(queryFn, lifecycleOptions),
+    loadInstallmentPackageCompleteByTrack(queryFn, lifecycleOptions),
+  ]);
+  return { installmentTrackKeys, installmentCompleteByTrack };
 };
 
 /**
@@ -2636,6 +3004,7 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
     programId = null,
     classId = null,
     teacherId = null,
+    lifecycleScope = false,
   } = options;
   if (!studentIds.length) return [];
 
@@ -2650,17 +3019,17 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
     params.push(branchId);
     paramIdx += 1;
   }
-  if (programId) {
+  if (!lifecycleScope && programId) {
     programJoin = `AND c.program_id = $${paramIdx}`;
     params.push(programId);
     paramIdx += 1;
   }
-  if (classId) {
+  if (!lifecycleScope && classId) {
     classJoin = `AND ip.class_id = $${paramIdx}`;
     params.push(classId);
     paramIdx += 1;
   }
-  if (teacherId) {
+  if (!lifecycleScope && teacherId) {
     const teacherScope = appendClassTeacherScope(teacherId, paramIdx, params);
     teacherJoin = teacherScope.sql;
     paramIdx = teacherScope.nextIdx;
@@ -2791,13 +3160,182 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
   }));
 };
 
-/** Latest matrix column with an enrolled status (new, re-enrolled, upsell, rejoin, completed, …). */
-const findLatestEnrolledPeriodIndex = (cellBucket, periods) => {
+/**
+ * Paid installment phases with billing months where no active classstudent row exists
+ * for that phase (e.g. phase 2 paid but only phase 1 + 3 enrolled — fills matrix gaps).
+ */
+const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
+  const {
+    branchId = null,
+    programId = null,
+    classId = null,
+    teacherId = null,
+    fromMonthStart,
+    toMonthStart,
+  } = options;
+  if (!fromMonthStart || !toMonthStart) return [];
+
+  const params = [fromMonthStart, toMonthStart];
+  let paramIdx = 3;
+  let branchJoin = '';
+  let programJoin = '';
+  let classJoin = '';
+  let teacherJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $${paramIdx}`;
+    params.push(branchId);
+    paramIdx += 1;
+  }
+  if (programId) {
+    programJoin = `AND c.program_id = $${paramIdx}`;
+    params.push(programId);
+    paramIdx += 1;
+  }
+  if (classId) {
+    classJoin = `AND ip.class_id = $${paramIdx}`;
+    params.push(classId);
+    paramIdx += 1;
+  }
+  if (teacherId) {
+    const teacherScope = appendClassTeacherScope(teacherId, paramIdx, params);
+    teacherJoin = teacherScope.sql;
+  }
+
+  const result = await queryFn(
+    `
+      WITH scoped_rows AS (
+        SELECT
+          cs.student_id,
+          cs.class_id,
+          COALESCE(cs.phase_number, 1) AS phase_number,
+          cs.enrolled_at,
+          cs.program_enrollment_status,
+          cs.removed_at,
+          cs.classstudent_id,
+          c.start_date AS class_start_date
+        FROM classstudentstbl cs
+        INNER JOIN classestbl c ON cs.class_id = c.class_id ${branchJoin}
+        INNER JOIN installmentinvoiceprofilestbl ip
+          ON ip.student_id = cs.student_id
+         AND ip.class_id = cs.class_id
+        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          ${programJoin}
+          ${classJoin}
+          ${teacherJoin}
+      ),
+      anchor AS (
+        SELECT DISTINCT ON (student_id, class_id)
+          student_id,
+          class_id,
+          phase_number AS base_phase,
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date AS base_month
+        FROM scoped_rows
+        WHERE enrolled_at IS NOT NULL
+          ${MATRIX_BILLING_ANCHOR_ACTIVE_WHERE}
+        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC
+      ),
+      invoice_ranked AS (
+        SELECT
+          ip.student_id,
+          ip.class_id,
+          ip.installmentinvoiceprofiles_id,
+          COALESCE(NULLIF(ip.phase_start, 0), 1) AS phase_start,
+          LOWER(TRIM(i.status)) AS pay_status,
+          ROW_NUMBER() OVER (
+            PARTITION BY ip.installmentinvoiceprofiles_id
+            ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC
+          )::int AS local_phase
+        FROM installmentinvoiceprofilestbl ip
+        INNER JOIN invoicestbl i
+          ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+        INNER JOIN invoicestudentstbl ist
+          ON ist.invoice_id = i.invoice_id
+         AND ist.student_id = ip.student_id
+        INNER JOIN classestbl c ON c.class_id = ip.class_id ${branchJoin}
+        WHERE i.due_date IS NOT NULL
+          AND COALESCE(i.status, '') NOT IN ('Cancelled', 'Canceled')
+          AND COALESCE(i.invoice_description, '') NOT ILIKE '%downpayment%'
+          AND (
+            ip.downpayment_invoice_id IS NULL
+            OR i.invoice_id <> ip.downpayment_invoice_id
+          )
+          ${programJoin}
+          ${classJoin}
+          ${teacherJoin}
+      ),
+      invoice_phase AS (
+        SELECT
+          student_id,
+          class_id,
+          phase_start,
+          phase_start + local_phase - 1 AS phase_number
+        FROM invoice_ranked
+        WHERE pay_status = 'paid'
+      ),
+      invoice_billing AS (
+        SELECT
+          inv.student_id,
+          inv.class_id,
+          inv.phase_number,
+          inv.phase_start,
+          (
+            GREATEST(
+              a.base_month,
+              CASE
+                WHEN c.start_date IS NOT NULL THEN
+                  DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date
+                ELSE a.base_month
+              END
+            ) + ((inv.phase_number - a.base_phase)::int * INTERVAL '1 month')
+          )::date AS billing_month
+        FROM invoice_phase inv
+        INNER JOIN anchor a
+          ON a.student_id = inv.student_id
+         AND a.class_id = inv.class_id
+        INNER JOIN classestbl c ON c.class_id = inv.class_id
+        WHERE inv.phase_number IS NOT NULL
+          AND inv.phase_number >= a.base_phase
+      )
+      SELECT DISTINCT
+        ib.student_id,
+        ib.class_id,
+        ib.phase_number,
+        ib.phase_start,
+        TO_CHAR(ib.billing_month, 'YYYY-MM') AS billing_month_key,
+        u.full_name,
+        c.class_name,
+        c.level_tag AS class_level_tag
+      FROM invoice_billing ib
+      INNER JOIN userstbl u ON u.user_id = ib.student_id AND u.user_type = 'Student'
+      INNER JOIN classestbl c ON c.class_id = ib.class_id
+      WHERE ib.billing_month >= $1::date
+        AND ib.billing_month <= $2::date
+        AND NOT EXISTS (
+          SELECT 1
+          FROM classstudentstbl cs2
+          WHERE cs2.student_id = ib.student_id
+            AND cs2.class_id = ib.class_id
+            AND COALESCE(cs2.phase_number, 1) = ib.phase_number
+            AND cs2.removed_at IS NULL
+            AND cs2.program_enrollment_status IN ${ENROLLED_STATUSES}
+        )
+    `,
+    params
+  );
+
+  return result.rows || [];
+};
+
+/** Latest billing anchor for installment lifecycle (enrolled or dropped month). */
+const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
   let latestIdx = -1;
   for (let i = 0; i < periods.length; i += 1) {
     const cell = cellBucket[periods[i].key];
+    if (!cell) continue;
     const status = String(cell?.status || '').toLowerCase();
-    if (cell?.mark === '1' && MATRIX_ENROLLED_OVERLAY_BLOCK_STATUSES.has(status)) {
+    if (cell.mark === '1' && MATRIX_ENROLLED_OVERLAY_BLOCK_STATUSES.has(status)) {
+      latestIdx = i;
+    } else if (isDroppedMonthMatrixCell(cell)) {
       latestIdx = i;
     }
   }
@@ -2805,18 +3343,18 @@ const findLatestEnrolledPeriodIndex = (cellBucket, periods) => {
 };
 
 /**
- * Overlay Active (✓) / Inactive (X) on the billing month/phase immediately after the latest
- * enrolled cell for recurring (installment) tracks.
+ * Overlay Active (✓) / Inactive (X) on the immediate billing month/phase after
+ * the latest enrolled or dropped cell for recurring (installment) tracks.
  *
- * - Default: Active on the next period (invoice may not exist yet).
- * - Inactive only when an unpaid invoice exists and today (Manila) is after its due date.
+ * - After **dropped**, the immediate next period is always **Inactive**.
+ * - After enrolled cells: **Active** when no unpaid invoice exists yet; **Inactive** when unpaid.
  * - Paid periods keep re-enrolled / new from enrollment rows.
  */
 const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, options = {}) => {
   const {
     periodKey = 'months',
-    todayYmd = getTodayManilaYmd(),
     installmentTrackKeys = new Set(),
+    installmentCompleteByTrack = new Map(),
   } = options;
   if (!periods?.length || !installmentTrackKeys.size) return;
 
@@ -2831,27 +3369,49 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
   for (const student of students) {
     const cellBucket = periodKey === 'months' ? student.months : student.phases;
     if (!cellBucket) continue;
-    const trackKey =
-      student.enrollment_track_key || enrollmentTrackKey(student.student_id, student.class_id);
 
-    if (!installmentTrackKeys.has(trackKey)) continue;
-    if (student.installment_package_complete) continue;
+    const installmentTrackKey = resolveInstallmentTrackKeyForMatrixRow(
+      student,
+      installmentTrackKeys,
+      periodKey,
+      installmentCompleteByTrack
+    );
+    if (!installmentTrackKey) continue;
+    if (installmentCompleteByTrack.get(installmentTrackKey)) continue;
 
-    const latestEnrolledIdx = findLatestEnrolledPeriodIndex(cellBucket, periods);
+    const latestEnrolledIdx = findLatestInstallmentLifecycleAnchorIndex(cellBucket, periods);
     if (latestEnrolledIdx < 0 || latestEnrolledIdx >= periods.length - 1) continue;
 
+    const anchorCell = cellBucket[periods[latestEnrolledIdx].key];
+    const anchorIsDropped = isDroppedMonthMatrixCell(anchorCell);
     const nextPeriod = periods[latestEnrolledIdx + 1];
     const nextPeriodValue = nextPeriod.key;
     if (cellBlocksPaymentLifecycleOverlay(cellBucket[nextPeriodValue])) continue;
 
-    const lifecycle = lifecycleByTrackPeriod.get(`${trackKey}|${nextPeriodValue}`);
+    const lifecycle = resolveInstallmentLifecycleRow(
+      installmentTrackKey,
+      student.student_id,
+      nextPeriodValue,
+      lifecycleByTrackPeriod
+    );
     const dueDateYmd = lifecycle?.due_date_ymd || null;
-    const isOverdue = Boolean(dueDateYmd && todayYmd > dueDateYmd);
+    const hasGeneratedUnpaidInvoice = Boolean(lifecycle);
+    const inferredPhaseAfterDrop =
+      anchorIsDropped && anchorCell?.phase_number != null
+        ? Number(anchorCell.phase_number) + 1
+        : null;
     const phaseNumber =
       lifecycle?.phase_number ??
+      inferredPhaseAfterDrop ??
       (periodKey === 'phases' ? parseInt(nextPeriodValue, 10) || null : null);
 
-    cellBucket[nextPeriodValue] = buildPaymentLifecycleCell(!isOverdue, phaseNumber, dueDateYmd);
+    const isActive = anchorIsDropped ? false : !hasGeneratedUnpaidInvoice;
+
+    cellBucket[nextPeriodValue] = buildPaymentLifecycleCell(
+      isActive,
+      phaseNumber,
+      dueDateYmd
+    );
   }
 };
 
@@ -3716,7 +4276,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           c.start_date                                                           AS class_start_date,
           ${IS_FULL_PAYMENT_SQL}                                                                      AS is_full_payment,
           ${CLASS_NUMBER_OF_PHASE_SQL}                                           AS class_number_of_phase,
-          ${INSTALLMENT_PACKAGE_COMPLETE_SQL}                                      AS installment_package_complete
+          ${INSTALLMENT_PACKAGE_COMPLETE_SQL}                                      AS installment_package_complete,
+          ${INSTALLMENT_PROFILE_TOTAL_PHASES_SUBQUERY}                             AS installment_plan_total_phases
         FROM classstudentstbl cs
         INNER JOIN classestbl c ON cs.class_id = c.class_id ${scopeBranchJoin}
         INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'
@@ -3735,7 +4296,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           student_id,
           class_id,
           class_number_of_phase,
-          installment_package_complete
+          installment_package_complete,
+          installment_plan_total_phases
         FROM scoped_rows
         ORDER BY student_id, class_id, classstudent_id DESC
       ),
@@ -3811,10 +4373,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           AND (
             pb.is_full_payment = true
             OR pb.program_enrollment_status = 'completed'
-            OR (
-              tm.installment_package_complete = true
-              AND pb.phase_number = tm.class_number_of_phase
-            )
+            OR tm.installment_package_complete = true
           )
         GROUP BY pb.student_id, pb.class_id
       ),
@@ -3832,7 +4391,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key,
         TO_CHAR(pc.terminal_billing_month, 'YYYY-MM') AS package_complete_month_key,
         tm.class_number_of_phase,
-        tm.installment_package_complete
+        tm.installment_package_complete,
+        tm.installment_plan_total_phases
       FROM track_first_enrolled tfe
       LEFT JOIN first_enrolled fe
         ON fe.student_id = tfe.student_id AND fe.class_id = tfe.class_id
@@ -3851,7 +4411,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   const lastFullPayMonthByTrack = new Map();
   const packageCompleteMonthByTrack = new Map();
   const classNumberOfPhaseByTrack = new Map();
-  const installmentCompleteByTrack = new Map();
+  const installmentPackageCompleteByTrack = new Map();
+  const installmentPlanTotalPhasesByTrack = new Map();
   for (const row of firstEnrollResult.rows || []) {
     const studentId = parseInt(row.student_id, 10);
     const classId = parseInt(row.class_id, 10);
@@ -3872,7 +4433,13 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       classNumberOfPhaseByTrack.set(trackKey, parseInt(row.class_number_of_phase, 10) || 1);
     }
     if (row.installment_package_complete) {
-      installmentCompleteByTrack.set(trackKey, true);
+      installmentPackageCompleteByTrack.set(trackKey, true);
+    }
+    if (row.installment_plan_total_phases != null) {
+      installmentPlanTotalPhasesByTrack.set(
+        trackKey,
+        parseInt(row.installment_plan_total_phases, 10) || 0
+      );
     }
   }
 
@@ -3913,7 +4480,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
           firstEnrolledMonthKey: firstEnrolledByTrack.get(trackKey) || null,
           lastFullPayMonthKey: lastFullPayMonthByTrack.get(trackKey) || null,
           classNumberOfPhase: classNumberOfPhaseByTrack.get(trackKey) ?? null,
-          installmentPackageComplete: installmentCompleteByTrack.get(trackKey) || false,
+          installmentPlanTotalPhases: installmentPlanTotalPhasesByTrack.get(trackKey) ?? null,
+          installmentPackageComplete: installmentPackageCompleteByTrack.get(trackKey) || false,
           packageCompleteMonthKey: packageCompleteMonthByTrack.get(trackKey) || null,
           months: {},
         })
@@ -3942,6 +4510,17 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   }
 
   const displayMonthKeys = new Set(months.map((m) => m.key));
+  const matrixCohortStudentIds = [
+    ...new Set(
+      (result.rows || [])
+        .map((row) => parseInt(row.student_id, 10))
+        .filter((id) => Number.isFinite(id))
+    ),
+  ];
+  const installmentProfileBillingByStudent = await loadInstallmentProfileBillingClassMap(
+    queryFn,
+    matrixCohortStudentIds
+  );
   const displayEnrolledToExclusive = (() => {
     const end = new Date(`${toYM}-01T00:00:00.000Z`);
     end.setUTCMonth(end.getUTCMonth() + 1);
@@ -4014,6 +4593,11 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     const classId = parseInt(row.class_id, 10);
     const monthKey = row.month_key;
     if (!displayMonthKeys.has(monthKey)) continue;
+
+    const billingClasses = installmentProfileBillingByStudent.get(studentId);
+    if (billingClasses?.has(classId)) {
+      continue;
+    }
 
     const student = ensureMatrixStudent(studentId, classId, row.full_name, row.class_name);
     const existing = student.months[monthKey];
@@ -4093,6 +4677,53 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       calendar_installment_start: true,
       is_full_payment: false,
     };
+    if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
+      student.first_enrolled_month_key = monthKey;
+    }
+  }
+
+  const paidInstallmentOverlayRows = await loadPaidInstallmentPhaseMatrixOverlay(queryFn, {
+    branchId,
+    programId,
+    classId,
+    teacherId,
+    fromMonthStart,
+    toMonthStart,
+  });
+  for (const row of paidInstallmentOverlayRows) {
+    const studentId = parseInt(row.student_id, 10);
+    const classId = parseInt(row.class_id, 10);
+    const monthKey = row.billing_month_key;
+    if (!displayMonthKeys.has(monthKey)) continue;
+
+    const student = ensureMatrixStudent(
+      studentId,
+      classId,
+      row.full_name,
+      row.class_name,
+      row.class_level_tag
+    );
+    const existing = student.months[monthKey];
+    if (
+      existing?.mark === '1' &&
+      ENROLLED_STATUSES_LIST.includes(String(existing.status || '').toLowerCase())
+    ) {
+      continue;
+    }
+
+    const phaseStart = parseInt(row.phase_start, 10) || 1;
+    const phaseNumber = parseInt(row.phase_number, 10) || phaseStart;
+    const status = phaseNumber === phaseStart ? 'new' : 're_enrolled';
+
+    student.months[monthKey] = {
+      mark: '1',
+      label: status === 'new' ? 'new' : 're-enrolled',
+      status,
+      phase_number: phaseNumber,
+      matrix_paid_installment_phase: true,
+      is_full_payment: false,
+    };
+
     if (!student.first_enrolled_month_key || monthKey < student.first_enrolled_month_key) {
       student.first_enrolled_month_key = monthKey;
     }
@@ -4386,6 +5017,11 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     const monthKey = row.month_key;
     if (!displayMonthKeys.has(monthKey)) continue;
 
+    const billingClasses = installmentProfileBillingByStudent.get(studentId);
+    if (billingClasses?.size && !billingClasses.has(classId)) {
+      continue;
+    }
+
     const student = ensureMatrixStudent(
       studentId,
       classId,
@@ -4537,6 +5173,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   // Single-phase classes allow the terminal month to equal the first enrolled month.
   for (const student of students) {
     if (student.matrix_merged_upsell_anchor) continue;
+    if (student.matrix_installment_class_id != null) continue;
 
     const firstEverKey = toManilaMonthKey(student.first_enrolled_at);
     const firstBillingKey = student.first_enrolled_month_key || null;
@@ -4568,6 +5205,20 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   });
   applyFromPreviousReservedCellFlags(students, 'months', reservationTrackKeys);
 
+  applyInstallmentCrossClassDisplayMatrixLink(students, installmentProfileBillingByStudent);
+
+  for (const student of students) {
+    if (!student.months || student.matrix_installment_class_id == null) continue;
+    for (const m of months) {
+      const cell = student.months[m.key];
+      if (!cell) continue;
+      if (isDroppedMonthMatrixCell(cell)) {
+        cell.label = 'dropped';
+        cell.status = 'dropped';
+      }
+    }
+  }
+
   const lifecycleStudentIds = [...new Set(students.map((s) => s.student_id))];
   const lifecycleScope = {
     studentIds: lifecycleStudentIds,
@@ -4575,8 +5226,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     programId,
     classId,
     teacherId,
+    lifecycleScope: true,
   };
-  const installmentTrackKeys = await loadInstallmentTrackKeys(queryFn, lifecycleScope);
+  const { installmentTrackKeys, installmentCompleteByTrack } =
+    await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
   const paymentLifecycleRows = await loadInstallmentInvoiceBillingLifecycle(
     queryFn,
     lifecycleScope
@@ -4584,6 +5237,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
   applyMatrixPaymentLifecycleOverlay(students, months, paymentLifecycleRows, {
     periodKey: 'months',
     installmentTrackKeys,
+    installmentCompleteByTrack,
   });
 
   const visibleStudents = filterHiddenMatrixTracks(students);

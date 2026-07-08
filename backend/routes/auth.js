@@ -1,7 +1,7 @@
 import express from 'express';
 import { body } from 'express-validator';
 import { verifyFirebaseToken } from '../middleware/auth.js';
-import { handleValidationErrors } from '../middleware/validation.js';
+import { handleValidationErrors, optionalNicknameValidator } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import admin from '../config/firebase.js';
 import { createFirebaseUser } from '../utils/firebaseAuthRest.js';
@@ -85,7 +85,7 @@ router.post(
     body('firebase_uid').notEmpty().withMessage('Firebase UID is required'),
     body('email').isEmail().withMessage('Valid email is required'),
     body('full_name').notEmpty().withMessage('Full name is required'),
-    body('nickname').optional().isString().withMessage('Nickname must be a string'),
+    optionalNicknameValidator,
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     handleValidationErrors,
   ],
@@ -226,7 +226,7 @@ router.post(
     body('email').isEmail().withMessage('Valid email is required'),
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
     body('full_name').notEmpty().withMessage('Full name is required'),
-    body('nickname').optional().isString().withMessage('Nickname must be a string'),
+    optionalNicknameValidator,
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     handleValidationErrors,
   ],

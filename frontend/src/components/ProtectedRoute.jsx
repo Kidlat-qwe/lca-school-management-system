@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { getHomePathForUser } from '../utils/announcementsNav';
 
 const ProtectedRoute = ({ children, allowedRoles = [], checkBranch = false, requireNoBranch = false }) => {
   const { userInfo, loading } = useAuth();
@@ -20,7 +21,7 @@ const ProtectedRoute = ({ children, allowedRoles = [], checkBranch = false, requ
   const branchId = userInfo.branchId || userInfo.branch_id;
 
   if (allowedRoles.length > 0 && !allowedRoles.includes(userType)) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to={getHomePathForUser(userInfo)} replace />;
   }
 
   // Check if superfinance route requires no branch (Finance with branch_id = null)

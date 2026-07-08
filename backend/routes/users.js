@@ -1,7 +1,7 @@
 import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess, assertCanViewStudentUserProfile } from '../middleware/auth.js';
-import { handleValidationErrors } from '../middleware/validation.js';
+import { handleValidationErrors, optionalNicknameValidator } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import admin from '../config/firebase.js';
 import { updateFirebaseUserEmail, updateFirebaseUserPassword } from '../utils/firebaseAuthRest.js';
@@ -241,7 +241,7 @@ router.post(
   [
     body('email').isEmail().withMessage('Valid email is required'),
     body('full_name').notEmpty().withMessage('Full name is required'),
-    body('nickname').optional().isString().withMessage('Nickname must be a string'),
+    optionalNicknameValidator,
     body('user_type').isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     handleValidationErrors,
@@ -322,7 +322,7 @@ router.put(
   [
     param('id').isInt().withMessage('User ID must be an integer'),
     body('full_name').optional().notEmpty().withMessage('Full name cannot be empty'),
-    body('nickname').optional().isString().withMessage('Nickname must be a string'),
+    optionalNicknameValidator,
     body('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
     body('phone_number')

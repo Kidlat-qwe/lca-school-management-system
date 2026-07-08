@@ -3,6 +3,7 @@ import {
   buildDailySummaryPath,
   DAILY_SUMMARY_KIND,
   getDailySummaryBasePath,
+  roleHasDailySummaryAccess,
 } from './dailySummaryNav';
 
 function getNotificationBasePath(navigationKey, userInfo) {
@@ -110,6 +111,17 @@ export function getNotificationDestination(notification, userInfo) {
   const navigationKey = notification.navigation_key || inferred.navigationKey;
   const navigationQuery = notification.navigation_query || inferred.navigationQuery || '';
   const dailySummaryKind = inferred.dailySummaryKind;
+
+  if (navigationKey === 'daily-summary-sales' && !roleHasDailySummaryAccess(userInfo)) {
+    const basePath = getAnnouncementsPathForUser(userInfo);
+    const params = new URLSearchParams();
+    if (notification.announcement_id != null) {
+      params.set('highlight', String(notification.announcement_id));
+    }
+    const query = params.toString();
+    return query ? `${basePath}?${query}` : basePath;
+  }
+
   let basePath = getNotificationBasePath(navigationKey, userInfo);
 
   if (navigationKey === 'daily-summary-sales') {

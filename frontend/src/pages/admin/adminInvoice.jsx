@@ -36,6 +36,7 @@ import {
 import StandardExportModal from '../../components/export/StandardExportModal';
 import SortableHeader from '../../components/table/SortableHeader';
 import PaymentRecordedInvoiceSummaryModal from '../../components/invoices/PaymentRecordedInvoiceSummaryModal';
+import InvoicePaymentDueStatusBadge from '../../components/invoices/InvoicePaymentDueStatusBadge';
 import {
   InvoiceListAmountCell,
   InvoiceListTotalAmountCell,
@@ -2830,7 +2831,7 @@ const AdminInvoice = () => {
                         </button>
                       </div>
                     ) : (
-                      <div className="mt-1 flex items-center gap-2">
+                      <div className="mt-1 flex items-center gap-2 flex-wrap">
                         <span
                           className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
                               selectedInvoiceForDetails.status === 'Paid'
@@ -2848,6 +2849,7 @@ const AdminInvoice = () => {
                         >
                           {selectedInvoiceForDetails.status || 'Draft'}
                         </span>
+                        <InvoicePaymentDueStatusBadge invoice={selectedInvoiceForDetails} />
                         <button
                           onClick={startEditingStatus}
                           className="text-xs text-blue-600 hover:text-blue-700 font-medium"
@@ -3141,7 +3143,13 @@ const AdminInvoice = () => {
         <div className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm bg-black/5">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-              <h2 className="text-xl font-semibold text-gray-900">Record Payment</h2>
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">Record Payment</h2>
+                <InvoicePaymentDueStatusBadge
+                  invoice={selectedInvoiceForPayment}
+                  className="mt-2"
+                />
+              </div>
               <button
                 onClick={handleClosePaymentModal}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -3402,7 +3410,10 @@ const AdminInvoice = () => {
                   const projectedTotalPaid = breakdown.paidAmount + payableToApply;
                   return (
                     <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                      <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-sm font-semibold text-gray-700">Invoice Information</h3>
+                        <InvoicePaymentDueStatusBadge invoice={selectedInvoiceForPayment} />
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <p className="text-xs text-gray-600">Invoice ID</p>

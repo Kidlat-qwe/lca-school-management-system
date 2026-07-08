@@ -17,6 +17,7 @@ import {
 } from '../../utils/installmentPhaseSlotStatus';
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
+import InvoicePaymentDueStatusBadge from '../invoices/InvoicePaymentDueStatusBadge';
 import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
 import PaymentMethodSelect from '../common/PaymentMethodSelect';
 import PaymentReferenceNumberField from '../common/PaymentReferenceNumberField';
@@ -67,6 +68,7 @@ const statusBadgeClass = (status) => {
     case 'paid all':
       return 'bg-green-100 text-green-800 border border-green-200';
     case 'overdue':
+    case 'overdue for penalty':
       return 'bg-red-100 text-red-800 border border-red-200';
     case 'under grace period':
       return 'bg-amber-100 text-amber-800 border border-amber-200';
@@ -144,9 +146,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   }, [profileId, fetchPhases]);
 
   const openPaymentModal = useCallback(async (payload) => {
+    let paymentDueStatusLabel = payload?.payment_due_status_label || null;
+
     if (payload?.mode === 'invoice' && payload.invoice_id) {
       try {
         const res = await apiRequest(`/invoices/${payload.invoice_id}`);
+        paymentDueStatusLabel = res?.data?.payment_due_status_label || paymentDueStatusLabel;
         const blockAlert = getInstallmentPaymentBlockAlert(res?.data);
         if (blockAlert) {
           appAlert(blockAlert);
@@ -164,7 +169,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
         ? Number(payload.outstanding ?? payload.amount ?? 0)
         : Number(payload.amount ?? 0);
 
-    setPaymentModal(payload);
+    setPaymentModal({ ...payload, payment_due_status_label: paymentDueStatusLabel });
     setApForm({
       payment_method: '',
       payment_type: payload.mode === 'invoice' ? 'Full Payment' : 'Advance Payment',
@@ -951,7 +956,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                                         ? 'font-medium text-orange-800'
                                         : enrollmentKey === 're_enrolled'
                                           ? 'font-medium text-indigo-800'
-                                          : ''
+                                          : enrollmentKey === 'completed'
+                                            ? 'font-medium text-amber-800'
+                                            : ''
                                   }
                                 >
                                   {enrollmentLabel}
@@ -1038,6 +1045,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                                       amount: phase.amount,
                                       outstanding,
                                       invoice_id: phase.invoice_id,
+                                      payment_due_status_label:
+                                        phase.status === 'Under grace period' ||
+                                        phase.status === 'Overdue'
+                                          ? phase.status
+                                          : null,
                                     });
                                   } else {
                                     openPaymentModal({
@@ -1117,6 +1129,10 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 <h2 className="text-xl font-semibold text-gray-900">
                   {paymentModal.mode === 'invoice' ? 'Record Payment' : 'Record Advance Payment'}
                 </h2>
+                <InvoicePaymentDueStatusBadge
+                  label={paymentModal.payment_due_status_label}
+                  className="mt-2"
+                />
                 <p className="text-sm text-gray-500 mt-0.5">
                   Phase {paymentModal.absolute} —{' '}
                   {formatCurrency(

@@ -242,7 +242,13 @@ export function annotateInstallmentPhasePlanSlots(phases) {
   }));
 }
 
-const INSTALLMENT_PLAN_ENROLLMENT_KEYS = new Set(['new', 'dropped', 'rejoin', 're_enrolled']);
+const INSTALLMENT_PLAN_ENROLLMENT_KEYS = new Set([
+  'new',
+  'dropped',
+  'rejoin',
+  're_enrolled',
+  'completed',
+]);
 
 const normalizeEnrollmentKey = (status) => String(status || '').trim().toLowerCase();
 
@@ -302,7 +308,7 @@ export function inferInstallmentPhaseEnrollmentStatus({
 
 /**
  * Enrollment label for installment plan phase rows (absolute class phase).
- * Canonical display values: new, dropped, rejoin, re_enrolled.
+ * Canonical display values: new, dropped, rejoin, re_enrolled, completed.
  *
  * @param {Map<number, { program_enrollment_status: string }>} enrollmentByAbsolutePhase
  */
@@ -312,15 +318,15 @@ export function resolveInstallmentPhaseEnrollmentStatus({
   phaseRow,
   phaseStart = 1,
   paidAbsolutePhases = [],
+  totalPhases = null,
 }) {
   const enroll = enrollmentByAbsolutePhase?.get(absolutePhase);
   const dbStatus = normalizeEnrollmentKey(enroll?.program_enrollment_status);
   if (dbStatus === 'dropped') {
-    // Unpaid generated slot: not enrolled until payment — show blank, keep Pay Now actionable.
-    if (!isPaidInstallmentPhaseRow(phaseRow)) {
-      return null;
-    }
     return 'dropped';
+  }
+  if (dbStatus === 'completed') {
+    return 'completed';
   }
 
   if (phaseRow?.billing_kind === 'late_start_gap') {
@@ -330,7 +336,26 @@ export function resolveInstallmentPhaseEnrollmentStatus({
     return null;
   }
 
+  const start = Math.max(1, parseInt(phaseStart, 10) || 1);
+  const planSlots = parseInt(totalPhases, 10);
+  const finalPlanAbsolutePhase =
+    Number.isFinite(planSlots) && planSlots > 0 ? start + planSlots - 1 : null;
+
   if (isPaidInstallmentPhaseRow(phaseRow)) {
+    if (planSlots === 1) {
+      return 'completed';
+    }
+
+    if (
+      finalPlanAbsolutePhase != null &&
+      absolutePhase === finalPlanAbsolutePhase &&
+      Number.isFinite(planSlots) &&
+      planSlots > 0 &&
+      paidAbsolutePhases.length >= planSlots
+    ) {
+      return 'completed';
+    }
+
     const inferred = inferInstallmentPhaseEnrollmentStatus({
       absolutePhase,
       enrollmentByAbsolutePhase,
@@ -386,13 +411,18 @@ export async function loadEnrollmentStatusByAbsolutePhase(queryFn, studentId, cl
   return map;
 }
 
-export function attachEnrollmentToInstallmentPhaseRows(phases, { phaseStart, enrollmentByAbsolutePhase }) {
+export function attachEnrollmentToInstallmentPhaseRows(
+  phases,
+  { phaseStart, enrollmentByAbsolutePhase, totalPhases = null }
+) {
   const start = Math.max(1, parseInt(phaseStart, 10) || 1);
 
   const paidAbsolutePhases = (phases || [])
     .filter(isPaidInstallmentPhaseRow)
     .map((phaseRow) => start + parseInt(phaseRow.phase_number, 10) - 1)
     .filter((p) => Number.isFinite(p));
+
+  const planSlots = parseInt(totalPhases, 10);
 
   return (phases || []).map((phaseRow) => {
     const localPhase = parseInt(phaseRow.phase_number, 10);
@@ -406,6 +436,7 @@ export function attachEnrollmentToInstallmentPhaseRows(phases, { phaseStart, enr
         phaseRow,
         phaseStart: start,
         paidAbsolutePhases,
+        totalPhases: planSlots,
       }),
     };
   });

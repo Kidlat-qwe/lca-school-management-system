@@ -1,4 +1,4 @@
-import { formatYmdLocal, parseYmdToLocalNoon } from './dateUtils.js';
+import { formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from './dateUtils.js';
 import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
 import { isInstallmentPenaltyExemptInvoice } from './installmentPenaltyExempt.js';
 
@@ -127,26 +127,91 @@ export function computeInstallmentPhaseDisplayStatus({
   const normalized = raw.toLowerCase();
   if (normalized === 'paid') return 'Paid';
   if (normalized === 'cancelled' || normalized === 'canceled') return 'Cancelled';
-  if (normalized === 'unpaid') return 'Unpaid';
 
   const today = todayYmd || formatYmdLocal(new Date());
 
   // First downpayment / first phase invoice: never show grace-period or overdue states.
   if (penaltyExempt) {
+    if (normalized === 'unpaid') return 'Unpaid';
     return raw || 'Pending';
   }
 
   // Mid-class enrollment: first phase due can be before issue — never overdue/penalty.
   if (issueDateYmd && dueDateYmd && String(dueDateYmd).slice(0, 10) < String(issueDateYmd).slice(0, 10)) {
+    if (normalized === 'unpaid') return 'Unpaid';
     return raw || 'Pending';
   }
 
-  if (!dueDateYmd || today <= dueDateYmd) return raw || 'Pending';
+  if (!dueDateYmd || today <= dueDateYmd) {
+    if (normalized === 'unpaid') return 'Unpaid';
+    return raw || 'Pending';
+  }
 
   const graceUntilYmd = addDaysYmd(dueDateYmd, graceDays);
   if (graceUntilYmd && today <= graceUntilYmd) return 'Under grace period';
 
   return 'Overdue';
+}
+
+export const PAYMENT_DUE_STATUS_LABEL = Object.freeze({
+  UNDER_GRACE_PERIOD: 'Under grace period',
+  OVERDUE_FOR_PENALTY: 'Overdue for penalty',
+});
+
+/** Map installment phase display status to invoice/payment modal labels. */
+export function mapInstallmentDisplayStatusToPaymentDueLabel(displayStatus) {
+  const normalized = String(displayStatus || '').trim().toLowerCase();
+  if (normalized === 'under grace period') {
+    return PAYMENT_DUE_STATUS_LABEL.UNDER_GRACE_PERIOD;
+  }
+  if (normalized === 'overdue') {
+    return PAYMENT_DUE_STATUS_LABEL.OVERDUE_FOR_PENALTY;
+  }
+  return null;
+}
+
+/**
+ * Grace / penalty timing label for invoice and payment modals.
+ * Returns null when paid, cancelled, before due, or penalty-exempt.
+ */
+export async function resolveInvoicePaymentDueStatusLabel(client, invoice) {
+  if (!invoice) return null;
+
+  const normalizedStatus = String(invoice.status || '').trim().toLowerCase();
+  if (
+    normalizedStatus === 'paid' ||
+    normalizedStatus === 'cancelled' ||
+    normalizedStatus === 'canceled'
+  ) {
+    return null;
+  }
+
+  const dueDateYmd = invoice.due_date ? formatYmdLocal(invoice.due_date).slice(0, 10) : null;
+  const issueDateYmd = invoice.issue_date ? formatYmdLocal(invoice.issue_date).slice(0, 10) : null;
+
+  let penaltyExempt = false;
+  if (invoice.installmentinvoiceprofiles_id) {
+    penaltyExempt = await isInstallmentPenaltyExemptInvoice(client, {
+      invoiceId: invoice.invoice_id,
+      profileId: invoice.installmentinvoiceprofiles_id,
+    });
+  } else {
+    penaltyExempt = String(invoice.invoice_description || '')
+      .toLowerCase()
+      .includes('downpayment');
+  }
+
+  const graceDays = await resolveInstallmentGraceDays(client, invoice.branch_id);
+  const displayStatus = computeInstallmentPhaseDisplayStatus({
+    invoiceStatus: invoice.status,
+    dueDateYmd,
+    issueDateYmd,
+    graceDays,
+    todayYmd: todayYmdManila(),
+    penaltyExempt,
+  });
+
+  return mapInstallmentDisplayStatusToPaymentDueLabel(displayStatus);
 }
 
 export const syncProgramPaymentStatusForInvoice = async (client, invoiceId) => {

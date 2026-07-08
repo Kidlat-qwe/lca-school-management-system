@@ -1,4 +1,4 @@
-import { validationResult } from 'express-validator';
+import { validationResult, body } from 'express-validator';
 
 /**
  * Middleware to handle validation errors from express-validator
@@ -15,4 +15,10 @@ export const handleValidationErrors = (req, res, next) => {
   }
   next();
 };
+
+/** Nickname is optional; null/empty from JSON clients must not fail isString(). */
+export const optionalNicknameValidator = body('nickname')
+  .optional({ values: 'falsy' })
+  .isString()
+  .withMessage('Nickname must be a string');
 
