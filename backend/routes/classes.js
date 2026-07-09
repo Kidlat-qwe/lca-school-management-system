@@ -7,9 +7,15 @@ import { generateClassSessions } from '../utils/sessionCalculation.js';
 import { syncClassSessionTeachersFromClass } from '../utils/classSessionTeacherSync.js';
 import { generateClassCode, extractStartTimeFromSchedule } from '../utils/classCodeGenerator.js';
 import { getCustomHolidayDateSetForRange } from '../utils/holidayService.js';
-import { addDaysToYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
+import { addDaysToYmd, coerceToManilaYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from '../utils/dateUtils.js';
 import { buildPhaseInstallmentSchedule } from '../utils/phaseInstallmentUtils.js';
 import { syncClassEndDateFromSessions } from '../utils/classEndDateSync.js';
+import { regenerateClassSessions } from '../utils/classSessionRegeneration.js';
+import {
+  applyStartDateAdjustment,
+  classRequiresStartDateWizard,
+  previewStartDateAdjustment,
+} from '../utils/classStartDateAdjustment/classStartDateAdjustmentService.js';
 import { resolveInstallmentEnrollmentMinPhase } from '../utils/classActivePhase.js';
 import {
   alignInstallmentProfileForRejoinInvoice,
@@ -531,6 +537,19 @@ router.get(
                         cu.number_of_session_per_phase,
                         c.phase_number as class_phase_number,
                         COALESCE(enrollment_counts.enrolled_count, 0) as enrolled_students,
+                        EXISTS (
+                          SELECT 1
+                          FROM installmentinvoiceprofilestbl ip
+                          WHERE ip.class_id = c.class_id
+                            AND (
+                              COALESCE(ip.generated_count, 0) > 0
+                              OR EXISTS (
+                                SELECT 1 FROM invoicestbl i
+                                WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                                  AND i.status = 'Unpaid'
+                              )
+                            )
+                        ) AS has_installment_billing,
                         CASE WHEN mh.merge_history_id IS NOT NULL AND mh.is_undone = false THEN true ELSE false END as is_merged_class,
                         mh.merge_history_id
                  FROM classestbl c
@@ -1864,6 +1883,19 @@ router.get(
                 cu.number_of_phase,
                 cu.number_of_session_per_phase,
                 COALESCE(enrollment_counts.enrolled_count, 0) as enrolled_students,
+                EXISTS (
+                  SELECT 1
+                  FROM installmentinvoiceprofilestbl ip
+                  WHERE ip.class_id = c.class_id
+                    AND (
+                      COALESCE(ip.generated_count, 0) > 0
+                      OR EXISTS (
+                        SELECT 1 FROM invoicestbl i
+                        WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+                          AND i.status = 'Unpaid'
+                      )
+                    )
+                ) AS has_installment_billing,
                 COALESCE(reservation_counts.reserved_count, 0) as reserved_students
          FROM classestbl c
          LEFT JOIN branchestbl b ON c.branch_id = b.branch_id
@@ -2419,6 +2451,91 @@ router.post(
 );
 
 /**
+ * POST /api/v1/classes/:id/adjust-start-date/preview
+ * Preview session + billing impact of a new class start date.
+ */
+router.post(
+  '/:id/adjust-start-date/preview',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    body('new_start_date').isISO8601().withMessage('new_start_date must be a valid date'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const { id } = req.params;
+      const { new_start_date, acknowledge_warnings } = req.body;
+      const preview = await previewStartDateAdjustment(client, parseInt(id, 10), new_start_date, {
+        acknowledgeWarnings: acknowledge_warnings === true,
+      });
+      res.json({ success: true, data: preview });
+    } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          details: error.details || undefined,
+        });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/v1/classes/:id/adjust-start-date/apply
+ * Apply start date shift with session regen + billing realignment.
+ */
+router.post(
+  '/:id/adjust-start-date/apply',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    body('new_start_date').isISO8601().withMessage('new_start_date must be a valid date'),
+    body('reason').trim().notEmpty().withMessage('reason is required'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const { id } = req.params;
+      const { new_start_date, reason, acknowledge_warnings } = req.body;
+      const result = await applyStartDateAdjustment(
+        client,
+        parseInt(id, 10),
+        new_start_date,
+        reason,
+        req.user?.userId || null,
+        { acknowledgeWarnings: acknowledge_warnings === true }
+      );
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: 'Class start date adjusted successfully',
+        data: result,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          details: error.details || undefined,
+        });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * PUT /api/v1/classes/:id
  * Update class
  * Access: Superadmin, Admin
@@ -2461,6 +2578,24 @@ router.put(
       }
 
       const existingClass = existingClassResult.rows[0];
+
+      if (start_date !== undefined) {
+        const incomingStart = coerceToManilaYmd(start_date) || '';
+        const currentStart = coerceToManilaYmd(existingClass.start_date) || '';
+        if (incomingStart && incomingStart !== currentStart) {
+          const requiresWizard = await classRequiresStartDateWizard(client, id);
+          if (requiresWizard) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+              success: false,
+              code: 'USE_START_DATE_ADJUSTMENT',
+              message:
+                'Use Edit Class to change the start date for this class. It has enrollments or installment billing. Provide a reason and click Update Class.',
+            });
+          }
+        }
+      }
+
       const finalRoomId = room_id !== undefined ? room_id : existingClass.room_id;
       const effectiveStartDate =
         start_date !== undefined ? start_date : existingClass.start_date;
@@ -2652,226 +2787,10 @@ router.put(
 
       if (shouldRegenerateSessions) {
         try {
-          // Get updated class data with program and curriculum info
-          const updatedClassResult = await client.query(
-            `SELECT c.*, 
-                    p.curriculum_id,
-                    p.program_code,
-                    p.session_duration_hours,
-                    cu.number_of_phase, 
-                    cu.number_of_session_per_phase
-             FROM classestbl c
-             LEFT JOIN programstbl p ON c.program_id = p.program_id
-             LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
-             WHERE c.class_id = $1`,
-            [id]
-          );
-
-          if (updatedClassResult.rows.length > 0) {
-            const classData = updatedClassResult.rows[0];
-            
-            // Only regenerate if we have all required data
-            if (classData.start_date && 
-                classData.number_of_phase && 
-                classData.number_of_session_per_phase && 
-                classData.curriculum_id) {
-              
-              // Get current schedules (use updated schedules if days_of_week was provided)
-              let schedulesResult;
-              if (days_of_week && Array.isArray(days_of_week) && days_of_week.length > 0) {
-                // Use the newly updated schedules
-                schedulesResult = await client.query(
-                  'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
-                  [id]
-                );
-              } else {
-                // Use existing schedules
-                schedulesResult = await client.query(
-                  'SELECT day_of_week, start_time, end_time FROM roomschedtbl WHERE class_id = $1 ORDER BY day_of_week',
-                  [id]
-                );
-              }
-
-              if (schedulesResult.rows.length > 0) {
-                console.log('🔄 Regenerating sessions for updated class...');
-                
-                // Get phase sessions for this curriculum
-                const phaseSessionsResult = await client.query(
-                  `SELECT phasesessiondetail_id, phase_number, phase_session_number 
-                   FROM phasesessionstbl 
-                   WHERE curriculum_id = $1 
-                   ORDER BY phase_number, phase_session_number`,
-                  [classData.curriculum_id]
-                );
-
-                // Format days of week
-                const formattedDaysOfWeek = schedulesResult.rows.map(day => ({
-                  day_of_week: day.day_of_week,
-                  start_time: day.start_time,
-                  end_time: day.end_time,
-                  enabled: true
-                }));
-
-                const { startYmd, endYmd } = getHolidayRangeFromStartDate(classData.start_date);
-                const skipHolidays = classData.skip_holidays === true || classData.skip_holidays === 'true';
-                const holidayDateSet = (skipHolidays && startYmd && endYmd)
-                  ? await getCustomHolidayDateSetForRange(startYmd, endYmd, classData.branch_id || null)
-                  : new Set();
-
-                // Generate sessions using utility function
-                const sessions = generateClassSessions(
-                  {
-                    class_id: id,
-                    teacher_id: classData.teacher_id || null,
-                    start_date: classData.start_date
-                  },
-                  formattedDaysOfWeek,
-                  phaseSessionsResult.rows,
-                  classData.number_of_phase,
-                  classData.number_of_session_per_phase,
-                  req.user.userId || null,
-                  classData.session_duration_hours || null,
-                  holidayDateSet
-                );
-
-                // Update or insert sessions using UPSERT
-                // This handles both updates (when date/time changes) and new sessions
-                let sessionsUpdated = 0;
-                let sessionsCreated = 0;
-                
-                for (const session of sessions) {
-                  try {
-                    // Check if session already exists
-                    const existingCheck = await client.query(
-                      `SELECT classsession_id FROM classsessionstbl 
-                       WHERE class_id = $1 
-                         AND phase_number = $2 
-                         AND phase_session_number = $3 
-                         AND scheduled_date = $4`,
-                      [
-                        session.class_id,
-                        session.phase_number,
-                        session.phase_session_number,
-                        session.scheduled_date
-                      ]
-                    );
-
-                    let sessionClassCode = null;
-                    if (
-                      classData.program_code &&
-                      session.scheduled_date &&
-                      session.scheduled_start_time &&
-                      classData.class_name
-                    ) {
-                      sessionClassCode = generateClassCode(
-                        classData.program_code,
-                        session.scheduled_date,
-                        session.scheduled_start_time,
-                        classData.class_name
-                      );
-                    }
-
-                    // Use UPSERT: Update if exists (matching phase/session/date), insert if new
-                    await client.query(
-                      `INSERT INTO classsessionstbl (
-                        class_id, phasesessiondetail_id, phase_number, phase_session_number,
-                        scheduled_date, scheduled_start_time, scheduled_end_time,
-                        original_teacher_id, assigned_teacher_id, status, created_by, class_code
-                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                      ON CONFLICT (class_id, phase_number, phase_session_number, scheduled_date) 
-                      DO UPDATE SET
-                        phasesessiondetail_id = EXCLUDED.phasesessiondetail_id,
-                        scheduled_start_time = EXCLUDED.scheduled_start_time,
-                        scheduled_end_time = EXCLUDED.scheduled_end_time,
-                        original_teacher_id = CASE
-                          WHEN classsessionstbl.substitute_teacher_id IS NOT NULL
-                            THEN classsessionstbl.original_teacher_id
-                          ELSE EXCLUDED.original_teacher_id
-                        END,
-                        assigned_teacher_id = CASE
-                          WHEN classsessionstbl.substitute_teacher_id IS NOT NULL
-                            THEN classsessionstbl.assigned_teacher_id
-                          ELSE EXCLUDED.assigned_teacher_id
-                        END,
-                        class_code = COALESCE(EXCLUDED.class_code, classsessionstbl.class_code),
-                        updated_at = CURRENT_TIMESTAMP`,
-                      [
-                        session.class_id,
-                        session.phasesessiondetail_id,
-                        session.phase_number,
-                        session.phase_session_number,
-                        session.scheduled_date,
-                        session.scheduled_start_time,
-                        session.scheduled_end_time,
-                        session.original_teacher_id,
-                        session.assigned_teacher_id,
-                        session.status,
-                        session.created_by,
-                        sessionClassCode,
-                      ]
-                    );
-
-                    // Track if it was an insert or update
-                    if (existingCheck.rows.length > 0) {
-                      sessionsUpdated++;
-                    } else {
-                      sessionsCreated++;
-                    }
-                  } catch (sessionError) {
-                    console.error('❌ Error updating/creating session:', sessionError);
-                  }
-                }
-
-                // Delete sessions that are no longer needed (sessions that don't exist in the new generation)
-                // This handles cases where schedule changes result in fewer sessions
-                const existingSessionsResult = await client.query(
-                  `SELECT classsession_id, phase_number, phase_session_number, 
-                          TO_CHAR(scheduled_date, 'YYYY-MM-DD') as scheduled_date
-                   FROM classsessionstbl WHERE class_id = $1`,
-                  [id]
-                );
-
-                const newSessionKeys = new Set(
-                  sessions.map(s => `${s.phase_number}_${s.phase_session_number}_${s.scheduled_date}`)
-                );
-
-                const sessionsToDelete = existingSessionsResult.rows.filter(existing => {
-                  const key = `${existing.phase_number}_${existing.phase_session_number}_${existing.scheduled_date}`;
-                  return !newSessionKeys.has(key);
-                });
-
-                if (sessionsToDelete.length > 0) {
-                  // Only delete sessions that are still in 'Scheduled' status (not completed/cancelled)
-                  const sessionIdsToDelete = sessionsToDelete
-                    .map(s => s.classsession_id)
-                    .filter(id => id !== null && id !== undefined);
-
-                  if (sessionIdsToDelete.length > 0) {
-                    await client.query(
-                      `DELETE FROM classsessionstbl 
-                       WHERE classsession_id = ANY($1::int[]) 
-                       AND status = 'Scheduled'`,
-                      [sessionIdsToDelete]
-                    );
-                    console.log(`🗑️ Deleted ${sessionIdsToDelete.length} obsolete scheduled session(s)`);
-                  }
-                }
-
-                console.log(`✅ Regenerated sessions: ${sessionsUpdated} updated, ${sessionsCreated} created`);
-                try {
-                  await syncClassEndDateFromSessions(client, parseInt(id, 10));
-                } catch (e) {
-                  console.error('⚠️ Could not sync class end_date from sessions:', e.message);
-                }
-              } else {
-                console.log('⚠️ No schedules found for class, skipping session regeneration');
-              }
-            } else {
-              console.log('⚠️ Class missing required data for session regeneration (start_date, phases, curriculum)');
-            }
-          }
+          await regenerateClassSessions(client, parseInt(id, 10), {
+            createdBy: req.user?.userId || null,
+          });
         } catch (sessionGenError) {
-          // Log error but don't fail the update
           console.error('❌ Error regenerating sessions:', sessionGenError);
         }
       }

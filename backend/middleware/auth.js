@@ -56,9 +56,16 @@ export const verifyFirebaseToken = async (req, res, next) => {
     const code = error.code || error.codePrefix;
     const msg = error.message || 'Unknown error';
     console.error('Token verification error:', code || msg, error);
+
+    const isNetworkError =
+      /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network|fetch failed|getaddrinfo/i.test(msg) ||
+      code === 'auth/network-request-failed';
+
     return res.status(401).json({
       success: false,
-      message: 'Invalid or expired token',
+      message: isNetworkError
+        ? 'Authentication server cannot reach Firebase (DNS/network). Check internet, DNS, firewall, or VPN on the machine running the backend.'
+        : 'Invalid or expired token',
       ...(process.env.NODE_ENV === 'development' && { error: msg, code: code || undefined }),
     });
   }

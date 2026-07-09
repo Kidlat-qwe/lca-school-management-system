@@ -15,6 +15,23 @@ Status **dropdown** for **Active / Inactive** class status on the Superadmin and
 
 **Props:** `classId`, `status`, `enrolledStudents`, `teacherLabel`, `onStatusChanged`, `onNeedsTeacherAssignment`, `disabled`
 
+## ClassStartDateAdjustmentPreviewPanel
+
+Inline preview for shifting class `start_date` inside **Edit Class** (Superadmin / Admin).
+
+- **API:** `POST /classes/:id/adjust-start-date/preview`, `POST /classes/:id/adjust-start-date/apply`
+- When the class has enrollments or installment billing, change **Start Date** in Edit Class, enter a **reason**, review the auto-loaded impact preview, then **Update Class**
+- Preview loads automatically when start date changes (debounced); shows session dates, room/teacher conflicts, and per-student billing impact
+- Backend: `backend/utils/classStartDateAdjustment/`
+
+**Props:** `preview`, `loading`, `acknowledgeWarnings`, `onAcknowledgeWarningsChange`
+
+## ClassStartDateAdjustmentModal
+
+Legacy standalone wizard (same APIs). Prefer Edit Class inline flow above.
+
+**Props:** `open`, `classItem`, `onClose`, `onApplied`
+
 ## ClassReactivateAssignTeacherModal
 
 Opens when activating a class (**Inactive → Active**) requires a teacher assignment (none on file or previous teacher on another class). Uses schedule conflict checks; **Assign & activate** saves teachers then `PATCH`es status to Active.

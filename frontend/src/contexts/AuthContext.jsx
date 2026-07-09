@@ -220,6 +220,11 @@ export const AuthProvider = ({ children }) => {
           'Authentication service is temporarily busy. Please wait a minute and try again.'
         );
       }
+      if (code === 'auth/network-request-failed') {
+        throw new Error(
+          'Cannot reach Firebase Authentication. Check your internet connection, DNS settings, firewall, or VPN, then try again.'
+        );
+      }
 
       // Newer Firebase SDKs may return `auth/invalid-credential` for wrong password OR unknown email.
       if (code === 'auth/invalid-credential') {
@@ -247,7 +252,17 @@ export const AuthProvider = ({ children }) => {
       if (error.response?.status === 401) {
         localStorage.removeItem('firebase_token');
         await signOut(auth).catch(() => {});
-        throw new Error('Session could not be verified. Please try signing in again.');
+        const backendMessage = error.response?.data?.message;
+        const backendDetail = error.response?.data?.error;
+        if (backendMessage && /cannot reach Firebase|DNS|network/i.test(backendMessage)) {
+          throw new Error(backendMessage);
+        }
+        if (backendDetail && /ENOTFOUND|getaddrinfo|www\.googleapis\.com/i.test(String(backendDetail))) {
+          throw new Error(
+            'Backend cannot verify login (DNS/network to Google). Fix internet or DNS on the server running nodemon, then try again.'
+          );
+        }
+        throw new Error(backendMessage || 'Session could not be verified. Please try signing in again.');
       }
 
       if (error instanceof Error && error.message) {

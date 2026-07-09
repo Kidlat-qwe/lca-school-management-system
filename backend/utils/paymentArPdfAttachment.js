@@ -82,27 +82,6 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
     studentName = String(arNameRes.rows[0]?.prospect_student_name || '').trim() || 'Student';
   }
 
-  let classLabel = '-';
-  const classLabelRes = await client.query(
-    `SELECT DISTINCT ON (cs.student_id)
-        NULLIF(TRIM(p.program_code), '') AS program_code,
-        NULLIF(TRIM(c.level_tag), '') AS level_tag
-     FROM invoicestudentstbl ist
-     INNER JOIN classstudentstbl cs ON cs.student_id = ist.student_id
-     INNER JOIN classestbl c ON cs.class_id = c.class_id
-     LEFT JOIN programstbl p ON c.program_id = p.program_id
-     WHERE ist.invoice_id = $1
-     ORDER BY cs.student_id, cs.classstudent_id DESC
-     LIMIT 1`,
-    [invId]
-  );
-  if (classLabelRes.rows.length > 0) {
-    const row = classLabelRes.rows[0];
-    const code = row.program_code || '-';
-    const lvl = row.level_tag || '-';
-    classLabel = `${code} - ${lvl}`;
-  }
-
   const itemsRes = await client.query(
     `SELECT description FROM invoiceitemstbl WHERE invoice_id = $1`,
     [invId]
@@ -110,6 +89,47 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
   const itemDescriptions = (itemsRes.rows || [])
     .map((item) => String(item.description || '').trim())
     .filter(Boolean);
+
+  let classLabel = '-';
+  const arTypeRes = await client.query(
+    `SELECT LOWER(TRIM(COALESCE(ar_type, ''))) AS ar_type
+     FROM acknowledgement_receiptstbl
+     WHERE invoice_id = $1
+     ORDER BY ack_receipt_id DESC
+     LIMIT 1`,
+    [invId]
+  );
+  const linkedArType = String(arTypeRes.rows[0]?.ar_type || '').trim();
+  const itemsLookMerchandiseOnly =
+    itemDescriptions.length > 0 &&
+    itemDescriptions.every((desc) => desc.toLowerCase().startsWith('merchandise:'));
+  const isMerchandiseAr =
+    linkedArType === 'merchandise' ||
+    linkedArType === 'event' ||
+    itemsLookMerchandiseOnly;
+
+  if (!isMerchandiseAr) {
+    const classLabelRes = await client.query(
+      `SELECT DISTINCT ON (cs.student_id)
+          NULLIF(TRIM(p.program_code), '') AS program_code,
+          NULLIF(TRIM(c.level_tag), '') AS level_tag
+       FROM invoicestudentstbl ist
+       INNER JOIN classstudentstbl cs ON cs.student_id = ist.student_id
+       INNER JOIN classestbl c ON cs.class_id = c.class_id
+       LEFT JOIN programstbl p ON c.program_id = p.program_id
+       WHERE ist.invoice_id = $1
+       ORDER BY cs.student_id, cs.classstudent_id DESC
+       LIMIT 1`,
+      [invId]
+    );
+    if (classLabelRes.rows.length > 0) {
+      const row = classLabelRes.rows[0];
+      const code = row.program_code || '-';
+      const lvl = row.level_tag || '-';
+      classLabel = `${code} - ${lvl}`;
+    }
+  }
+
   const invDesc = String(invoice.invoice_description || '').trim();
   const looksLikeCodeOnly = /^INV-\d+$/i.test(invDesc);
   const packageDesc =
@@ -192,7 +212,7 @@ export async function buildSyntheticArRowFromInvoice(client, invoiceId) {
     branch_address: invoice.branch_address,
     branch_phone_number: invoice.branch_phone_number,
     branch_email: invoice.branch_email,
-    ar_type: 'package',
+    ar_type: isMerchandiseAr ? linkedArType || 'merchandise' : 'package',
   };
 }
 

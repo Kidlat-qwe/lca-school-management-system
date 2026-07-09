@@ -89,6 +89,14 @@ export function buildVirtualDualInstallmentPdfRowsFromSingleAr(ar, dpAmt, moAmt)
   ];
 }
 
+export function resolveAckReceiptClassLabel(ar) {
+  const arType = String(ar?.ar_type || '').trim().toLowerCase();
+  if (arType === 'merchandise' || arType === 'event') {
+    return '-';
+  }
+  return String(ar?.level_tag || '').trim() || '-';
+}
+
 export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
   const { rows: tableRows, total: totalAmount } = buildAckReceiptTableRows(ar);
 
@@ -99,7 +107,7 @@ export function drawAcknowledgementReceiptPage(doc, ar, logoPath, hasLogo) {
         ? `AR-${ar.ack_receipt_id}`
         : 'N/A';
   const studentName = (ar.prospect_student_name || 'N/A').trim();
-  const classLabel = (ar.level_tag || '-').trim();
+  const classLabel = resolveAckReceiptClassLabel(ar);
 
   const rawDateStr = ar.issue_date_fmt || '';
   const formatDate = (ymd) => formatLongDateDisplay(ymd, { fallback: '-' });

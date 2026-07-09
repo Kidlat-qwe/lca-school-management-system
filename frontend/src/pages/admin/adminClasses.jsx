@@ -12,6 +12,13 @@ import {
   getInstallmentEnrollmentFloorPhase,
   isPhaseClosedForEnrollment,
 } from '../../utils/classActivePhase';
+import {
+  CLASS_INACTIVE_ACTION_MESSAGE,
+  getClassInactiveActionButtonClass,
+  getClassInactiveIconButtonClass,
+  getClassInactiveMenuButtonClass,
+  isClassInactive,
+} from '../../utils/classActiveStatus';
 import { appAlert, appPrompt, appConfirm } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import useClassAttendanceDeepLink from '../../hooks/useClassAttendanceDeepLink';
@@ -26,6 +33,11 @@ import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
 import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
 import ClassStatusToggle from '../../components/class/ClassStatusToggle';
 import ClassReactivateAssignTeacherModal from '../../components/class/ClassReactivateAssignTeacherModal';
+import ClassStartDateAdjustmentPreviewPanel from '../../components/class/ClassStartDateAdjustmentPreviewPanel';
+import {
+  classNeedsStartDateWizard,
+  isStartDateChanged,
+} from '../../utils/classStartDateAdjustment';
 import {
   formatProgramEnrollmentStatus,
   pickGroupedProgramEnrollmentStatus,
@@ -59,6 +71,11 @@ const AdminClasses = () => {
   const [filterProgram, setFilterProgram] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [reactivateAssignTeacherClass, setReactivateAssignTeacherClass] = useState(null);
+  const [editOriginalStartDate, setEditOriginalStartDate] = useState('');
+  const [startDateAdjustmentReason, setStartDateAdjustmentReason] = useState('');
+  const [startDatePreview, setStartDatePreview] = useState(null);
+  const [startDateAcknowledgeWarnings, setStartDateAcknowledgeWarnings] = useState(false);
+  const [loadingStartDatePreview, setLoadingStartDatePreview] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: undefined, bottom: undefined, right: undefined, left: undefined });
   const [openBranchDropdown, setOpenBranchDropdown] = useState(false);
   const [openProgramDropdown, setOpenProgramDropdown] = useState(false);
@@ -928,6 +945,9 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const handleViewStudentActionMenuClick = (student, menuKey, event) => {
+    const contextClass = selectedClassForView || selectedClassForEnrollment;
+    if (isClassInactive(contextClass)) return;
+
     const button = event.currentTarget;
     const rect = button.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
@@ -998,6 +1018,11 @@ const initializePackageMerchSelections = useCallback(
   const openAttendanceModal = async (classSession, phaseNumber, phaseSessionNumber, sessionDate) => {
     if (!selectedClassForDetails) {
       console.error('Cannot open attendance modal: selectedClassForDetails is null');
+      return;
+    }
+
+    if (isClassInactive(selectedClassForDetails)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
       return;
     }
 
@@ -1201,6 +1226,124 @@ const initializePackageMerchSelections = useCallback(
       setSavingAttendance(false);
     }
   };
+
+  const resolveWizardClassForEdit = async (classItem) => {
+    if (classNeedsStartDateWizard(classItem)) {
+      return classItem;
+    }
+    try {
+      const classRes = await apiRequest(`/classes/${classItem.class_id}`);
+      return classRes.data?.class ?? classRes.data ?? classItem;
+    } catch {
+      return classItem;
+    }
+  };
+
+  const applyStartDateAdjustmentOnEdit = async (classItem, newStartDate) => {
+    if (!startDateAdjustmentReason.trim()) {
+      throw new Error('Please provide a reason for changing the start date.');
+    }
+
+    let preview = startDatePreview;
+    if (!preview || preview.new_start_date !== String(newStartDate).slice(0, 10)) {
+      setLoadingStartDatePreview(true);
+      const previewResponse = await apiRequest(
+        `/classes/${classItem.class_id}/adjust-start-date/preview`,
+        {
+          method: 'POST',
+          body: {
+            new_start_date: newStartDate,
+            acknowledge_warnings: startDateAcknowledgeWarnings,
+          },
+        }
+      );
+      preview = previewResponse.data || previewResponse;
+      setStartDatePreview(preview);
+      setLoadingStartDatePreview(false);
+    }
+
+    if (!preview.can_apply) {
+      throw new Error(
+        preview.blockers?.map((blocker) => blocker.message).join(' ') ||
+          'Cannot change start date until conflicts are resolved.'
+      );
+    }
+
+    const applyResponse = await apiRequest(
+      `/classes/${classItem.class_id}/adjust-start-date/apply`,
+      {
+        method: 'POST',
+        body: {
+          new_start_date: newStartDate,
+          reason: startDateAdjustmentReason.trim(),
+          acknowledge_warnings: startDateAcknowledgeWarnings,
+        },
+      }
+    );
+
+    return applyResponse.data || applyResponse;
+  };
+
+  const editingStartDateAdjustmentActive =
+    Boolean(editingClass) &&
+    isStartDateChanged(editOriginalStartDate, formData.start_date);
+
+  const debouncedAdjustmentStartDate = useDebouncedValue(
+    editingStartDateAdjustmentActive ? formData.start_date : '',
+    400
+  );
+
+  useEffect(() => {
+    if (!editingClass || !debouncedAdjustmentStartDate) {
+      return undefined;
+    }
+
+    if (!isStartDateChanged(editOriginalStartDate, debouncedAdjustmentStartDate)) {
+      setStartDatePreview(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadStartDatePreview = async () => {
+      setLoadingStartDatePreview(true);
+      try {
+        const previewResponse = await apiRequest(
+          `/classes/${editingClass.class_id}/adjust-start-date/preview`,
+          {
+            method: 'POST',
+            body: {
+              new_start_date: debouncedAdjustmentStartDate,
+              acknowledge_warnings: startDateAcknowledgeWarnings,
+            },
+          }
+        );
+        if (!cancelled) {
+          setStartDatePreview(previewResponse.data || previewResponse);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setStartDatePreview(null);
+          appAlert(err.response?.data?.message || err.message || 'Failed to load preview');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingStartDatePreview(false);
+        }
+      }
+    };
+
+    loadStartDatePreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    editingClass,
+    editOriginalStartDate,
+    debouncedAdjustmentStartDate,
+    startDateAcknowledgeWarnings,
+  ]);
 
   const fetchClasses = async () => {
     try {
@@ -2006,6 +2149,11 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const openMergeModal = async (classItem) => {
+    if (isClassInactive(classItem)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     setOpenMenuId(null);
     setSelectedClassForMerge(classItem);
     setSelectedMergeTargetClasses([]);
@@ -2536,6 +2684,12 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const handleUpgradeReservation = async (reservation) => {
+    const contextClass = selectedClassForView || selectedClassForEnrollment;
+    if (isClassInactive(contextClass)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     if (!canUpgradeReservationRecord(reservation)) {
       if (reservation.status === 'Reserved') {
         appAlert(
@@ -2811,6 +2965,10 @@ const initializePackageMerchSelections = useCallback(
   const openMoveStudentModal = async (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
     if (!sourceClass) return;
+    if (isClassInactive(sourceClass)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
     closeViewStudentActionMenu();
     setMoveSourceClass(sourceClass);
     setStudentToMove(student);
@@ -2929,6 +3087,10 @@ const initializePackageMerchSelections = useCallback(
   const openChangePackageModal = async (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForView;
     if (!sourceClass) return;
+    if (isClassInactive(sourceClass)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
     closeViewStudentActionMenu();
     const currentPackageId = Number(student?.current_package_id || 0);
 
@@ -2991,6 +3153,10 @@ const initializePackageMerchSelections = useCallback(
   const openRejoinModal = (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
     if (!student || !sourceClass) return;
+    if (isClassInactive(sourceClass)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
     closeViewStudentActionMenu();
     const phases = Array.isArray(student.phases)
       ? student.phases.map((phase) => Number(phase)).filter((phase) => Number.isFinite(phase))
@@ -3109,6 +3275,11 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const openEnrollModal = (classItem) => {
+    if (isClassInactive(classItem)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     setOpenMenuId(null);
     setSelectedClassForEnrollment(classItem);
     setEnrollStep('enrollment-option');
@@ -3139,6 +3310,11 @@ const initializePackageMerchSelections = useCallback(
 
   const openContinuePerPhaseModal = (student, classItem) => {
     if (!student || !classItem) return;
+    if (isClassInactive(classItem)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     setOpenMenuId(null);
     setOpenViewStudentMenuKey(null);
     setViewStudentMenuTarget(null);
@@ -3176,6 +3352,11 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const openManageEnrolledStudentsModal = (classItem) => {
+    if (isClassInactive(classItem)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     setOpenMenuId(null);
     setSelectedClassForEnrollment(classItem);
     setEnrollStep('view');
@@ -3201,6 +3382,11 @@ const initializePackageMerchSelections = useCallback(
   };
 
   const handleStartEnrollment = () => {
+    if (isClassInactive(selectedClassForEnrollment)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
+      return;
+    }
+
     setEnrollStep('enrollment-option');
     setStudentSearchTerm('');
     setShowStudentDropdown(false);
@@ -4812,8 +4998,13 @@ const initializePackageMerchSelections = useCallback(
     // Format dates for date input (YYYY-MM-DD format)
     const formatDateForInput = (dateString) => {
       if (!dateString) return '';
+      const raw = String(dateString).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+        return raw.slice(0, 10);
+      }
       try {
         const date = new Date(dateString);
+        if (Number.isNaN(date.getTime())) return '';
         return date.toISOString().split('T')[0];
       } catch {
         return '';
@@ -4833,7 +5024,9 @@ const initializePackageMerchSelections = useCallback(
       console.error('Error fetching class schedule:', err);
       // Continue with original classItem if fetch fails
     }
-    
+
+    setEditingClass(classDataWithSchedule);
+
     // Initialize days_of_week from classDataWithSchedule if available, otherwise use default
     const initializeDaysOfWeek = () => {
       const defaultDays = {
@@ -4905,6 +5098,11 @@ const resolvedBranchId =
       days_of_week: initializeDaysOfWeek(),
     });
     setFormErrors({});
+    setEditOriginalStartDate(formatDateForInput(classDataWithSchedule.start_date));
+    setStartDateAdjustmentReason('');
+    setStartDatePreview(null);
+    setStartDateAcknowledgeWarnings(false);
+    setLoadingStartDatePreview(false);
 
     // Fetch room schedules if room is already selected
     if (classDataWithSchedule.room_id) {
@@ -4921,6 +5119,11 @@ const resolvedBranchId =
     setSelectedBranch(null);
     setSelectedProgram(null);
     setFormErrors({});
+    setEditOriginalStartDate('');
+    setStartDateAdjustmentReason('');
+    setStartDatePreview(null);
+    setStartDateAcknowledgeWarnings(false);
+    setLoadingStartDatePreview(false);
     setTeacherSearchTerm('');
     setShowTeacherDropdown(false);
     setRoomSchedules([]);
@@ -5241,6 +5444,11 @@ const resolvedBranchId =
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+
+    if (name === 'end_date' && editingClass) {
+      return;
+    }
+
     setFormData((prev) => {
       const updated = {
         ...prev,
@@ -5798,9 +6006,7 @@ const resolvedBranchId =
         max_students: formData.max_students && formData.max_students !== '' ? parseInt(formData.max_students) : null,
         // Start date is REQUIRED - validation ensures it exists before reaching here
         start_date: formData.start_date && formData.start_date.trim() !== '' ? formData.start_date.trim() : null,
-        end_date: manualEndDateAdjustment.enabled && manualEndDateAdjustment.adjustedDate
-          ? manualEndDateAdjustment.adjustedDate
-          : (formData.end_date && formData.end_date !== '' ? formData.end_date : null),
+        end_date: formData.end_date && formData.end_date !== '' ? formData.end_date : null,
         skip_holidays: formData.skip_holidays === true,
         is_vip: formData.is_vip === true,
         days_of_week: formData.days_of_week
@@ -5821,11 +6027,39 @@ const resolvedBranchId =
         setSubmitting(false);
         return;
       }
+
+      const startDateChanged =
+        editingClass && isStartDateChanged(editOriginalStartDate, payload.start_date);
+
+      let startDateAlreadyApplied = false;
+
+      if (startDateChanged) {
+        const wizardClass = await resolveWizardClassForEdit(editingClass);
+        if (classNeedsStartDateWizard(wizardClass)) {
+          const applyResult = await applyStartDateAdjustmentOnEdit(
+            wizardClass,
+            payload.start_date
+          );
+          if (applyResult?.new_end_date) {
+            payload.end_date = applyResult.new_end_date;
+            setFormData((prev) => ({ ...prev, end_date: applyResult.new_end_date }));
+          }
+          setEditOriginalStartDate(payload.start_date);
+          startDateAlreadyApplied = true;
+        }
+      }
       
       if (editingClass) {
+        const putPayload = { ...payload };
+        if (startDateAlreadyApplied) {
+          delete putPayload.start_date;
+        } else if (!startDateChanged) {
+          delete putPayload.start_date;
+          delete putPayload.end_date;
+        }
         await apiRequest(`/classes/${editingClass.class_id}`, {
           method: 'PUT',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(putPayload),
         });
       } else {
         await apiRequest('/classes', {
@@ -5837,7 +6071,12 @@ const resolvedBranchId =
       closeModal();
       fetchClasses();
     } catch (err) {
-      const errorMessage = err.message || `Failed to ${editingClass ? 'update' : 'create'} class`;
+      const responseData = err.response?.data;
+      let errorMessage = err.message || `Failed to ${editingClass ? 'update' : 'create'} class`;
+      if (responseData?.code === 'USE_START_DATE_ADJUSTMENT') {
+        errorMessage =
+          'The start date changed on a class with enrollments or billing. Provide a reason in the adjustment section, then click Update Class.';
+      }
       setError(errorMessage);
       console.error('Error saving class:', err);
       
@@ -6324,6 +6563,7 @@ const resolvedBranchId =
               </p>
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
           {selectedClassForDetails.is_merged_class && (
             <div className="flex items-center gap-2 bg-white rounded-lg shadow px-3 py-2 border border-gray-200">
               <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -6338,6 +6578,7 @@ const resolvedBranchId =
               </button>
             </div>
           )}
+          </div>
         </div>
 
         {/* Phase & Sessions Table - Collapsible by Phase */}
@@ -6831,6 +7072,7 @@ const resolvedBranchId =
           }
           
           const originalTeacherName = classSession?.original_teacher_name || selectedClassForDetails.teacher_name || null;
+          const detailClassInactive = isClassInactive(selectedClassForDetails);
           
           return (
             <>
@@ -6853,16 +7095,24 @@ const resolvedBranchId =
               >
                 <div className="py-1">
                   <button
+                    type="button"
+                    disabled={detailClassInactive}
+                    title={detailClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (detailClassInactive) return;
                       setOpenSessionMenuId(null);
                       openAttendanceModal(classSession, parseInt(phaseNum), parseInt(sessionNum), sessionDate);
                     }}
-                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    className={getClassInactiveMenuButtonClass(detailClassInactive)}
                   >
                     Attendance
                   </button>
                   <button
+                    type="button"
+                    disabled={detailClassInactive}
+                    title={detailClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (detailClassInactive) return;
                       setOpenSessionMenuId(null);
                       setSelectedSessionForSubstitute(classSession || {
                         class_id: selectedClassForDetails.class_id,
@@ -6874,12 +7124,16 @@ const resolvedBranchId =
                       });
                       setIsSubstituteModalOpen(true);
                     }}
-                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    className={getClassInactiveMenuButtonClass(detailClassInactive)}
                   >
                     Sub-teacher
                   </button>
                   <button
+                    type="button"
+                    disabled={detailClassInactive}
+                    title={detailClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (detailClassInactive) return;
                       setOpenSessionMenuId(null);
                       if (selectedClassForDetails && classSession) {
                         setSelectedClassForSuspension(selectedClassForDetails);
@@ -6895,7 +7149,7 @@ const resolvedBranchId =
                         setIsSuspensionModalOpen(true);
                       }
                     }}
-                    className="block w-full text-left px-4 py-2 text-sm text-amber-600 hover:bg-gray-100 transition-colors"
+                    className={getClassInactiveMenuButtonClass(detailClassInactive, 'amber')}
                   >
                     Suspension
                   </button>
@@ -8377,7 +8631,7 @@ const resolvedBranchId =
                   };
 
                   const hasInactivatedSchedule = classesWithInactivatedSchedules.has(classItem.class_id);
-                  const isClassInactive = String(classItem.status || 'Active').trim() === 'Inactive';
+                  const classRowInactive = isClassInactive(classItem);
 
                   return (
                     <tr
@@ -8385,7 +8639,7 @@ const resolvedBranchId =
                       className={
                         hasInactivatedSchedule
                           ? 'bg-yellow-50'
-                          : isClassInactive
+                          : classRowInactive
                             ? 'bg-gray-50 opacity-80'
                             : ''
                       }
@@ -8558,7 +8812,11 @@ const resolvedBranchId =
       />
 
       {/* Action Menu Overlay Modal */}
-      {openMenuId && createPortal(
+      {openMenuId && (() => {
+        const menuClassItem = filteredClasses.find((c) => c.class_id === openMenuId);
+        const menuClassInactive = isClassInactive(menuClassItem);
+
+        return createPortal(
         <>
           <div 
             className="fixed inset-0 z-40 bg-transparent" 
@@ -8598,8 +8856,11 @@ const resolvedBranchId =
               </button>
               <button
                 type="button"
+                disabled={menuClassInactive}
+                title={menuClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (menuClassInactive) return;
                   const selectedClass = filteredClasses.find(c => c.class_id === openMenuId);
                   if (selectedClass) {
                     setOpenMenuId(null);
@@ -8607,14 +8868,17 @@ const resolvedBranchId =
                     openEnrollModal(selectedClass);
                   }
                 }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                className={getClassInactiveMenuButtonClass(menuClassInactive)}
               >
                 Enroll Student
               </button>
               <button
                 type="button"
+                disabled={menuClassInactive}
+                title={menuClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (menuClassInactive) return;
                   const selectedClass = filteredClasses.find(c => c.class_id === openMenuId);
                   if (selectedClass) {
                     setOpenMenuId(null);
@@ -8622,7 +8886,7 @@ const resolvedBranchId =
                     openManageEnrolledStudentsModal(selectedClass);
                   }
                 }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                className={getClassInactiveMenuButtonClass(menuClassInactive)}
               >
                 Manage Enrolled Student
               </button>
@@ -8658,8 +8922,11 @@ const resolvedBranchId =
               </button>
               <button
                 type="button"
+                disabled={menuClassInactive}
+                title={menuClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (menuClassInactive) return;
                   const selectedClass = filteredClasses.find(c => c.class_id === openMenuId);
                   if (selectedClass) {
                     setOpenMenuId(null);
@@ -8667,7 +8934,7 @@ const resolvedBranchId =
                     openMergeModal(selectedClass);
                   }
                 }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                className={getClassInactiveMenuButtonClass(menuClassInactive)}
               >
                 Merge Class
               </button>
@@ -8687,7 +8954,8 @@ const resolvedBranchId =
           </div>
         </>,
         document.body
-      )}
+      );
+      })()}
 
       {/* Create/Edit Class Modal */}
       {isModalOpen && createPortal(
@@ -9355,11 +9623,19 @@ const resolvedBranchId =
                         id="start_date"
                         name="start_date"
                         value={formData.start_date}
-                        onChange={handleInputChange}
+                        onChange={(e) => {
+                          setStartDatePreview(null);
+                          handleInputChange(e);
+                        }}
                         required
                         className={`input-field ${formErrors.start_date ? 'border-red-500' : ''}`}
                         aria-required="true"
                       />
+                      {editingClass && classNeedsStartDateWizard(editingClass) && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          Changing the start date will realign sessions and installment billing when you update the class.
+                        </p>
+                      )}
                       {formErrors.start_date && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.start_date}</p>
                       )}
@@ -9367,20 +9643,25 @@ const resolvedBranchId =
 
                     <div>
                       <label htmlFor="end_date" className="label-field">
-                        End Date <span className="text-red-500">*</span> {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && formData.start_date && !editingClass && (
+                        End Date <span className="text-red-500">*</span>{' '}
+                        {(editingClass ||
+                          (selectedProgram &&
+                            selectedProgram.number_of_phase &&
+                            selectedProgram.number_of_session_per_phase &&
+                            formData.start_date)) && (
                           <span className="text-xs text-gray-500 font-normal">(Auto-calculated)</span>
                         )}
                       </label>
-                      {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && formData.start_date && !editingClass ? (
+                      {editingClass ||
+                      (selectedProgram &&
+                        selectedProgram.number_of_phase &&
+                        selectedProgram.number_of_session_per_phase &&
+                        formData.start_date) ? (
                         <input
                           type="text"
                           id="end_date"
                           name="end_date"
-                          value={formData.end_date ? (() => {
-                            const [year, month, day] = formData.end_date.split('-').map(Number);
-                            const date = new Date(year, month - 1, day);
-                            return formatDateManila(formData.end_date);
-                          })() : ''}
+                          value={formData.end_date ? formatDateManila(formData.end_date) : ''}
                           readOnly
                           className={`input-field bg-gray-50 cursor-not-allowed ${formErrors.end_date ? 'border-red-500' : ''}`}
                           placeholder="dd/mm/yyyy"
@@ -9390,23 +9671,20 @@ const resolvedBranchId =
                           type="date"
                           id="end_date"
                           name="end_date"
-                          value={manualEndDateAdjustment.enabled ? manualEndDateAdjustment.adjustedDate : formData.end_date}
-                          onChange={(e) => {
-                            if (manualEndDateAdjustment.enabled) {
-                              setManualEndDateAdjustment(prev => ({
-                                ...prev,
-                                adjustedDate: e.target.value,
-                              }));
-                            } else {
-                              handleInputChange(e);
-                            }
-                          }}
+                          value={formData.end_date}
+                          onChange={handleInputChange}
                           className={`input-field ${formErrors.end_date ? 'border-red-500' : ''}`}
                         />
                       )}
-                      {selectedProgram && selectedProgram.number_of_phase && selectedProgram.number_of_session_per_phase && formData.start_date && !editingClass && (
+                      {(editingClass ||
+                        (selectedProgram &&
+                          selectedProgram.number_of_phase &&
+                          selectedProgram.number_of_session_per_phase &&
+                          formData.start_date)) && (
                         <p className="mt-1 text-xs text-gray-500">
-                          End date is automatically calculated based on curriculum ({selectedProgram.number_of_phase} phases ? {selectedProgram.number_of_session_per_phase} sessions) and selected days
+                          {editingClass
+                            ? 'End date is automatically calculated from the class schedule and updates when start date or days change.'
+                            : `End date is automatically calculated based on curriculum (${selectedProgram.number_of_phase} phases × ${selectedProgram.number_of_session_per_phase} sessions) and selected days`}
                         </p>
                       )}
                       {formErrors.end_date && (
@@ -9415,111 +9693,34 @@ const resolvedBranchId =
                     </div>
                   </div>
 
-                  {/* Manual End Date Adjustment Section - Only for editing existing classes */}
-                  {editingClass && classSessions && classSessions.length > 0 && (
-                    <div className="border-t border-gray-200 pt-6 mt-6">
-                      <h3 className="text-lg font-semibold text-gray-900 mb-4">Manual End Date Adjustment</h3>
-                      <div className="space-y-4">
-                        {/* Calculated End Date (Read-only) */}
-                        <div>
-                          <label className="label-field">Calculated End Date (from sessions)</label>
-                          <input
-                            type="text"
-                            value={(() => {
-                              const calculatedDate = calculateEndDateFromSessions(
-                                classSessions,
-                                selectedProgram?.number_of_phase || editingClass.number_of_phase,
-                                selectedProgram?.number_of_session_per_phase || editingClass.number_of_session_per_phase
-                              );
-                              if (!calculatedDate) return 'N/A';
-                              const [year, month, day] = calculatedDate.split('-').map(Number);
-                              const date = new Date(year, month - 1, day);
-                              return formatDateManila(calculatedDate);
-                            })()}
-                            readOnly
-                            className="input-field bg-gray-50 cursor-not-allowed"
-                          />
-                          <div className="mt-2 text-sm text-gray-600">
-                            {(() => {
-                              const cancelledCount = classSessions.filter(s => s.status === 'Cancelled').length;
-                              const rescheduledCount = classSessions.filter(s => s.status === 'Rescheduled').length;
-                              const parts = [];
-                              if (cancelledCount > 0) {
-                                parts.push(`${cancelledCount} cancelled session${cancelledCount !== 1 ? 's' : ''}`);
-                              }
-                              if (rescheduledCount > 0) {
-                                parts.push(`${rescheduledCount} rescheduled session${rescheduledCount !== 1 ? 's' : ''}`);
-                              }
-                              return parts.length > 0 ? `Note: ${parts.join(', ')} ${parts.length > 1 ? 'are' : 'is'} excluded from calculation.` : 'All sessions are active.';
-                            })()}
-                          </div>
-                        </div>
-
-                        {/* Manual Override Toggle */}
-                        <div className="flex items-center space-x-3">
-                          <input
-                            type="checkbox"
-                            id="manual_end_date_override"
-                            checked={manualEndDateAdjustment.enabled}
-                            onChange={(e) => {
-                              setManualEndDateAdjustment(prev => ({
-                                ...prev,
-                                enabled: e.target.checked,
-                                adjustedDate: e.target.checked ? formData.end_date : '',
-                              }));
-                            }}
-                            className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-                          />
-                          <label htmlFor="manual_end_date_override" className="text-sm font-medium text-gray-700">
-                            Override calculated end date
-                          </label>
-                        </div>
-
-                        {/* Manual Date Input */}
-                        {manualEndDateAdjustment.enabled && (
-                          <div>
-                            <label htmlFor="adjusted_end_date" className="label-field">
-                              Adjusted End Date
-                            </label>
-                            <input
-                              type="date"
-                              id="adjusted_end_date"
-                              value={manualEndDateAdjustment.adjustedDate}
-                              onChange={(e) => {
-                                setManualEndDateAdjustment(prev => ({
-                                  ...prev,
-                                  adjustedDate: e.target.value,
-                                }));
-                              }}
-                              className="input-field"
-                            />
-                          </div>
-                        )}
-
-                        {/* Notes Field */}
-                        {manualEndDateAdjustment.enabled && (
-                          <div>
-                            <label htmlFor="end_date_adjustment_notes" className="label-field">
-                              Adjustment Reason/Notes
-                            </label>
-                            <textarea
-                              id="end_date_adjustment_notes"
-                              value={manualEndDateAdjustment.notes}
-                              onChange={(e) => {
-                                setManualEndDateAdjustment(prev => ({
-                                  ...prev,
-                                  notes: e.target.value,
-                                }));
-                              }}
-                              rows={3}
-                              className="input-field"
-                              placeholder="e.g., Extended due to holiday disruptions, Additional make-up sessions scheduled..."
-                            />
-                          </div>
-                        )}
+                  {editingStartDateAdjustmentActive && (
+                    <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                      <p className="text-sm text-amber-900">
+                        This class has enrollments or installment billing. Provide a reason, review the impact below,
+                        then click <span className="font-medium">Update Class</span> to apply the new start date.
+                      </p>
+                      <div>
+                        <label htmlFor="start_date_adjustment_reason" className="label-field">
+                          Reason for start date change <span className="text-red-500">*</span>
+                        </label>
+                        <textarea
+                          id="start_date_adjustment_reason"
+                          rows={3}
+                          value={startDateAdjustmentReason}
+                          onChange={(e) => setStartDateAdjustmentReason(e.target.value)}
+                          className="input-field resize-y"
+                          placeholder="e.g. Branch delayed room availability; class moved from July to August"
+                        />
                       </div>
+                      <ClassStartDateAdjustmentPreviewPanel
+                        preview={startDatePreview}
+                        loading={loadingStartDatePreview}
+                        acknowledgeWarnings={startDateAcknowledgeWarnings}
+                        onAcknowledgeWarningsChange={setStartDateAcknowledgeWarnings}
+                      />
                     </div>
                   )}
+
                   </>
                   )}
                 </div>
@@ -10111,11 +10312,19 @@ const resolvedBranchId =
                                     <div className="view-student-action-menu-container relative inline-block">
                                       <button
                                         type="button"
+                                        disabled={isClassInactive(selectedClassForEnrollment)}
                                         onClick={(event) => handleViewStudentActionMenuClick(student, uniqueKey, event)}
-                                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                                        className={getClassInactiveIconButtonClass(
+                                          isClassInactive(selectedClassForEnrollment),
+                                          'inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                                        )}
                                         aria-haspopup="menu"
                                         aria-expanded={openViewStudentMenuKey === uniqueKey}
-                                        title="Actions"
+                                        title={
+                                          isClassInactive(selectedClassForEnrollment)
+                                            ? CLASS_INACTIVE_ACTION_MESSAGE
+                                            : 'Actions'
+                                        }
                                       >
                                         <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                                           <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM18 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -14136,9 +14345,17 @@ const resolvedBranchId =
                                       <div className="relative view-student-action-menu-container">
                                         <button
                                           type="button"
+                                          disabled={isClassInactive(selectedClassForView)}
                                           onClick={(event) => handleViewStudentActionMenuClick(student, uniqueKey, event)}
-                                          className="inline-flex items-center justify-center rounded-full p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-                                          title="Open actions"
+                                          className={getClassInactiveIconButtonClass(
+                                            isClassInactive(selectedClassForView),
+                                            'inline-flex items-center justify-center rounded-full p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors'
+                                          )}
+                                          title={
+                                            isClassInactive(selectedClassForView)
+                                              ? CLASS_INACTIVE_ACTION_MESSAGE
+                                              : 'Open actions'
+                                          }
                                           aria-haspopup="menu"
                                           aria-expanded={openViewStudentMenuKey === uniqueKey}
                                         >
@@ -14189,22 +14406,36 @@ const resolvedBranchId =
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="py-1">
-              {studentHasDroppedPhaseForRejoin(viewStudentMenuTarget) ? (
+              {(() => {
+                const viewStudentClassInactive = isClassInactive(
+                  selectedClassForView || selectedClassForEnrollment
+                );
+
+                return studentHasDroppedPhaseForRejoin(viewStudentMenuTarget) ? (
                 <button
                   type="button"
+                  disabled={viewStudentClassInactive}
+                  title={viewStudentClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                   onClick={() => {
+                    if (viewStudentClassInactive) return;
                     const target = viewStudentMenuTarget;
                     closeViewStudentActionMenu();
                     openRejoinModal(target, selectedClassForEnrollment || selectedClassForView);
                   }}
-                  className="block w-full px-4 py-2 text-left text-sm text-emerald-700 hover:bg-emerald-50 transition-colors"
+                  className={getClassInactiveActionButtonClass(
+                    viewStudentClassInactive,
+                    'block w-full px-4 py-2 text-left text-sm text-emerald-700 hover:bg-emerald-50 transition-colors'
+                  )}
                 >
                   Rejoin
                 </button>
               ) : viewStudentMenuTarget.student_type === 'reserved' ? (
                 <button
                   type="button"
+                  disabled={viewStudentClassInactive}
+                  title={viewStudentClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                   onClick={() => {
+                    if (viewStudentClassInactive) return;
                     const r =
                       viewStudentMenuTarget.reservationRecord ||
                       enrollReservedStudents.find(
@@ -14217,7 +14448,10 @@ const resolvedBranchId =
                       appAlert('Reservation data is missing. Close the modal, refresh the class, and try again.');
                     }
                   }}
-                  className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                  className={getClassInactiveActionButtonClass(
+                    viewStudentClassInactive,
+                    'block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors'
+                  )}
                 >
                   Upgrade to enrollment
                 </button>
@@ -14225,36 +14459,55 @@ const resolvedBranchId =
                 <>
                   <button
                     type="button"
+                    disabled={viewStudentClassInactive}
+                    title={viewStudentClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (viewStudentClassInactive) return;
                       closeViewStudentActionMenu();
                       openMoveStudentModal(viewStudentMenuTarget, selectedClassForView);
                     }}
-                    className="block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors"
+                    className={getClassInactiveActionButtonClass(
+                      viewStudentClassInactive,
+                      'block w-full px-4 py-2 text-left text-sm text-sky-700 hover:bg-sky-50 transition-colors'
+                    )}
                   >
                     Move
                   </button>
                   <button
                     type="button"
+                    disabled={viewStudentClassInactive}
+                    title={viewStudentClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (viewStudentClassInactive) return;
                       closeViewStudentActionMenu();
                       openContinuePerPhaseModal(viewStudentMenuTarget, selectedClassForView);
                     }}
-                    className="block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors"
+                    className={getClassInactiveActionButtonClass(
+                      viewStudentClassInactive,
+                      'block w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 transition-colors'
+                    )}
                   >
                     Continue per phase
                   </button>
                   <button
                     type="button"
+                    disabled={viewStudentClassInactive}
+                    title={viewStudentClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (viewStudentClassInactive) return;
                       closeViewStudentActionMenu();
                       openChangePackageModal(viewStudentMenuTarget, selectedClassForView);
                     }}
-                    className="block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors"
+                    className={getClassInactiveActionButtonClass(
+                      viewStudentClassInactive,
+                      'block w-full px-4 py-2 text-left text-sm text-amber-700 hover:bg-amber-50 transition-colors'
+                    )}
                   >
                     Update Plan
                   </button>
                 </>
-              )}
+              );
+              })()}
             </div>
           </div>
         </>,

@@ -8,6 +8,11 @@ import { appAlert } from '../../utils/appAlert';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import useClassAttendanceDeepLink from '../../hooks/useClassAttendanceDeepLink';
 import { formatDateManila } from '../../utils/dateUtils';
+import {
+  CLASS_INACTIVE_ACTION_MESSAGE,
+  getClassInactiveMenuButtonClass,
+  isClassInactive,
+} from '../../utils/classActiveStatus';
 import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
 import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
 
@@ -232,6 +237,11 @@ const TeacherClasses = () => {
   const openAttendanceModal = async (classSession, phaseNumber, phaseSessionNumber, sessionDate) => {
     if (!selectedClassForDetails) {
       console.error('Cannot open attendance modal: selectedClassForDetails is null');
+      return;
+    }
+
+    if (isClassInactive(selectedClassForDetails)) {
+      appAlert(CLASS_INACTIVE_ACTION_MESSAGE);
       return;
     }
 
@@ -1252,6 +1262,8 @@ const TeacherClasses = () => {
             }
           }
           
+          const detailClassInactive = isClassInactive(selectedClassForDetails);
+
           return (
             <>
               <div 
@@ -1273,11 +1285,15 @@ const TeacherClasses = () => {
               >
                 <div className="py-1">
                   <button
+                    type="button"
+                    disabled={detailClassInactive}
+                    title={detailClassInactive ? CLASS_INACTIVE_ACTION_MESSAGE : undefined}
                     onClick={() => {
+                      if (detailClassInactive) return;
                       setOpenSessionMenuId(null);
                       openAttendanceModal(classSession, parseInt(phaseNum), parseInt(sessionNum), sessionDate);
                     }}
-                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    className={getClassInactiveMenuButtonClass(detailClassInactive)}
                   >
                     Attendance
                   </button>

@@ -3402,10 +3402,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             onClick={closeCreateModal}
           >
             <div
-              className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] overflow-y-auto ${arType === 'Merchandise' ? 'max-w-4xl' : 'max-w-2xl'}`}
+              className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col min-w-0"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="px-6 pt-6 pb-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="shrink-0 px-4 sm:px-6 pt-4 sm:pt-6 pb-4 border-b border-gray-200 flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold text-gray-900">Create Acknowledgement Receipt</h2>
                   <p className="text-xs text-gray-500 mt-1">
@@ -3430,7 +3430,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 </button>
               </div>
 
-              <form onSubmit={handleCreateSubmit} className="px-6 pb-6 pt-4 space-y-4">
+              <form onSubmit={handleCreateSubmit} className="flex flex-col flex-1 min-h-0">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 space-y-4 min-w-0">
+                {(isSuperadmin || isAdminOrSuperadmin) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {isSuperadmin && (
                   <div>
                     <label className="label-field text-xs">
@@ -3478,7 +3481,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     )}
                   </div>
                 )}
-                {(isSuperadmin || isAdminOrSuperadmin) && (
                   <div>
                     <label className="label-field text-xs">
                       Issue Type <span className="text-red-500">*</span>
@@ -3498,6 +3500,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     {createFormErrors.ar_type && (
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.ar_type}</p>
                     )}
+                  </div>
                   </div>
                 )}
                 {!arType ? (
@@ -3525,7 +3528,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     clearAttachment={clearAttachment}
                   />
                 ) : arType === 'Merchandise' ? (
-                  <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 items-start min-w-0">
+                    <div className="space-y-4 min-w-0">
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
                         <label className="label-field text-xs">
@@ -3730,6 +3734,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         </ul>
                       )}
                     </div>
+                    </div>
+                    <div className="space-y-4 min-w-0">
                     <div>
                       <label className="label-field text-xs">
                         Level Tag <span className="text-red-500">*</span>
@@ -3749,6 +3755,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
                       )}
                     </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="label-field text-xs">
                         Payment Date <span className="text-red-500">*</span>
@@ -3765,7 +3772,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       {createFormErrors.issue_date && (
                         <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
                       )}
-                      <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
+                      <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
                     </div>
                     <div>
                       <label className="label-field text-xs">Amount</label>
@@ -3775,6 +3782,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                         className="input-field text-sm bg-gray-100 cursor-not-allowed"
                       />
+                    </div>
                     </div>
                     <div>
                       <label className="label-field text-xs">Tip/Payment Adjustment</label>
@@ -3865,9 +3873,11 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         </div>
                       )}
                     </div>
-                  </>
+                  </div>
+                  </div>
                 ) : (
-                  <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 items-start min-w-0">
+                    <div className="space-y-4 min-w-0">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="label-field text-xs">
@@ -4032,33 +4042,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_amount}</p>
                     )}
                   </div>
-                  <div>
-                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      name="tip_amount"
-                      value={createFormData.tip_amount}
-                      onChange={handleCreateInputChange}
-                      placeholder="0.00"
-                      className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
-                    />
-                    {createFormErrors.tip_amount && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
-                    )}
-                  </div>
                 </div>
-
-                <PaymentDiscountField
-                  className="col-span-full"
-                  hintVariant="ar"
-                  value={createFormData.discount_amount}
-                  onChange={handleCreateInputChange}
-                  error={createFormErrors.discount_amount}
-                  payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
-                  disabled={creating}
-                />
 
                 {selectedPackage &&
                   ((selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')) && (() => {
@@ -4114,8 +4098,37 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     );
                   })()
                 }
+                    </div>
+                    <div className="space-y-4 min-w-0">
+                  <div>
+                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      name="tip_amount"
+                      value={createFormData.tip_amount}
+                      onChange={handleCreateInputChange}
+                      placeholder="0.00"
+                      className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
+                    />
+                    {createFormErrors.tip_amount && (
+                      <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
+                    )}
+                  </div>
+
+                <PaymentDiscountField
+                  className="col-span-full"
+                  hintVariant="ar"
+                  value={createFormData.discount_amount}
+                  onChange={handleCreateInputChange}
+                  error={createFormErrors.discount_amount}
+                  payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
+                  disabled={creating}
+                />
 
                 {arType === 'Package' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="label-field text-xs">
                       Payment Method <span className="text-red-500">*</span>
@@ -4140,9 +4153,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       </p>
                     )}
                   </div>
-                )}
 
-                {arType === 'Package' && (
                   <div>
                     <label className="label-field text-xs">
                       Issue Date <span className="text-red-500">*</span>
@@ -4159,7 +4170,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     {createFormErrors.issue_date && (
                       <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
                     )}
-                    <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time). You may edit it.</p>
+                    <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
+                  </div>
                   </div>
                 )}
 
@@ -4216,11 +4228,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
                   )}
                 </div>
-
-                  </>
+                    </div>
+                  </div>
                 )}
 
-                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                </div>
+
+                <div className="shrink-0 flex justify-end gap-3 px-4 sm:px-6 py-4 border-t border-gray-200 bg-gray-50">
                   <button
                     type="button"
                     onClick={closeCreateModal}
@@ -4341,7 +4355,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         branchFallbackLine={!b?.branch_address?.trim() ? branchLabel : undefined}
                         receiptNo={receiptNo}
                         studentName={r.prospect_student_name || '—'}
-                        classLabel={r.level_tag || '-'}
+                        classLabel="-"
                         receiptDateDisplay={issueYmd ? formatDateManila(issueYmd) : '—'}
                         preparedByText={preparedByText}
                         receivedByText={receivedByText}

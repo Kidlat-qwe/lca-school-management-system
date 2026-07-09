@@ -1265,13 +1265,36 @@ router.get(
         [id]
       );
 
-      // Fetch class label(s) for AR: program_code + level_tag of linked student(s)
+      // Fetch class label(s) for AR: program_code + level_tag of linked student(s).
+      // Merchandise / event ARs have no class — show "-".
       let arClassLabel = '-';
+      const linkedArTypeRes = await query(
+        `SELECT LOWER(TRIM(COALESCE(ar_type, ''))) AS ar_type
+         FROM acknowledgement_receiptstbl
+         WHERE invoice_id = $1
+         ORDER BY ack_receipt_id DESC
+         LIMIT 1`,
+        [id]
+      );
+      const linkedArType = String(linkedArTypeRes.rows[0]?.ar_type || '').trim();
+      const itemsLookMerchandiseOnly =
+        (itemsResult.rows || []).length > 0 &&
+        (itemsResult.rows || []).every((item) =>
+          String(item.description || '')
+            .trim()
+            .toLowerCase()
+            .startsWith('merchandise:')
+        );
+      const isMerchandiseArDoc =
+        linkedArType === 'merchandise' ||
+        linkedArType === 'event' ||
+        itemsLookMerchandiseOnly;
+
       const invoiceStudentIds = (studentsResult.rows || [])
         .map((s) => Number(s.student_id))
         .filter((idVal) => Number.isInteger(idVal) && idVal > 0);
 
-      if (invoiceStudentIds.length > 0) {
+      if (!isMerchandiseArDoc && invoiceStudentIds.length > 0) {
         const classLabelResult = await query(
           `SELECT DISTINCT ON (cs.student_id)
               cs.student_id,
