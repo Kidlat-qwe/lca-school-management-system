@@ -14,13 +14,31 @@ const origin = typeof window !== 'undefined' ? window.location?.origin || '' : '
 const isLocalhost = /localhost|127\.0\.0\.1/.test(origin);
 const isLcaApp = /lca-app\.com/.test(origin);
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  (isLocalhost
-    ? 'http://localhost:3000/api/sms'
-    : isLcaApp
-      ? 'http://api-cms.lca-app.com/api/sms'
-      : 'http://cms.little-champion.com/api/sms');
+/** HTTPS page cannot call HTTP APIs (mixed content). Upgrade http→https when needed. */
+const resolveApiBaseUrl = () => {
+  const fromEnv = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+  let url = fromEnv;
+
+  if (!url) {
+    url = isLocalhost
+      ? 'http://localhost:3000/api/sms'
+      : isLcaApp
+        ? 'https://api-cms.lca-app.com/api/sms'
+        : 'https://cms.little-champion.com/api/sms';
+  }
+
+  if (
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'https:' &&
+    url.startsWith('http://')
+  ) {
+    url = url.replace(/^http:\/\//, 'https://');
+  }
+
+  return url.replace(/\/$/, '');
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export default API_BASE_URL;
 
