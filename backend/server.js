@@ -79,6 +79,9 @@ const getAllowedOrigins = () => {
   origins.push('http://localhost:5173');
   origins.push('https://cms.little-champion.com');
   origins.push('http://cms.little-champion.com');
+  origins.push('https://cms.lca-app.com');
+  origins.push('http://cms.lca-app.com');
+  origins.push('https://*.lca-app.com');
   origins.push('https://*.id.repl.co');
   origins.push('https://*.repl.co');
   
