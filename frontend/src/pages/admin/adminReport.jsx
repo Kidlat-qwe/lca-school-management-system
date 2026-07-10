@@ -15,6 +15,13 @@ const TAB_STUDENT_STATUS = 'student_status';
 const TAB_PROGRAM_PAYMENT_STATUS = 'program_payment_status';
 const TAB_PROGRAM_ENROLLMENT_STATUS = 'program_enrollment_status';
 
+const currentManilaMonthKey = () => {
+  const manila = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
+  return `${manila.getFullYear()}-${String(manila.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const CURRENT_MONTH = currentManilaMonthKey();
+
 const REPORT_TABS = [
   { id: TAB_STUDENT_STATUS, label: 'Student Status' },
   { id: TAB_PROGRAM_PAYMENT_STATUS, label: 'Program Payment Status' },
@@ -25,7 +32,8 @@ const TAB_CONFIG = {
   [TAB_STUDENT_STATUS]: {
     endpoint: '/reports/student-status',
     title: 'Report - Student Status',
-    description: 'Rows from student_statustbl.',
+    description:
+      'Active/inactive per billing month using Month Re-enrollment matrix rules (new + re-enrolled + rejoin), same as Monthly Operational Dashboard.',
     itemLabel: 'students',
     statusOptions: [
       { value: 'all', label: 'All' },
@@ -98,6 +106,8 @@ const AdminReport = () => {
   const [filterEnrolledDateFrom, setFilterEnrolledDateFrom] = useState(urlBootstrap.enrolledDateFrom);
   const [filterEnrolledDateTo, setFilterEnrolledDateTo] = useState(urlBootstrap.enrolledDateTo);
   const [filterEnrolledOnly, setFilterEnrolledOnly] = useState(urlBootstrap.enrolledOnly);
+  const [filterSummaryMonth, setFilterSummaryMonth] = useState(CURRENT_MONTH);
+  const [reportMeta, setReportMeta] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
 
   const config = TAB_CONFIG[tab];
@@ -112,9 +122,16 @@ const AdminReport = () => {
   }, [location.search]);
 
   useEffect(() => {
+    if (tab === TAB_STUDENT_STATUS) {
+      setFilterSummaryMonth((prev) => prev || CURRENT_MONTH);
+    }
+  }, [tab]);
+
+  useEffect(() => {
     setFilterStatus('all');
     setSearchTerm('');
     setRows([]);
+    setReportMeta(null);
     setPagination((p) => ({ ...p, page: 1 }));
     hasLoadedOnceRef.current = false;
     setLoading(true);
@@ -135,8 +152,12 @@ const AdminReport = () => {
         if (filterEnrolledDateTo) params.set('enrolled_date_to', filterEnrolledDateTo);
         if (filterEnrolledOnly) params.set('enrolled_only', '1');
       }
+      if (tab === TAB_STUDENT_STATUS && filterSummaryMonth) {
+        params.set('summary_month', filterSummaryMonth);
+      }
       const response = await apiRequest(`${config.endpoint}?${params.toString()}`);
       setRows(response.data || []);
+      setReportMeta(tab === TAB_STUDENT_STATUS ? response.meta || null : null);
       if (response.pagination) {
         setPagination((prev) => ({
           ...prev,
@@ -169,13 +190,14 @@ const AdminReport = () => {
     filterEnrolledDateFrom,
     filterEnrolledDateTo,
     filterEnrolledOnly,
+    filterSummaryMonth,
   ]);
 
   const table = useMemo(() => {
     if (tab === TAB_STUDENT_STATUS) {
       return {
-        minWidth: '720px',
-        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Updated At'],
+        minWidth: '880px',
+        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Matrix Labels', 'Updated At'],
         render: (row) => (
           <>
             <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
@@ -187,6 +209,9 @@ const AdminReport = () => {
               <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.status)}`}>
                 {row.status || '-'}
               </span>
+            </td>
+            <td className="px-4 py-3 text-sm text-gray-600 max-w-[220px]" title={row.matrix_labels || '-'}>
+              <span className="truncate block">{row.matrix_labels || '—'}</span>
             </td>
             <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatDateTime(row.updated_at)}</td>
           </>
@@ -298,6 +323,17 @@ const AdminReport = () => {
             ))}
           </select>
         </div>
+        {tab === TAB_STUDENT_STATUS ? (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Billing month</label>
+            <input
+              type="month"
+              value={filterSummaryMonth}
+              onChange={(e) => setFilterSummaryMonth(e.target.value)}
+              className="input-field text-sm"
+            />
+          </div>
+        ) : null}
         {tab === TAB_PROGRAM_ENROLLMENT_STATUS ? (
           <>
             <div>
@@ -342,7 +378,16 @@ const AdminReport = () => {
         ) : null}
       </div>
 
-      <StatusLegend tab={tab} />
+      <StatusLegend tab={tab} summaryMonth={tab === TAB_STUDENT_STATUS ? filterSummaryMonth : ''} />
+
+      {tab === TAB_STUDENT_STATUS && reportMeta ? (
+        <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          Billing month <span className="font-semibold">{reportMeta.summary_month}</span>:{' '}
+          <span className="font-semibold">{reportMeta.active_students ?? 0}</span> active students,{' '}
+          <span className="font-semibold">{reportMeta.inactive_students ?? 0}</span> inactive (matrix rules:
+          new + re-enrolled + rejoin).
+        </div>
+      ) : null}
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
 

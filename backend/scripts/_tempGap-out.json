@@ -1,0 +1,1383 @@
+﻿≡ƒöº NODE_ENV=production (from .env file) | DB: psms_production
+≡ƒôè Database Configuration: {
+  host: 'ep-patient-voice-a1urdtt5-pooler.ap-southeast-1.aws.neon.tech',
+  database: 'psms_production',
+  port: '5432',
+  ssl: true,
+  user: 'neondb_owner'
+}
+Γ£à Database connected successfully
+Executed query {
+  text: "SELECT u.user_id, u.full_name, ss.status FROM userstbl u LEFT JOIN student_statustbl ss ON ss.student_id = u.user_id WHERE u.user_type = 'Student'",
+  duration: 474,
+  rows: 602
+}
+Executed query {
+  text: '\n' +
+    '      WITH month_series AS (\n' +
+    '        SELECT gs::date AS month_start\n' +
+    "        FROM generate_series($1::date, $2::date, '1 month'::interval) gs\n" +
+    '      ),\n' +
+    '\n' +
+    '      -- All phase rows for the scoped student set (no date filter here ΓÇö\n' +
+    '      -- we need every phase to compute billing months correctly)\n' +
+    '      scoped_rows AS (\n' +
+    '        SELECT\n' +
+    '          cs.classstudent_id,\n' +
+    '          cs.student_id,\n' +
+    '          cs.class_id,\n' +
+    '          COALESCE(cs.phase_number, 1)                                           AS phase_number,\n' +
+    '          cs.program_enrollment_status,\n' +
+    '          cs.removed_at,\n' +
+    '          cs.enrolled_at,\n' +
+    '          c.start_date                                                           AS class_start_date,\n' +
+    '          \n' +
+    '  NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '  )\n' +
+    '  AND NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM invoicestbl i\n' +
+    '    INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id\n' +
+    '    WHERE ist.student_id = cs.student_id\n' +
+    "      AND i.status = 'Paid'\n" +
+    "      AND i.invoice_description ILIKE '%downpayment%'\n" +
+    "      AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')\n" +
+    '  )                                                                      AS is_full_payment\n' +
+    '        FROM classstudentstbl cs\n' +
+    '        INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $4\n' +
+    "        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '          \n' +
+    '  \n' +
+    '  AND NOT (\n' +
+    "    cs.program_enrollment_status = 'dropped'\n" +
+    '    AND COALESCE(cs.phase_number, 1) < COALESCE(\n' +
+    '  (\n' +
+    '    SELECT NULLIF(ip.phase_start, 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  ), 1)\n' +
+    '  )\n' +
+    '  \n' +
+    '  AND NOT (\n' +
+    '    COALESCE(cs.phase_number, 1) < COALESCE(\n' +
+    '  (\n' +
+    '    SELECT NULLIF(ip.phase_start, 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  ), 1)\n' +
+    '    AND EXISTS (\n' +
+    '      SELECT 1\n' +
+    '      FROM installmentinvoiceprofilestbl ip\n' +
+    '      WHERE ip.student_id = cs.student_id\n' +
+    '        AND ip.class_id = cs.class_id\n' +
+    '    )\n' +
+    '  )\n' +
+    '          AND (\n' +
+    '            cs.enrolled_at IS NOT NULL\n' +
+    '            OR c.start_date IS NOT NULL\n' +
+    '          )\n' +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '\n' +
+    '      -- Installment anchor: earliest active enrolled phase + enrolled_at month.\n' +
+    '      anchor AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_number                                                           AS base_phase,\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date        AS base_month\n" +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '          \n' +
+    "  AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '  AND removed_at IS NULL\n' +
+    '\n' +
+    '        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC\n' +
+    '      ),\n' +
+    '\n' +
+    '      phase_billing AS (\n' +
+    '        SELECT\n' +
+    '          sr.student_id,\n' +
+    '          sr.class_id,\n' +
+    '          sr.phase_number,\n' +
+    '          sr.program_enrollment_status,\n' +
+    '          sr.removed_at,\n' +
+    '          sr.classstudent_id,\n' +
+    '          sr.is_full_payment,\n' +
+    '          CASE\n' +
+    '            WHEN sr.is_full_payment AND sr.class_start_date IS NOT NULL THEN\n' +
+    '              (\n' +
+    "                DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    "                + ((sr.phase_number - 1)::int * INTERVAL '1 month')\n" +
+    '              )::date\n' +
+    '            WHEN a.base_month IS NOT NULL THEN\n' +
+    '              \n' +
+    '  (\n' +
+    '    GREATEST(\n' +
+    '      a.base_month,\n' +
+    '      CASE\n' +
+    '        WHEN sr.class_start_date IS NOT NULL THEN\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    '        ELSE a.base_month\n' +
+    '      END\n' +
+    "    ) + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month')\n" +
+    '  )::date\n' +
+    '            ELSE NULL\n' +
+    '          END AS billing_month\n' +
+    '        FROM scoped_rows sr\n' +
+    '        LEFT JOIN anchor a\n' +
+    '          ON a.student_id = sr.student_id\n' +
+    '         AND a.class_id   = sr.class_id\n' +
+    '      ),\n' +
+    '\n' +
+    '      -- Cohort = enrollment tracks with at least one billing_month inside the display window.\n' +
+    '      cohort AS (\n' +
+    '        SELECT DISTINCT student_id, class_id\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    '          AND billing_month >= $3::date\n' +
+    '          AND billing_month <= $2::date\n' +
+    '      ),\n' +
+    '\n' +
+    '      -- Per track per billing_month: pick the best status row.\n' +
+    '      student_month_status AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id, billing_month)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          billing_month,\n' +
+    '          phase_number,\n' +
+    '          program_enrollment_status,\n' +
+    '          removed_at,\n' +
+    '          is_full_payment\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    '          AND billing_month >= $1::date\n' +
+    '          AND billing_month <= $2::date\n' +
+    '        ORDER BY\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          billing_month,\n' +
+    '          CASE\n' +
+    "            WHEN program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed') AND removed_at IS NULL THEN 0\n" +
+    '            ELSE 1\n' +
+    '          END ASC,\n' +
+    '          removed_at DESC NULLS LAST,\n' +
+    '          classstudent_id DESC\n' +
+    '      ),\n' +
+    '\n' +
+    '      matrix AS (\n' +
+    '        SELECT\n' +
+    '          co.student_id,\n' +
+    '          co.class_id,\n' +
+    '          ms.month_start,\n' +
+    '          sms.program_enrollment_status,\n' +
+    '          sms.removed_at,\n' +
+    '          sms.is_full_payment,\n' +
+    '          sms.phase_number\n' +
+    '        FROM cohort co\n' +
+    '        CROSS JOIN month_series ms\n' +
+    '        LEFT JOIN student_month_status sms\n' +
+    '          ON sms.student_id   = co.student_id\n' +
+    '         AND sms.class_id     = co.class_id\n' +
+    '         AND sms.billing_month = ms.month_start\n' +
+    '      )\n' +
+    '\n' +
+    '      SELECT\n' +
+    '        m.student_id,\n' +
+    '        m.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    "        TO_CHAR(m.month_start, 'YYYY-MM')  AS month_key,\n" +
+    "        TO_CHAR(m.month_start, 'Mon YYYY') AS month_label,\n" +
+    '        m.program_enrollment_status,\n' +
+    '        m.removed_at,\n' +
+    '        m.is_full_payment,\n' +
+    '        m.phase_number\n' +
+    '      FROM matrix m\n' +
+    '      INNER JOIN userstbl u ON u.user_id = m.student_id\n' +
+    '      INNER JOIN classestbl c ON c.class_id = m.class_id\n' +
+    '      ORDER BY u.full_name ASC NULLS LAST, m.class_id ASC, m.student_id ASC, m.month_start ASC\n' +
+    '    ',
+  duration: 267,
+  rows: 1690
+}
+Executed query {
+  text: '\n' +
+    '      WITH scoped_rows AS (\n' +
+    '        SELECT\n' +
+    '          cs.classstudent_id,\n' +
+    '          cs.student_id,\n' +
+    '          cs.class_id,\n' +
+    '          COALESCE(cs.phase_number, 1)                                           AS phase_number,\n' +
+    '          cs.program_enrollment_status,\n' +
+    '          cs.removed_at,\n' +
+    '          cs.enrolled_at,\n' +
+    '          c.start_date                                                           AS class_start_date,\n' +
+    '          \n' +
+    '  NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '  )\n' +
+    '  AND NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM invoicestbl i\n' +
+    '    INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id\n' +
+    '    WHERE ist.student_id = cs.student_id\n' +
+    "      AND i.status = 'Paid'\n" +
+    "      AND i.invoice_description ILIKE '%downpayment%'\n" +
+    "      AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')\n" +
+    '  )                                                                      AS is_full_payment,\n' +
+    '          (\n' +
+    '  SELECT COALESCE(NULLIF(cu.number_of_phase, 0), 1)\n' +
+    '  FROM programstbl cprog\n' +
+    '  INNER JOIN curriculumstbl cu ON cu.curriculum_id = cprog.curriculum_id\n' +
+    '  WHERE cprog.program_id = c.program_id\n' +
+    ')                                           AS class_number_of_phase,\n' +
+    '          \n' +
+    '  EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '      AND COALESCE(ip.total_phases, 0) > 0\n' +
+    '      AND (\n' +
+    '        SELECT COUNT(DISTINCT CASE\n' +
+    "          WHEN i.status = 'Paid' THEN COALESCE(i.invoice_chain_root_id, i.invoice_id)\n" +
+    '          ELSE NULL\n' +
+    '        END)::integer\n' +
+    '        FROM invoicestbl i\n' +
+    '        WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id\n' +
+    '          AND (\n' +
+    '            ip.downpayment_invoice_id IS NULL\n' +
+    '            OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id::INTEGER\n' +
+    '          )\n' +
+    '      ) >= COALESCE(ip.total_phases, 0)\n' +
+    '  )                                      AS installment_package_complete,\n' +
+    '          \n' +
+    '  (\n' +
+    '    SELECT COALESCE(NULLIF(ip.total_phases, 0), 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  )                             AS installment_plan_total_phases\n' +
+    '        FROM classstudentstbl cs\n' +
+    '        INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1\n' +
+    "        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '          \n' +
+    '  \n' +
+    '  AND NOT (\n' +
+    "    cs.program_enrollment_status = 'dropped'\n" +
+    '    AND COALESCE(cs.phase_number, 1) < COALESCE(\n' +
+    '  (\n' +
+    '    SELECT NULLIF(ip.phase_start, 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  ), 1)\n' +
+    '  )\n' +
+    '  \n' +
+    '  AND NOT (\n' +
+    '    COALESCE(cs.phase_number, 1) < COALESCE(\n' +
+    '  (\n' +
+    '    SELECT NULLIF(ip.phase_start, 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  ), 1)\n' +
+    '    AND EXISTS (\n' +
+    '      SELECT 1\n' +
+    '      FROM installmentinvoiceprofilestbl ip\n' +
+    '      WHERE ip.student_id = cs.student_id\n' +
+    '        AND ip.class_id = cs.class_id\n' +
+    '    )\n' +
+    '  )\n' +
+    '          AND (\n' +
+    '            cs.enrolled_at IS NOT NULL\n' +
+    '            OR c.start_date IS NOT NULL\n' +
+    '          )\n' +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '      track_meta AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          class_number_of_phase,\n' +
+    '          installment_package_complete,\n' +
+    '          installment_plan_total_phases\n' +
+    '        FROM scoped_rows\n' +
+    '        ORDER BY student_id, class_id, classstudent_id DESC\n' +
+    '      ),\n' +
+    '      anchor AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_number                                                           AS base_phase,\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date        AS base_month\n" +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '          \n' +
+    "  AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '  AND removed_at IS NULL\n' +
+    '\n' +
+    '        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC\n' +
+    '      ),\n' +
+    '      phase_billing AS (\n' +
+    '        SELECT\n' +
+    '          sr.student_id,\n' +
+    '          sr.class_id,\n' +
+    '          sr.phase_number,\n' +
+    '          sr.program_enrollment_status,\n' +
+    '          sr.removed_at,\n' +
+    '          sr.is_full_payment,\n' +
+    '          CASE\n' +
+    '            WHEN sr.is_full_payment AND sr.class_start_date IS NOT NULL THEN\n' +
+    '              (\n' +
+    "                DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    "                + ((sr.phase_number - 1)::int * INTERVAL '1 month')\n" +
+    '              )::date\n' +
+    '            WHEN a.base_month IS NOT NULL THEN\n' +
+    '              \n' +
+    '  (\n' +
+    '    GREATEST(\n' +
+    '      a.base_month,\n' +
+    '      CASE\n' +
+    '        WHEN sr.class_start_date IS NOT NULL THEN\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    '        ELSE a.base_month\n' +
+    '      END\n' +
+    "    ) + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month')\n" +
+    '  )::date\n' +
+    '            ELSE NULL\n' +
+    '          END AS billing_month\n' +
+    '        FROM scoped_rows sr\n' +
+    '        LEFT JOIN anchor a\n' +
+    '          ON a.student_id = sr.student_id\n' +
+    '         AND a.class_id   = sr.class_id\n' +
+    '      ),\n' +
+    '      first_enrolled AS (\n' +
+    '        SELECT\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          MIN(billing_month) AS first_billing_month\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    "          AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '          AND removed_at IS NULL\n' +
+    '        GROUP BY student_id, class_id\n' +
+    '      ),\n' +
+    '      last_full_pay AS (\n' +
+    '        SELECT\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          MAX(billing_month) AS last_full_pay_billing_month\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    '          AND is_full_payment = true\n' +
+    "          AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '          AND removed_at IS NULL\n' +
+    '        GROUP BY student_id, class_id\n' +
+    '      ),\n' +
+    '      package_complete AS (\n' +
+    '        SELECT\n' +
+    '          pb.student_id,\n' +
+    '          pb.class_id,\n' +
+    '          MAX(pb.billing_month) AS terminal_billing_month\n' +
+    '        FROM phase_billing pb\n' +
+    '        INNER JOIN track_meta tm\n' +
+    '          ON tm.student_id = pb.student_id\n' +
+    '         AND tm.class_id = pb.class_id\n' +
+    '        WHERE pb.billing_month IS NOT NULL\n' +
+    "          AND pb.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '          AND pb.removed_at IS NULL\n' +
+    '          AND (\n' +
+    '            pb.is_full_payment = true\n' +
+    "            OR pb.program_enrollment_status = 'completed'\n" +
+    '            OR tm.installment_package_complete = true\n' +
+    '          )\n' +
+    '        GROUP BY pb.student_id, pb.class_id\n' +
+    '      ),\n' +
+    '      track_first_enrolled AS (\n' +
+    '        SELECT student_id, class_id, MIN(enrolled_at) AS first_enrolled_at\n' +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '        GROUP BY student_id, class_id\n' +
+    '      )\n' +
+    '      SELECT\n' +
+    '        tfe.student_id,\n' +
+    '        tfe.class_id,\n' +
+    '        tfe.first_enrolled_at,\n' +
+    "        TO_CHAR(fe.first_billing_month, 'YYYY-MM') AS first_enrolled_month_key,\n" +
+    "        TO_CHAR(lfp.last_full_pay_billing_month, 'YYYY-MM') AS last_full_pay_month_key,\n" +
+    "        TO_CHAR(pc.terminal_billing_month, 'YYYY-MM') AS package_complete_month_key,\n" +
+    '        tm.class_number_of_phase,\n' +
+    '        tm.installment_package_complete,\n' +
+    '        tm.installment_plan_total_phases\n' +
+    '      FROM track_first_enrolled tfe\n' +
+    '      LEFT JOIN first_enrolled fe\n' +
+    '        ON fe.student_id = tfe.student_id AND fe.class_id = tfe.class_id\n' +
+    '      LEFT JOIN last_full_pay lfp\n' +
+    '        ON lfp.student_id = tfe.student_id AND lfp.class_id = tfe.class_id\n' +
+    '      LEFT JOIN package_complete pc\n' +
+    '        ON pc.student_id = tfe.student_id AND pc.class_id = tfe.class_id\n' +
+    '      LEFT JOIN track_meta tm\n' +
+    '        ON tm.student_id = tfe.student_id AND tm.class_id = tfe.class_id\n' +
+    '    ',
+  duration: 106,
+  rows: 137
+}
+Executed query {
+  text: '\n' +
+    '      SELECT ip.student_id, ip.class_id\n' +
+    '      FROM installmentinvoiceprofilestbl ip\n' +
+    '      WHERE ip.student_id = ANY($1::int[])\n' +
+    '        AND (\n' +
+    '          COALESCE(ip.is_active, true) = true\n' +
+    '          OR COALESCE(ip.generated_count, 0) > 0\n' +
+    '        )\n' +
+    '    ',
+  duration: 87,
+  rows: 100
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    "        TO_CHAR(TIMEZONE('Asia/Manila', cs.removed_at), 'YYYY-MM') AS month_key\n" +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "      WHERE cs.program_enrollment_status = 'dropped'\n" +
+    '        AND cs.removed_at IS NOT NULL\n' +
+    "        AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '        AND (\n' +
+    '          (cs.enrolled_at IS NOT NULL AND cs.enrolled_at < cs.removed_at)\n' +
+    '          OR (\n' +
+    '            cs.enrolled_at IS NULL\n' +
+    "            AND COALESCE(cs.enrolled_by, '') ILIKE '%Drop marker%'\n" +
+    '          )\n' +
+    '        )\n' +
+    "        AND TIMEZONE('Asia/Manila', cs.removed_at)::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', cs.removed_at)::date < $2::date\n" +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 93,
+  rows: 43
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        TO_CHAR(\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date,\n" +
+    "          'YYYY-MM'\n" +
+    '        ) AS month_key\n' +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $1\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    '      INNER JOIN invoicestudentstbl ist ON ist.student_id = cs.student_id\n' +
+    '      INNER JOIN invoicestbl i ON i.invoice_id = ist.invoice_id\n' +
+    '      WHERE cs.removed_at IS NULL\n' +
+    "        AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '        AND c.start_date IS NOT NULL\n' +
+    "        AND i.status = 'Paid'\n" +
+    "        AND i.invoice_description ILIKE '%downpayment%'\n" +
+    "        AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')\n" +
+    '        AND NOT EXISTS (\n' +
+    '          SELECT 1\n' +
+    '          FROM installmentinvoiceprofilestbl ip\n' +
+    '          WHERE ip.student_id = cs.student_id\n' +
+    '            AND ip.class_id = cs.class_id\n' +
+    '        )\n' +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 91,
+  rows: 0
+}
+Executed query {
+  text: '\n' +
+    '      WITH scoped_rows AS (\n' +
+    '        SELECT\n' +
+    '          cs.student_id,\n' +
+    '          cs.class_id,\n' +
+    '          COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    '          cs.enrolled_at,\n' +
+    '          cs.program_enrollment_status,\n' +
+    '          cs.removed_at,\n' +
+    '          cs.classstudent_id,\n' +
+    '          c.start_date AS class_start_date\n' +
+    '        FROM classstudentstbl cs\n' +
+    '        INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    '        INNER JOIN installmentinvoiceprofilestbl ip\n' +
+    '          ON ip.student_id = cs.student_id\n' +
+    '         AND ip.class_id = cs.class_id\n' +
+    "        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '      anchor AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_number AS base_phase,\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date AS base_month\n" +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '          \n' +
+    "  AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '  AND removed_at IS NULL\n' +
+    '\n' +
+    '        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC\n' +
+    '      ),\n' +
+    '      invoice_ranked AS (\n' +
+    '        SELECT\n' +
+    '          ip.student_id,\n' +
+    '          ip.class_id,\n' +
+    '          ip.installmentinvoiceprofiles_id,\n' +
+    '          COALESCE(NULLIF(ip.phase_start, 0), 1) AS phase_start,\n' +
+    '          LOWER(TRIM(i.status)) AS pay_status,\n' +
+    '          ROW_NUMBER() OVER (\n' +
+    '            PARTITION BY ip.installmentinvoiceprofiles_id\n' +
+    '            ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC\n' +
+    '          )::int AS local_phase\n' +
+    '        FROM installmentinvoiceprofilestbl ip\n' +
+    '        INNER JOIN invoicestbl i\n' +
+    '          ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id\n' +
+    '        INNER JOIN invoicestudentstbl ist\n' +
+    '          ON ist.invoice_id = i.invoice_id\n' +
+    '         AND ist.student_id = ip.student_id\n' +
+    '        INNER JOIN classestbl c ON c.class_id = ip.class_id AND c.branch_id = $3\n' +
+    '        WHERE i.due_date IS NOT NULL\n' +
+    "          AND COALESCE(i.status, '') NOT IN ('Cancelled', 'Canceled')\n" +
+    "          AND COALESCE(i.invoice_description, '') NOT ILIKE '%downpayment%'\n" +
+    '          AND (\n' +
+    '            ip.downpayment_invoice_id IS NULL\n' +
+    '            OR i.invoice_id <> ip.downpayment_invoice_id\n' +
+    '          )\n' +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '      invoice_phase AS (\n' +
+    '        SELECT\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_start,\n' +
+    '          phase_start + local_phase - 1 AS phase_number\n' +
+    '        FROM invoice_ranked\n' +
+    "        WHERE pay_status = 'paid'\n" +
+    '      ),\n' +
+    '      invoice_billing AS (\n' +
+    '        SELECT\n' +
+    '          inv.student_id,\n' +
+    '          inv.class_id,\n' +
+    '          inv.phase_number,\n' +
+    '          inv.phase_start,\n' +
+    '          (\n' +
+    '            GREATEST(\n' +
+    '              a.base_month,\n' +
+    '              CASE\n' +
+    '                WHEN c.start_date IS NOT NULL THEN\n' +
+    "                  DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date\n" +
+    '                ELSE a.base_month\n' +
+    '              END\n' +
+    "            ) + ((inv.phase_number - a.base_phase)::int * INTERVAL '1 month')\n" +
+    '          )::date AS billing_month\n' +
+    '        FROM invoice_phase inv\n' +
+    '        INNER JOIN anchor a\n' +
+    '          ON a.student_id = inv.student_id\n' +
+    '         AND a.class_id = inv.class_id\n' +
+    '        INNER JOIN classestbl c ON c.class_id = inv.class_id\n' +
+    '        WHERE inv.phase_number IS NOT NULL\n' +
+    '          AND inv.phase_number >= a.base_phase\n' +
+    '      )\n' +
+    '      SELECT DISTINCT\n' +
+    '        ib.student_id,\n' +
+    '        ib.class_id,\n' +
+    '        ib.phase_number,\n' +
+    '        ib.phase_start,\n' +
+    "        TO_CHAR(ib.billing_month, 'YYYY-MM') AS billing_month_key,\n" +
+    '        u.full_name,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag\n' +
+    '      FROM invoice_billing ib\n' +
+    "      INNER JOIN userstbl u ON u.user_id = ib.student_id AND u.user_type = 'Student'\n" +
+    '      INNER JOIN classestbl c ON c.class_id = ib.class_id\n' +
+    '      WHERE ib.billing_month >= $1::date\n' +
+    '        AND ib.billing_month <= $2::date\n' +
+    '        AND NOT EXISTS (\n' +
+    '          SELECT 1\n' +
+    '          FROM classstudentstbl cs2\n' +
+    '          WHERE cs2.student_id = ib.student_id\n' +
+    '            AND cs2.class_id = ib.class_id\n' +
+    '            AND COALESCE(cs2.phase_number, 1) = ib.phase_number\n' +
+    '            AND cs2.removed_at IS NULL\n' +
+    "            AND cs2.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '        )\n' +
+    '    ',
+  duration: 97,
+  rows: 5
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    "        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key\n" +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "      WHERE cs.program_enrollment_status = 'rejoin'\n" +
+    '        AND cs.enrolled_at IS NOT NULL\n' +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date\n" +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 88,
+  rows: 4
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    "        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key\n" +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "      WHERE cs.program_enrollment_status = 'upsell'\n" +
+    '        AND COALESCE(cs.phase_number, 1) = 1\n' +
+    '        AND cs.enrolled_at IS NOT NULL\n' +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date\n" +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 95,
+  rows: 0
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        r.student_id,\n' +
+    '        r.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        TO_CHAR(\n' +
+    "          TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at)),\n" +
+    "          'YYYY-MM'\n" +
+    '        ) AS month_key,\n' +
+    '        COALESCE(r.reservation_fee_paid_at, r.reserved_at) AS reserved_at\n' +
+    '      FROM reservedstudentstbl r\n' +
+    '      INNER JOIN classestbl c ON r.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = r.student_id AND u.user_type = 'Student'\n" +
+    '      LEFT JOIN invoicestbl inv ON r.invoice_id = inv.invoice_id\n' +
+    '      WHERE (\n' +
+    "  r.status = 'Fee Paid'\n" +
+    '  OR r.reservation_fee_paid_at IS NOT NULL\n' +
+    '  OR (\n' +
+    '    r.invoice_id IS NOT NULL\n' +
+    "    AND COALESCE(inv.status, '') IN ('Paid', 'Partially Paid')\n" +
+    '  )\n' +
+    ')\n' +
+    '        AND r.expired_at IS NULL\n' +
+    '        AND COALESCE(r.reservation_fee_paid_at, r.reserved_at) IS NOT NULL\n' +
+    "        AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', COALESCE(r.reservation_fee_paid_at, r.reserved_at))::date < $2::date\n" +
+    '        AND NOT EXISTS (\n' +
+    '          SELECT 1 FROM classstudentstbl cs\n' +
+    '          WHERE cs.student_id = r.student_id\n' +
+    '            AND cs.class_id = r.class_id\n' +
+    '            AND cs.removed_at IS NULL\n' +
+    "            AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed', 'pending_enrollment')\n" +
+    '        )\n' +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 88,
+  rows: 1
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    "        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key,\n" +
+    '        cs.enrolled_at\n' +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "      WHERE cs.program_enrollment_status = 'pending_enrollment'\n" +
+    '        AND cs.removed_at IS NULL\n' +
+    '        AND cs.enrolled_at IS NOT NULL\n' +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date\n" +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 85,
+  rows: 6
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT\n' +
+    '        cs.student_id,\n' +
+    '        cs.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    '        COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    "        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key\n" +
+    '      FROM classstudentstbl cs\n' +
+    '      INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $3\n' +
+    "      INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "      WHERE cs.program_enrollment_status = 'new'\n" +
+    '        AND cs.removed_at IS NULL\n' +
+    '        AND COALESCE(cs.phase_number, 1) = COALESCE(\n' +
+    '  (\n' +
+    '    SELECT NULLIF(ip.phase_start, 0)\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '    ORDER BY ip.installmentinvoiceprofiles_id DESC\n' +
+    '    LIMIT 1\n' +
+    '  ), 1)\n' +
+    '        AND cs.enrolled_at IS NOT NULL\n' +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date\n" +
+    "        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date\n" +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 92,
+  rows: 127
+}
+Executed query {
+  text: '\n' +
+    '      WITH month_series AS (\n' +
+    '        SELECT gs::date AS month_start\n' +
+    "        FROM generate_series($1::date, $2::date, '1 month'::interval) gs\n" +
+    '      ),\n' +
+    '      scoped_rows AS (\n' +
+    '        SELECT\n' +
+    '          cs.classstudent_id,\n' +
+    '          cs.student_id,\n' +
+    '          cs.class_id,\n' +
+    '          COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    '          cs.program_enrollment_status,\n' +
+    '          cs.removed_at,\n' +
+    '          cs.enrolled_at,\n' +
+    '          c.start_date AS class_start_date,\n' +
+    '          c.level_tag AS class_level_tag,\n' +
+    '          \n' +
+    '  NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM installmentinvoiceprofilestbl ip\n' +
+    '    WHERE ip.student_id = cs.student_id\n' +
+    '      AND ip.class_id = cs.class_id\n' +
+    '  )\n' +
+    '  AND NOT EXISTS (\n' +
+    '    SELECT 1\n' +
+    '    FROM invoicestbl i\n' +
+    '    INNER JOIN invoicestudentstbl ist ON ist.invoice_id = i.invoice_id\n' +
+    '    WHERE ist.student_id = cs.student_id\n' +
+    "      AND i.status = 'Paid'\n" +
+    "      AND i.invoice_description ILIKE '%downpayment%'\n" +
+    "      AND i.remarks ILIKE ('%CLASS_ID:' || cs.class_id::text || '%')\n" +
+    '  ) AS is_full_payment\n' +
+    '        FROM classstudentstbl cs\n' +
+    '        INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $5\n' +
+    "        INNER JOIN userstbl u ON u.user_id = cs.student_id AND u.user_type = 'Student'\n" +
+    "        WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '          AND cs.student_id = ANY($4::int[])\n' +
+    '          AND (cs.enrolled_at IS NOT NULL OR c.start_date IS NOT NULL)\n' +
+    '      ),\n' +
+    '      anchor AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_number AS base_phase,\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date AS base_month\n" +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC\n' +
+    '      ),\n' +
+    '      phase_billing AS (\n' +
+    '        SELECT\n' +
+    '          sr.student_id,\n' +
+    '          sr.class_id,\n' +
+    '          sr.phase_number,\n' +
+    '          sr.program_enrollment_status,\n' +
+    '          sr.removed_at,\n' +
+    '          sr.classstudent_id,\n' +
+    '          sr.is_full_payment,\n' +
+    '          sr.class_level_tag,\n' +
+    '          CASE\n' +
+    '            WHEN sr.is_full_payment AND sr.class_start_date IS NOT NULL THEN\n' +
+    '              (\n' +
+    "                DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    "                + ((sr.phase_number - 1)::int * INTERVAL '1 month')\n" +
+    '              )::date\n' +
+    '            WHEN a.base_month IS NOT NULL THEN\n' +
+    '              \n' +
+    '  (\n' +
+    '    GREATEST(\n' +
+    '      a.base_month,\n' +
+    '      CASE\n' +
+    '        WHEN sr.class_start_date IS NOT NULL THEN\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', sr.class_start_date))::date\n" +
+    '        ELSE a.base_month\n' +
+    '      END\n' +
+    "    ) + ((sr.phase_number - a.base_phase)::int * INTERVAL '1 month')\n" +
+    '  )::date\n' +
+    '            ELSE NULL\n' +
+    '          END AS billing_month\n' +
+    '        FROM scoped_rows sr\n' +
+    '        LEFT JOIN anchor a\n' +
+    '          ON a.student_id = sr.student_id\n' +
+    '         AND a.class_id = sr.class_id\n' +
+    '      ),\n' +
+    '      cohort AS (\n' +
+    '        SELECT DISTINCT student_id, class_id\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    '          AND billing_month >= $3::date\n' +
+    '          AND billing_month <= $2::date\n' +
+    '      ),\n' +
+    '      cohort_with_upsell_anchors AS (\n' +
+    '        SELECT student_id, class_id FROM cohort\n' +
+    '        UNION\n' +
+    '        SELECT DISTINCT pb.student_id, pb.class_id\n' +
+    '        FROM phase_billing pb\n' +
+    '        INNER JOIN cohort co ON co.student_id = pb.student_id\n' +
+    '        INNER JOIN classestbl c_co ON c_co.class_id = co.class_id\n' +
+    '        INNER JOIN classestbl c_pb ON c_pb.class_id = pb.class_id\n' +
+    '        WHERE (\n' +
+    '          CASE c_pb.level_tag\n' +
+    "            WHEN 'Playgroup' THEN 0\n" +
+    "            WHEN 'Nursery' THEN 1\n" +
+    "            WHEN 'Pre-Kindergarten' THEN 2\n" +
+    "            WHEN 'Kindergarten' THEN 3\n" +
+    "            WHEN 'Grade School' THEN 4\n" +
+    '            ELSE -1\n' +
+    '          END\n' +
+    '        ) < (\n' +
+    '          CASE c_co.level_tag\n' +
+    "            WHEN 'Playgroup' THEN 0\n" +
+    "            WHEN 'Nursery' THEN 1\n" +
+    "            WHEN 'Pre-Kindergarten' THEN 2\n" +
+    "            WHEN 'Kindergarten' THEN 3\n" +
+    "            WHEN 'Grade School' THEN 4\n" +
+    '            ELSE -1\n' +
+    '          END\n' +
+    '        )\n' +
+    '        AND (\n' +
+    '          CASE c_pb.level_tag\n' +
+    "            WHEN 'Playgroup' THEN 0\n" +
+    "            WHEN 'Nursery' THEN 1\n" +
+    "            WHEN 'Pre-Kindergarten' THEN 2\n" +
+    "            WHEN 'Kindergarten' THEN 3\n" +
+    "            WHEN 'Grade School' THEN 4\n" +
+    '            ELSE -1\n' +
+    '          END\n' +
+    '        ) >= 0\n' +
+    '      ),\n' +
+    '      student_month_status AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id, billing_month)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          billing_month,\n' +
+    '          phase_number,\n' +
+    '          program_enrollment_status,\n' +
+    '          removed_at,\n' +
+    '          is_full_payment,\n' +
+    '          class_level_tag\n' +
+    '        FROM phase_billing\n' +
+    '        WHERE billing_month IS NOT NULL\n' +
+    '          AND billing_month >= $1::date\n' +
+    '          AND billing_month <= $2::date\n' +
+    '        ORDER BY\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          billing_month,\n' +
+    '          CASE\n' +
+    "            WHEN program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed') AND removed_at IS NULL THEN 0\n" +
+    '            ELSE 1\n' +
+    '          END ASC,\n' +
+    '          removed_at DESC NULLS LAST,\n' +
+    '          classstudent_id DESC\n' +
+    '      ),\n' +
+    '      matrix AS (\n' +
+    '        SELECT\n' +
+    '          co.student_id,\n' +
+    '          co.class_id,\n' +
+    '          ms.month_start,\n' +
+    '          sms.program_enrollment_status,\n' +
+    '          sms.removed_at,\n' +
+    '          sms.is_full_payment,\n' +
+    '          sms.class_level_tag,\n' +
+    '          sms.phase_number\n' +
+    '        FROM cohort_with_upsell_anchors co\n' +
+    '        CROSS JOIN month_series ms\n' +
+    '        LEFT JOIN student_month_status sms\n' +
+    '          ON sms.student_id = co.student_id\n' +
+    '         AND sms.class_id = co.class_id\n' +
+    '         AND sms.billing_month = ms.month_start\n' +
+    '      )\n' +
+    '      SELECT\n' +
+    '        m.student_id,\n' +
+    '        m.class_id,\n' +
+    '        c.class_name,\n' +
+    '        c.level_tag AS class_level_tag,\n' +
+    '        u.full_name,\n' +
+    "        TO_CHAR(m.month_start, 'YYYY-MM') AS month_key,\n" +
+    '        m.program_enrollment_status,\n' +
+    '        m.removed_at,\n' +
+    '        m.is_full_payment,\n' +
+    '        m.phase_number\n' +
+    '      FROM matrix m\n' +
+    '      INNER JOIN userstbl u ON u.user_id = m.student_id\n' +
+    '      INNER JOIN classestbl c ON c.class_id = m.class_id\n' +
+    '      ORDER BY m.student_id ASC, m.class_id ASC, m.month_start ASC\n' +
+    '    ',
+  duration: 200,
+  rows: 1781
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT r.student_id, r.class_id\n' +
+    '      FROM reservedstudentstbl r\n' +
+    '      INNER JOIN classestbl c ON r.class_id = c.class_id\n' +
+    '      LEFT JOIN invoicestbl inv ON r.invoice_id = inv.invoice_id\n' +
+    '      \n' +
+    '      WHERE r.student_id = ANY($1::int[])\n' +
+    '        AND (\n' +
+    "  r.status = 'Fee Paid'\n" +
+    '  OR r.reservation_fee_paid_at IS NOT NULL\n' +
+    '  OR (\n' +
+    '    r.invoice_id IS NOT NULL\n' +
+    "    AND COALESCE(inv.status, '') IN ('Paid', 'Partially Paid')\n" +
+    '  )\n' +
+    ')\n' +
+    '        AND (\n' +
+    "          r.status = 'Upgraded'\n" +
+    '          OR EXISTS (\n' +
+    '            SELECT 1\n' +
+    '            FROM classstudentstbl cs\n' +
+    '            WHERE cs.student_id = r.student_id\n' +
+    '              AND cs.class_id = r.class_id\n' +
+    '              AND cs.removed_at IS NULL\n' +
+    "              AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '              AND COALESCE(cs.phase_number, 1) = 1\n' +
+    '          )\n' +
+    '        )\n' +
+    '        AND (r.branch_id = $2 OR c.branch_id = $2)\n' +
+    '    ',
+  duration: 92,
+  rows: 0
+}
+Executed query {
+  text: '\n' +
+    '      SELECT DISTINCT ip.student_id, ip.class_id\n' +
+    '      FROM installmentinvoiceprofilestbl ip\n' +
+    '      INNER JOIN classestbl c ON c.class_id = ip.class_id AND c.branch_id = $2\n' +
+    '      WHERE ip.student_id = ANY($1::int[])\n' +
+    '        AND (\n' +
+    '        COALESCE(ip.is_active, true) = true\n' +
+    '        OR COALESCE(ip.generated_count, 0) > 0\n' +
+    '      )\n' +
+    '        \n' +
+    '        \n' +
+    '        \n' +
+    '    ',
+  duration: 89,
+  rows: 107
+}
+Γ£à Database connected successfully
+Executed query {
+  text: '\n' +
+    '      SELECT\n' +
+    '        ip.student_id,\n' +
+    '        ip.class_id,\n' +
+    '        (\n' +
+    '          COALESCE(ip.total_phases, 0) > 0\n' +
+    '          AND (\n' +
+    '            SELECT COUNT(DISTINCT CASE\n' +
+    "              WHEN i.status = 'Paid' THEN COALESCE(i.invoice_chain_root_id, i.invoice_id)\n" +
+    '              ELSE NULL\n' +
+    '            END)::integer\n' +
+    '            FROM invoicestbl i\n' +
+    '            WHERE i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id\n' +
+    '              AND (\n' +
+    '                ip.downpayment_invoice_id IS NULL\n' +
+    '                OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id::INTEGER\n' +
+    '              )\n' +
+    '          ) >= COALESCE(ip.total_phases, 0)\n' +
+    '        ) AS installment_package_complete\n' +
+    '      FROM installmentinvoiceprofilestbl ip\n' +
+    '      INNER JOIN classestbl c ON c.class_id = ip.class_id AND c.branch_id = $2\n' +
+    '      WHERE ip.student_id = ANY($1::int[])\n' +
+    '        AND (\n' +
+    '        COALESCE(ip.is_active, true) = true\n' +
+    '        OR COALESCE(ip.generated_count, 0) > 0\n' +
+    '      )\n' +
+    '    ',
+  duration: 354,
+  rows: 107
+}
+Executed query {
+  text: '\n' +
+    '      WITH scoped_rows AS (\n' +
+    '        SELECT\n' +
+    '          cs.student_id,\n' +
+    '          cs.class_id,\n' +
+    '          COALESCE(cs.phase_number, 1) AS phase_number,\n' +
+    '          cs.enrolled_at,\n' +
+    '          cs.program_enrollment_status,\n' +
+    '          cs.removed_at,\n' +
+    '          cs.classstudent_id,\n' +
+    '          c.start_date AS class_start_date\n' +
+    '        FROM classstudentstbl cs\n' +
+    '        INNER JOIN classestbl c ON cs.class_id = c.class_id AND c.branch_id = $2\n' +
+    '        INNER JOIN installmentinvoiceprofilestbl ip\n' +
+    '          ON ip.student_id = cs.student_id\n' +
+    '         AND ip.class_id = cs.class_id\n' +
+    '        WHERE cs.student_id = ANY($1::int[])\n' +
+    "          AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'\n" +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '      anchor AS (\n' +
+    '        SELECT DISTINCT ON (student_id, class_id)\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          phase_number AS base_phase,\n' +
+    "          DATE_TRUNC('month', TIMEZONE('Asia/Manila', enrolled_at))::date AS base_month\n" +
+    '        FROM scoped_rows\n' +
+    '        WHERE enrolled_at IS NOT NULL\n' +
+    '          \n' +
+    "  AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')\n" +
+    '  AND removed_at IS NULL\n' +
+    '\n' +
+    '        ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC\n' +
+    '      ),\n' +
+    '      invoice_phase AS (\n' +
+    '        SELECT\n' +
+    '          ip.student_id,\n' +
+    '          ip.class_id,\n' +
+    '          COALESCE(\n' +
+    "            (regexp_match(i.remarks, 'TARGET_PHASE:(\\d+)', 'i'))[1]::int,\n" +
+    "            (regexp_match(i.invoice_description, 'phase\\s*(\\d+)', 'i'))[1]::int\n" +
+    '          ) AS phase_number,\n' +
+    "          TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_date_ymd,\n" +
+    "          LOWER(TRIM(i.status)) = 'paid' AS is_paid\n" +
+    '        FROM installmentinvoiceprofilestbl ip\n' +
+    '        INNER JOIN invoicestbl i\n' +
+    '          ON i.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id\n' +
+    '        INNER JOIN invoicestudentstbl ist\n' +
+    '          ON ist.invoice_id = i.invoice_id\n' +
+    '         AND ist.student_id = ip.student_id\n' +
+    '        INNER JOIN classestbl c ON c.class_id = ip.class_id AND c.branch_id = $2\n' +
+    '        WHERE ip.student_id = ANY($1::int[])\n' +
+    '          AND i.due_date IS NOT NULL\n' +
+    "          AND COALESCE(i.status, '') NOT IN ('Cancelled', 'Canceled')\n" +
+    '          AND (\n' +
+    '            ip.downpayment_invoice_id IS NULL\n' +
+    '            OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id\n' +
+    '          )\n' +
+    '          \n' +
+    '          \n' +
+    '          \n' +
+    '      ),\n' +
+    '      invoice_billing AS (\n' +
+    '        SELECT\n' +
+    '          inv.student_id,\n' +
+    '          inv.class_id,\n' +
+    '          inv.phase_number,\n' +
+    '          inv.due_date_ymd,\n' +
+    '          inv.is_paid,\n' +
+    '          TO_CHAR(\n' +
+    '            (\n' +
+    '              GREATEST(\n' +
+    '                a.base_month,\n' +
+    '                CASE\n' +
+    '                  WHEN c.start_date IS NOT NULL THEN\n' +
+    "                    DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date\n" +
+    '                  ELSE a.base_month\n' +
+    '                END\n' +
+    "              ) + ((inv.phase_number - a.base_phase)::int * INTERVAL '1 month')\n" +
+    '            )::date,\n' +
+    "            'YYYY-MM'\n" +
+    '          ) AS billing_month_key\n' +
+    '        FROM invoice_phase inv\n' +
+    '        INNER JOIN anchor a\n' +
+    '          ON a.student_id = inv.student_id\n' +
+    '         AND a.class_id = inv.class_id\n' +
+    '        INNER JOIN classestbl c ON c.class_id = inv.class_id\n' +
+    '        WHERE inv.phase_number IS NOT NULL\n' +
+    '          AND inv.phase_number >= a.base_phase\n' +
+    '      ),\n' +
+    '      unpaid_billing AS (\n' +
+    '        SELECT\n' +
+    '          student_id,\n' +
+    '          class_id,\n' +
+    '          billing_month_key,\n' +
+    '          MAX(phase_number) AS phase_number,\n' +
+    '          MAX(due_date_ymd) AS due_date_ymd\n' +
+    '        FROM invoice_billing\n' +
+    '        WHERE NOT is_paid\n' +
+    '          AND billing_month_key IS NOT NULL\n' +
+    '          AND due_date_ymd IS NOT NULL\n' +
+    '        GROUP BY student_id, class_id, billing_month_key\n' +
+    '      )\n' +
+    '      SELECT\n' +
+    '        student_id,\n' +
+    '        class_id,\n' +
+    '        billing_month_key,\n' +
+    '        phase_number,\n' +
+    '        due_date_ymd,\n' +
+    '        false AS is_paid\n' +
+    '      FROM unpaid_billing\n' +
+    '    ',
+  duration: 89,
+  rows: 37
+}
+{
+  "physical_count": 113,
+  "not_in_dashboard_100_count": 15,
+  "names": [
+    {
+      "physical": "Skyler Dempo",
+      "reason": "Not registered in CMS",
+      "cms_name": null
+    },
+    {
+      "physical": "Queen Hyzelyn Almanza",
+      "reason": "July matrix only: Inactive",
+      "cms_name": "Queen Hyzelyn Almanza",
+      "student_id": 31,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Inactive",
+          "status": "inactive",
+          "class": "SOMO_Nursery_MWF_4:00-5:00PM"
+        }
+      ]
+    },
+    {
+      "physical": "Alexandra Michaela Montales",
+      "reason": "July matrix only: Inactive",
+      "cms_name": "Alexandra Michaela Perez Montales",
+      "student_id": 14,
+      "match": "fuzzy",
+      "julyCells": [
+        {
+          "label": "Inactive",
+          "status": "inactive",
+          "class": "SOMO_Pre-Kinder_TThS_9:30-10:30AM"
+        }
+      ]
+    },
+    {
+      "physical": "Joe Isaac Maragrag",
+      "reason": "July matrix only: Inactive",
+      "cms_name": "Joe Isaac Maragrag",
+      "student_id": 99,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Inactive",
+          "status": "inactive",
+          "class": "SOMO_Nursery_TThS_1:00-2:00PM"
+        }
+      ]
+    },
+    {
+      "physical": "Tian Yi Wen",
+      "reason": "July matrix only: Inactive",
+      "cms_name": "Tian Yi Wen",
+      "student_id": 100,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Inactive",
+          "status": "inactive",
+          "class": "SOMO_Playgroup__TTH_1:00-2:00PM"
+        }
+      ]
+    },
+    {
+      "physical": "Aadam June Cawili",
+      "reason": "July matrix only: Inactive",
+      "cms_name": "Aadam June Cawili",
+      "student_id": 293,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Inactive",
+          "status": "inactive",
+          "class": "SOMO_Pre-Kinder_MWF_2:30-3:30PM"
+        }
+      ]
+    },
+    {
+      "physical": "Jesse Faith De La Cruz",
+      "reason": "Not registered in CMS",
+      "cms_name": null
+    },
+    {
+      "physical": "Hiraya Cabiles",
+      "reason": "Not registered in CMS",
+      "cms_name": null
+    },
+    {
+      "physical": "Kalliope Astrid Loise Jeneza",
+      "reason": "July matrix only: Active",
+      "cms_name": "Kalliope Astrid Loise Jeneza",
+      "student_id": 576,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Active",
+          "status": "active",
+          "class": "SOMO_JULY_Nursery_MWF_4:00-5:00PM"
+        }
+      ]
+    },
+    {
+      "physical": "Xion Fritz De Castro",
+      "reason": "Inactive in Student Status (none)",
+      "cms_name": "Xion Fritz De Castro",
+      "student_id": 612,
+      "match": "exact",
+      "julyCells": []
+    },
+    {
+      "physical": "Margarette Celine P. Endico",
+      "reason": "July matrix only: Active",
+      "cms_name": "Margarette Celine P. Endico",
+      "student_id": 620,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Active",
+          "status": "active",
+          "class": "SOMO_Playgroup_TTH_9:30-10:30AM"
+        }
+      ]
+    },
+    {
+      "physical": "Christian Alonzo Caligner",
+      "reason": "July matrix only: Active",
+      "cms_name": "Christian Alonzo Caligner",
+      "student_id": 634,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "Active",
+          "status": "active",
+          "class": "SOMO_JULY_Nursery_MWF_4:00-5:00PM"
+        }
+      ]
+    },
+    {
+      "physical": "Azikiel F. Tecson",
+      "reason": "July matrix only: pending enrollment",
+      "cms_name": "Azikiel F. Tecson",
+      "student_id": 643,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "pending enrollment",
+          "status": "pending_enrollment",
+          "class": "SOMO_Playgroup_TTH_9:30-10:30AM"
+        }
+      ]
+    },
+    {
+      "physical": "Caden Jacob Solis",
+      "reason": "July matrix only: pending enrollment",
+      "cms_name": "Caden Jacob Solis",
+      "student_id": 650,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "pending enrollment",
+          "status": "pending_enrollment",
+          "class": "SOMO_JULY_Nursery_TTHS_9:30AM"
+        }
+      ]
+    },
+    {
+      "physical": "Matteo Arvian Abenion",
+      "reason": "July matrix only: pending enrollment",
+      "cms_name": "Matteo Arvian Abenion",
+      "student_id": 653,
+      "match": "exact",
+      "julyCells": [
+        {
+          "label": "pending enrollment",
+          "status": "pending_enrollment",
+          "class": "SOMO_Kindergarten_1:00 - 3:00 PM"
+        }
+      ]
+    }
+  ]
+}

@@ -5559,3 +5559,37 @@ export async function loadMonthlyOperationalEnrollmentFromMonthMatrix(queryFn, o
 
 /** @deprecated Use loadMonthMatrixOperationalStatsForMonth */
 export const loadMonthReEnrollmentStatForMonth = loadMonthMatrixOperationalStatsForMonth;
+
+/**
+ * Whether a month-matrix cell counts as "active" for Reports → Student Status and
+ * Monthly Operational Dashboard total active students (new + re-enrollment + rejoin).
+ * Re-enrollment includes visible re-enrolled and completed cells in the rate numerator.
+ */
+export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student) => {
+  if (!cell?.label) return false;
+  const label = String(cell.label).trim().toLowerCase();
+  if (label === 'new' || label === 'rejoin') return true;
+  return matrixCellCountsTowardReEnrollmentRate(cell, student);
+};
+
+/**
+ * @param {object[]} students - matrix tracks from loadStudentMonthEnrollmentMatrix
+ * @param {string} monthKey - YYYY-MM
+ * @returns {Map<number, { labels: Set<string>, trackCount: number }>}
+ */
+export const buildMonthMatrixActiveStudentIndex = (students, monthKey) => {
+  const byStudentId = new Map();
+  for (const track of students || []) {
+    const cell = track.months?.[monthKey];
+    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track)) continue;
+    const sid = Number(track.student_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (!byStudentId.has(sid)) {
+      byStudentId.set(sid, { labels: new Set(), trackCount: 0 });
+    }
+    const entry = byStudentId.get(sid);
+    entry.labels.add(String(cell.label));
+    entry.trackCount += 1;
+  }
+  return byStudentId;
+};

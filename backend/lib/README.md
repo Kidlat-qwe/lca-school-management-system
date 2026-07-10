@@ -101,6 +101,10 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 - **Cross-class installment display**: when billing lives on the profile class but enrollment was auto-created on a different class (same student), the display-class row sets `matrix_installment_class_id`, copies billing-month cells from the profile class, strips wrong display-only enrolled months, and hides the profile-class row. Drop/rejoin gap rules are skipped on those rows so lifecycle can show **Inactive** after **dropped**. Repair script: `backend/scripts/repairKievZionSerranoMatrixAlignment.js` (Kiev Zion Z. Serrano reference case).
 - **Paid installment phase gaps**: when a paid installment phase has no matching `classstudentstbl` row (e.g. phase 2 paid but only phases 1 and 3 enrolled), the month matrix synthesizes **re-enrolled** on that phase’s billing month from paid invoice order (`ROW_NUMBER` by `issue_date`, excluding downpayment). Phase numbers fall back to invoice sequence when `TARGET_PHASE` remarks are absent.
 
+## `studentStatusReport/`
+
+**Reports → Student Status** tab: `loadStudentStatusReportPage` classifies students **active** / **inactive** for a selected billing month (`summary_month`) using the same Month Re-enrollment matrix rules as **Monthly Operational Dashboard → Total Active Students** (`new` + re-enrolled/completed rate numerator + `rejoin`). See `studentStatusReport/README.md`.
+
 ## `operationalDashboardRecentPayments.js`
 
 Returns up to 50 completed **invoice** payments for daily / monthly operational dashboards (`recent_invoice_payments` on the API). Each row includes payment-log invoice context (`invoice_description`, installment profile, partial-payment parent, etc.) so the UI can show the same **package/item** label as Payment Logs. The UI shows three rows with vertical scroll when there are more. Filter: `paymenttbl.issue_date` in scope, `status = Completed`, approval not Returned/Rejected, `invoice_id` required. Ordered newest first.

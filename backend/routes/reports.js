@@ -3,6 +3,7 @@ import { query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
+import { loadStudentStatusReportPage } from '../lib/studentStatusReport/studentStatusReport.js';
 
 const router = express.Router();
 
@@ -162,7 +163,7 @@ const REPORT_ACTIVE_BRANCH_CLAUSE = (req, branchId, params, paramCount, branchSq
 
 /**
  * GET /api/sms/reports/student-status
- * Source table: student_statustbl (one row per student).
+ * Active/inactive from Month Re-enrollment matrix (same rules as Monthly Operational Dashboard).
  */
 router.get(
   '/student-status',
@@ -173,80 +174,37 @@ router.get(
       .optional()
       .isIn(['all', 'active', 'inactive'])
       .withMessage('status must be all, active, or inactive'),
+    queryValidator('summary_month')
+      .optional()
+      .matches(/^\d{4}-\d{2}$/)
+      .withMessage('summary_month must be YYYY-MM'),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
-      const { status = 'all', branch_id, search, page = 1, limit = 10 } = req.query;
-      const pageNum = parseInt(page, 10) || 1;
-      const limitNum = parseInt(limit, 10) || 10;
-      const offset = (pageNum - 1) * limitNum;
-      const searchTerm = String(search || '').trim();
+      const { status = 'all', branch_id, search, page = 1, limit = 10, summary_month } = req.query;
 
-      const params = [];
-      let paramCount = 0;
-      let whereSql = ` WHERE LOWER(u.user_type) = 'student'`;
-
-      const branchFilter = REPORT_ACTIVE_BRANCH_CLAUSE(req, branch_id, params, paramCount, 'u.branch_id');
-      whereSql += branchFilter.sql;
-      paramCount = branchFilter.paramCount;
-
-      if (status === 'active' || status === 'inactive') {
-        paramCount++;
-        whereSql += ` AND base.status = $${paramCount}`;
-        params.push(status);
+      let branchId = null;
+      if (req.user.userType !== 'Superadmin' && req.user.branchId) {
+        branchId = Number(req.user.branchId);
+      } else if (branch_id) {
+        branchId = Number(branch_id);
       }
 
-      if (searchTerm) {
-        paramCount++;
-        whereSql += ` AND (
-          COALESCE(base.student_name, u.full_name, '') ILIKE $${paramCount}
-          OR COALESCE(u.email, '') ILIKE $${paramCount}
-          OR COALESCE(u.level_tag, '') ILIKE $${paramCount}
-          OR COALESCE(b.branch_nickname, b.branch_name, '') ILIKE $${paramCount}
-        )`;
-        params.push(`%${searchTerm}%`);
-      }
-
-      const baseSql = `
-        SELECT
-          base.student_status_id,
-          base.student_id AS user_id,
-          COALESCE(base.student_name, u.full_name) AS full_name,
-          u.email,
-          u.level_tag,
-          COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
-          u.branch_id,
-          base.status,
-          base.updated_at,
-          base.updated_reason
-        FROM public.student_statustbl base
-        JOIN public.userstbl u ON u.user_id = base.student_id
-        LEFT JOIN public.branchestbl b ON b.branch_id = u.branch_id
-      `;
-
-      const countResult = await query(`SELECT COUNT(*) AS total FROM (${baseSql} ${whereSql}) t`, params);
-      const total = parseInt(countResult.rows[0]?.total || '0', 10);
-
-      const dataSql = `
-        ${baseSql}
-        ${whereSql}
-        ORDER BY COALESCE(base.student_name, u.full_name) ASC
-        LIMIT $${paramCount + 1}
-        OFFSET $${paramCount + 2}
-      `;
-      const dataParams = [...params, limitNum, offset];
-      const result = await query(dataSql, dataParams);
+      const report = await loadStudentStatusReportPage(query, {
+        branchId,
+        summaryMonth: summary_month || null,
+        status,
+        search,
+        page,
+        limit,
+      });
 
       res.json({
         success: true,
-        data: result.rows,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum) || 1,
-        },
+        data: report.rows,
+        meta: report.meta,
+        pagination: report.pagination,
       });
     } catch (error) {
       next(error);

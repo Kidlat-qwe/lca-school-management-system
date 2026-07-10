@@ -1,5 +1,4 @@
-// API Configuration
-// When deployed (not localhost), always use production API so login/auth works even if build had wrong env
+// API Configuration — see API_BASE_URL below for per-host routing.
 import {
   buildApiCacheKey,
   getApiCache,
@@ -10,10 +9,18 @@ import {
 
 export { buildApiCacheKey, invalidateApiCache };
 
-const isLocalhost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location?.origin || '');
-const API_BASE_URL = isLocalhost
-  ? 'http://localhost:3000/api/sms'
-  : 'https://cms.little-champion.com/api/sms';
+// localhost → local backend; lca-app.com (Coolify) → Coolify API; else Linode production.
+const origin = typeof window !== 'undefined' ? window.location?.origin || '' : '';
+const isLocalhost = /localhost|127\.0\.0\.1/.test(origin);
+const isLcaApp = /lca-app\.com/.test(origin);
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (isLocalhost
+    ? 'http://localhost:3000/api/sms'
+    : isLcaApp
+      ? 'https://api-cms.lca-app.com/api/sms'
+      : 'https://cms.little-champion.com/api/sms');
 
 export default API_BASE_URL;
 
