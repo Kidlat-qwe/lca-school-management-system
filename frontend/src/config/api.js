@@ -19,8 +19,8 @@ const API_BASE_URL =
   (isLocalhost
     ? 'http://localhost:3000/api/sms'
     : isLcaApp
-      ? 'https://api-cms.lca-app.com/api/sms'
-      : 'https://cms.little-champion.com/api/sms');
+      ? 'http://api-cms.lca-app.com/api/sms'
+      : 'http://cms.little-champion.com/api/sms');
 
 export default API_BASE_URL;
 
