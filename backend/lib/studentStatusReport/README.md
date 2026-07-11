@@ -23,6 +23,10 @@ Upsell, reserved, dropped, and other labels are **inactive** for that month.
 | `branch_id` | Optional branch filter (Superadmin) |
 | `search`, `page`, `limit` | List filters |
 
+## Excel export
+
+Frontend **Export to Excel** on Report → Student Status downloads Active / Inactive / All via paged calls to this API (`status` + `summary_month`). See `frontend/src/utils/studentStatusExcelExport.js`.
+
 ## Module
 
 - `studentStatusReport.js` — `loadStudentStatusReportPage`

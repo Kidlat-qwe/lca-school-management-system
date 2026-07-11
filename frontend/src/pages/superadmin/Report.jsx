@@ -4,11 +4,16 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import StatusLegend from '../../components/reports/StatusLegend';
+import StandardExportModal from '../../components/export/StandardExportModal';
 import {
   formatProgramEnrollmentStatus,
   PROGRAM_ENROLLMENT_STATUS_FILTER_OPTIONS,
   programEnrollmentStatusBadgeClass,
 } from '../../utils/programEnrollmentStatus';
+import {
+  downloadStudentStatusExportXlsx,
+  STUDENT_STATUS_EXPORT_OPTIONS,
+} from '../../utils/studentStatusExcelExport';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { formatDateTimeManila } from '../../utils/dateUtils';
 
@@ -111,6 +116,10 @@ const Report = () => {
   const [filterSummaryMonth, setFilterSummaryMonth] = useState(CURRENT_MONTH);
   const [reportMeta, setReportMeta] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportStatusScope, setExportStatusScope] = useState('all');
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   const config = TAB_CONFIG[tab];
 
@@ -196,6 +205,70 @@ const Report = () => {
     filterEnrolledOnly,
     filterSummaryMonth,
   ]);
+
+  const openExportModal = () => {
+    setExportStatusScope(
+      filterStatus === 'active' || filterStatus === 'inactive' ? filterStatus : 'all'
+    );
+    setExportError('');
+    setShowExportModal(true);
+  };
+
+  const fetchAllStudentStatusRowsForExport = async (statusScope) => {
+    const pageLimit = 100;
+    let page = 1;
+    let totalPages = 1;
+    const allRows = [];
+
+    while (page <= totalPages) {
+      const params = new URLSearchParams({
+        status: statusScope,
+        page: String(page),
+        limit: String(pageLimit),
+      });
+      if (globalBranchId) params.set('branch_id', String(globalBranchId));
+      if (debouncedSearchTerm.trim()) params.set('search', debouncedSearchTerm.trim());
+      if (filterSummaryMonth) params.set('summary_month', filterSummaryMonth);
+
+      const response = await apiRequest(`/reports/student-status?${params.toString()}`);
+      allRows.push(...(response.data || []));
+      totalPages = Math.max(1, Number(response.pagination?.totalPages) || 1);
+      page += 1;
+      if (page > 200) break;
+    }
+    return allRows;
+  };
+
+  const handleExportStudentStatus = async () => {
+    try {
+      setExportLoading(true);
+      setExportError('');
+      const exportRows = await fetchAllStudentStatusRowsForExport(exportStatusScope);
+      if (!exportRows.length) {
+        setExportError('No students found for the selected export scope.');
+        return;
+      }
+      const scopeLabel =
+        exportStatusScope === 'active'
+          ? 'active'
+          : exportStatusScope === 'inactive'
+            ? 'inactive'
+            : 'all';
+      downloadStudentStatusExportXlsx(
+        exportRows,
+        `Student_Status_${scopeLabel}_${filterSummaryMonth || 'month'}.xlsx`,
+        {
+          summaryMonth: filterSummaryMonth,
+          statusScope: exportStatusScope,
+        }
+      );
+      setShowExportModal(false);
+    } catch (err) {
+      setExportError(err.message || 'Failed to export Student Status report.');
+    } finally {
+      setExportLoading(false);
+    }
+  };
 
   const table = useMemo(() => {
     if (tab === TAB_STUDENT_STATUS) {
@@ -383,6 +456,25 @@ const Report = () => {
             </label>
           </>
         ) : null}
+        {tab === TAB_STUDENT_STATUS ? (
+          <div className="sm:ml-auto self-end">
+            <button
+              type="button"
+              onClick={openExportModal}
+              className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+              Export to Excel
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <StatusLegend tab={tab} summaryMonth={tab === TAB_STUDENT_STATUS ? filterSummaryMonth : ''} />
@@ -456,6 +548,50 @@ const Report = () => {
           )}
         </div>
       )}
+
+      <StandardExportModal
+        open={showExportModal}
+        onClose={() => {
+          if (exportLoading) return;
+          setShowExportModal(false);
+        }}
+        title="Export Student Status"
+        description={
+          <>
+            Export for billing month <span className="font-medium">{filterSummaryMonth || '—'}</span> using
+            Month Re-enrollment matrix active/inactive rules. Current search and branch filters are applied.
+          </>
+        }
+        exportLoading={exportLoading}
+        onExport={handleExportStudentStatus}
+      >
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">Include students</label>
+          <div className="space-y-2">
+            {STUDENT_STATUS_EXPORT_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm hover:bg-gray-50"
+              >
+                <input
+                  type="radio"
+                  name="student-status-export-scope"
+                  value={opt.value}
+                  checked={exportStatusScope === opt.value}
+                  onChange={() => setExportStatusScope(opt.value)}
+                  className="h-4 w-4 border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-gray-800">{opt.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        {exportError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {exportError}
+          </div>
+        ) : null}
+      </StandardExportModal>
     </div>
   );
 };

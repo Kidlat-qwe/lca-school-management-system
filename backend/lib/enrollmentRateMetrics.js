@@ -2746,6 +2746,21 @@ const MATRIX_ENROLLED_OVERLAY_BLOCK_STATUSES = new Set([
   'pending_enrollment',
 ]);
 
+/**
+ * Statuses that anchor Active/Inactive on the *next* billing month.
+ * pending_enrollment is included so the month after pending is marked Inactive
+ * (Phase 1 not yet paid — not Active).
+ */
+const MATRIX_LIFECYCLE_ANCHOR_STATUSES = new Set([
+  'new',
+  're_enrolled',
+  'upsell',
+  'rejoin',
+  'completed',
+  'reserved',
+  'pending_enrollment',
+]);
+
 /** Skip payment-lifecycle overlay when cell already shows enrolled or dropped status. */
 const cellBlocksPaymentLifecycleOverlay = (cell) => {
   if (!cell) return false;
@@ -3240,7 +3255,10 @@ const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
           ip.class_id,
           ip.installmentinvoiceprofiles_id,
           COALESCE(NULLIF(ip.phase_start, 0), 1) AS phase_start,
-          LOWER(TRIM(i.status)) AS pay_status,
+          COALESCE(
+            (regexp_match(i.remarks, 'TARGET_PHASE:(\\d+)', 'i'))[1]::int,
+            NULL
+          ) AS target_phase,
           ROW_NUMBER() OVER (
             PARTITION BY ip.installmentinvoiceprofiles_id
             ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC
@@ -3253,7 +3271,10 @@ const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
          AND ist.student_id = ip.student_id
         INNER JOIN classestbl c ON c.class_id = ip.class_id ${branchJoin}
         WHERE i.due_date IS NOT NULL
-          AND COALESCE(i.status, '') NOT IN ('Cancelled', 'Canceled')
+          -- Only fully Paid invoices advance the phase sequence. Partially Paid
+          -- must not consume a slot (otherwise later Paid invoices shift forward
+          -- and paint false re-enrolled months — e.g. Lorenzo Ardina July).
+          AND LOWER(TRIM(i.status)) = 'paid'
           AND COALESCE(i.invoice_description, '') NOT ILIKE '%downpayment%'
           AND (
             ip.downpayment_invoice_id IS NULL
@@ -3268,9 +3289,8 @@ const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
           student_id,
           class_id,
           phase_start,
-          phase_start + local_phase - 1 AS phase_number
+          COALESCE(target_phase, phase_start + local_phase - 1) AS phase_number
         FROM invoice_ranked
-        WHERE pay_status = 'paid'
       ),
       invoice_billing AS (
         SELECT
@@ -3333,7 +3353,7 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
     const cell = cellBucket[periods[i].key];
     if (!cell) continue;
     const status = String(cell?.status || '').toLowerCase();
-    if (cell.mark === '1' && MATRIX_ENROLLED_OVERLAY_BLOCK_STATUSES.has(status)) {
+    if (cell.mark === '1' && MATRIX_LIFECYCLE_ANCHOR_STATUSES.has(status)) {
       latestIdx = i;
     } else if (isDroppedMonthMatrixCell(cell)) {
       latestIdx = i;
@@ -3344,9 +3364,11 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
 
 /**
  * Overlay Active (✓) / Inactive (X) on the immediate billing month/phase after
- * the latest enrolled or dropped cell for recurring (installment) tracks.
+ * the latest enrolled, pending, or dropped cell for recurring (installment) tracks.
  *
  * - After **dropped**, the immediate next period is always **Inactive**.
+ * - After **pending_enrollment**, the immediate next period is always **Inactive**
+ *   (downpayment paid but Phase 1 not settled — not yet Active).
  * - After enrolled cells: **Active** when no unpaid invoice exists yet; **Inactive** when unpaid.
  * - Paid periods keep re-enrolled / new from enrollment rows.
  */
@@ -3384,6 +3406,8 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
 
     const anchorCell = cellBucket[periods[latestEnrolledIdx].key];
     const anchorIsDropped = isDroppedMonthMatrixCell(anchorCell);
+    const anchorIsPending =
+      String(anchorCell?.status || '').toLowerCase() === 'pending_enrollment';
     const nextPeriod = periods[latestEnrolledIdx + 1];
     const nextPeriodValue = nextPeriod.key;
     if (cellBlocksPaymentLifecycleOverlay(cellBucket[nextPeriodValue])) continue;
@@ -3403,9 +3427,12 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
     const phaseNumber =
       lifecycle?.phase_number ??
       inferredPhaseAfterDrop ??
+      (anchorIsPending ? anchorCell?.phase_number ?? null : null) ??
       (periodKey === 'phases' ? parseInt(nextPeriodValue, 10) || null : null);
 
-    const isActive = anchorIsDropped ? false : !hasGeneratedUnpaidInvoice;
+    // Pending and dropped both force Inactive on the next cell.
+    const isActive =
+      anchorIsDropped || anchorIsPending ? false : !hasGeneratedUnpaidInvoice;
 
     cellBucket[nextPeriodValue] = buildPaymentLifecycleCell(
       isActive,
@@ -4915,9 +4942,11 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
-  // Pending enrollment by downpayment-paid month (enrolled_at on pending row).
-  // Installment tracks with only pending_enrollment have no billing anchor yet, so the main
-  // billing-month query cannot place them; mirror the reserved calendar overlay.
+  // Pending enrollment on Phase 1 / class-start month (not DP paid month).
+  // enrolled_at is set when downpayment is paid (often earlier than class start). For
+  // advance DP into a future class (e.g. May DP → July SOMO), the matrix cell must land
+  // on the class start month. Installment tracks with only pending_enrollment have no
+  // billing anchor yet, so the main billing-month query cannot place them.
   const pendingCalendarResult = await queryFn(
     `
       SELECT DISTINCT
@@ -4927,7 +4956,16 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         c.level_tag AS class_level_tag,
         u.full_name,
         COALESCE(cs.phase_number, 1) AS phase_number,
-        TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM') AS month_key,
+        TO_CHAR(
+          GREATEST(
+            DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date,
+            COALESCE(
+              DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date,
+              DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date
+            )
+          ),
+          'YYYY-MM'
+        ) AS month_key,
         cs.enrolled_at
       FROM classstudentstbl cs
       INNER JOIN classestbl c ON cs.class_id = c.class_id ${calendarBranchJoin}
@@ -4935,8 +4973,20 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       WHERE cs.program_enrollment_status = 'pending_enrollment'
         AND cs.removed_at IS NULL
         AND cs.enrolled_at IS NOT NULL
-        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date >= $1::date
-        AND TIMEZONE('Asia/Manila', cs.enrolled_at)::date < $2::date
+        AND GREATEST(
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date,
+          COALESCE(
+            DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date,
+            DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date
+          )
+        ) >= $1::date
+        AND GREATEST(
+          DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date,
+          COALESCE(
+            DATE_TRUNC('month', TIMEZONE('Asia/Manila', c.start_date))::date,
+            DATE_TRUNC('month', TIMEZONE('Asia/Manila', cs.enrolled_at))::date
+          )
+        ) < $2::date
         ${calendarProgramJoin}
         ${calendarClassJoin}
         ${calendarTeacherJoin}

@@ -29,6 +29,7 @@ const formatMatrixLabels = (labelSet) => {
  *   search?: string,
  *   page?: number,
  *   limit?: number,
+ *   forExport?: boolean,
  * }} options
  */
 export async function loadStudentStatusReportPage(queryFn, options = {}) {
@@ -39,12 +40,14 @@ export async function loadStudentStatusReportPage(queryFn, options = {}) {
     search = '',
     page = 1,
     limit = 10,
+    forExport = false,
   } = options;
 
   const monthKey = resolveManilaMonthKey(summaryMonth);
   const year = parseInt(monthKey.slice(0, 4), 10);
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+  const maxLimit = forExport ? 10000 : 100;
+  const limitNum = Math.min(maxLimit, Math.max(1, parseInt(limit, 10) || 10));
   const offset = (pageNum - 1) * limitNum;
   const searchTerm = String(search || '').trim();
 

@@ -169,7 +169,18 @@ router.get(
   '/student-status',
   requireRole('Superadmin', 'Admin'),
   [
-    ...REPORT_BASE_VALIDATORS,
+    queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
+    queryValidator('search').optional().isString().withMessage('search must be a string'),
+    queryValidator('page').optional().isInt({ min: 1 }).withMessage('page must be a positive integer'),
+    // Allow higher limit for Excel export (for_export=1); UI list stays at ≤100.
+    queryValidator('limit')
+      .optional()
+      .isInt({ min: 1, max: 10000 })
+      .withMessage('limit must be between 1 and 10000'),
+    queryValidator('for_export')
+      .optional()
+      .isIn(['0', '1', 'true', 'false'])
+      .withMessage('for_export must be 0 or 1'),
     queryValidator('status')
       .optional()
       .isIn(['all', 'active', 'inactive'])
@@ -182,7 +193,24 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { status = 'all', branch_id, search, page = 1, limit = 10, summary_month } = req.query;
+      const {
+        status = 'all',
+        branch_id,
+        search,
+        page = 1,
+        limit = 10,
+        summary_month,
+        for_export,
+      } = req.query;
+
+      const forExport =
+        for_export === '1' || String(for_export || '').toLowerCase() === 'true';
+      if (!forExport && Number(limit) > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'limit must be between 1 and 100 unless for_export=1',
+        });
+      }
 
       let branchId = null;
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
@@ -197,7 +225,8 @@ router.get(
         status,
         search,
         page,
-        limit,
+        limit: forExport ? Math.min(Number(limit) || 10000, 10000) : limit,
+        forExport,
       });
 
       res.json({
