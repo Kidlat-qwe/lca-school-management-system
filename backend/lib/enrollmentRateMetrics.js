@@ -741,7 +741,7 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     const handoffMonthKey = findLastCompletedMonthKey(anchor);
     if (!handoffMonthKey) continue;
 
-    const upsellMonthKey = nextCalendarMonthKey(handoffMonthKey);
+    const handoffUpsellMonthKey = nextCalendarMonthKey(handoffMonthKey);
 
     const higherTracksForMerge = enrolledTracks
       .filter((t) => {
@@ -770,10 +770,25 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
       const enrolledBillingMonths = getHigherTrackMergeBillingMonths(higher);
       if (!enrolledBillingMonths.length) continue;
 
+      // Higher program may start later than the month after lower completion
+      // (e.g. Nursery completed April, Pre-K starts June — May stays empty).
+      const higherFirstBillingMonth =
+        enrolledBillingMonths[0] || higher.first_enrolled_month_key || null;
+      let displayStartMonthKey = handoffUpsellMonthKey;
+      if (
+        higherFirstBillingMonth &&
+        higherFirstBillingMonth > displayStartMonthKey
+      ) {
+        displayStartMonthKey = higherFirstBillingMonth;
+      }
+
       const srcBillingMonthToDisplayMonth = new Map();
 
       for (const srcKey of enrolledBillingMonths) {
-        const displayMonth = addCalendarMonthsToKey(upsellMonthKey, higherPhaseIndex);
+        const displayMonth = addCalendarMonthsToKey(
+          displayStartMonthKey,
+          higherPhaseIndex
+        );
         const srcCell = higherCells[srcKey];
         const src = srcCell
           ? { ...srcCell, merged_from_class_id: higher.class_id }

@@ -589,6 +589,47 @@ node scripts/repairMaverickManzanalPhase56IssueDueDates.js
 node scripts/repairMaverickManzanalPhase56IssueDueDates.js --apply
 ```
 
+### `repairAndreiAtienzaPhase610IssueDueDates.js`
+
+**Andrei Caleb Ethan V. Atienza** (`juliven_atienza@lifelinediag.com`, student `247`, profile `97`) — Nursery Phase 6–9 issue/due dates:
+
+| Phase | Invoice | Issue | Due |
+|-------|---------|-------|-----|
+| 6 | INV-278 | 2026-02-22 | 2026-02-22 |
+| 7 | INV-294 | 2026-03-25 | 2026-04-05 |
+| 8 | INV-773 (+774 due) | 2026-04-25 | 2026-05-05 |
+| 9 | INV-1201 | 2026-05-25 | 2026-06-05 |
+| 10 | (not generated) | 2026-06-25 | 2026-07-05 |
+
+Clears late-penalty markers on updated invoices. Phase 10 stays Not Generated until explicitly generated.
+
+```bash
+node scripts/repairAndreiAtienzaPhase610IssueDueDates.js
+node scripts/repairAndreiAtienzaPhase610IssueDueDates.js --apply
+```
+
+### `repairAndreiAtienzaGeneratePhase10.js`
+
+Same student — generate missing **Phase 10** (issue `2026-06-25`, due `2026-07-05`). Temporarily reactivates inactive class 58 for generation, then restores Inactive; marks profile complete.
+
+```bash
+node scripts/repairAndreiAtienzaGeneratePhase10.js
+node scripts/repairAndreiAtienzaGeneratePhase10.js --apply
+```
+
+### `repairAnaiahMecijaPreKMatrixJuneJuly.js`
+
+**Anaiah Cali Tan Mecija** (`student 249`, `maicahtan@gmail.com`) — Pre-K upsell on Nursery row:
+
+- Profile `420` `first_billing_month` → `2026-06-01` (class start / phase 1 enrollment)
+- Expected matrix: Apr completed → May `-` → Jun upsell → Jul re-enrolled → Aug Active
+- Requires upsell merge fix in `enrollmentRateMetrics.js` (display start = later of handoff+1 vs higher first month)
+
+```bash
+node scripts/repairAnaiahMecijaPreKMatrixJuneJuly.js
+node scripts/repairAnaiahMecijaPreKMatrixJuneJuly.js --apply
+```
+
 ### `repairMaverickManzanalPlaygroupMatrixFebruary.js`
 
 Same student / Plan 1 Playgroup (`class 57`, profile `94`) — align month matrix with invoice Enrollment:
