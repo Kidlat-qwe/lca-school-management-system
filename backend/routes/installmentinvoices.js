@@ -194,14 +194,17 @@ const enrichInstallmentInvoiceRow = async (row) => {
   };
   const baseRow = omitCanon(row);
 
-  // Absolute phase numbering: when a profile starts at a later phase
-  // (e.g. enrolled mid-school-year for phases 6..10), the dashboard's
-  // Phase Progress column should reflect those absolute phase numbers
-  // (e.g. 6 / 10) instead of the relative profile-local numbers (1 / 5).
-  // For profiles starting at phase 1 (or with no phase_start) the absolute
-  // numbers equal the relative numbers, so the display is unchanged.
+  // Absolute phase numbering on BOTH sides: when a profile starts mid-year
+  // (e.g. phase_start=5, total_phases=6 → plan covers absolute phases 5..10),
+  // Phase Progress shows absolute reached / absolute last phase (e.g. 7 / 10),
+  // not relative count vs plan length (which wrongly produced 7 / 6).
+  // phase_start=1 keeps absolute == relative (e.g. 3 / 10).
+  // "Completed" uses relative displayPhaseProgress >= totalPhases (see
+  // phaseProgressComplete); with a matching absolute denominator,
+  // numerator >= denominator is equivalent once the plan is fully billed.
   const phaseProgressNumerator = displayPhaseProgress + phaseStartOffset;
-  const phaseProgressDenominator = totalPhases != null ? totalPhases : null;
+  const phaseProgressDenominator =
+    totalPhases != null ? totalPhases + phaseStartOffset : null;
 
   const queueNextGenYmd = coerceToManilaYmd(row.next_generation_date, { fallbackToToday: false });
   const queueNextMonthYmd = coerceToManilaYmd(row.next_invoice_month, { fallbackToToday: false });

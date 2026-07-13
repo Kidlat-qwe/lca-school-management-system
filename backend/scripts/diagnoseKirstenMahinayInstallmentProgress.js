@@ -194,7 +194,11 @@ const displayPhaseProgress = Math.min(
   Number(profile.total_phases || 0) || billedPhaseProgress
 );
 const listNumerator = displayPhaseProgress + phaseStartOffset;
-const listDenominator = Number(profile.total_phases || 0);
+// Absolute / absolute (must match enrichInstallmentInvoiceRow)
+const listDenominator =
+  Number(profile.total_phases || 0) > 0
+    ? Number(profile.total_phases) + phaseStartOffset
+    : 0;
 
 console.log({
   paid_phases_sql: paidPhases,

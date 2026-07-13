@@ -307,16 +307,23 @@ const FinanceInstallmentInvoice = () => {
                           invoice.phase_progress_numerator != null
                             ? Number(invoice.phase_progress_numerator)
                             : Number(invoice.display_phase_progress || 0);
+                        const phaseStartOffset = Math.max(
+                          0,
+                          (Number(invoice.phase_start) || 1) - 1
+                        );
                         const denominator =
                           invoice.phase_progress_denominator != null
                             ? Number(invoice.phase_progress_denominator)
                             : invoice.total_phases != null
-                              ? Number(invoice.total_phases)
+                              ? Number(invoice.total_phases) + phaseStartOffset
                               : null;
                         if (denominator === null || denominator === undefined) {
                           return <span className="text-sm text-gray-400">-</span>;
                         }
-                        const isComplete = numerator >= denominator;
+                        const isComplete =
+                          typeof invoice.phase_progress_complete === 'boolean'
+                            ? invoice.phase_progress_complete
+                            : numerator >= denominator;
                         // Bar fill reflects the relative paid-vs-billed
                         // progress for THIS plan profile (e.g. 1 of 5
                         // phases paid = 20%), not the absolute calendar

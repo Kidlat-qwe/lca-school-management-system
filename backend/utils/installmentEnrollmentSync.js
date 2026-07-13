@@ -324,3 +324,112 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
 
   await markCompletedIfFullyPaid();
 }
+
+/**
+ * After finance rejects an installment phase payment, remove the phase enrollment
+ * that was created by that payment so the student must pay again to re-enroll.
+ * Leaves the Rejected invoice in place for Pay Now / resubmit.
+ *
+ * @returns {Promise<{ removed: boolean, targetPhase: number|null, classstudent_id: number|null }>}
+ */
+export async function voidInstallmentEnrollmentForRejectedInvoice({
+  client,
+  invoice,
+  studentId = null,
+  reason = 'Payment rejected — enrollment voided pending repayment',
+}) {
+  if (!invoice?.invoice_id || !invoice?.installmentinvoiceprofiles_id) {
+    return { removed: false, targetPhase: null, classstudent_id: null };
+  }
+
+  const profileRes = await client.query(
+    `SELECT *
+     FROM installmentinvoiceprofilestbl
+     WHERE installmentinvoiceprofiles_id = $1`,
+    [invoice.installmentinvoiceprofiles_id]
+  );
+  const profile = profileRes.rows[0];
+  if (!profile?.class_id) {
+    return { removed: false, targetPhase: null, classstudent_id: null };
+  }
+
+  const sid =
+    studentId != null
+      ? Number(studentId)
+      : profile.student_id != null
+        ? Number(profile.student_id)
+        : null;
+  if (!sid || Number.isNaN(sid)) {
+    return { removed: false, targetPhase: null, classstudent_id: null };
+  }
+
+  const targetPhase = await resolveTargetPhaseForPaidInvoice({
+    client,
+    profileId: profile.installmentinvoiceprofiles_id,
+    profile,
+    invoice,
+  });
+  if (targetPhase == null) {
+    return { removed: false, targetPhase: null, classstudent_id: null };
+  }
+
+  // Only void if this invoice (or its chain) has no remaining completed payment.
+  const stillPaid = await client.query(
+    `SELECT 1
+     FROM paymenttbl p
+     INNER JOIN invoicestbl i ON i.invoice_id = p.invoice_id
+     WHERE (
+         i.invoice_id = $1
+         OR COALESCE(i.invoice_chain_root_id, i.invoice_id) = COALESCE(
+           (SELECT COALESCE(invoice_chain_root_id, invoice_id) FROM invoicestbl WHERE invoice_id = $1),
+           $1
+         )
+       )
+       AND COALESCE(p.status, '') = 'Completed'
+       AND COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')
+     LIMIT 1`,
+    [invoice.invoice_id]
+  );
+  if (stillPaid.rows.length > 0) {
+    return { removed: false, targetPhase, classstudent_id: null };
+  }
+
+  const existing = await client.query(
+    `SELECT classstudent_id, program_enrollment_status, enrolled_by
+     FROM classstudentstbl
+     WHERE student_id = $1
+       AND class_id = $2
+       AND COALESCE(phase_number, 1) = $3
+       AND removed_at IS NULL
+       AND program_enrollment_status = ANY($4::text[])
+     ORDER BY classstudent_id DESC
+     LIMIT 1`,
+    [sid, profile.class_id, targetPhase, ACTIVE_PHASE_STATUSES]
+  );
+  const row = existing.rows[0];
+  if (!row) {
+    return { removed: false, targetPhase, classstudent_id: null };
+  }
+
+  const enrolledBy = String(row.enrolled_by || '');
+  const isAutoInstallment =
+    enrolledBy.toLowerCase().includes('installment') ||
+    enrolledBy.toLowerCase().includes('auto-enrolled');
+  if (!isAutoInstallment) {
+    // Still clear enrollment for rejected phase payment — repayment recreates it.
+  }
+
+  await client.query(`DELETE FROM classstudentstbl WHERE classstudent_id = $1`, [
+    row.classstudent_id,
+  ]);
+
+  console.log(
+    `✅ Voided Phase ${targetPhase} enrollment (classstudent ${row.classstudent_id}) after rejected payment on invoice ${invoice.invoice_id}: ${reason}`
+  );
+
+  return {
+    removed: true,
+    targetPhase,
+    classstudent_id: row.classstudent_id,
+  };
+}

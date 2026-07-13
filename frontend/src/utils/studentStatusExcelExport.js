@@ -12,8 +12,9 @@ export const STUDENT_STATUS_EXPORT_COL_WIDTHS = [
   { wch: 32 },
   { wch: 16 },
   { wch: 28 },
+  { wch: 32 },
   { wch: 12 },
-  { wch: 28 },
+  { wch: 18 },
   { wch: 22 },
 ];
 
@@ -28,6 +29,7 @@ export function mapStudentStatusRowsToExportRows(rows, summaryMonth = '') {
     Email: row.email || '-',
     'Level Tag': row.level_tag || '-',
     Branch: row.branch_name || '-',
+    Class: row.class_name || '—',
     Status: row.status || '-',
     'Matrix Labels': row.matrix_labels || '—',
     'Billing Month': row.matrix_month || summaryMonth || '-',

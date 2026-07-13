@@ -38,8 +38,8 @@ const TAB_CONFIG = {
     endpoint: '/reports/student-status',
     title: 'Report - Student Status',
     description:
-      'Active/inactive per billing month using Month Re-enrollment matrix rules (new + re-enrolled + rejoin + upsell), same as Monthly Operational Dashboard.',
-    itemLabel: 'students',
+      'Active/inactive per billing month using Month Re-enrollment matrix rules (new + re-enrolled + rejoin + upsell). Active rows match Monthly Operational Total Active (one row per matrix track/class).',
+    itemLabel: 'rows',
     statusOptions: [
       { value: 'all', label: 'All' },
       { value: 'active', label: 'Active' },
@@ -268,8 +268,8 @@ const AdminReport = () => {
   const table = useMemo(() => {
     if (tab === TAB_STUDENT_STATUS) {
       return {
-        minWidth: '880px',
-        headers: ['Name', 'Email', 'Level Tag', 'Status', 'Matrix Labels', 'Updated At'],
+        minWidth: '1000px',
+        headers: ['Name', 'Email', 'Level Tag', 'Class', 'Status', 'Matrix Labels', 'Updated At'],
         render: (row) => (
           <>
             <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">{row.full_name || '-'}</td>
@@ -277,6 +277,9 @@ const AdminReport = () => {
               {row.email || '-'}
             </td>
             <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{row.level_tag || '-'}</td>
+            <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]" title={row.class_name || '-'}>
+              <span className="truncate block">{row.class_name || '—'}</span>
+            </td>
             <td className="px-4 py-3 whitespace-nowrap">
               <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusBadgeClass(row.status)}`}>
                 {row.status || '-'}
@@ -474,9 +477,12 @@ const AdminReport = () => {
       {tab === TAB_STUDENT_STATUS && reportMeta ? (
         <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
           Billing month <span className="font-semibold">{reportMeta.summary_month}</span>:{' '}
-          <span className="font-semibold">{reportMeta.active_students ?? 0}</span> active students,{' '}
-          <span className="font-semibold">{reportMeta.inactive_students ?? 0}</span> inactive (matrix rules:
-          new + re-enrolled + rejoin + upsell).
+          <span className="font-semibold">{reportMeta.active_students ?? 0}</span> active
+          {reportMeta.active_unique_students != null
+            ? ` (${reportMeta.active_unique_students} unique students)`
+            : ''}
+          , <span className="font-semibold">{reportMeta.inactive_students ?? 0}</span> inactive
+          (matrix track rows: new + re-enrolled + rejoin + upsell; same as Total Active).
         </div>
       ) : null}
 
@@ -520,7 +526,7 @@ const AdminReport = () => {
                   </tr>
                 ) : (
                   rows.map((row, idx) => (
-                    <tr key={row.student_status_id || row.program_payment_status_id || row.classstudent_id || `${tab}-${idx}`} className="hover:bg-gray-50">
+                    <tr key={row.row_key || row.student_status_id || row.program_payment_status_id || row.classstudent_id || `${tab}-${idx}`} className="hover:bg-gray-50">
                       {table.render(row)}
                     </tr>
                   ))

@@ -64,7 +64,7 @@ import {
   deriveInvoiceStatusForInvoice,
   invoiceHasRejectedPayment,
 } from '../utils/invoicePaymentStatus.js';
-import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
+import { syncInstallmentEnrollmentForPaidInvoice, voidInstallmentEnrollmentForRejectedInvoice } from '../utils/installmentEnrollmentSync.js';
 import { enrollStudentForFullPaymentPhases } from '../utils/fullPaymentPhaseEnrollment.js';
 import {
   applyInstallmentToFullPaymentConversion,
@@ -4585,7 +4585,8 @@ router.put(
 /**
  * PUT /api/sms/payments/:id/reject
  * Finance/Superfinance: permanently reject a payment. Rejected payments no
- * longer count as revenue, but enrollment remains unchanged.
+ * longer count as revenue. Installment phase enrollment created by that payment
+ * is voided so the student must pay again.
  */
 router.put(
   '/:id/reject',
@@ -4685,6 +4686,24 @@ router.put(
            WHERE invoice_id = $2`,
           [Number(payment.payable_amount || 0) + Number(payment.discount_amount || 0), payment.invoice_id]
         );
+
+        const invoiceRes = await client.query(
+          `SELECT i.*, ip.installmentinvoiceprofiles_id AS profile_id_check
+           FROM invoicestbl i
+           LEFT JOIN installmentinvoiceprofilestbl ip
+             ON ip.installmentinvoiceprofiles_id = i.installmentinvoiceprofiles_id
+           WHERE i.invoice_id = $1`,
+          [payment.invoice_id]
+        );
+        const rejectedInvoice = invoiceRes.rows[0];
+        if (rejectedInvoice?.installmentinvoiceprofiles_id) {
+          await voidInstallmentEnrollmentForRejectedInvoice({
+            client,
+            invoice: rejectedInvoice,
+            studentId: payment.student_id,
+            reason: reason || 'Payment rejected',
+          });
+        }
       }
 
       await client.query('COMMIT');

@@ -172,6 +172,11 @@ const applyInstallmentCrossClassDisplayMatrixLink = (students, profileBillingCla
         if (track.student_id !== studentId) continue;
         if (track.class_id === billingClassId) continue;
         if (track.hide_from_matrix) continue;
+        // Full-payment short courses (e.g. ACC) are independent enrollments — never
+        // proxy installment billing from another class onto them.
+        if (trackIsFullPaymentEnrollment(track)) continue;
+        // Two installment billing classes for the same student are separate matrix rows.
+        if (billingClassIds.has(track.class_id)) continue;
 
         const hasDisplayEnrollment = Object.values(track.months || {}).some(
           (cell) =>
@@ -713,7 +718,16 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     const anchor = enrolledTracks
       .filter((t) => {
         const idx = levelTagIndex(t.class_level_tag);
-        return idx >= 0 && idx < maxHigherIdx;
+        if (idx < 0 || idx >= maxHigherIdx) return false;
+        if (!trackIsFullPaymentEnrollment(t)) return true;
+        // Installment progression (e.g. Nursery → Pre-K) must not anchor on unrelated
+        // full-payment Playgroup short courses that happen to share a lower level_tag.
+        const hasInstallmentAbove = enrolledTracks.some((other) => {
+          if (other.class_id === t.class_id) return false;
+          const otherIdx = levelTagIndex(other.class_level_tag);
+          return otherIdx > idx && !trackIsFullPaymentEnrollment(other);
+        });
+        return !hasInstallmentAbove;
       })
       .reduce((best, t) => {
         const idx = levelTagIndex(t.class_level_tag);
@@ -724,8 +738,7 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     if (!anchor) continue;
 
     const anchorIdx = levelTagIndex(anchor.class_level_tag);
-    const handoffMonthKey =
-      findLastCompletedMonthKey(anchor) || findLastEnrolledMonthKey(anchor);
+    const handoffMonthKey = findLastCompletedMonthKey(anchor);
     if (!handoffMonthKey) continue;
 
     const upsellMonthKey = nextCalendarMonthKey(handoffMonthKey);
@@ -5643,4 +5656,50 @@ export const buildMonthMatrixActiveStudentIndex = (students, monthKey) => {
     entry.trackCount += 1;
   }
   return byStudentId;
+};
+
+/**
+ * One entry per active matrix track/cell for the billing month.
+ * Length matches Monthly Operational Dashboard Total Active Students
+ * (cell sum — same student on two classes counts twice).
+ *
+ * @param {object[]} students - matrix tracks from loadStudentMonthEnrollmentMatrix
+ * @param {string} monthKey - YYYY-MM
+ * @returns {Array<{
+ *   student_id: number,
+ *   class_id: number|null,
+ *   class_name: string,
+ *   class_level_tag: string,
+ *   full_name: string,
+ *   matrix_label: string,
+ *   enrollment_track_key: string|null,
+ * }>}
+ */
+export const buildMonthMatrixActiveTrackRows = (students, monthKey) => {
+  const rows = [];
+  for (const track of students || []) {
+    const cell = track.months?.[monthKey];
+    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track)) continue;
+    const sid = Number(track.student_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    rows.push({
+      student_id: sid,
+      class_id: track.class_id != null ? Number(track.class_id) : null,
+      class_name: track.class_name || '',
+      class_level_tag: track.class_level_tag || '',
+      full_name: track.full_name || track.student_name || '',
+      matrix_label: String(cell.label || '').trim(),
+      enrollment_track_key: track.enrollment_track_key || null,
+    });
+  }
+  rows.sort((a, b) => {
+    const nameCmp = String(a.full_name || '').localeCompare(String(b.full_name || ''), undefined, {
+      sensitivity: 'base',
+    });
+    if (nameCmp !== 0) return nameCmp;
+    return String(a.class_name || '').localeCompare(String(b.class_name || ''), undefined, {
+      sensitivity: 'base',
+    });
+  });
+  return rows;
 };

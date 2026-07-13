@@ -940,6 +940,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                           </td>
                           <td className="px-2 py-2.5 text-sm text-gray-700 max-w-[140px]">
                             {(() => {
+                              const invoiceStatus = String(phase.status || phase.invoice_status || '')
+                                .trim()
+                                .toLowerCase();
+                              if (invoiceStatus === 'rejected') {
+                                return '\u2014';
+                              }
                               const enrollmentLabel = formatInstallmentPlanPhaseEnrollment(
                                 phase.program_enrollment_status
                               );

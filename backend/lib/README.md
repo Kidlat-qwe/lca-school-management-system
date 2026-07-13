@@ -103,7 +103,7 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 
 ## `studentStatusReport/`
 
-**Reports → Student Status** tab: `loadStudentStatusReportPage` classifies students **active** / **inactive** for a selected billing month (`summary_month`) using the same Month Re-enrollment matrix rules as **Monthly Operational Dashboard → Total Active Students** (`new` + re-enrolled/completed rate numerator + `rejoin`). See `studentStatusReport/README.md`.
+**Reports → Student Status** tab: `loadStudentStatusReportPage` classifies **active** / **inactive** for a selected billing month (`summary_month`) using the same Month Re-enrollment matrix rules as **Monthly Operational Dashboard → Total Active Students** (`new` + re-enrolled/completed rate numerator + `rejoin` + `upsell`). Active list is **one row per matrix track** (matches Total Active cell sum). See `studentStatusReport/README.md`.
 
 ## `operationalDashboardRecentPayments.js`
 
