@@ -673,14 +673,30 @@ router.get(
         return false;
       };
 
+      const hasEarlierGeneratedOrDropped = (absolutePhase) => {
+        if (droppedAbsolutePhases.has(absolutePhase)) return false;
+        for (const abs of droppedAbsolutePhases) {
+          if (Number(abs) < absolutePhase) return true;
+        }
+        for (const local of chainByLocalPhase.keys()) {
+          const abs = phaseStart + Number(local) - 1;
+          if (abs < absolutePhase) return true;
+        }
+        return false;
+      };
+
       const buildPhaseRow = async (phaseNumber, chain) => {
         if (!chain) {
           const absoluteGap = phaseStart + phaseNumber - 1;
           const isSkippedGap = droppedAbsolutePhases.has(absoluteGap);
+          // Late-start gaps (never enrolled before first billable phase) stay hidden.
+          // Empty slots after an earlier drop/generated phase (drop → rejoin skip)
+          // must stay visible as "-" / Not Generated.
           const isLateStartGap =
             !isSkippedGap &&
             !activeEnrollmentAbsolutePhases.has(absoluteGap) &&
-            (hasLaterAbsoluteBilling(absoluteGap) || hasLaterAbsoluteEnrollment(absoluteGap));
+            (hasLaterAbsoluteBilling(absoluteGap) || hasLaterAbsoluteEnrollment(absoluteGap)) &&
+            !hasEarlierGeneratedOrDropped(absoluteGap);
           return {
             phase_number: phaseNumber,
             invoice_id: null,

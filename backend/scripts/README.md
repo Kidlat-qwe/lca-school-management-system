@@ -218,6 +218,19 @@ node scripts/repairMatrixReviewStudents.js --dry-run
 node scripts/repairMatrixReviewStudents.js
 ```
 
+### `findMultipleDroppedNoRejoinInstallmentStudents.js`
+
+Lists installment student+class tracks with **multiple dropped** enrollment phases and **no continue** afterward (no `rejoin`, and no later active `new` / `re_enrolled` / `upsell` / `rejoin` after the latest drop). Useful to find Maverick-like plans that kept generating after unpaid drops and never rejoined.
+
+```bash
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js --min-drops=2
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js --branch-id=5
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js --csv
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js --json
+node scripts/findMultipleDroppedNoRejoinInstallmentStudents.js --include-continued
+```
+
 ### `findDelinquencyDropMismatchStudents.js`
 
 Lists students with **`dropped`** rows from installment delinquency who still have **paid** or **partially paid** installment invoices (Skyler-like class-wide drop).
@@ -587,6 +600,66 @@ node scripts/repairKirstenMahinayPhase34IssueDueDates.js --apply
 ```bash
 node scripts/repairMaverickManzanalPhase56IssueDueDates.js
 node scripts/repairMaverickManzanalPhase56IssueDueDates.js --apply
+```
+
+### `repairKeepFirstDroppedOnly.js`
+
+For installment tracks with **multiple dropped phases**:
+
+- **Keep** the first dropped phase (enrollment + its invoice)
+- **Delete** later dropped enrollments (e.g. drops `2,3,4,5` → delete P3–P5)
+- **Delete** unpaid invoices for those extra dropped phases (skips Paid / Partially Paid / invoices with payments)
+
+Modes:
+
+| Flag | Population |
+|------|------------|
+| (default) | No-rejoin / no-continue only — also clears later unpaid generated invoices and sets `generated_count` / `is_active=false` |
+| `--include-continued` | All multi-drop tracks including rejoined |
+| `--continued-only` | Only rejoined/continued tracks (e.g. Ianna, Lorrie, Lucas, Zein) — **does not** change `generated_count` / `is_active`; keeps rejoin invoices |
+
+```bash
+node scripts/repairKeepFirstDroppedOnly.js
+node scripts/repairKeepFirstDroppedOnly.js --csv
+node scripts/repairKeepFirstDroppedOnly.js --continued-only --csv
+node scripts/repairKeepFirstDroppedOnly.js --include-continued
+node scripts/repairKeepFirstDroppedOnly.js --profile-id=149
+node scripts/repairKeepFirstDroppedOnly.js --continued-only --apply
+```
+
+### `repairMaverickManzanalRemovePhases5to7.js`
+
+**Maverick Raziel Viola Manzanal** — after unpaid Phase 4 delinquency drop, remove incorrectly generated Playgroup invoices:
+
+- DELETE INV-1545 (P5), INV-1589 (P6), INV-1812 (P7) — unpaid, no payments
+- DELETE Phase 5–6 delinquency drop enrollment rows
+- `generated_count` → `3`; profile stays inactive (Phase 4 INV-1480 remains unpaid/dropped)
+
+```bash
+node scripts/repairMaverickManzanalRemovePhases5to7.js
+node scripts/repairMaverickManzanalRemovePhases5to7.js --apply
+```
+
+### `repairMaverickManzanalUndoPhase7Rejoin.js`
+
+**Maverick Raziel Viola Manzanal** — undo accidental Phase 7 rejoin invoices and clear Phase 5–6 rejoin gap markers so those slots show as not enrolled (`-`):
+
+- DELETE unpaid Phase 7 rejoin invoices (INV-1989, INV-1990)
+- DELETE Phase 5–6 `dropped` gap marker classstudent rows (`System (Rejoin gap marker)`)
+- `generated_count` → `3`; profile `is_active=false` (Phase 4 INV-1480 remains unpaid/dropped)
+
+```bash
+node scripts/repairMaverickManzanalUndoPhase7Rejoin.js
+node scripts/repairMaverickManzanalUndoPhase7Rejoin.js --apply
+```
+
+### `repairMaverickManzanalPhase3PaidEnrollment.js`
+
+**Maverick Raziel Viola Manzanal** — Playgroup Phase 3 (INV-275 Paid) had enrollment overwritten to `dropped` by delinquency. Restores `re_enrolled` and clears removal fields. Leaves Phase 4–6 drops unchanged.
+
+```bash
+node scripts/repairMaverickManzanalPhase3PaidEnrollment.js
+node scripts/repairMaverickManzanalPhase3PaidEnrollment.js --apply
 ```
 
 ### `repairAndreiAtienzaPhase610IssueDueDates.js`

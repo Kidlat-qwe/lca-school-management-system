@@ -480,9 +480,10 @@ const isActiveMonthMatrixCell = (cell) =>
   ENROLLED_STATUSES_LIST.includes(String(cell?.status || '').toLowerCase());
 
 /**
- * Installment delinquency drop → pay on a later phase:
- * dropped billing month, then rejoin on the next comeback month, then re-enrolled.
- * Fills empty gap months (e.g. May rejoin when April dropped and June has active enrollment).
+ * Installment delinquency drop → pay/rejoin on a later phase:
+ * keep the dropped billing month, leave intermediate months blank ("-"),
+ * and keep the real comeback month as rejoin (do not invent gap rejoins or
+ * rename the comeback rejoin to re-enrolled).
  */
 const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
   const monthKeys = displayMonths.map((m) => m.key);
@@ -518,42 +519,48 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
       const gapStart = i + 1;
       const gapEnd = comebackIdx - 1;
 
+      // Clear synthetic / intermediate marks between first drop and real comeback.
       if (gapStart <= gapEnd) {
         for (let g = gapStart; g <= gapEnd; g += 1) {
-          // Immediate month after drop is reserved for installment lifecycle (Inactive).
-          if (g === i + 1) continue;
-
-          const rejoinKey = monthKeys[g];
-          const inferPhase =
-            dropCell.phase_number != null
-              ? Number(dropCell.phase_number) + (g - i)
-              : null;
-          student.months[rejoinKey] = {
-            mark: '1',
-            label: 'rejoin',
-            status: 'rejoin',
-            phase_number: matrixCellPhaseNumber(
-              student.months[rejoinKey]?.phase_number,
-              inferPhase
-            ),
-            matrix_drop_rejoin_gap: true,
-            is_full_payment: Boolean(dropCell?.is_full_payment),
-          };
+          const gapKey = monthKeys[g];
+          const gapCell = student.months[gapKey];
+          // Keep lifecycle Inactive on the immediate post-drop month when already set.
+          if (g === i + 1 && String(gapCell?.label || '').toLowerCase() === 'inactive') {
+            continue;
+          }
+          // Remove invented rejoins and other enrollment marks in the gap.
+          if (
+            !gapCell ||
+            gapCell.matrix_drop_rejoin_gap ||
+            gapCell.mark === '1' ||
+            gapCell.label === 'rejoin' ||
+            gapCell.status === 'rejoin'
+          ) {
+            student.months[gapKey] = {
+              mark: '-',
+              label: null,
+              status: null,
+              phase_number: null,
+              matrix_drop_rejoin_cleared: true,
+            };
+          }
         }
+      }
 
-        const comebackCell = student.months[monthKeys[comebackIdx]];
-        if (
-          comebackCell?.status === 'rejoin' ||
-          comebackCell?.calendar_rejoin ||
-          comebackCell?.label === 'rejoin'
-        ) {
-          comebackCell.label = 're-enrolled';
-          comebackCell.status = 're_enrolled';
-          comebackCell.matrix_rejoin_shifted = true;
-        }
-      } else if (comebackIdx === i + 1) {
-        // Immediate post-drop month uses Inactive lifecycle, not rejoin.
-        continue;
+      const comebackCell = student.months[monthKeys[comebackIdx]];
+      if (!comebackCell) continue;
+
+      // Keep the real comeback as rejoin when it is a rejoin (do not rename to re-enrolled).
+      if (
+        comebackCell.status === 'rejoin' ||
+        comebackCell.calendar_rejoin ||
+        comebackCell.label === 'rejoin' ||
+        comebackCell.matrix_rejoin_shifted
+      ) {
+        comebackCell.mark = '1';
+        comebackCell.label = 'rejoin';
+        comebackCell.status = 'rejoin';
+        delete comebackCell.matrix_rejoin_shifted;
       }
     }
   }

@@ -56,6 +56,97 @@ export const getInstallmentPhaseOutstanding = (phase) => {
   return Math.max(0, Number(phase.amount) - Number(phase.paid_amount || 0));
 };
 
+/**
+ * Dropped enrollment with remaining invoice balance — student must Rejoin,
+ * not Pay Now / advance on later phases.
+ */
+export const isUnpaidDroppedEnrollmentPhase = (phase) => {
+  if (!isDroppedEnrollmentPhase(phase)) return false;
+  if (!phase?.is_generated) return true;
+  return getInstallmentPhaseOutstanding(phase) > PHASE_OUTSTANDING_EPSILON;
+};
+
+/** Index of the latest unpaid-dropped phase in a visible phases list, or -1. */
+export const findLatestUnpaidDroppedPhaseIndex = (phases) => {
+  if (!Array.isArray(phases) || !phases.length) return -1;
+  let latest = -1;
+  for (let i = 0; i < phases.length; i += 1) {
+    if (isUnpaidDroppedEnrollmentPhase(phases[i])) latest = i;
+  }
+  return latest;
+};
+
+const ACTIVE_ENROLLMENT_KEYS = new Set([
+  'new',
+  're_enrolled',
+  'upsell',
+  'rejoin',
+  'completed',
+]);
+
+/**
+ * True when billing/enrollment continued after an unpaid drop
+ * (rejoin / later active enrollment / later generated invoice that is not dropped).
+ */
+export const hasContinuedAfterUnpaidDrop = (phases, dropIdx) => {
+  if (!Array.isArray(phases) || dropIdx < 0) return false;
+  for (let i = dropIdx + 1; i < phases.length; i += 1) {
+    const p = phases[i];
+    if (isLateStartGapPhase(p) || isDroppedEnrollmentPhase(p)) continue;
+    const enr = String(p?.program_enrollment_status || '').toLowerCase();
+    if (ACTIVE_ENROLLMENT_KEYS.has(enr)) return true;
+    if (p?.is_generated) return true;
+  }
+  return false;
+};
+
+/** Empty Not Generated slot with no enrollment — skipped when continuing after a drop. */
+export const isEmptyNotGeneratedPlanGap = (phase) => {
+  if (!phase || isLateStartGapPhase(phase) || isDroppedEnrollmentPhase(phase)) return false;
+  if (phase.is_generated) return false;
+  const st = String(phase.status || '').toLowerCase();
+  if (st && st !== 'not generated') return false;
+  const enr = String(phase.program_enrollment_status || '').trim().toLowerCase();
+  return !enr || enr === '-' || enr === '—' || enr === '\u2014';
+};
+
+/**
+ * Latest index after an unpaid drop where the student continued
+ * (active enrollment or a generated invoice). -1 if none.
+ */
+export const findLatestContinuedPhaseIndexAfterDrop = (phases, dropIdx) => {
+  if (!Array.isArray(phases) || dropIdx < 0) return -1;
+  let latest = -1;
+  for (let i = dropIdx + 1; i < phases.length; i += 1) {
+    const p = phases[i];
+    if (isLateStartGapPhase(p) || isDroppedEnrollmentPhase(p)) continue;
+    const enr = String(p?.program_enrollment_status || '').toLowerCase();
+    if (ACTIVE_ENROLLMENT_KEYS.has(enr) || p?.is_generated) {
+      latest = i;
+    }
+  }
+  return latest;
+};
+
+/**
+ * Show plan Rejoin only when an unpaid drop blocks further billing and the
+ * student has not continued (no later rejoin / paid invoice after the drop).
+ * If they already continued, use Pay Now on the next phase instead.
+ */
+export const shouldOfferInstallmentPlanRejoin = (phases, profile = null) => {
+  const list = Array.isArray(phases) ? phases : [];
+  const blockIdx = findLatestUnpaidDroppedPhaseIndex(list);
+  if (blockIdx < 0) return false;
+  if (hasContinuedAfterUnpaidDrop(list, blockIdx)) return false;
+  const hasLaterOpenSlot = list.slice(blockIdx + 1).some((p) => {
+    if (isLateStartGapPhase(p)) return false;
+    const st = String(p?.status || '').toLowerCase();
+    return !p?.is_generated || st === 'not generated';
+  });
+  if (hasLaterOpenSlot) return true;
+  return profile?.is_active === false;
+};
+
 /** Phase has payment recorded but an unsettled remainder (blocks later phases). */
 export const hasOpenPartialPhaseBalance = (phase) => {
   if (!phase?.is_generated || isInactiveInstallmentPlanSlot(phase)) return false;

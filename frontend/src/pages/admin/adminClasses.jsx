@@ -13,6 +13,10 @@ import {
   isPhaseClosedForEnrollment,
 } from '../../utils/classActivePhase';
 import {
+  buildRejoinPhaseOptions,
+  getDefaultRejoinPhase,
+} from '../../utils/rejoinPhaseOptions';
+import {
   CLASS_INACTIVE_ACTION_MESSAGE,
   getClassInactiveActionButtonClass,
   getClassInactiveIconButtonClass,
@@ -3150,7 +3154,7 @@ const initializePackageMerchSelections = useCallback(
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
   };
 
-  const openRejoinModal = (student, sourceClassOverride = null) => {
+  const openRejoinModal = async (student, sourceClassOverride = null) => {
     const sourceClass = sourceClassOverride ?? selectedClassForEnrollment;
     if (!student || !sourceClass) return;
     if (isClassInactive(sourceClass)) {
@@ -3158,13 +3162,21 @@ const initializePackageMerchSelections = useCallback(
       return;
     }
     closeViewStudentActionMenu();
-    const phases = Array.isArray(student.phases)
-      ? student.phases.map((phase) => Number(phase)).filter((phase) => Number.isFinite(phase))
-      : [];
-    const suggestedPhase = Math.min(
-      getClassMaxPhase(sourceClass),
-      Math.max(...phases, 0) + 1 || 1
-    );
+
+    if (enrollmentPhaseContext.classId !== sourceClass.class_id) {
+      await loadEnrollmentPhaseContext(sourceClass);
+    }
+
+    const { phaseSessions: ps, classSessions: cs, classDetails } =
+      resolveEnrollmentPhaseContext(sourceClass);
+    const maxPhase = getClassMaxPhase(sourceClass);
+    const suggestedPhase = getDefaultRejoinPhase({
+      classDetails,
+      phaseSessions: ps,
+      classSessions: cs,
+      maxPhase,
+    });
+
     setStudentToRejoin(student);
     setRejoinSourceClass(sourceClass);
     setRejoinPhaseNumber(String(suggestedPhase));
@@ -3181,11 +3193,23 @@ const initializePackageMerchSelections = useCallback(
 
   const handleCreateRejoinInvoice = async () => {
     if (!studentToRejoin || !rejoinSourceClass || !rejoinPhaseNumber) return;
+    const phaseNumber = Number(rejoinPhaseNumber);
+    const confirmed = await appConfirm({
+      title: 'Create Rejoin Invoice',
+      message:
+        `Create an unpaid rejoin invoice for ${studentToRejoin.full_name || 'this student'} ` +
+        `on Phase ${phaseNumber}?\n\n` +
+        'The student will not be enrolled until the invoice is paid.',
+      confirmLabel: 'Create Invoice',
+      cancelLabel: 'Cancel',
+    });
+    if (!confirmed) return;
+
     setRejoinSubmitting(true);
     try {
       const response = await apiRequest(`/classes/${rejoinSourceClass.class_id}/students/${studentToRejoin.user_id}/rejoin-invoice`, {
         method: 'POST',
-        body: JSON.stringify({ phase_number: Number(rejoinPhaseNumber) }),
+        body: JSON.stringify({ phase_number: phaseNumber }),
       });
       const sourceClassId = rejoinSourceClass.class_id;
       closeRejoinModal();
@@ -14540,11 +14564,21 @@ const resolvedBranchId =
                   onChange={(e) => setRejoinPhaseNumber(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
                 >
-                  {Array.from({ length: getClassMaxPhase(rejoinSourceClass) }, (_, index) => index + 1).map((phase) => (
-                    <option key={phase} value={phase}>
-                      Phase {phase}
-                    </option>
-                  ))}
+                  {(() => {
+                    const { phaseSessions: ps, classSessions: cs, classDetails } =
+                      resolveEnrollmentPhaseContext(rejoinSourceClass);
+                    const options = buildRejoinPhaseOptions({
+                      classDetails,
+                      phaseSessions: ps,
+                      classSessions: cs,
+                      maxPhase: getClassMaxPhase(rejoinSourceClass),
+                    });
+                    return options.map((opt) => (
+                      <option key={opt.absolute} value={opt.absolute}>
+                        {opt.label}
+                      </option>
+                    ));
+                  })()}
                 </select>
               </div>
               <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">

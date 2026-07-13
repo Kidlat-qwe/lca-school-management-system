@@ -6,15 +6,25 @@ import { appAlert } from '../../utils/appAlert';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import {
   computeInstallmentPlanDisplayProgress,
+  findLatestUnpaidDroppedPhaseIndex,
+  findLatestContinuedPhaseIndexAfterDrop,
   getInstallmentPhaseBillingLabel,
   getInstallmentPhaseOutstanding,
+  hasContinuedAfterUnpaidDrop,
   hasOpenPartialPhaseBalance,
   isDroppedEnrollmentPhase,
+  isEmptyNotGeneratedPlanGap,
   isInactiveInstallmentPlanSlot,
   isInstallmentPlanSlotAddressed,
   isLateStartGapPhase,
   isPhaseLockedByPriorPartialBalance,
+  shouldOfferInstallmentPlanRejoin,
 } from '../../utils/installmentPhaseSlotStatus';
+import {
+  buildRejoinPhaseOptions,
+  fetchClassRejoinScheduleContext,
+  getDefaultRejoinPhase,
+} from '../../utils/rejoinPhaseOptions';
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
 import InvoicePaymentDueStatusBadge from '../invoices/InvoicePaymentDueStatusBadge';
@@ -40,6 +50,12 @@ import {
  *   - **Pay Now** on the first actionable phase: **existing** unpaid invoice
  *     via `POST /payments`, or **advance** on the next not-yet-generated phase
  *     via `POST .../advance-pay`
+ *   - After an **unpaid dropped** phase with **no continue**, later slots show
+ *     Locked and a **Rejoin** button appears. Choosing a target phase opens the
+ *     payment form first; the invoice is created as **Paid** only after payment
+ *     via `POST /classes/:id/students/:studentId/rejoin-pay`.
+ *     If the student already continued (later rejoin/paid phase), Rejoin is
+ *     hidden and **Pay Now** is offered on the next phase instead.
  *   - After a successful payment, the same **Payment recorded** modal as the
  *     Invoice page (receipt preview + Print AR PDF)
  *
@@ -98,7 +114,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
 
-  /** @type {null | { mode: 'invoice'|'advance', phase_number: number, absolute: number, amount: number|null, outstanding?: number, invoice_id?: number }} */
+  /** @type {null | { mode: 'invoice'|'advance'|'rejoin', phase_number: number, absolute: number, amount: number|null, outstanding?: number, invoice_id?: number }} */
   const [paymentModal, setPaymentModal] = useState(null);
   const [apForm, setApForm] = useState({
     payment_method: '',
@@ -118,6 +134,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
   const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
   const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
+
+  const [rejoinModalOpen, setRejoinModalOpen] = useState(false);
+  const [rejoinPhaseNumber, setRejoinPhaseNumber] = useState('');
+  const [rejoinSubmitting, setRejoinSubmitting] = useState(false);
+  const [rejoinScheduleContext, setRejoinScheduleContext] = useState({
+    loaded: false,
+    loading: false,
+    phaseSessions: [],
+    classSessions: [],
+    classDetails: null,
+  });
 
   const fetchPhases = useCallback(async () => {
     if (!profileId) return;
@@ -144,6 +171,50 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       setError('');
     };
   }, [profileId, fetchPhases]);
+
+  useEffect(() => {
+    const classId = data?.profile?.class_id;
+    if (!classId) {
+      setRejoinScheduleContext({
+        loaded: false,
+        loading: false,
+        phaseSessions: [],
+        classSessions: [],
+        classDetails: null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    setRejoinScheduleContext((prev) => ({ ...prev, loading: true }));
+
+    fetchClassRejoinScheduleContext(classId, apiRequest)
+      .then((context) => {
+        if (cancelled) return;
+        setRejoinScheduleContext({
+          loaded: true,
+          loading: false,
+          phaseSessions: context.phaseSessions,
+          classSessions: context.classSessions,
+          classDetails: context.classDetails,
+        });
+      })
+      .catch((err) => {
+        console.error('Failed to load class schedule for rejoin:', err);
+        if (cancelled) return;
+        setRejoinScheduleContext({
+          loaded: true,
+          loading: false,
+          phaseSessions: [],
+          classSessions: [],
+          classDetails: null,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.profile?.class_id]);
 
   const openPaymentModal = useCallback(async (payload) => {
     let paymentDueStatusLabel = payload?.payment_due_status_label || null;
@@ -172,7 +243,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     setPaymentModal({ ...payload, payment_due_status_label: paymentDueStatusLabel });
     setApForm({
       payment_method: '',
-      payment_type: payload.mode === 'invoice' ? 'Full Payment' : 'Advance Payment',
+      payment_type:
+        payload.mode === 'invoice'
+          ? 'Full Payment'
+          : payload.mode === 'rejoin'
+            ? 'Full Payment'
+            : 'Advance Payment',
       payable_amount:
         invoiceOutstanding > 0 ? invoiceOutstanding.toFixed(2) : '',
       tip_amount: '',
@@ -199,11 +275,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       }
 
       const capAmount =
-        paymentModal.mode === 'invoice'
+        paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
           ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
           : Number(paymentModal.amount ?? 0);
       const fullPaymentType =
-        paymentModal.mode === 'invoice' ? 'Full Payment' : 'Advance Payment';
+        paymentModal.mode === 'advance' ? 'Advance Payment' : 'Full Payment';
       let nextValue = value;
 
       if (
@@ -356,18 +432,22 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       errors.tip_amount = 'Must be a valid number.';
 
     const invoiceOutstanding =
-      paymentModal.mode === 'invoice'
+      paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
         ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
         : 0;
     const phasePayableAmount = Number(paymentModal.amount ?? 0);
     const grossPayable =
-      paymentModal.mode === 'invoice'
+      paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
         ? parseFloat(apForm.payable_amount) || 0
         : apForm.payment_type === 'Partial Payment'
           ? parseFloat(apForm.payable_amount) || 0
           : phasePayableAmount;
 
-    if (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') {
+    if (
+      paymentModal.mode === 'invoice' ||
+      paymentModal.mode === 'advance' ||
+      paymentModal.mode === 'rejoin'
+    ) {
       if (!apForm.payment_type) {
         errors.payment_type = 'Payment type is required.';
       }
@@ -389,6 +469,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       ) {
         errors.payable_amount =
           'For partial payment, amount must be less than the phase payable amount.';
+      } else if (paymentModal.mode === 'rejoin' && apForm.payment_type === 'Partial Payment') {
+        errors.payment_type = 'Rejoin requires full payment.';
       }
     }
 
@@ -415,7 +497,71 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
     setApSubmitting(true);
     try {
-      if (modalSnap.mode === 'invoice') {
+      if (modalSnap.mode === 'rejoin') {
+        if (!Number.isFinite(grossPayable) || grossPayable < 0.01) {
+          setApFormErrors({ _general: 'Invalid amount to pay for this rejoin phase.' });
+          setApSubmitting(false);
+          return;
+        }
+        const classId = data?.profile?.class_id;
+        if (!classId) {
+          setApFormErrors({ _general: 'Missing class for rejoin payment.' });
+          setApSubmitting(false);
+          return;
+        }
+
+        const rejoinRes = await apiRequest(
+          `/classes/${classId}/students/${studentId}/rejoin-pay`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              phase_number: modalSnap.phase_number,
+              payment_method: apForm.payment_method,
+              payment_type: 'Full Payment',
+              payable_amount: grossPayable,
+              discount_amount: discountApplied > 0 ? discountApplied : undefined,
+              tip_amount: tipVal || undefined,
+              issue_date: apForm.issue_date || undefined,
+              reference_number:
+                normalizePaymentReferenceNumber(apForm.payment_method, apForm.reference_number) ||
+                undefined,
+              remarks: apForm.remarks.trim() || undefined,
+              attachment_url: apForm.attachment_url || undefined,
+            }),
+          }
+        );
+
+        const paidInvoiceId = rejoinRes?.data?.invoice_id;
+        const paymentSnapshot = {
+          student_id: Number(studentId),
+          payable_amount: netPayable,
+          discount_amount: discountApplied,
+          tip_amount: tipVal,
+          issue_date: apForm.issue_date,
+          reference_number: normalizePaymentReferenceNumber(
+            apForm.payment_method,
+            apForm.reference_number,
+          ),
+        };
+
+        setPaymentModal(null);
+        await fetchPhases();
+        if (paidInvoiceId) {
+          try {
+            await loadPaymentRecordedSummary(paidInvoiceId, paymentSnapshot, branchId);
+          } catch (fetchErr) {
+            console.error('Error loading invoice after rejoin payment:', fetchErr);
+            appAlert(
+              'Rejoin payment recorded successfully, but the receipt preview could not be loaded. Refresh the page if needed.'
+            );
+          }
+        } else {
+          appAlert(
+            rejoinRes.message ||
+              `Rejoin payment for Phase ${modalSnap.absolute} recorded successfully.`
+          );
+        }
+      } else if (modalSnap.mode === 'invoice') {
         if (!Number.isFinite(grossPayable) || grossPayable < 0.01) {
           setApFormErrors({ _general: 'Invalid amount to pay for this phase.' });
           setApSubmitting(false);
@@ -522,7 +668,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     } finally {
       setApSubmitting(false);
     }
-  }, [paymentModal, profileId, data?.profile?.student_id, data?.profile?.branch_id, apForm, fetchPhases, loadPaymentRecordedSummary]);
+  }, [paymentModal, profileId, data?.profile?.student_id, data?.profile?.branch_id, data?.profile?.class_id, apForm, fetchPhases, loadPaymentRecordedSummary]);
 
   // Close payment modal on Escape
   useEffect(() => {
@@ -598,14 +744,33 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     [visiblePhases, phaseStartOffset]
   );
 
-  /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot. */
+  /** First phase that can accept payment: existing unpaid invoice, else earliest advance slot.
+   *  Unpaid dropped phases block Pay Now only when the student has not continued;
+   *  after a rejoin/continue, Pay Now is offered on the next phase. */
   const firstPayAction = useMemo(() => {
     if (profile?.upgraded_to_full_payment) return null;
+
+    const unpaidDropIdx = findLatestUnpaidDroppedPhaseIndex(visiblePhases);
+    const continuedAfterDrop =
+      unpaidDropIdx >= 0 && hasContinuedAfterUnpaidDrop(visiblePhases, unpaidDropIdx);
+    const blockPayAfterUnpaidDrop = unpaidDropIdx >= 0 && !continuedAfterDrop;
+    const lastContinuedIdx = continuedAfterDrop
+      ? findLatestContinuedPhaseIndexAfterDrop(visiblePhases, unpaidDropIdx)
+      : -1;
 
     const priorPlanSlotsOk = (upToIndex) => {
       for (let j = 0; j < upToIndex; j += 1) {
         const prev = visiblePhases[j];
         if (isDroppedEnrollmentPhase(prev)) continue;
+        // Only skip empty gaps between the unpaid drop and the latest continued phase.
+        if (
+          continuedAfterDrop &&
+          lastContinuedIdx >= 0 &&
+          j < lastContinuedIdx &&
+          isEmptyNotGeneratedPlanGap(prev)
+        ) {
+          continue;
+        }
         if (hasOpenPartialPhaseBalance(prev)) return false;
         if (!isInstallmentPlanSlotAddressed(prev)) return false;
       }
@@ -615,6 +780,19 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     for (let i = 0; i < visiblePhases.length; i += 1) {
       const p = visiblePhases[i];
       if (isDroppedEnrollmentPhase(p) || isLateStartGapPhase(p)) continue;
+      // After an unpaid drop with no continue, do not offer Pay Now on later slots.
+      if (blockPayAfterUnpaidDrop && i > unpaidDropIdx) continue;
+      // After continue, skip empty gaps only before the latest continued phase (e.g. P2–P5).
+      // Do not skip the next advance slot (e.g. Phase 7 after paid Phase 6 rejoin).
+      if (
+        continuedAfterDrop &&
+        lastContinuedIdx >= 0 &&
+        i < lastContinuedIdx &&
+        isEmptyNotGeneratedPlanGap(p)
+      ) {
+        continue;
+      }
+
       const out = getInstallmentPhaseOutstanding(p);
       const st = String(p.status || '').toLowerCase();
       const cancelled = st === 'cancelled' || st === 'canceled';
@@ -631,6 +809,108 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     }
     return null;
   }, [visiblePhases, profile?.upgraded_to_full_payment]);
+
+  const showRejoinAction = useMemo(
+    () => shouldOfferInstallmentPlanRejoin(visiblePhases, profile),
+    [visiblePhases, profile]
+  );
+
+  const rejoinPhaseOptions = useMemo(() => {
+    if (!showRejoinAction) return [];
+
+    const maxPhase =
+      Number(rejoinScheduleContext.classDetails?.number_of_phase) ||
+      (profile?.total_phases != null
+        ? Number(profile.total_phases) + phaseStartOffset
+        : null) ||
+      1;
+
+    return buildRejoinPhaseOptions({
+      classDetails: rejoinScheduleContext.classDetails || {},
+      phaseSessions: rejoinScheduleContext.phaseSessions,
+      classSessions: rejoinScheduleContext.classSessions,
+      maxPhase,
+    });
+  }, [
+    showRejoinAction,
+    rejoinScheduleContext,
+    profile?.total_phases,
+    phaseStartOffset,
+  ]);
+
+  const openRejoinModal = useCallback(() => {
+    if (!profile?.class_id || !profile?.student_id) {
+      appAlert('Missing class or student for rejoin. Refresh and try again.');
+      return;
+    }
+    if (rejoinScheduleContext.loading) {
+      appAlert('Loading current class phase from schedule. Please try again in a moment.');
+      return;
+    }
+
+    const maxPhase =
+      Number(rejoinScheduleContext.classDetails?.number_of_phase) ||
+      (profile?.total_phases != null
+        ? Number(profile.total_phases) + phaseStartOffset
+        : null) ||
+      1;
+    const defaultPhase = getDefaultRejoinPhase({
+      classDetails: rejoinScheduleContext.classDetails || {},
+      phaseSessions: rejoinScheduleContext.phaseSessions,
+      classSessions: rejoinScheduleContext.classSessions,
+      maxPhase,
+    });
+
+    if (defaultPhase == null) {
+      appAlert('No current or future phase is available to rejoin based on the class schedule.');
+      return;
+    }
+    setRejoinPhaseNumber(String(defaultPhase));
+    setRejoinModalOpen(true);
+  }, [
+    profile?.class_id,
+    profile?.student_id,
+    profile?.total_phases,
+    phaseStartOffset,
+    rejoinScheduleContext,
+  ]);
+
+  const closeRejoinModal = useCallback(() => {
+    setRejoinModalOpen(false);
+    setRejoinPhaseNumber('');
+    setRejoinSubmitting(false);
+  }, []);
+
+  const handleCreateRejoinInvoice = useCallback(async () => {
+    if (!profile?.class_id || !profile?.student_id || !rejoinPhaseNumber) return;
+    const phaseNumber = Number(rejoinPhaseNumber);
+    if (!Number.isFinite(phaseNumber) || phaseNumber < 1) {
+      appAlert('Select a valid rejoin phase.');
+      return;
+    }
+
+    const amount = Number(profile?.amount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      appAlert('Cannot determine the rejoin phase amount. Refresh and try again.');
+      return;
+    }
+
+    closeRejoinModal();
+    await openPaymentModal({
+      mode: 'rejoin',
+      phase_number: phaseNumber,
+      absolute: phaseNumber,
+      amount,
+      outstanding: amount,
+    });
+  }, [
+    profile?.class_id,
+    profile?.student_id,
+    profile?.amount,
+    rejoinPhaseNumber,
+    closeRejoinModal,
+    openPaymentModal,
+  ]);
 
   return (
     <div className={`space-y-4 sm:space-y-6 ${className}`}>
@@ -847,11 +1127,23 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
           )}
 
           <section className="rounded-lg border border-gray-200 bg-white">
-            <div className="px-4 sm:px-5 py-3 border-b border-gray-200 flex items-center justify-between">
+            <div className="px-4 sm:px-5 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-gray-900">Phases</h3>
-              <span className="text-xs text-gray-500">
-                {visiblePhases.length} {visiblePhases.length === 1 ? 'phase' : 'phases'}
-              </span>
+              <div className="flex items-center gap-2 sm:gap-3">
+                <span className="text-xs text-gray-500">
+                  {visiblePhases.length} {visiblePhases.length === 1 ? 'phase' : 'phases'}
+                </span>
+                {showRejoinAction && (
+                  <button
+                    type="button"
+                    onClick={openRejoinModal}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md bg-orange-50 text-orange-800 border border-orange-200 hover:bg-orange-100 transition-colors"
+                    title="Create a rejoin invoice for the current class phase (from class schedule)"
+                  >
+                    Rejoin
+                  </button>
+                )}
+              </div>
             </div>
 
             {openPartialPhases.length > 0 && (
@@ -917,12 +1209,20 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                         (firstPayAction.mode === 'invoice' || firstPayAction.mode === 'advance');
                       const lockedByPriorPartial = isPhaseLockedByPriorPartialBalance(visiblePhases, idx);
                       const isOpenPartial = hasOpenPartialPhaseBalance(phase);
+                      const unpaidDropIdx = findLatestUnpaidDroppedPhaseIndex(visiblePhases);
+                      const continuedAfterDrop =
+                        unpaidDropIdx >= 0 &&
+                        hasContinuedAfterUnpaidDrop(visiblePhases, unpaidDropIdx);
+                      const blockedByUnpaidDrop =
+                        unpaidDropIdx >= 0 && idx > unpaidDropIdx && !continuedAfterDrop;
                       const isLockedFuture =
                         (isNotGenerated || lockedByPriorPartial) &&
                         !(firstPayAction && firstPayAction.index === idx && firstPayAction.mode === 'advance');
                       const lockTitle = lockedByPriorPartial
                         ? 'Settle the remaining balance on the earlier partially paid phase before paying this phase.'
-                        : 'Pay the current phase (or earlier unpaid invoice) first';
+                        : blockedByUnpaidDrop
+                          ? 'Student was dropped on an unpaid phase. Use Rejoin for the current class phase from the class schedule.'
+                          : 'Pay the current phase (or earlier unpaid invoice) first';
 
                       return (
                         <tr
@@ -1133,7 +1433,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">
-                  {paymentModal.mode === 'invoice' ? 'Record Payment' : 'Record Advance Payment'}
+                  {paymentModal.mode === 'invoice'
+                    ? 'Record Payment'
+                    : paymentModal.mode === 'rejoin'
+                      ? 'Record Rejoin Payment'
+                      : 'Record Advance Payment'}
                 </h2>
                 <InvoicePaymentDueStatusBadge
                   label={paymentModal.payment_due_status_label}
@@ -1142,13 +1446,18 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 <p className="text-sm text-gray-500 mt-0.5">
                   Phase {paymentModal.absolute} —{' '}
                   {formatCurrency(
-                    paymentModal.mode === 'invoice'
-                      ? (paymentModal.outstanding ?? 0)
+                    paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+                      ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
                       : (paymentModal.amount || 0),
                   )}
                   {paymentModal.mode === 'invoice' && paymentModal.invoice_id != null && (
                     <span className="block text-xs text-gray-400 mt-0.5">
                       Invoice #{paymentModal.invoice_id}
+                    </span>
+                  )}
+                  {paymentModal.mode === 'rejoin' && (
+                    <span className="block text-xs text-gray-400 mt-0.5">
+                      Invoice is created only after this payment is recorded
                     </span>
                   )}
                 </p>
@@ -1182,10 +1491,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       className={`input-field text-sm ${apFormErrors.payment_type ? 'border-red-500' : ''}`}
                       required
                     >
-                      {paymentModal.mode === 'invoice' ? (
+                      {paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin' ? (
                         <>
                           <option value="Full Payment">Full Payment</option>
-                          <option value="Partial Payment">Partial Payment</option>
+                          {paymentModal.mode === 'invoice' && (
+                            <option value="Partial Payment">Partial Payment</option>
+                          )}
                         </>
                       ) : (
                         <>
@@ -1424,12 +1735,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   <div className="border-t border-gray-200 pt-3 space-y-1 text-sm">
                     <div className="flex justify-between font-semibold">
                       <span className="text-gray-800">
-                        {paymentModal.mode === 'invoice' ? 'Amount due' : 'Phase Amount'}
+                        {paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+                          ? 'Amount due'
+                          : 'Phase Amount'}
                       </span>
                       <span className="text-gray-900">
                         {formatCurrency(
-                          paymentModal.mode === 'invoice'
-                            ? (paymentModal.outstanding ?? 0)
+                          paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+                            ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
                             : (paymentModal.amount || 0),
                         )}
                       </span>
@@ -1454,8 +1767,10 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                         {formatCurrency(
                           Math.max(
                             0,
-                            (paymentModal.mode === 'invoice'
-                              ? (parseFloat(paymentModal.outstanding) || 0)
+                            (paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+                              ? (parseFloat(paymentModal.outstanding) ||
+                                  parseFloat(paymentModal.amount) ||
+                                  0)
                               : (parseFloat(paymentModal.amount) || 0)) -
                               (parseFloat(apForm.discount_amount) || 0),
                           ) + (parseFloat(apForm.tip_amount) || 0),
@@ -1468,6 +1783,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       This records the same <strong>Full</strong> payment as on the Invoice page. When the
                       balance is settled, the invoice status becomes <strong>Paid</strong> and appears paid
                       everywhere invoices are listed.
+                    </p>
+                  ) : paymentModal.mode === 'rejoin' ? (
+                    <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-2">
+                      No invoice exists yet. Recording this payment generates a <strong>Paid</strong> rejoin
+                      invoice for Phase {paymentModal.absolute} and enrolls the student in that phase.
+                      Intermediate skipped phases stay not enrolled.
                     </p>
                   ) : (
                     <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-2">
@@ -1532,6 +1853,70 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
         printLoading={paymentRecordedPdfLoading}
         overlayClassName="fixed inset-0 z-[21000] flex items-center justify-center bg-black/40 p-3 sm:p-4"
       />
+
+      {rejoinModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[22000] flex items-center justify-center bg-black/40 p-4"
+            onClick={closeRejoinModal}
+          >
+            <div
+              className="w-full max-w-md rounded-xl bg-white p-5 sm:p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Rejoin Class</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Select the target phase (defaults to the current class phase from the session
+                  schedule). Next you will enter payment details; the phase invoice is generated only
+                  after payment is recorded.
+                </p>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label
+                    htmlFor="installment_rejoin_phase"
+                    className="mb-1 block text-sm font-medium text-gray-700"
+                  >
+                    Target phase
+                  </label>
+                  <select
+                    id="installment_rejoin_phase"
+                    value={rejoinPhaseNumber}
+                    onChange={(e) => setRejoinPhaseNumber(e.target.value)}
+                    disabled={rejoinSubmitting}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    {rejoinPhaseOptions.map((opt) => (
+                      <option key={opt.absolute} value={String(opt.absolute)}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeRejoinModal}
+                    disabled={rejoinSubmitting}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateRejoinInvoice}
+                    disabled={rejoinSubmitting || !rejoinPhaseNumber}
+                    className="px-4 py-2 text-sm font-semibold text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50"
+                  >
+                    {rejoinSubmitting ? 'Opening…' : 'Continue to Payment'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
