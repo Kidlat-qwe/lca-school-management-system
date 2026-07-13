@@ -280,6 +280,36 @@ export async function getChainFinancialSummary(client, invoiceId) {
 }
 
 /**
+ * True when invoiceId is the profile downpayment invoice or any balance
+ * continuation on the same chain (partial DP → balance invoice).
+ */
+export async function isInvoiceOnProfileDownpaymentChain(client, profile, invoiceId) {
+  const dpId =
+    profile?.downpayment_invoice_id != null ? Number(profile.downpayment_invoice_id) : null;
+  const invId = invoiceId != null ? Number(invoiceId) : null;
+  if (!dpId || !invId) return false;
+  if (dpId === invId) return true;
+  const [payRoot, dpRoot] = await Promise.all([
+    getChainRootInvoiceId(client, invId),
+    getChainRootInvoiceId(client, dpId),
+  ]);
+  return Number(payRoot) === Number(dpRoot);
+}
+
+/**
+ * Downpayment chain has no remaining balance on the leaf (fully settled).
+ */
+export async function isDownpaymentChainFullySettled(client, downpaymentInvoiceId) {
+  const dpId = downpaymentInvoiceId != null ? Number(downpaymentInvoiceId) : null;
+  if (!dpId) return false;
+  const summary = await getChainFinancialSummary(client, dpId);
+  return (
+    Number(summary.remaining_on_leaf || 0) <= 0.009 &&
+    Number(summary.total_paid_in_chain || 0) > 0.009
+  );
+}
+
+/**
  * Installment phase counts should treat a balance-invoice chain as one canonical phase.
  * Downpayment chains are excluded entirely from phase progress.
  */
@@ -418,19 +448,9 @@ export async function createBalanceInvoiceFromPartial({
     [newInv.invoice_id, parent.invoice_id]
   );
 
-  if (parent.installmentinvoiceprofiles_id) {
-    const prof = await client.query(
-      `SELECT installmentinvoiceprofiles_id, downpayment_invoice_id FROM installmentinvoiceprofilestbl
-       WHERE installmentinvoiceprofiles_id = $1`,
-      [parent.installmentinvoiceprofiles_id]
-    );
-    if (prof.rows[0] && Number(prof.rows[0].downpayment_invoice_id) === Number(parent.invoice_id)) {
-      await client.query(
-        `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
-        [newInv.invoice_id, parent.installmentinvoiceprofiles_id]
-      );
-    }
-  }
+  // Keep installmentinvoiceprofilestbl.downpayment_invoice_id on the chain root
+  // (parent). Pointing it at the balance continuation breaks Student History phase
+  // mapping (DP chain is mis-read as Phase 1 because chain_root !== balance id).
 
   return { balance_invoice_id: newInv.invoice_id };
 }

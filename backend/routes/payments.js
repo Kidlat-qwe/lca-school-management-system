@@ -53,6 +53,8 @@ import {
   createBalanceInvoiceFromPartial,
   getCanonicalInstallmentPhaseCounts,
   getChainRootInvoiceId,
+  isDownpaymentChainFullySettled,
+  isInvoiceOnProfileDownpaymentChain,
   removeUnusedBalanceInvoice,
 } from '../utils/balanceInvoice.js';
 import {
@@ -2817,19 +2819,37 @@ router.post(
           if (profileResult.rows.length > 0) {
             const profile = profileResult.rows[0];
             
-            // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
-            // (e.g. reservation flow) and this is the first payment - then backfill and proceed
-            const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(invoice_id);
-            const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+            // Treat as downpayment if: (a) invoice is on the profile DP chain
+            // (root or balance continuation), OR (b) profile has no
+            // downpayment_invoice_id yet and this is the first linked payment.
+            const isDownpaymentInvoice = await isInvoiceOnProfileDownpaymentChain(
+              client,
+              profile,
+              invoice_id
+            );
+            const isFirstLinkedInvoice =
+              !profile.downpayment_invoice_id &&
+              !profile.downpayment_paid &&
+              (profile.generated_count || 0) === 0;
+            const dpAnchorId = profile.downpayment_invoice_id
+              ? Number(profile.downpayment_invoice_id)
+              : Number(invoice_id);
+            const dpChainSettled =
+              isDownpaymentInvoice || isFirstLinkedInvoice
+                ? await isDownpaymentChainFullySettled(client, dpAnchorId)
+                : false;
             const isPendingDownpayment =
-              (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
+              (isDownpaymentInvoice || isFirstLinkedInvoice) &&
+              !profile.downpayment_paid &&
+              dpChainSettled;
             
-            if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
-              // Backfill downpayment_invoice_id if profile never had it set (e.g. from reservation upgrade)
-              if (!profile.downpayment_invoice_id) {
+            if (isPendingDownpayment) {
+              // Always store the chain root as downpayment_invoice_id (never the balance leaf).
+              const dpRootId = await getChainRootInvoiceId(client, invoice_id);
+              if (Number(profile.downpayment_invoice_id) !== Number(dpRootId)) {
                 await client.query(
                   `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
-                  [invoice_id, invoice.installmentinvoiceprofiles_id]
+                  [dpRootId, invoice.installmentinvoiceprofiles_id]
                 );
               }
               // Mark downpayment as paid
@@ -3706,17 +3726,35 @@ router.put(
               if (profileResult.rows.length > 0) {
                 const profile = profileResult.rows[0];
                 
-                // Treat as downpayment if: (a) profile explicitly links this invoice, OR (b) profile has no downpayment_invoice_id set
-                const isDownpaymentInvoice = Number(profile.downpayment_invoice_id) === Number(payment.invoice_id);
-                const isFirstLinkedInvoice = !profile.downpayment_invoice_id && !profile.downpayment_paid && (profile.generated_count || 0) === 0;
+                // Treat as downpayment if invoice is on the DP chain (root or balance)
+                // or first linked invoice when profile has no DP id yet.
+                const isDownpaymentInvoice = await isInvoiceOnProfileDownpaymentChain(
+                  client,
+                  profile,
+                  payment.invoice_id
+                );
+                const isFirstLinkedInvoice =
+                  !profile.downpayment_invoice_id &&
+                  !profile.downpayment_paid &&
+                  (profile.generated_count || 0) === 0;
+                const dpAnchorId = profile.downpayment_invoice_id
+                  ? Number(profile.downpayment_invoice_id)
+                  : Number(payment.invoice_id);
+                const dpChainSettled =
+                  isDownpaymentInvoice || isFirstLinkedInvoice
+                    ? await isDownpaymentChainFullySettled(client, dpAnchorId)
+                    : false;
                 const isPendingDownpayment =
-                  (isDownpaymentInvoice || isFirstLinkedInvoice) && !profile.downpayment_paid;
+                  (isDownpaymentInvoice || isFirstLinkedInvoice) &&
+                  !profile.downpayment_paid &&
+                  dpChainSettled;
                 
-                if (newInvoiceStatus === 'Paid' && isPendingDownpayment) {
-                  if (!profile.downpayment_invoice_id) {
+                if (isPendingDownpayment) {
+                  const dpRootId = await getChainRootInvoiceId(client, payment.invoice_id);
+                  if (Number(profile.downpayment_invoice_id) !== Number(dpRootId)) {
                     await client.query(
                       `UPDATE installmentinvoiceprofilestbl SET downpayment_invoice_id = $1 WHERE installmentinvoiceprofiles_id = $2`,
-                      [payment.invoice_id, invoice.installmentinvoiceprofiles_id]
+                      [dpRootId, invoice.installmentinvoiceprofiles_id]
                     );
                   }
                   // Mark downpayment as paid

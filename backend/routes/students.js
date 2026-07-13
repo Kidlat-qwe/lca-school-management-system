@@ -847,7 +847,9 @@ router.get(
         });
       }
 
-      // Get all enrollments for the student
+      // Active / current enrollments only for Student History → Enrolled class.
+      // Dropped/removed phase rows stay in classstudentstbl for billing/matrix history
+      // but must not appear as additional enrolled classes in this modal.
       const enrollmentsResult = await query(
         `SELECT 
           cs.classstudent_id,
@@ -869,6 +871,11 @@ router.get(
          LEFT JOIN programstbl p ON c.program_id = p.program_id
          LEFT JOIN roomstbl r ON c.room_id = r.room_id
          WHERE cs.student_id = $1
+           AND cs.removed_at IS NULL
+           AND cs.program_enrollment_status IN (
+             'new', 're_enrolled', 'upsell', 'rejoin', 'completed',
+             'pending_enrollment', 'reserved'
+           )
          ORDER BY cs.enrolled_at DESC`,
         [studentId]
       );

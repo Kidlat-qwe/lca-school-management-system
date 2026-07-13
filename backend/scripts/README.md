@@ -577,6 +577,63 @@ node scripts/repairKirstenMahinayPhase34IssueDueDates.js --dry-run
 node scripts/repairKirstenMahinayPhase34IssueDueDates.js --apply
 ```
 
+### `repairMaverickManzanalPhase56IssueDueDates.js`
+
+**Maverick Raziel Viola Manzanal** (`shaimanzanal@icloud.com`, profile `94`, Playgroup Plan 1) — correct Phase 5 & 6 issue/due dates (one month too late after drop/rejoin cadence). Clears late-penalty line items so the due-date job can re-apply.
+
+- Phase 5 INV-1545 → issue `2026-04-25`, due `2026-05-05`
+- Phase 6 INV-1589 → issue `2026-05-25`, due `2026-06-05`
+
+```bash
+node scripts/repairMaverickManzanalPhase56IssueDueDates.js
+node scripts/repairMaverickManzanalPhase56IssueDueDates.js --apply
+```
+
+### `repairMaverickManzanalPlaygroupMatrixFebruary.js`
+
+Same student / Plan 1 Playgroup (`class 57`, profile `94`) — align month matrix with invoice Enrollment:
+
+- Phase 2 `enrolled_at` → `2026-02-02` so **new** lands in **February**
+- Profile `first_billing_month` → `2026-02-01`
+- Expected: Feb new → Mar–Jun dropped → Jul rejoin → Aug Active
+
+(Requires paid-overlay fix in `enrollmentRateMetrics.js` so paid+dropped phases stay **dropped**.)
+
+```bash
+node scripts/repairMaverickManzanalPlaygroupMatrixFebruary.js
+node scripts/repairMaverickManzanalPlaygroupMatrixFebruary.js --apply
+```
+
+### `reassignMaverickPlaygroupP7PaymentToNurseryP1.js`
+
+Same student — payment **1460** was posted to **Playgroup Phase 7 (INV-1812)** but belongs on **Nursery Phase 1 (INV-1113)**.
+
+- Reassigns payment → INV-1113; Playgroup P7 becomes Unpaid; Nursery P1 becomes Paid
+- Voids Playgroup Phase 7 rejoin enrollment; promotes Nursery Phase 1 pending → enrolled
+
+```bash
+node scripts/reassignMaverickPlaygroupP7PaymentToNurseryP1.js
+node scripts/reassignMaverickPlaygroupP7PaymentToNurseryP1.js --apply
+```
+
+### `repairKievZionSerranoHideBillingClassEnrollment.js`
+
+**Kiev Zion Z. Serrano** (Pampanga, student `581`) — soft-drop ops-inserted enrollment on billing class **110** (VMM 2:30 PM) so Student History → Enrolled class only shows **120** (VMP 1:00 PM).
+
+```bash
+node scripts/repairKievZionSerranoHideBillingClassEnrollment.js
+node scripts/repairKievZionSerranoHideBillingClassEnrollment.js --apply
+```
+
+### `repairJullaRojasDownpaymentPhase1Display.js`
+
+**Julla Santos Rojas** (student `590`, profile `462`) — downpayment balance chain was mis-shown as Phase 1 Paid. Restores DP root INV-1773, remaps INV-1775 to unpaid Phase 1, `generated_count=1`, enrollment → `pending_enrollment`.
+
+```bash
+node scripts/repairJullaRojasDownpaymentPhase1Display.js
+node scripts/repairJullaRojasDownpaymentPhase1Display.js --apply
+```
+
 ### `setJaliyahAlmendrasInstallmentPhaseStart2.js`
 
 Set **Jaliyah Callie Almendras** (`rinadeleon713@gmail.com`, profile `150`, class `47`) installment **`phase_start` → 2** so the plan begins at class Phase 2 (curriculum phase 1 is outside the plan grid).

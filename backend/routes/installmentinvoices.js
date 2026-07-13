@@ -577,7 +577,16 @@ router.get(
         let dpChain = null;
         const phChains = [];
         for (const chain of chainMap.values()) {
-          if (downpaymentInvoiceId && chain.chain_root_id === downpaymentInvoiceId) {
+          const chainInvoiceIds = new Set(
+            (chain.invoices || []).map((inv) => Number(inv.invoice_id)).filter(Boolean)
+          );
+          // Match DP by chain root OR any invoice on the chain (balance rows may
+          // have been incorrectly stored as downpayment_invoice_id historically).
+          const isDownpaymentChain =
+            downpaymentInvoiceId != null &&
+            (Number(chain.chain_root_id) === downpaymentInvoiceId ||
+              chainInvoiceIds.has(downpaymentInvoiceId));
+          if (isDownpaymentChain) {
             dpChain = chain;
           } else {
             phChains.push(chain);
@@ -777,27 +786,46 @@ router.get(
       normalizedPhases = annotateInstallmentPhasePlanSlots(normalizedPhases);
 
       const downpaymentRep = downpaymentChain?.representative || null;
-      const downpayment = downpaymentRep
-        ? {
-            invoice_id: Number(downpaymentRep.invoice_id),
-            invoice_ar_number: downpaymentRep.invoice_ar_number || null,
-            invoice_description: downpaymentRep.invoice_description || null,
-            issue_date: downpaymentRep.issue_date || null,
-            due_date: downpaymentRep.due_date || null,
-            payment_date: downpaymentChain.latest_payment_date || null,
-            amount:
-              downpaymentRep.amount != null ? Number(downpaymentRep.amount) : null,
-            paid_amount: Number(downpaymentChain.paid_amount || 0),
-            status: computeStatus(
-              downpaymentRep.status,
-              downpaymentRep.due_date,
-              downpaymentRep.issue_date,
-              true
-            ),
-            is_generated: true,
-            penalty_exempt: true,
-          }
-        : null;
+      let downpayment = null;
+      if (downpaymentRep && downpaymentChain) {
+        const dpSummary = await getChainFinancialSummary(
+          pool,
+          downpaymentChain.chain_root_id
+        );
+        const dpPaidAmount = Number(dpSummary.total_paid_in_chain || 0);
+        const dpRemaining = Math.max(0, Number(dpSummary.remaining_on_leaf || 0));
+        const dpObligation = Number(dpSummary.total_obligation || 0);
+        // Prefer chain settlement over the partial parent's row status so a
+        // fully paid DP+balance chain shows Paid (not Partially Paid).
+        let dpStatus = computeStatus(
+          downpaymentRep.status,
+          downpaymentRep.due_date,
+          downpaymentRep.issue_date,
+          true
+        );
+        if (dpRemaining <= 0.009 && dpPaidAmount >= 0.009) {
+          dpStatus = 'Paid';
+        } else if (dpPaidAmount > 0.009 && dpRemaining > 0.009) {
+          dpStatus = 'Partially Paid';
+        }
+        downpayment = {
+          invoice_id: Number(downpaymentRep.invoice_id),
+          root_invoice_id: Number(dpSummary.root_invoice_id),
+          invoice_ar_number: downpaymentRep.invoice_ar_number || null,
+          invoice_description: downpaymentRep.invoice_description || null,
+          issue_date: downpaymentRep.issue_date || null,
+          due_date: downpaymentRep.due_date || null,
+          payment_date: downpaymentChain.latest_payment_date || null,
+          amount: dpObligation > 0.009 ? dpObligation : downpaymentRep.amount != null
+            ? Number(downpaymentRep.amount)
+            : null,
+          paid_amount: dpPaidAmount,
+          remaining_balance: dpRemaining,
+          status: dpStatus,
+          is_generated: true,
+          penalty_exempt: true,
+        };
+      }
 
       let totalPaidPhases = normalizedPhases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0);
       const totalPaidDownpayment = downpayment ? Number(downpayment.paid_amount || 0) : 0;
@@ -839,9 +867,11 @@ router.get(
         0
       );
       const outstandingDownpayment =
-        downpayment && downpayment.amount != null
-          ? Math.max(0, Number(downpayment.amount) - Number(downpayment.paid_amount || 0))
-          : 0;
+        downpayment?.remaining_balance != null
+          ? Math.max(0, Number(downpayment.remaining_balance))
+          : downpayment && downpayment.amount != null
+            ? Math.max(0, Number(downpayment.amount) - Number(downpayment.paid_amount || 0))
+            : 0;
       let totalOutstanding =
         outstandingGenerated + outstandingNotGenerated + outstandingDownpayment;
 

@@ -3189,8 +3189,10 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
 };
 
 /**
- * Paid installment phases with billing months where no active classstudent row exists
+ * Paid installment phases with billing months where no classstudent row exists
  * for that phase (e.g. phase 2 paid but only phase 1 + 3 enrolled — fills matrix gaps).
+ * Does not synthesize over dropped/removed phase rows — those cells must keep
+ * invoice/enrollment "dropped" (not false re-enrolled from a later paid invoice).
  */
 const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
   const {
@@ -3349,8 +3351,15 @@ const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
           WHERE cs2.student_id = ib.student_id
             AND cs2.class_id = ib.class_id
             AND COALESCE(cs2.phase_number, 1) = ib.phase_number
-            AND cs2.removed_at IS NULL
-            AND cs2.program_enrollment_status IN ${ENROLLED_STATUSES}
+            AND COALESCE(cs2.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+            AND (
+              (
+                cs2.removed_at IS NULL
+                AND cs2.program_enrollment_status IN ${ENROLLED_STATUSES}
+              )
+              OR cs2.program_enrollment_status = 'dropped'
+              OR cs2.removed_at IS NOT NULL
+            )
         )
     `,
     params
@@ -4744,9 +4753,12 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       row.class_level_tag
     );
     const existing = student.months[monthKey];
+    // Never paint over real enrollment or dropped cells — paid gap-fill is
+    // only for missing phase rows (invoice paid, no classstudent for phase).
     if (
-      existing?.mark === '1' &&
-      ENROLLED_STATUSES_LIST.includes(String(existing.status || '').toLowerCase())
+      (existing?.mark === '1' &&
+        ENROLLED_STATUSES_LIST.includes(String(existing.status || '').toLowerCase())) ||
+      isDroppedMonthMatrixCell(existing)
     ) {
       continue;
     }
