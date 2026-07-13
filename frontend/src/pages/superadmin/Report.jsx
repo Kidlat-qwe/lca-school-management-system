@@ -39,7 +39,7 @@ const TAB_CONFIG = {
     endpoint: '/reports/student-status',
     title: 'Report - Student Status',
     description:
-      'Active/inactive per billing month using Month Re-enrollment matrix rules (new + re-enrolled + rejoin), same as Monthly Operational Dashboard.',
+      'Active/inactive per billing month using Month Re-enrollment matrix rules (new + re-enrolled + rejoin + upsell), same as Monthly Operational Dashboard.',
     itemLabel: 'students',
     statusOptions: [
       { value: 'all', label: 'All' },
@@ -484,7 +484,7 @@ const Report = () => {
           Billing month <span className="font-semibold">{reportMeta.summary_month}</span>:{' '}
           <span className="font-semibold">{reportMeta.active_students ?? 0}</span> active students,{' '}
           <span className="font-semibold">{reportMeta.inactive_students ?? 0}</span> inactive (matrix rules:
-          new + re-enrolled + rejoin).
+          new + re-enrolled + rejoin + upsell).
         </div>
       ) : null}
 

@@ -13,6 +13,7 @@ import {
   planProfileBillingRealignment,
   resolveInvoicePhaseForRealignment,
   resolveIssueDateAfterDueAlign,
+  resolveTargetGeneratedCount,
 } from '../utils/classStartDateAdjustment/billingRealignment.js';
 
 function testComputePhaseDueFromStart() {
@@ -21,11 +22,11 @@ function testComputePhaseDueFromStart() {
 }
 
 function testJulyToAugustShiftScenario() {
-  const phaseStartDateMap = { 1: '2026-08-03' };
+  const phaseStartDateMap = { 1: '2026-08-03', 2: '2026-09-11' };
   const profile = {
     installmentinvoiceprofiles_id: 1,
     student_id: 10,
-    generated_count: 1,
+    generated_count: 2,
     total_phases: 6,
     is_active: true,
     full_name: 'Test Student',
@@ -52,13 +53,7 @@ function testJulyToAugustShiftScenario() {
     },
   ];
 
-  const plan = planProfileBillingRealignment(
-    profile,
-    phaseInvoices,
-    null,
-    phaseStartDateMap,
-    { allowPrematurePhaseDelete: true }
-  );
+  const plan = planProfileBillingRealignment(profile, phaseInvoices, null, phaseStartDateMap);
 
   const phase1Update = plan.changes.find((c) => c.type === 'update_phase_invoice' && c.phase === 1);
   assert.ok(phase1Update, 'phase 1 invoice should be realigned');
@@ -66,9 +61,16 @@ function testJulyToAugustShiftScenario() {
   assert.equal(phase1Update.old_due_date, '2026-07-02');
   assert.ok(phase1Update.clear_penalty);
 
+  const phase2Update = plan.changes.find((c) => c.type === 'update_phase_invoice' && c.phase === 2);
+  assert.ok(phase2Update, 'unpaid phase 2 should be realigned, not deleted');
+  assert.equal(phase2Update.new_due_date, '2026-09-10');
+  assert.equal(phase2Update.old_due_date, '2026-07-05');
+  assert.ok(phase2Update.clear_penalty);
+
   const prematureDelete = plan.changes.find((c) => c.type === 'delete_premature_invoice');
-  assert.ok(prematureDelete, 'unpaid phase 2 should be removed as premature');
-  assert.ok(plan.deleteInvoiceIds.includes(101));
+  assert.equal(prematureDelete, undefined);
+  assert.equal(plan.deleteInvoiceIds.length, 0);
+  assert.equal(plan.targetGeneratedCount, 2);
 }
 
 function testPaidInvoiceUnchanged() {
@@ -188,14 +190,50 @@ function testFirstInvoiceWithoutTargetPhaseRemark() {
     profile,
     phaseInvoices,
     null,
-    phaseStartDateMap,
-    { allowPrematurePhaseDelete: true }
+    phaseStartDateMap
   );
 
   const phase1Update = plan.changes.find((c) => c.type === 'update_phase_invoice' && c.phase === 1);
   assert.ok(phase1Update, 'first generated invoice should realign to new phase 1 due');
   assert.equal(phase1Update.new_due_date, '2026-08-06');
   assert.equal(phase1Update.old_due_date, '2026-07-02');
+}
+
+function testMidPackageTargetGeneratedCount() {
+  const phaseInvoices = [
+    {
+      invoice_id: 500,
+      status: 'Unpaid',
+      issue_ymd: '2026-06-25',
+      due_ymd: '2026-09-10',
+      phase: 2,
+      remarks: 'TARGET_PHASE:2',
+    },
+  ];
+  const profile = {
+    installmentinvoiceprofiles_id: 5,
+    student_id: 14,
+    generated_count: 1,
+    total_phases: 6,
+    phase_start: 2,
+    is_active: true,
+  };
+
+  assert.equal(resolveTargetGeneratedCount(phaseInvoices), 1);
+
+  const plan = planProfileBillingRealignment(
+    profile,
+    phaseInvoices,
+    null,
+    { 2: '2026-07-03', 3: '2026-08-07' }
+  );
+
+  assert.equal(plan.targetGeneratedCount, 1);
+  const phase2Update = plan.changes.find((c) => c.type === 'update_phase_invoice' && c.phase === 2);
+  assert.ok(phase2Update);
+  assert.equal(phase2Update.new_due_date, '2026-07-02');
+  const generatedCountChange = plan.changes.find((c) => c.type === 'set_generated_count');
+  assert.equal(generatedCountChange, undefined);
 }
 
 const tests = [
@@ -209,6 +247,7 @@ const tests = [
   testAddDaysYmd,
   testDateParam,
   testFirstInvoiceWithoutTargetPhaseRemark,
+  testMidPackageTargetGeneratedCount,
 ];
 
 let failed = 0;

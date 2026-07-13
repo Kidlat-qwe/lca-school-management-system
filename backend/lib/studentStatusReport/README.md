@@ -9,8 +9,9 @@ Matches **Monthly Operational Dashboard → Total Active Students** for the sele
 - **New** matrix cells (`new`)
 - **Re-enrollment** matrix cells (`re-enrolled` and qualifying `completed` — same as the month matrix rate-header numerator)
 - **Rejoin** matrix cells (`rejoin`)
+- **Upsell** matrix cells (`upsell`)
 
-Upsell, reserved, dropped, and other labels are **inactive** for that month.
+Reserved, dropped, pending enrollment, and other labels are **inactive** for that month.
 
 ## API
 

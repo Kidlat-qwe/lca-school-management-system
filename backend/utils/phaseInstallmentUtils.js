@@ -261,17 +261,27 @@ async function resolveRecurringBillingAnchorYmd(
   db,
   profile,
   generatedCount,
-  { generationAnchorYmd, issueDateOverride, frequencyMonths = 1 } = {}
+  {
+    generationAnchorYmd,
+    issueDateOverride,
+    frequencyMonths = 1,
+    ignoreStoredQueueAnchor = false,
+    resolvePhaseStartDate = null,
+  } = {}
 ) {
   const profileCount = parseInt(profile.generated_count ?? generatedCount, 10);
   const explicitAnchor = coerceScheduleYmd(generationAnchorYmd);
   const queueAnchor =
-    generatedCount === profileCount ? coerceScheduleYmd(profile.next_generation_date) : null;
+    !ignoreStoredQueueAnchor && generatedCount === profileCount
+      ? coerceScheduleYmd(profile.next_generation_date)
+      : null;
   const storedAnchor = explicitAnchor || queueAnchor;
   if (storedAnchor) return storedAnchor;
 
   const phaseStartNum = resolveProfilePhaseStart(profile);
-  const firstPhaseStart = await getPhaseStartDate(db, profile.class_id, phaseStartNum);
+  const firstPhaseStart = resolvePhaseStartDate
+    ? await resolvePhaseStartDate(phaseStartNum)
+    : await getPhaseStartDate(db, profile.class_id, phaseStartNum);
   const firstPhaseIssueYmd = await getFirstGeneratedInstallmentIssueYmd(db, profile);
 
   const seedIssueYmd =
@@ -363,10 +373,20 @@ export const buildPhaseInstallmentSchedule = async ({
   issueDateOverride = null,
   generationAnchorYmd = null,
   frequencyMonths = 1,
+  phaseStartDateMapOverride = null,
+  ignoreStoredQueueAnchor = false,
 }) => {
   if (!isPhaseInstallmentProfile(profile)) {
     return null;
   }
+
+  const resolvePhaseStartDate = async (phaseNumber) => {
+    const overrideYmd = phaseStartDateMapOverride?.[phaseNumber];
+    if (overrideYmd) {
+      return normalizeDateInput(overrideYmd);
+    }
+    return getPhaseStartDate(db, profile.class_id, phaseNumber);
+  };
 
   const profileWithPhaseStart = {
     ...profile,
@@ -397,7 +417,7 @@ export const buildPhaseInstallmentSchedule = async ({
     };
   }
 
-  const currentPhaseStart = await getPhaseStartDate(db, profile.class_id, currentPhaseNumber);
+  const currentPhaseStart = await resolvePhaseStartDate(currentPhaseNumber);
   if (!currentPhaseStart) {
     throw new Error(`Cannot determine start date for Phase ${currentPhaseNumber}. Please generate class sessions first.`);
   }
@@ -416,6 +436,8 @@ export const buildPhaseInstallmentSchedule = async ({
       generationAnchorYmd,
       issueDateOverride: explicitIssueOverride ? formatYmdLocal(explicitIssueOverride) : null,
       frequencyMonths,
+      ignoreStoredQueueAnchor,
+      resolvePhaseStartDate: phaseStartDateMapOverride ? resolvePhaseStartDate : null,
     });
 
     const cycle = buildFixedRecurringCycleDates(anchorYmd, frequencyMonths);
@@ -446,7 +468,7 @@ export const buildPhaseInstallmentSchedule = async ({
   const nextPhaseNumber = currentPhaseNumber + 1;
   const hasNextPhase = lastPhaseNumber === null || nextPhaseNumber <= lastPhaseNumber;
   const nextPhaseStart = hasNextPhase
-    ? await getPhaseStartDate(db, profile.class_id, nextPhaseNumber)
+    ? await resolvePhaseStartDate(nextPhaseNumber)
     : null;
 
   let nextIssueDate = null;
@@ -473,7 +495,8 @@ export const buildPhaseInstallmentSchedule = async ({
       const anchorYmd =
         coerceScheduleYmd(generationAnchorYmd) ||
         (currentGenerationDate ? formatYmdLocal(currentGenerationDate) : null) ||
-        (generatedCount === parseInt(profile.generated_count ?? generatedCount, 10)
+        (!ignoreStoredQueueAnchor &&
+        generatedCount === parseInt(profile.generated_count ?? generatedCount, 10)
           ? coerceScheduleYmd(profile.next_generation_date)
           : null);
       const nextCycle = buildFixedRecurringCycleDates(

@@ -178,10 +178,17 @@ const ClassStartDateAdjustmentPreviewPanel = ({
                             );
                           }
                           if (change.type === 'rebuild_queue') {
+                            const phaseLabel =
+                              change.current_phase_number != null
+                                ? `Billing phase ${change.current_phase_number}. `
+                                : '';
                             return (
                               <li key={idx}>
-                                {change.message ||
-                                  `Queue: ${change.old_next_generation_date || '—'} → ${change.new_next_generation_date}`}
+                                {phaseLabel}
+                                Next generation: {formatYmd(change.old_next_generation_date) || '—'} →{' '}
+                                {formatYmd(change.new_next_generation_date) || '—'}; next invoice month:{' '}
+                                {formatYmd(change.old_next_invoice_month) || '—'} →{' '}
+                                {formatYmd(change.new_next_invoice_month) || '—'}
                               </li>
                             );
                           }

@@ -283,12 +283,11 @@ export async function previewStartDateAdjustment(client, classId, newStartDate, 
     });
   }
 
-  const allowPrematurePhaseDelete = completedStats.completedCount === 0;
   const billingImpacts = await planBillingRealignmentForClass(
     client,
     classId,
     phaseStartDates,
-    { allowPrematurePhaseDelete, previewMode: true }
+    { previewMode: true }
   );
 
   const canApply = blockers.length === 0;
@@ -376,12 +375,11 @@ export async function applyStartDateAdjustment(
     createdBy: adjustedBy,
   });
 
-  const allowPrematurePhaseDelete = preview.completed_session_stats.completedCount === 0;
   const billingImpacts = await planBillingRealignmentForClass(
     client,
     classId,
     regen.phaseStartDates,
-    { allowPrematurePhaseDelete }
+    {}
   );
 
   const adjustmentInsert = await client.query(

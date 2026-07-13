@@ -7,6 +7,47 @@ import { dirname, resolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/**
+ * Coolify / Docker often mangle FIREBASE_PRIVATE_KEY (quotes, literal \\n, double-escaped).
+ * Also supports FIREBASE_PRIVATE_KEY_BASE64 (recommended on Coolify).
+ */
+const normalizeFirebasePrivateKey = (raw) => {
+  if (raw == null) return null;
+  let key = String(raw).trim();
+  if (!key) return null;
+
+  // Strip wrapping quotes Coolify sometimes keeps
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+
+  // Literal backslash-n → real newlines (repeat for double-escaping)
+  for (let i = 0; i < 3; i += 1) {
+    if (key.includes('\\n')) key = key.replace(/\\n/g, '\n');
+    else break;
+  }
+
+  // Normalize Windows newlines
+  key = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  return key;
+};
+
+const resolveFirebasePrivateKey = () => {
+  const b64 = String(process.env.FIREBASE_PRIVATE_KEY_BASE64 || '').trim();
+  if (b64) {
+    try {
+      return Buffer.from(b64, 'base64').toString('utf8');
+    } catch (_) {
+      console.warn('⚠️  FIREBASE_PRIVATE_KEY_BASE64 is set but could not be decoded');
+    }
+  }
+  return normalizeFirebasePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+};
+
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
   try {
@@ -56,7 +97,7 @@ if (!admin.apps.length) {
     // Option 2: Use environment variables (fallback method)
     if (!credential) {
       const projectId = process.env.FIREBASE_PROJECT_ID;
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+      const privateKey = resolveFirebasePrivateKey();
       const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 
       // Validate required fields
@@ -64,7 +105,16 @@ if (!admin.apps.length) {
         throw new Error(
           'Missing required Firebase environment variables. ' +
           'Either set FIREBASE_ADMIN_SDK_PATH to a valid JSON file path, ' +
-          'or provide FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, and FIREBASE_CLIENT_EMAIL.'
+          'or provide FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY ' +
+          '(or FIREBASE_PRIVATE_KEY_BASE64 on Coolify).'
+        );
+      }
+
+      if (!privateKey.includes('BEGIN PRIVATE KEY')) {
+        throw new Error(
+          'FIREBASE_PRIVATE_KEY does not look like a PEM key after normalization. ' +
+          'On Coolify: use Normal view, enable Is Multiline for FIREBASE_PRIVATE_KEY, ' +
+          'paste the key with real line breaks (no \\n), or use FIREBASE_PRIVATE_KEY_BASE64.'
         );
       }
 

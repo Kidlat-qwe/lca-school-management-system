@@ -84,7 +84,7 @@ export const MONTHLY_OPERATIONAL = {
   newEnrolleesReenroll:
     'Counts from the Month Re-enrollment matrix for the selected month (billing month column). New = green "new" cells. Re-enrollment = rate-row numerator (re-enrolled + completed; upsell excluded).',
   totalActiveStudents:
-    'Sum of new enrollees + re-enrollment + rejoin for the selected month (Month Re-enrollment matrix column). Counts matrix cells, not unique students — one student in two classes counts twice.',
+    'Sum of new enrollees + re-enrollment + rejoin + upsell for the selected month (Month Re-enrollment matrix column). Counts matrix cells, not unique students — one student in two classes counts twice.',
   droppedRejoin:
     'Dropped / unenrolled = pink cells in the matrix month column. Rejoin = orange "rejoin" cells in that column.',
   reservedUpsell:

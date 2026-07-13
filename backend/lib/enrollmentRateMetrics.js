@@ -5612,13 +5612,14 @@ export const loadMonthReEnrollmentStatForMonth = loadMonthMatrixOperationalStats
 
 /**
  * Whether a month-matrix cell counts as "active" for Reports → Student Status and
- * Monthly Operational Dashboard total active students (new + re-enrollment + rejoin).
+ * Monthly Operational Dashboard total active students
+ * (new + re-enrollment + rejoin + upsell).
  * Re-enrollment includes visible re-enrolled and completed cells in the rate numerator.
  */
 export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student) => {
   if (!cell?.label) return false;
   const label = String(cell.label).trim().toLowerCase();
-  if (label === 'new' || label === 'rejoin') return true;
+  if (label === 'new' || label === 'rejoin' || label === 'upsell') return true;
   return matrixCellCountsTowardReEnrollmentRate(cell, student);
 };
 

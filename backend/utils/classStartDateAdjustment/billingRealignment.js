@@ -47,20 +47,31 @@ export function resolveIssueDateAfterDueAlign(issueYmd, dueYmd) {
 }
 
 /**
+ * Count of generated phase invoices still on the profile after realignment.
+ * Uses invoice count (not max phase number) so mid-package enrollments stay correct.
+ *
+ * @param {object[]} phaseInvoices
+ * @param {number[]} deleteInvoiceIds
+ */
+export function resolveTargetGeneratedCount(phaseInvoices, deleteInvoiceIds = []) {
+  const remaining = phaseInvoices.filter(
+    (inv) => inv.phase != null && !deleteInvoiceIds.includes(inv.invoice_id)
+  );
+  return remaining.length;
+}
+
+/**
  * @param {object} profile
  * @param {object[]} phaseInvoices
  * @param {object|null} enrollment
  * @param {Record<number, string>} phaseStartDateMap
- * @param {{ allowPrematurePhaseDelete?: boolean }} [options]
  */
 export function planProfileBillingRealignment(
   profile,
   phaseInvoices,
   enrollment,
-  phaseStartDateMap,
-  options = {}
+  phaseStartDateMap
 ) {
-  const allowPrematurePhaseDelete = options.allowPrematurePhaseDelete !== false;
   const changes = [];
   const deleteInvoiceIds = [];
 
@@ -101,22 +112,18 @@ export function planProfileBillingRealignment(
   for (const inv of phase2Plus) {
     if (isSettledInvoiceStatus(inv.status)) continue;
 
-    if (allowPrematurePhaseDelete) {
-      deleteInvoiceIds.push(inv.invoice_id);
+    const phaseStart = phaseStartDateMap[inv.phase];
+    const newDue = phaseStart ? computePhaseDueFromStart(phaseStart) : null;
+    if (!newDue) {
       changes.push({
-        type: 'delete_premature_invoice',
+        type: 'warning',
+        code: 'missing_phase_session',
         invoice_id: inv.invoice_id,
-        invoice_ar_number: inv.invoice_ar_number,
         phase: inv.phase,
-        status: inv.status,
-        reason: 'Unpaid phase 2+ invoice removed after schedule shift',
+        message: `Cannot compute new due date for phase ${inv.phase} (no sessions).`,
       });
       continue;
     }
-
-    const phaseStart = phaseStartDateMap[inv.phase];
-    const newDue = phaseStart ? computePhaseDueFromStart(phaseStart) : null;
-    if (!newDue) continue;
 
     const newIssue = resolveIssueDateAfterDueAlign(inv.issue_ymd, newDue);
     const needDue = ymd(inv.due_ymd) !== newDue;
@@ -137,13 +144,7 @@ export function planProfileBillingRealignment(
     }
   }
 
-  const remainingPhases = new Set(
-    phaseInvoices
-      .filter((inv) => inv.phase != null && !deleteInvoiceIds.includes(inv.invoice_id))
-      .map((inv) => inv.phase)
-  );
-  const maxRemainingPhase = remainingPhases.size ? Math.max(...remainingPhases) : 0;
-  const targetGeneratedCount = maxRemainingPhase;
+  const targetGeneratedCount = resolveTargetGeneratedCount(phaseInvoices, deleteInvoiceIds);
 
   if (targetGeneratedCount > 0 && Number(profile.generated_count) !== targetGeneratedCount) {
     changes.push({
@@ -203,6 +204,8 @@ export async function loadBillingProfilesForClass(client, classId) {
             u.email,
             TO_CHAR(TIMEZONE('Asia/Manila', ii.next_generation_date), 'YYYY-MM-DD') AS next_gen,
             TO_CHAR(TIMEZONE('Asia/Manila', ii.next_invoice_month), 'YYYY-MM-DD') AS next_month,
+            TO_CHAR(TIMEZONE('Asia/Manila', ip.bill_invoice_due_date), 'YYYY-MM-DD') AS bill_due,
+            TO_CHAR(TIMEZONE('Asia/Manila', ip.next_invoice_due_date), 'YYYY-MM-DD') AS next_bill_due,
             ii.installmentinvoicedtl_id
      FROM installmentinvoiceprofilestbl ip
      INNER JOIN userstbl u ON u.user_id = ip.student_id
@@ -334,8 +337,80 @@ export function planDownpaymentRealignment(downpaymentInvoice, enrollmentDateYmd
 /**
  * @param {import('pg').PoolClient} client
  * @param {number} classId
+ * @param {object} profile
+ * @param {object} profilePlan
  * @param {Record<number, string>} phaseStartDateMap
- * @param {{ allowPrematurePhaseDelete?: boolean, previewMode?: boolean }} [options]
+ * @param {{ previewMode?: boolean }} [options]
+ */
+export async function planQueueRealignmentForProfile(
+  client,
+  classId,
+  profile,
+  profilePlan,
+  phaseStartDateMap,
+  options = {}
+) {
+  try {
+    const generatedCount = profilePlan.targetGeneratedCount ?? profile.generated_count ?? 0;
+    const schedule = await buildPhaseInstallmentSchedule({
+      db: client,
+      profile: {
+        class_id: classId,
+        phase_start: profile.phase_start,
+        total_phases: profile.total_phases,
+        generated_count: generatedCount,
+      },
+      generatedCountOverride: generatedCount,
+      phaseStartDateMapOverride: phaseStartDateMap,
+      ignoreStoredQueueAnchor: true,
+    });
+
+    if (!schedule || schedule.is_last_phase) {
+      return null;
+    }
+
+    const nextGen = ymd(schedule.current_generation_date);
+    const nextMonth = ymd(schedule.current_invoice_month);
+    const billDue = ymd(schedule.current_due_date);
+    const nextBillDue = ymd(schedule.next_due_date);
+    const changed =
+      ymd(profile.next_gen) !== nextGen ||
+      ymd(profile.next_month) !== nextMonth ||
+      ymd(profile.bill_due) !== billDue ||
+      ymd(profile.next_bill_due) !== nextBillDue;
+
+    if (!options.previewMode && !changed) {
+      return null;
+    }
+
+    return {
+      type: 'rebuild_queue',
+      installmentinvoicedtl_id: profile.installmentinvoicedtl_id,
+      old_next_generation_date: ymd(profile.next_gen),
+      new_next_generation_date: nextGen,
+      old_next_invoice_month: ymd(profile.next_month),
+      new_next_invoice_month: nextMonth,
+      bill_invoice_due_date: billDue,
+      next_invoice_due_date: nextBillDue,
+      scheduled_date: billDue,
+      current_phase_number: schedule.current_phase_number,
+      next_phase_number: schedule.next_phase_number,
+      changed,
+    };
+  } catch (queueErr) {
+    return {
+      type: 'warning',
+      code: 'queue_rebuild_failed',
+      message: queueErr.message,
+    };
+  }
+}
+
+/**
+ * @param {import('pg').PoolClient} client
+ * @param {number} classId
+ * @param {Record<number, string>} phaseStartDateMap
+ * @param {{ previewMode?: boolean }} [options]
  */
 export async function planBillingRealignmentForClass(client, classId, phaseStartDateMap, options = {}) {
   const profiles = await loadBillingProfilesForClass(client, classId);
@@ -380,68 +455,20 @@ export async function planBillingRealignmentForClass(client, classId, phaseStart
       profile,
       phaseInvoices,
       enrollment,
-      phaseStartDateMap,
-      options
+      phaseStartDateMap
     );
     changes.push(...profilePlan.changes);
 
-    let queueChange = null;
-    if (options.previewMode) {
-      const phase1Due = computePhaseDueFromStart(phaseStartDateMap[1]);
-      if (phase1Due) {
-        queueChange = {
-          type: 'rebuild_queue',
-          message: 'Installment queue will be rebuilt on apply from the new session schedule.',
-          new_next_generation_date: null,
-          new_next_invoice_month: null,
-          estimated_phase1_due: phase1Due,
-        };
-        changes.push(queueChange);
-      }
-    } else {
-      try {
-        const generatedCount = profilePlan.targetGeneratedCount ?? profile.generated_count ?? 0;
-        const schedule = await buildPhaseInstallmentSchedule({
-          db: client,
-          profile: {
-            class_id: classId,
-            phase_start: profile.phase_start,
-            total_phases: profile.total_phases,
-            generated_count: generatedCount,
-          },
-          generatedCountOverride: generatedCount,
-        });
-        if (schedule && !schedule.is_last_phase) {
-          const nextGen = ymd(schedule.current_generation_date);
-          const nextMonth = ymd(schedule.current_invoice_month);
-          const billDue = ymd(schedule.current_due_date);
-          const nextBillDue = ymd(schedule.next_due_date);
-          if (
-            ymd(profile.next_gen) !== nextGen ||
-            ymd(profile.next_month) !== nextMonth ||
-            ymd(profile.bill_invoice_due_date) !== billDue
-          ) {
-            queueChange = {
-              type: 'rebuild_queue',
-              installmentinvoicedtl_id: profile.installmentinvoicedtl_id,
-              old_next_generation_date: ymd(profile.next_gen),
-              new_next_generation_date: nextGen,
-              old_next_invoice_month: ymd(profile.next_month),
-              new_next_invoice_month: nextMonth,
-              bill_invoice_due_date: billDue,
-              next_invoice_due_date: nextBillDue,
-              scheduled_date: billDue,
-            };
-            changes.push(queueChange);
-          }
-        }
-      } catch (queueErr) {
-        changes.push({
-          type: 'warning',
-          code: 'queue_rebuild_failed',
-          message: queueErr.message,
-        });
-      }
+    const queueChange = await planQueueRealignmentForProfile(
+      client,
+      classId,
+      profile,
+      profilePlan,
+      phaseStartDateMap,
+      options
+    );
+    if (queueChange) {
+      changes.push(queueChange);
     }
 
     impacts.push({
@@ -576,10 +603,6 @@ export async function applyBillingRealignment(client, billingImpacts, adjustment
       }
 
       if (change.type === 'rebuild_queue') {
-        if (change.message) {
-          continue;
-        }
-
         const billDueDate = dateParam(change.bill_invoice_due_date);
         const nextBillDueDate = dateParam(change.next_invoice_due_date);
         const nextInvoiceMonth = dateParam(change.new_next_invoice_month);

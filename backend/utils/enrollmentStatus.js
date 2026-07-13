@@ -151,6 +151,11 @@ export async function determineRejoinEnrollmentStatus({ db, studentId, classId, 
        AND class_id = $2
        AND program_enrollment_status = 'dropped'
        AND COALESCE(phase_number, 0) <= $3
+       -- Ignore pending-DP placeholder drops (same-day replace on Phase 1 pay).
+       -- Those are not real unenrolls; counting them falsely labels first paid
+       -- enrollment as rejoin (e.g. Jianna Mirabuenos, Ciandrei Maclang).
+       AND COALESCE(enrolled_by, '') NOT ILIKE '%awaiting Phase 1 payment%'
+       AND COALESCE(enrolled_by, '') NOT ILIKE '%Downpayment paid%'
      ORDER BY COALESCE(removed_at, enrolled_at) DESC NULLS LAST, classstudent_id DESC
      LIMIT 1`,
     [sid, cid, phase]
