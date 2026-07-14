@@ -110,6 +110,33 @@ export const isEmptyNotGeneratedPlanGap = (phase) => {
   return !enr || enr === '-' || enr === '—' || enr === '\u2014';
 };
 
+/** Latest index with real billing/enrollment activity (generated invoice or known enrollment status). */
+export const findLastTouchedPhaseIndex = (phases) => {
+  if (!Array.isArray(phases)) return -1;
+  let latest = -1;
+  phases.forEach((p, i) => {
+    if (isLateStartGapPhase(p)) return;
+    const enr = String(p?.program_enrollment_status || '').trim().toLowerCase();
+    const hasEnrollment = enr && enr !== '-' && enr !== '\u2014';
+    if (p?.is_generated || hasEnrollment) {
+      latest = i;
+    }
+  });
+  return latest;
+};
+
+/**
+ * A past, non-generated gap phase with no enrollment record — occurs before the
+ * latest phase with real activity, so the student is confirmed to have never
+ * enrolled that phase (as opposed to a future phase that simply hasn't arrived yet).
+ */
+export const isPastUnenrolledGapPhase = (phases, phaseIndex) => {
+  if (!Array.isArray(phases) || phaseIndex < 0 || phaseIndex >= phases.length) return false;
+  if (!isEmptyNotGeneratedPlanGap(phases[phaseIndex])) return false;
+  const lastTouched = findLastTouchedPhaseIndex(phases);
+  return phaseIndex < lastTouched;
+};
+
 /**
  * Latest index after an unpaid drop where the student continued
  * (active enrollment or a generated invoice). -1 if none.

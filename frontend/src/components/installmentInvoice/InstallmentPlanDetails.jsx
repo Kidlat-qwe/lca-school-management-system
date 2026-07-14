@@ -17,6 +17,7 @@ import {
   isInactiveInstallmentPlanSlot,
   isInstallmentPlanSlotAddressed,
   isLateStartGapPhase,
+  isPastUnenrolledGapPhase,
   isPhaseLockedByPriorPartialBalance,
   shouldOfferInstallmentPlanRejoin,
 } from '../../utils/installmentPhaseSlotStatus';
@@ -1249,7 +1250,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                               const enrollmentLabel = formatInstallmentPlanPhaseEnrollment(
                                 phase.program_enrollment_status
                               );
-                              if (!enrollmentLabel) return '\u2014';
+                              if (!enrollmentLabel) {
+                                if (isPastUnenrolledGapPhase(visiblePhases, idx)) {
+                                  return <span className="text-gray-500">Not Enrolled</span>;
+                                }
+                                return '\u2014';
+                              }
                               const enrollmentKey = String(phase.program_enrollment_status || '')
                                 .trim()
                                 .toLowerCase();
