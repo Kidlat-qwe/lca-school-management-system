@@ -6,7 +6,16 @@ import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
-import { UNIFORM_SIZE_OPTIONS } from '../../utils/uniformMerchandise';
+import {
+  UNIFORM_SIZE_OPTIONS,
+  UNIFORM_PIECE_OPTIONS,
+  UNIFORM_SCHOOL_NAME,
+  UNIFORM_PE_NAME,
+  isUniformMerchandiseName,
+  requiresUniformPieceFields,
+  countUniformPiecesByType,
+} from '../../utils/uniformMerchandise';
+import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -45,9 +54,11 @@ const Merchandise = () => {
   const [submitting, setSubmitting] = useState(false);
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
   const [merchandiseCategory, setMerchandiseCategory] = useState(''); // 'uniform_school' | 'uniform_pe' | 'other' – used when creating new type
+  /** Stocks list filters (uniforms): gender, piece type, size */
+  const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
-  const [activeTab, setActiveTab] = useState('branches'); // 'branches' or 'requests'
+  const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'requests' | 'logs'
 
   useEffect(() => {
     fetchBranches();
@@ -67,20 +78,22 @@ const Merchandise = () => {
         setSelectedBranchId(parsedBranchId);
         setSelectedBranchName(globalBranchName || null);
         setViewingStocksFor(null);
+        setStockFilters({ gender: '', type: '', size: '' });
       }
       return;
     }
     setSelectedBranchId(null);
     setSelectedBranchName(null);
     setViewingStocksFor(null);
+    setStockFilters({ gender: '', type: '', size: '' });
     setMerchandise([]);
   }, [globalBranchId, globalBranchName]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.get('notificationTab') === 'requests') {
-      setActiveTab('requests');
-    }
+    const tab = params.get('notificationTab') || params.get('tab');
+    if (tab === 'requests') setActiveTab('requests');
+    if (tab === 'logs') setActiveTab('logs');
   }, [location.search]);
 
   const fetchBranches = async () => {
@@ -121,6 +134,7 @@ const Merchandise = () => {
     setSelectedBranchId(branchId);
     setSelectedBranchName(branchName);
     setViewingStocksFor(null); // Reset stocks view
+    setStockFilters({ gender: '', type: '', size: '' });
   };
 
   const handleBackToBranches = () => {
@@ -128,15 +142,18 @@ const Merchandise = () => {
     setSelectedBranchName(null);
     setMerchandise([]);
     setViewingStocksFor(null);
+    setStockFilters({ gender: '', type: '', size: '' });
   };
 
   const handleViewStocks = (merchandiseName) => {
     setOpenMenuId(null);
+    setStockFilters({ gender: '', type: '', size: '' });
     setViewingStocksFor(merchandiseName);
   };
 
   const handleBackToMerchandise = () => {
     setViewingStocksFor(null);
+    setStockFilters({ gender: '', type: '', size: '' });
   };
 
   const handleDelete = async (merchandiseId) => {
@@ -202,10 +219,14 @@ const Merchandise = () => {
   const openCreateModal = () => {
     setEditingMerchandise(null);
     setError('');
+
     // If we're in stocks view, pre-fill merchandise_name and branch_id
     if (viewingStocksFor && selectedBranchId) {
       // Check if this merchandise type requires sizing
       setRequiresSizing(requiresSizingForMerchandise(viewingStocksFor));
+      if (isUniformMerchandiseName(viewingStocksFor)) {
+
+      }
       setModalStep('form');
       setSelectedBranch(branches.find(b => b.branch_id === selectedBranchId) || null);
       setFormData({
@@ -344,9 +365,12 @@ const Merchandise = () => {
     setEditingMerchandise(item);
     setEditingMerchandiseType(null);
     setError('');
+
     setModalStep('form');
     setSelectedBranch(branches.find(b => b.branch_id === item.branch_id) || null);
-    setRequiresSizing(item.merchandise_name?.trim() === 'LCA Uniform' || !!item.size);
+    setRequiresSizing(
+      isUniformMerchandiseName(item.merchandise_name) || !!item.size
+    );
     setFormData({
       merchandise_name: item.merchandise_name || '',
       size: item.size || '',
@@ -403,6 +427,7 @@ const Merchandise = () => {
     setSelectedBranch(null);
     setFormErrors({});
     setRequiresSizing(false);
+
   };
 
   const handleBranchSelect = (branch) => {
@@ -417,11 +442,12 @@ const Merchandise = () => {
 
   const handleCategorySelect = (category) => {
     setMerchandiseCategory(category);
+
     if (category === 'uniform_school') {
-      setFormData(prev => ({ ...prev, merchandise_name: 'School Uniform', gender: '', type: '' }));
+      setFormData(prev => ({ ...prev, merchandise_name: UNIFORM_SCHOOL_NAME, gender: '', type: '' }));
       setRequiresSizing(true);
     } else if (category === 'uniform_pe') {
-      setFormData(prev => ({ ...prev, merchandise_name: 'PE Uniform', gender: '', type: '' }));
+      setFormData(prev => ({ ...prev, merchandise_name: UNIFORM_PE_NAME, gender: '', type: '' }));
       setRequiresSizing(true);
     } else {
       setFormData(prev => ({ ...prev, merchandise_name: '', gender: '', type: '' }));
@@ -462,6 +488,26 @@ const Merchandise = () => {
       errors.merchandise_name = 'Merchandise name is required';
     }
 
+    const name = formData.merchandise_name?.trim() || '';
+    const needsSizing =
+      requiresSizing ||
+      requiresSizingForMerchandise(name) ||
+      requiresUniformPieceFields(name);
+    const isUniform = requiresUniformPieceFields(name);
+
+    if (!editingMerchandiseType && needsSizing && !formData.size?.trim()) {
+      errors.size = 'Size is required for this merchandise type';
+    }
+
+    if (!editingMerchandiseType && isUniform) {
+      if (!formData.gender?.trim()) {
+        errors.gender = 'Gender is required for uniforms';
+      }
+      if (!formData.type?.trim()) {
+        errors.type = 'Piece (Top or Bottom) is required';
+      }
+    }
+
     if (formData.quantity && (isNaN(formData.quantity) || parseInt(formData.quantity) < 0)) {
       errors.quantity = 'Quantity must be a non-negative integer';
     }
@@ -474,6 +520,44 @@ const Merchandise = () => {
     return Object.keys(errors).length === 0;
   };
 
+  const findExistingUniformStockRow = ({
+    merchandiseName,
+    size,
+    gender,
+    type,
+    branchId,
+    excludeId = null,
+  }) => {
+    if (!merchandiseName || !branchId) return null;
+    const sizeKey = String(size || '').trim();
+    const genderKey = String(gender || '').trim();
+    const typeKey = String(type || '').trim();
+    return (
+      merchandise.find((item) => {
+        if (excludeId != null && String(item.merchandise_id) === String(excludeId)) return false;
+        if (String(item.branch_id) !== String(branchId)) return false;
+        if (String(item.merchandise_name || '').trim() !== String(merchandiseName).trim()) return false;
+        if (String(item.size || '').trim() !== sizeKey) return false;
+        if (String(item.gender || '').trim() !== genderKey) return false;
+        if (String(item.type || '').trim() !== typeKey) return false;
+        return true;
+      }) || null
+    );
+  };
+
+  const handleDuplicateUniformStock = async (existing, pieceLabel) => {
+    const goEdit = await appConfirm({
+      title: 'Stock already exists',
+      message: `${pieceLabel} is already created for this branch.\n\nPlease edit that stock row to adjust the quantity instead of adding a duplicate.`,
+      confirmLabel: 'Edit existing stock',
+      cancelLabel: 'Cancel',
+    });
+    if (goEdit && existing) {
+      closeModal();
+      openEditModal(existing);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -481,10 +565,34 @@ const Merchandise = () => {
       return;
     }
 
+    // Uniforms are per piece (Gender + Top/Bottom + Size). Block duplicate SKUs on create.
+    if (
+      !editingMerchandise &&
+      !editingMerchandiseType &&
+      requiresUniformPieceFields(formData.merchandise_name)
+    ) {
+      const branchId = formData.branch_id ? parseInt(formData.branch_id, 10) : selectedBranchId;
+      const merchandiseName = formData.merchandise_name.trim();
+      const size = formData.size?.trim() || '';
+      const gender = formData.gender?.trim() || '';
+      const piece = formData.type?.trim() || '';
+      const existing = findExistingUniformStockRow({
+        merchandiseName,
+        size,
+        gender,
+        type: piece,
+        branchId,
+      });
+      if (existing) {
+        await handleDuplicateUniformStock(existing, `${gender} · ${piece} · ${size}`);
+        return;
+      }
+    }
+
     setSubmitting(true);
     setError('');
     try {
-      const payload = {
+      const basePayload = {
         merchandise_name: formData.merchandise_name.trim(),
         size: formData.size?.trim() || null,
         quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
@@ -497,9 +605,28 @@ const Merchandise = () => {
       };
       
       if (editingMerchandise) {
+        // Prevent changing into a duplicate uniform SKU on edit
+        if (requiresUniformPieceFields(basePayload.merchandise_name)) {
+          const existing = findExistingUniformStockRow({
+            merchandiseName: basePayload.merchandise_name,
+            size: basePayload.size,
+            gender: basePayload.gender,
+            type: basePayload.type,
+            branchId: basePayload.branch_id || editingMerchandise.branch_id,
+            excludeId: editingMerchandise.merchandise_id,
+          });
+          if (existing) {
+            setSubmitting(false);
+            await handleDuplicateUniformStock(
+              existing,
+              `${basePayload.gender} · ${basePayload.type} · ${basePayload.size}`
+            );
+            return;
+          }
+        }
         await apiRequest(`/merchandise/${editingMerchandise.merchandise_id}`, {
           method: 'PUT',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(basePayload),
         });
       } else if (editingMerchandiseType) {
         // When editing merchandise type, update all items of that type with the image
@@ -514,14 +641,14 @@ const Merchandise = () => {
           await apiRequest(`/merchandise/${item.merchandise_id}`, {
             method: 'PUT',
             body: JSON.stringify({
-              image_url: payload.image_url,
+              image_url: basePayload.image_url,
             }),
           });
         }
       } else {
         await apiRequest('/merchandise', {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(basePayload),
         });
       }
       
@@ -640,8 +767,7 @@ const Merchandise = () => {
   const requiresSizingForMerchandise = (merchandiseName) => {
     if (!merchandiseName) return false;
     
-    // Check if name contains "uniform" (case-insensitive)
-    if (merchandiseName.toLowerCase().includes('uniform')) {
+    if (isUniformMerchandiseName(merchandiseName)) {
       return true;
     }
     
@@ -893,14 +1019,14 @@ const Merchandise = () => {
                       {(requiresSizing || requiresSizingForMerchandise(formData.merchandise_name)) && (
                         <div>
                           <label htmlFor="size" className="label-field">
-                            Size
+                            Size {requiresUniformPieceFields(formData.merchandise_name) ? '*' : ''}
                           </label>
                           <select
                             id="size"
                             name="size"
                             value={formData.size}
                             onChange={handleInputChange}
-                            className="input-field"
+                            className={`input-field ${formErrors.size ? 'border-red-500' : ''}`}
                           >
                             <option value="">Select Size</option>
                             {UNIFORM_SIZE_OPTIONS.map((size) => (
@@ -909,6 +1035,9 @@ const Merchandise = () => {
                               </option>
                             ))}
                           </select>
+                          {formErrors.size && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.size}</p>
+                          )}
                         </div>
                       )}
 
@@ -966,42 +1095,54 @@ const Merchandise = () => {
                         />
                       </div>
 
-                      {/* Gender and Type fields - show for Uniform (School/PE) category or when name contains "uniform" */}
-                      {((merchandiseCategory === 'uniform_school' || merchandiseCategory === 'uniform_pe') || (formData.merchandise_name && formData.merchandise_name.toLowerCase().includes('uniform'))) && (
+                      {/* Gender and Piece fields - uniforms only */}
+                      {((merchandiseCategory === 'uniform_school' || merchandiseCategory === 'uniform_pe') || isUniformMerchandiseName(formData.merchandise_name)) && (
                         <>
                           <div>
                             <label htmlFor="gender" className="label-field">
-                              Gender
+                              Gender *
                             </label>
                             <select
                               id="gender"
                               name="gender"
                               value={formData.gender}
                               onChange={handleInputChange}
-                              className="input-field"
+                              className={`input-field ${formErrors.gender ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Gender</option>
                               <option value="Men">Men</option>
                               <option value="Women">Women</option>
                               <option value="Unisex">Unisex</option>
                             </select>
+                            {formErrors.gender && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.gender}</p>
+                            )}
                           </div>
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Type
+                              Piece: Top / Bottom *
                             </label>
                             <select
                               id="type"
                               name="type"
                               value={formData.type}
                               onChange={handleInputChange}
-                              className="input-field"
+                              className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
-                              <option value="">Select Type</option>
-                              <option value="Top">Top</option>
-                              <option value="Bottom">Bottom</option>
+                              <option value="">Select Piece</option>
+                              {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
                             </select>
+                            {formErrors.type && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Each stock row is one piece (Top or Bottom). Sizes may differ.
+                            </p>
                           </div>
                         </>
                       )}
@@ -1060,7 +1201,13 @@ const Merchandise = () => {
                         <span>Saving...</span>
                       </span>
                     ) : (
-                    editingMerchandise ? 'Update Stock' : 'Add Merchandise Type'
+                    editingMerchandiseType
+                      ? 'Update Image'
+                      : editingMerchandise
+                      ? 'Update Stock'
+                      : viewingStocksFor
+                      ? 'Add Stock'
+                      : 'Add Merchandise Type'
                     )}
                   </button>
                 </div>
@@ -1396,8 +1543,67 @@ const Merchandise = () => {
     const stocks = getStocksByMerchandiseName(viewingStocksFor);
     const showSizeColumn = requiresSizingForMerchandise(viewingStocksFor);
     const showGenderTypeColumns =
-      viewingStocksFor.toLowerCase().includes('uniform') ||
+      isUniformMerchandiseName(viewingStocksFor) ||
       stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
+    const isUniformStocks = isUniformMerchandiseName(viewingStocksFor);
+    const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
+
+    const genderFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.gender || '').trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    if (genderFilterOptions.length === 0 && isUniformStocks) {
+      genderFilterOptions.push('Men', 'Women', 'Unisex');
+    }
+
+    const typeFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.type || '').trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    if (typeFilterOptions.length === 0 && isUniformStocks) {
+      UNIFORM_PIECE_OPTIONS.forEach((o) => typeFilterOptions.push(o.value));
+    }
+
+    const sizeFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.size || '').trim())
+          .filter((sz) => sz && sz !== 'N/A')
+      ),
+    ].sort((a, b) => {
+      const ai = UNIFORM_SIZE_OPTIONS.indexOf(a);
+      const bi = UNIFORM_SIZE_OPTIONS.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    if (sizeFilterOptions.length === 0 && showSizeColumn) {
+      UNIFORM_SIZE_OPTIONS.forEach((sz) => sizeFilterOptions.push(sz));
+    }
+
+    const hasActiveStockFilters =
+      !!stockFilters.gender || !!stockFilters.type || !!stockFilters.size;
+
+    const filteredStocks = stocks.filter((stock) => {
+      if (stockFilters.gender) {
+        if (String(stock.gender || '').trim() !== stockFilters.gender) return false;
+      }
+      if (stockFilters.type) {
+        if (String(stock.type || '').trim() !== stockFilters.type) return false;
+      }
+      if (stockFilters.size) {
+        const stockSize = stock.size && stock.size !== 'N/A' ? String(stock.size).trim() : '';
+        if (stockSize !== stockFilters.size) return false;
+      }
+      return true;
+    });
     
     return (
       <div className="space-y-6">
@@ -1417,6 +1623,21 @@ const Merchandise = () => {
                 Stocks: {viewingStocksFor}
               </h1>
               <p className="text-sm text-gray-500 mt-1">{selectedBranchName}</p>
+              {pieceCounts && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                    Top: {pieceCounts.top}
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                    Bottom: {pieceCounts.bottom}
+                  </span>
+                  {pieceCounts.unspecified > 0 && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">
+                      Unspecified piece: {pieceCounts.unspecified}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <button 
@@ -1437,6 +1658,91 @@ const Merchandise = () => {
           </div>
         )}
 
+        {/* Uniform stock filters */}
+        {(isUniformStocks || showSizeColumn || showGenderTypeColumns) && (
+          <div className="bg-white rounded-lg shadow border border-gray-100 p-3 sm:p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {hasActiveStockFilters && (
+                <div className="sm:col-span-3 flex justify-end -mb-1">
+                  <button
+                    type="button"
+                    onClick={() => setStockFilters({ gender: '', type: '', size: '' })}
+                    className="text-xs font-medium text-gray-600 hover:text-gray-900 underline underline-offset-2"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
+              {(isUniformStocks || showGenderTypeColumns) && (
+                <div>
+                  <label htmlFor="stock-filter-gender" className="block text-xs font-medium text-gray-600 mb-1">
+                    Gender
+                  </label>
+                  <select
+                    id="stock-filter-gender"
+                    value={stockFilters.gender}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, gender: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All genders</option>
+                    {genderFilterOptions.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {(isUniformStocks || showGenderTypeColumns) && (
+                <div>
+                  <label htmlFor="stock-filter-type" className="block text-xs font-medium text-gray-600 mb-1">
+                    Type (piece)
+                  </label>
+                  <select
+                    id="stock-filter-type"
+                    value={stockFilters.type}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, type: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All types</option>
+                    {typeFilterOptions.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {showSizeColumn && (
+                <div>
+                  <label htmlFor="stock-filter-size" className="block text-xs font-medium text-gray-600 mb-1">
+                    Size
+                  </label>
+                  <select
+                    id="stock-filter-size"
+                    value={stockFilters.size}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, size: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All sizes</option>
+                    {sizeFilterOptions.map((sz) => (
+                      <option key={sz} value={sz}>
+                        {sz}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Stocks Table */}
         <div className="bg-white rounded-lg shadow">
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
@@ -1451,6 +1757,16 @@ const Merchandise = () => {
             >
               <thead className="bg-white">
                 <tr>
+                  {showGenderTypeColumns && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Gender
+                    </th>
+                  )}
+                  {showGenderTypeColumns && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Type
+                    </th>
+                  )}
                   {showSizeColumn && (
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Size
@@ -1465,25 +1781,25 @@ const Merchandise = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Remarks
                   </th>
-                  {showGenderTypeColumns && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Gender
-                    </th>
-                  )}
-                  {showGenderTypeColumns && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Type
-                    </th>
-                  )}
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {stocks.length > 0 ? (
-                  stocks.map((stock) => (
+                {filteredStocks.length > 0 ? (
+                  filteredStocks.map((stock) => (
                     <tr key={stock.merchandise_id}>
+                      {showGenderTypeColumns && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
+                        </td>
+                      )}
+                      {showGenderTypeColumns && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">{stock.type || '-'}</div>
+                        </td>
+                      )}
                       {showSizeColumn && (
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{stock.size || 'N/A'}</div>
@@ -1502,16 +1818,6 @@ const Merchandise = () => {
                           {stock.remarks || '-'}
                         </div>
                       </td>
-                      {showGenderTypeColumns && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
-                        </td>
-                      )}
-                      {showGenderTypeColumns && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{stock.type || '-'}</div>
-                        </td>
-                      )}
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end space-x-2">
                           <button
@@ -1537,14 +1843,16 @@ const Merchandise = () => {
                   <tr>
                     <td
                         colSpan={
+                          (showGenderTypeColumns ? 2 : 0) +
                           (showSizeColumn ? 1 : 0) +
                           3 + // qty, price, remarks
-                          (showGenderTypeColumns ? 2 : 0) +
                           1 // actions
                         }
                       className="px-6 py-4 text-center text-sm text-gray-500"
                     >
-                      No stock information available for this merchandise type.
+                      {stocks.length === 0
+                        ? 'No stock information available for this merchandise type.'
+                        : 'No stocks match the selected filters.'}
                     </td>
                   </tr>
                 )}
@@ -1842,8 +2150,9 @@ const Merchandise = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-                            <button
+        <nav className="-mb-px flex flex-wrap gap-x-8 gap-y-1">
+          <button
+            type="button"
             onClick={() => setActiveTab('branches')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'branches'
@@ -1852,8 +2161,9 @@ const Merchandise = () => {
             }`}
           >
             Branches
-                            </button>
-                  <button
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('requests')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors flex items-center space-x-2 ${
               activeTab === 'requests'
@@ -1862,12 +2172,23 @@ const Merchandise = () => {
             }`}
           >
             <span>Stock Requests</span>
-            {requests.filter(r => r.status === 'Pending').length > 0 && (
+            {requests.filter((r) => r.status === 'Pending').length > 0 && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                {requests.filter(r => r.status === 'Pending').length}
-                      </span>
-                    )}
-                  </button>
+                {requests.filter((r) => r.status === 'Pending').length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('logs')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'logs'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Merchandise Logs
+          </button>
         </nav>
       </div>
 
@@ -1953,6 +2274,16 @@ const Merchandise = () => {
         </div>
       )}
         </>
+      ) : activeTab === 'logs' ? (
+        <MerchandiseReleaseLogsPanel
+          branchId={globalBranchId || ''}
+          branchName={
+            globalBranchId
+              ? globalBranchName || selectedBranchName || 'Selected branch'
+              : 'All branches'
+          }
+          showBranchColumn={!globalBranchId}
+        />
       ) : (
         <>
           {/* Requests List */}
@@ -1996,37 +2327,37 @@ const Merchandise = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && (
-              <button
+                            <button
                               onClick={() => openReviewModal(request)}
                               className="px-3 py-1 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-              >
+                            >
                               Review
-              </button>
+                            </button>
                           )}
                           {(request.status === 'Approved' || request.status === 'Rejected') && (
-                  <button
+                            <button
                               onClick={() => openViewModal(request)}
                               className="px-3 py-1 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                  >
+                            >
                               View
-                  </button>
+                            </button>
                           )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                        </div>
-                        </div>
-                      ) : (
+              </div>
+            </div>
+          ) : (
             <div className="bg-white rounded-lg shadow p-12 text-center">
               <p className="text-gray-500">
                 No stock requests found. Admins can submit requests which will appear here.
               </p>
-                      </div>
-                    )}
-                      </>
-                    )}
+            </div>
+          )}
+        </>
+      )}
 
       {/* Modals */}
       {renderModals()}

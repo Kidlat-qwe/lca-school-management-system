@@ -6,7 +6,23 @@ import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
-import { UNIFORM_SIZE_OPTIONS } from '../../utils/uniformMerchandise';
+import {
+  UNIFORM_SIZE_OPTIONS,
+  UNIFORM_PIECE_OPTIONS,
+  isUniformMerchandiseName,
+  requiresUniformPieceFields,
+  countUniformPiecesByType,
+} from '../../utils/uniformMerchandise';
+import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+
+const createEmptyBulkLine = () => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+  merchandise_name: '',
+  size: '',
+  gender: '',
+  type: '',
+  quantity: '',
+});
 
 const AdminMerchandise = () => {
   const location = useLocation();
@@ -47,14 +63,26 @@ const AdminMerchandise = () => {
     gender: '',
     type: '',
   });
+  const [bulkRequestLines, setBulkRequestLines] = useState([createEmptyBulkLine()]);
+  const [bulkLineErrors, setBulkLineErrors] = useState({});
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
   const [formErrors, setFormErrors] = useState({});
   const [requestFormErrors, setRequestFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
+  /** Stocks list filters (uniforms): gender, piece type, size */
+  const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'requests'
+  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'logs'
+
+  const requestedByDisplay =
+    (userInfo?.nickname && String(userInfo.nickname).trim()) ||
+    userInfo?.full_name ||
+    userInfo?.fullName ||
+    userInfo?.email ||
+    'Admin';
+  const requestDateDisplay = formatDateManila(new Date());
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -86,9 +114,9 @@ const AdminMerchandise = () => {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.get('notificationTab') === 'requests') {
-      setActiveTab('requests');
-    }
+    const tab = params.get('notificationTab') || params.get('tab');
+    if (tab === 'requests') setActiveTab('requests');
+    if (tab === 'logs') setActiveTab('logs');
   }, [location.search]);
 
   // Auto-set branch_id from adminBranchId when available
@@ -131,11 +159,13 @@ const AdminMerchandise = () => {
 
   const handleViewStocks = (merchandiseName) => {
     setOpenMenuId(null);
+    setStockFilters({ gender: '', type: '', size: '' });
     setViewingStocksFor(merchandiseName);
   };
 
   const handleBackToMerchandise = () => {
     setViewingStocksFor(null);
+    setStockFilters({ gender: '', type: '', size: '' });
   };
 
   const handleDelete = async (merchandiseId) => {
@@ -208,6 +238,7 @@ const AdminMerchandise = () => {
   const openCreateModal = () => {
     setEditingMerchandise(null);
     setError('');
+
     // If we're in stocks view, pre-fill merchandise_name and branch_id
     if (viewingStocksFor && adminBranchId) {
       // Check if this merchandise type requires sizing
@@ -246,11 +277,13 @@ const AdminMerchandise = () => {
     setIsModalOpen(true);
   };
 
-  // Open request modal from global "Request Stock" button
+  // Open request modal from global "Request Stock" button (bulk spreadsheet by default)
   const openRequestModal = (merchandiseDetails = null) => {
     setIsRequestModalOpen(true);
     const isSpecificRequest = Boolean(merchandiseDetails);
     setIsRequestingSpecificStock(isSpecificRequest);
+    setBulkRequestLines([createEmptyBulkLine()]);
+    setBulkLineErrors({});
     
     if (isSpecificRequest) {
       const { name, size, gender, type } = merchandiseDetails;
@@ -264,7 +297,7 @@ const AdminMerchandise = () => {
       });
       setRequestFormErrors({});
     } else {
-      // Reset form for general request
+      // Reset form for general bulk request
       setRequestFormData({
         merchandise_name: '',
         size: '',
@@ -280,6 +313,8 @@ const AdminMerchandise = () => {
   const closeRequestModal = () => {
     setIsRequestModalOpen(false);
     setIsRequestingSpecificStock(false);
+    setBulkRequestLines([createEmptyBulkLine()]);
+    setBulkLineErrors({});
     setRequestFormData({
       merchandise_name: '',
       size: '',
@@ -289,6 +324,50 @@ const AdminMerchandise = () => {
       type: '',
     });
     setRequestFormErrors({});
+  };
+
+  const addBulkRequestLine = () => {
+    setBulkRequestLines((prev) => [...prev, createEmptyBulkLine()]);
+  };
+
+  const removeBulkRequestLine = (lineId) => {
+    setBulkRequestLines((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((line) => line.id !== lineId);
+    });
+    setBulkLineErrors((prev) => {
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
+    });
+  };
+
+  const handleBulkLineChange = (lineId, field, value) => {
+    setBulkRequestLines((prev) =>
+      prev.map((line) => {
+        if (line.id !== lineId) return line;
+        const updated = { ...line, [field]: value };
+        if (field === 'merchandise_name') {
+          const needsSizing = requiresSizingForMerchandise(value);
+          const isUniform = requiresUniformPieceFields(value);
+          if (!needsSizing) updated.size = '';
+          if (!isUniform) {
+            updated.gender = '';
+            updated.type = '';
+          }
+        }
+        return updated;
+      })
+    );
+    setBulkLineErrors((prev) => {
+      if (!prev[lineId]?.[field]) return prev;
+      const nextLine = { ...prev[lineId] };
+      delete nextLine[field];
+      const next = { ...prev };
+      if (Object.keys(nextLine).length === 0) delete next[lineId];
+      else next[lineId] = nextLine;
+      return next;
+    });
   };
 
   const openEditModal = (item) => {
@@ -359,6 +438,7 @@ const AdminMerchandise = () => {
     // Removed setSelectedBranch - admin only sees their branch
     setFormErrors({});
     setRequiresSizing(false);
+
   };
 
   // Removed handleBranchSelect and handleBackToBranchSelection - admin only sees their branch
@@ -391,8 +471,7 @@ const AdminMerchandise = () => {
   const requiresSizingForMerchandise = (merchandiseName) => {
     if (!merchandiseName) return false;
     
-    // Check if name contains "uniform" (case-insensitive)
-    if (merchandiseName.toLowerCase().includes('uniform')) {
+    if (isUniformMerchandiseName(merchandiseName)) {
       return true;
     }
     
@@ -462,6 +541,26 @@ const AdminMerchandise = () => {
       errors.merchandise_name = 'Merchandise name is required';
     }
 
+    const name = formData.merchandise_name?.trim() || '';
+    const needsSizing =
+      requiresSizing ||
+      requiresSizingForMerchandise(name) ||
+      requiresUniformPieceFields(name);
+    const isUniform = requiresUniformPieceFields(name);
+
+    if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && needsSizing && !formData.size?.trim()) {
+      errors.size = 'Size is required for this merchandise type';
+    }
+
+    if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && isUniform) {
+      if (!formData.gender?.trim()) {
+        errors.gender = 'Gender is required for uniforms';
+      }
+      if (!formData.type?.trim()) {
+        errors.type = 'Piece (Top or Bottom) is required';
+      }
+    }
+
     if (formData.quantity && (isNaN(formData.quantity) || parseInt(formData.quantity) < 0)) {
       errors.quantity = 'Quantity must be a non-negative integer';
     }
@@ -474,24 +573,83 @@ const AdminMerchandise = () => {
     return Object.keys(errors).length === 0;
   };
 
+  const validateBulkRequestForm = () => {
+    const errors = {};
+    const lineErrors = {};
+
+    if (!requestFormData.request_reason.trim()) {
+      errors.request_reason = 'Request reason is required';
+    }
+
+    if (!bulkRequestLines.length) {
+      errors.bulk = 'Add at least one item row';
+    }
+
+    bulkRequestLines.forEach((line, index) => {
+      const row = {};
+      const name = (line.merchandise_name || '').trim();
+      if (!name) {
+        row.merchandise_name = 'Item is required';
+      }
+
+      const needsSizing = requiresSizingForMerchandise(name);
+      if (needsSizing && !(line.size || '').trim()) {
+        row.size = 'Size is required';
+      }
+
+      if (requiresUniformPieceFields(name)) {
+        if (!(line.gender || '').trim()) {
+          row.gender = 'Gender is required';
+        }
+        if (!(line.type || '').trim()) {
+          row.type = 'Piece is required';
+        }
+      }
+
+      const qty = parseInt(line.quantity, 10);
+      if (!line.quantity || Number.isNaN(qty) || qty <= 0) {
+        row.quantity = 'Quantity must be greater than 0';
+      }
+
+      if (Object.keys(row).length > 0) {
+        lineErrors[line.id] = row;
+        errors[`line_${index}`] = true;
+      }
+    });
+
+    setRequestFormErrors(errors);
+    setBulkLineErrors(lineErrors);
+    return Object.keys(lineErrors).length === 0 && !errors.request_reason && !errors.bulk;
+  };
+
   const validateRequestForm = () => {
+    if (!isRequestingSpecificStock) {
+      return validateBulkRequestForm();
+    }
+
     const errors = {};
     
     if (!requestFormData.merchandise_name.trim()) {
-      errors.merchandise_name = 'Merchandise name is required';
+      errors.merchandise_name = 'Item is required';
     }
 
     // Check if merchandise requires sizing (not just uniforms, but any item type that has sizes)
-    const requiresSizing = requiresSizingForMerchandise(requestFormData.merchandise_name);
+    const sizingRequired = requiresSizingForMerchandise(requestFormData.merchandise_name);
     
     // Size is required for items that require sizing
-    if (requiresSizing && !requestFormData.size.trim()) {
+    if (sizingRequired && !requestFormData.size.trim()) {
       errors.size = 'Size is required for this merchandise type';
     }
 
-    // Gender and type are optional for uniforms (not strictly required)
-    // but we validate if provided
-    const isUniform = requestFormData.merchandise_name.toLowerCase().includes('uniform');
+    const isUniform = requiresUniformPieceFields(requestFormData.merchandise_name);
+    if (isUniform) {
+      if (!requestFormData.gender?.trim()) {
+        errors.gender = 'Gender is required for uniforms';
+      }
+      if (!requestFormData.type?.trim()) {
+        errors.type = 'Piece (Top or Bottom) is required';
+      }
+    }
 
     if (!requestFormData.requested_quantity || parseInt(requestFormData.requested_quantity) <= 0) {
       errors.requested_quantity = 'Requested quantity must be greater than 0';
@@ -505,6 +663,44 @@ const AdminMerchandise = () => {
     return Object.keys(errors).length === 0;
   };
 
+  const findExistingUniformStockRow = ({
+    merchandiseName,
+    size,
+    gender,
+    type,
+    branchId,
+    excludeId = null,
+  }) => {
+    if (!merchandiseName || !branchId) return null;
+    const sizeKey = String(size || '').trim();
+    const genderKey = String(gender || '').trim();
+    const typeKey = String(type || '').trim();
+    return (
+      merchandise.find((item) => {
+        if (excludeId != null && String(item.merchandise_id) === String(excludeId)) return false;
+        if (String(item.branch_id) !== String(branchId)) return false;
+        if (String(item.merchandise_name || '').trim() !== String(merchandiseName).trim()) return false;
+        if (String(item.size || '').trim() !== sizeKey) return false;
+        if (String(item.gender || '').trim() !== genderKey) return false;
+        if (String(item.type || '').trim() !== typeKey) return false;
+        return true;
+      }) || null
+    );
+  };
+
+  const handleDuplicateUniformStock = async (existing, pieceLabel) => {
+    const goEdit = await appConfirm({
+      title: 'Stock already exists',
+      message: `${pieceLabel} is already created for this branch.\n\nPlease edit that stock row to adjust the quantity instead of adding a duplicate.`,
+      confirmLabel: 'Edit existing stock',
+      cancelLabel: 'Cancel',
+    });
+    if (goEdit && existing) {
+      closeModal();
+      openEditModal(existing);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -512,10 +708,33 @@ const AdminMerchandise = () => {
       return;
     }
 
+    if (
+      !editingMerchandise &&
+      !editingMerchandiseType &&
+      requiresUniformPieceFields(formData.merchandise_name)
+    ) {
+      const branchId = adminBranchId || (formData.branch_id ? parseInt(formData.branch_id, 10) : null);
+      const merchandiseName = formData.merchandise_name.trim();
+      const size = formData.size?.trim() || '';
+      const gender = formData.gender?.trim() || '';
+      const piece = formData.type?.trim() || '';
+      const existing = findExistingUniformStockRow({
+        merchandiseName,
+        size,
+        gender,
+        type: piece,
+        branchId,
+      });
+      if (existing) {
+        await handleDuplicateUniformStock(existing, `${gender} · ${piece} · ${size}`);
+        return;
+      }
+    }
+
     setSubmitting(true);
     setError('');
     try {
-      const payload = {
+      const basePayload = {
         merchandise_name: formData.merchandise_name.trim(),
         size: formData.size?.trim() || null,
         quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
@@ -528,9 +747,27 @@ const AdminMerchandise = () => {
       };
       
       if (editingMerchandise) {
+        if (requiresUniformPieceFields(basePayload.merchandise_name)) {
+          const existing = findExistingUniformStockRow({
+            merchandiseName: basePayload.merchandise_name,
+            size: basePayload.size,
+            gender: basePayload.gender,
+            type: basePayload.type,
+            branchId: basePayload.branch_id || editingMerchandise.branch_id,
+            excludeId: editingMerchandise.merchandise_id,
+          });
+          if (existing) {
+            setSubmitting(false);
+            await handleDuplicateUniformStock(
+              existing,
+              `${basePayload.gender} · ${basePayload.type} · ${basePayload.size}`
+            );
+            return;
+          }
+        }
         await apiRequest(`/merchandise/${editingMerchandise.merchandise_id}`, {
           method: 'PUT',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(basePayload),
         });
       } else if (editingMerchandiseType) {
         // When editing merchandise type, update all items of that type with the image
@@ -545,14 +782,14 @@ const AdminMerchandise = () => {
           await apiRequest(`/merchandise/${item.merchandise_id}`, {
             method: 'PUT',
             body: JSON.stringify({
-              image_url: payload.image_url,
+              image_url: basePayload.image_url,
             }),
           });
         }
       } else {
         await apiRequest('/merchandise', {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(basePayload),
         });
       }
       
@@ -596,18 +833,65 @@ const AdminMerchandise = () => {
 
     setSubmitting(true);
     try {
-      const payload = {
+      const sharedReason = requestFormData.request_reason.trim();
+
+      if (!isRequestingSpecificStock) {
+        const payloads = bulkRequestLines.map((line) => ({
+          merchandise_name: line.merchandise_name.trim(),
+          size: line.size?.trim() || null,
+          requested_quantity: parseInt(line.quantity, 10),
+          request_reason: sharedReason,
+          gender: line.gender?.trim() || null,
+          type: line.type?.trim() || null,
+        }));
+
+        let successCount = 0;
+        const failures = [];
+        for (let i = 0; i < payloads.length; i += 1) {
+          const payload = payloads[i];
+          try {
+            await apiRequest('/merchandise-requests', {
+              method: 'POST',
+              body: JSON.stringify(payload),
+            });
+            successCount += 1;
+          } catch (lineErr) {
+            failures.push(
+              `Row ${i + 1} (${payload.merchandise_name}): ${lineErr.message || 'Failed'}`
+            );
+          }
+        }
+
+        await fetchMerchandiseRequests();
+
+        if (failures.length === 0) {
+          closeRequestModal();
+          appAlert(
+            `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! Superadmin will be notified.`
+          );
+        } else if (successCount === 0) {
+          appAlert(`Failed to submit bulk request:\n${failures.join('\n')}`);
+        } else {
+          closeRequestModal();
+          appAlert(
+            `${successCount} of ${payloads.length} submitted. The rest failed:\n${failures.join('\n')}`
+          );
+        }
+        return;
+      }
+
+      const basePayload = {
         merchandise_name: requestFormData.merchandise_name.trim(),
         size: requestFormData.size?.trim() || null,
         requested_quantity: parseInt(requestFormData.requested_quantity),
-        request_reason: requestFormData.request_reason.trim(),
+        request_reason: sharedReason,
         gender: requestFormData.gender?.trim() || null,
         type: requestFormData.type?.trim() || null,
       };
-      
+
       await apiRequest('/merchandise-requests', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(basePayload),
       });
       
       closeRequestModal();
@@ -813,14 +1097,14 @@ const AdminMerchandise = () => {
                       {(requiresSizing || requiresSizingForMerchandise(formData.merchandise_name)) && (
                         <div>
                           <label htmlFor="size" className="label-field">
-                            Size
+                            Size {requiresUniformPieceFields(formData.merchandise_name) ? '*' : ''}
                           </label>
                           <select
                             id="size"
                             name="size"
                             value={formData.size}
                             onChange={handleInputChange}
-                            className="input-field"
+                            className={`input-field ${formErrors.size ? 'border-red-500' : ''}`}
                           >
                             <option value="">Select Size</option>
                             {UNIFORM_SIZE_OPTIONS.map((size) => (
@@ -829,6 +1113,9 @@ const AdminMerchandise = () => {
                               </option>
                             ))}
                           </select>
+                          {formErrors.size && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.size}</p>
+                          )}
                         </div>
                       )}
 
@@ -886,42 +1173,54 @@ const AdminMerchandise = () => {
                         />
                       </div>
 
-                      {/* Gender and Type fields - only show for uniforms */}
-                      {formData.merchandise_name && formData.merchandise_name.toLowerCase().includes('uniform') && (
+                      {/* Gender and Piece fields - only show for uniforms */}
+                      {isUniformMerchandiseName(formData.merchandise_name) && (
                         <>
                           <div>
                             <label htmlFor="gender" className="label-field">
-                              Gender
+                              Gender *
                             </label>
                             <select
                               id="gender"
                               name="gender"
                               value={formData.gender}
                               onChange={handleInputChange}
-                              className="input-field"
+                              className={`input-field ${formErrors.gender ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Gender</option>
                               <option value="Men">Men</option>
                               <option value="Women">Women</option>
                               <option value="Unisex">Unisex</option>
                             </select>
+                            {formErrors.gender && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.gender}</p>
+                            )}
                           </div>
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Type
+                              Piece: Top / Bottom *
                             </label>
                             <select
                               id="type"
                               name="type"
                               value={formData.type}
                               onChange={handleInputChange}
-                              className="input-field"
+                              className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
-                              <option value="">Select Type</option>
-                              <option value="Top">Top</option>
-                              <option value="Bottom">Bottom</option>
+                              <option value="">Select Piece</option>
+                              {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
                             </select>
+                            {formErrors.type && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Each stock row is one piece (Top or Bottom). Sizes may differ.
+                            </p>
                           </div>
                         </>
                       )}
@@ -972,10 +1271,12 @@ const AdminMerchandise = () => {
                         <span>Saving...</span>
                       </span>
                     ) : (
-                      editingMerchandiseType 
-                        ? 'Update Image' 
-                        : editingMerchandise 
-                        ? 'Update Stock' 
+                      editingMerchandiseType
+                        ? 'Update Image'
+                        : editingMerchandise
+                        ? 'Update Stock'
+                        : viewingStocksFor
+                        ? 'Add Stock'
                         : 'Add Merchandise Type'
                     )}
                   </button>
@@ -993,19 +1294,23 @@ const AdminMerchandise = () => {
           onClick={closeRequestModal}
         >
           <div 
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] min-h-0 flex flex-col overflow-hidden ${
+              !isRequestingSpecificStock ? 'max-w-5xl' : 'max-w-2xl'
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
               <div>
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  {isRequestingSpecificStock ? 'Request Additional Stock' : 'Request Merchandise Stock'}
+                  {isRequestingSpecificStock
+                    ? 'Request Additional Stock'
+                    : 'Request Merchandise Stock'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-1">
                   {isRequestingSpecificStock 
                     ? 'Submit a request to add more stock to this specific item' 
-                    : 'Submit a request to Superadmin for merchandise stock approval'}
+                    : 'Add one or more items in a single request. Each row is submitted as a separate pending request.'}
                 </p>
             </div>
               <button
@@ -1019,13 +1324,271 @@ const AdminMerchandise = () => {
           </div>
 
             {/* Modal Body */}
-            <form onSubmit={handleRequestSubmit} className="flex flex-col flex-1 overflow-hidden">
+            <form onSubmit={handleRequestSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              {!isRequestingSpecificStock ? (
+                <div className="p-6 flex flex-col flex-1 min-h-0 overflow-hidden gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-shrink-0">
+                    <div>
+                      <label className="label-field">Request Date</label>
+                      <input
+                        type="text"
+                        value={requestDateDisplay}
+                        className="input-field bg-gray-50 cursor-not-allowed"
+                        readOnly
+                      />
+                    </div>
+                    <div>
+                      <label className="label-field">Requested By</label>
+                      <input
+                        type="text"
+                        value={requestedByDisplay}
+                        className="input-field bg-gray-50 cursor-not-allowed"
+                        readOnly
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 mb-2 flex-shrink-0">
+                      <label className="label-field mb-0">Items</label>
+                      <button
+                        type="button"
+                        onClick={addBulkRequestLine}
+                        className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        Add row
+                      </button>
+                    </div>
+                    {requestFormErrors.bulk && (
+                      <p className="mb-2 text-sm text-red-600 flex-shrink-0">{requestFormErrors.bulk}</p>
+                    )}
+                    <div
+                      className="rounded-lg border border-gray-200 flex-1 min-h-[120px] max-h-[min(42vh,380px)] overflow-y-auto"
+                      style={{
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#cbd5e0 #f7fafc',
+                      }}
+                    >
+                      <table
+                        className="divide-y divide-gray-200 table-fixed"
+                        style={{ width: '100%' }}
+                      >
+                        <thead className="bg-gray-50 sticky top-0 z-10">
+                          <tr>
+                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '28%' }}>
+                              Items
+                            </th>
+                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '18%' }}>
+                              Size
+                            </th>
+                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '16%' }}>
+                              Gender
+                            </th>
+                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '14%' }}>
+                              Type
+                            </th>
+                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '14%' }}>
+                              Quantity
+                            </th>
+                            <th className="px-1 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '40px' }}>
+                              {' '}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                          {bulkRequestLines.map((line, rowIndex) => {
+                            const lineErr = bulkLineErrors[line.id] || {};
+                            const needsSizing = requiresSizingForMerchandise(line.merchandise_name);
+                            const isUniform = requiresUniformPieceFields(line.merchandise_name);
+                            return (
+                              <tr key={line.id}>
+                                <td className="px-2 py-2 align-top">
+                                  <select
+                                    value={line.merchandise_name}
+                                    onChange={(e) =>
+                                      handleBulkLineChange(line.id, 'merchandise_name', e.target.value)
+                                    }
+                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.merchandise_name ? 'border-red-500' : ''}`}
+                                    aria-label={`Item row ${rowIndex + 1}`}
+                                  >
+                                    <option value="">-- Select --</option>
+                                    {getUniqueMerchandiseTypes().map((merchType) => (
+                                      <option key={merchType.name} value={merchType.name}>
+                                        {merchType.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {lineErr.merchandise_name && (
+                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.merchandise_name}</p>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  <select
+                                    value={line.size}
+                                    onChange={(e) =>
+                                      handleBulkLineChange(line.id, 'size', e.target.value)
+                                    }
+                                    disabled={!needsSizing}
+                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.size ? 'border-red-500' : ''} ${!needsSizing ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                                    aria-label={`Size row ${rowIndex + 1}`}
+                                  >
+                                    <option value="">{needsSizing ? 'Select' : '—'}</option>
+                                    {UNIFORM_SIZE_OPTIONS.map((size) => (
+                                      <option key={size} value={size}>
+                                        {size}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {lineErr.size && (
+                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.size}</p>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  <select
+                                    value={line.gender}
+                                    onChange={(e) =>
+                                      handleBulkLineChange(line.id, 'gender', e.target.value)
+                                    }
+                                    disabled={!isUniform}
+                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.gender ? 'border-red-500' : ''} ${!isUniform ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                                    aria-label={`Gender row ${rowIndex + 1}`}
+                                  >
+                                    <option value="">{isUniform ? 'Select' : '—'}</option>
+                                    <option value="Men">Men</option>
+                                    <option value="Women">Women</option>
+                                    <option value="Unisex">Unisex</option>
+                                  </select>
+                                  {lineErr.gender && (
+                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.gender}</p>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  <select
+                                    value={line.type}
+                                    onChange={(e) =>
+                                      handleBulkLineChange(line.id, 'type', e.target.value)
+                                    }
+                                    disabled={!isUniform}
+                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.type ? 'border-red-500' : ''} ${!isUniform ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                                    aria-label={`Type row ${rowIndex + 1}`}
+                                  >
+                                    <option value="">{isUniform ? 'Select' : '—'}</option>
+                                    {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {lineErr.type && (
+                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.type}</p>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={line.quantity}
+                                    onChange={(e) =>
+                                      handleBulkLineChange(line.id, 'quantity', e.target.value)
+                                    }
+                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.quantity ? 'border-red-500' : ''}`}
+                                    placeholder="0"
+                                    aria-label={`Quantity row ${rowIndex + 1}`}
+                                  />
+                                  {lineErr.quantity && (
+                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.quantity}</p>
+                                  )}
+                                </td>
+                                <td className="px-1 py-2 align-top text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => removeBulkRequestLine(line.id)}
+                                    disabled={bulkRequestLines.length <= 1}
+                                    className="p-1.5 text-gray-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-gray-400 rounded transition-colors"
+                                    title="Remove row"
+                                    aria-label={`Remove row ${rowIndex + 1}`}
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addBulkRequestLine}
+                      className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800 flex-shrink-0 self-start"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add another item
+                    </button>
+                  </div>
+
+                  <div className="flex-shrink-0">
+                    <label htmlFor="request_reason_bulk" className="label-field">
+                      Reason for Request <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      id="request_reason_bulk"
+                      name="request_reason"
+                      value={requestFormData.request_reason}
+                      onChange={handleRequestInputChange}
+                      className={`input-field min-h-[72px] resize-y ${requestFormErrors.request_reason ? 'border-red-500' : ''}`}
+                      required
+                      placeholder="Please explain why you need this stock..."
+                      rows={3}
+                    />
+                    {requestFormErrors.request_reason && (
+                      <p className="mt-1 text-sm text-red-600">{requestFormErrors.request_reason}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-500">
+                      This reason is applied to every item in the bulk request.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="p-6 overflow-y-auto flex-1">
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label htmlFor="request_date" className="label-field">
+                        Request Date
+                      </label>
+                      <input
+                        type="text"
+                        id="request_date"
+                        value={requestDateDisplay}
+                        className="input-field bg-gray-50 cursor-not-allowed"
+                        readOnly
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="requested_by" className="label-field">
+                        Requested By
+                      </label>
+                      <input
+                        type="text"
+                        id="requested_by"
+                        value={requestedByDisplay}
+                        className="input-field bg-gray-50 cursor-not-allowed"
+                        readOnly
+                      />
+                    </div>
+
                     <div className="md:col-span-2">
                       <label htmlFor="request_merchandise_name" className="label-field">
-                        Merchandise Name <span className="text-red-500">*</span>
+                        Items <span className="text-red-500">*</span>
                       </label>
                       {isRequestingSpecificStock ? (
                         <>
@@ -1037,7 +1600,7 @@ const AdminMerchandise = () => {
                             className="input-field bg-gray-50 cursor-not-allowed"
                             readOnly
                           />
-                          <p className="mt-1 text-xs text-gray-500">Merchandise name is pre-filled for this specific stock item</p>
+                          <p className="mt-1 text-xs text-gray-500">Merchandise type is pre-filled for this specific stock item</p>
                         </>
                       ) : (
                         <>
@@ -1106,9 +1669,60 @@ const AdminMerchandise = () => {
                       </div>
                     )}
 
+                    {/* Gender and Piece fields - only show for uniforms */}
+                    {isUniformMerchandiseName(requestFormData.merchandise_name) && (
+                      <>
+                        <div>
+                          <label htmlFor="request_gender" className="label-field">
+                            Gender *
+                          </label>
+                          <select
+                            id="request_gender"
+                            name="gender"
+                            value={requestFormData.gender}
+                            onChange={handleRequestInputChange}
+                            className="input-field bg-gray-50 cursor-not-allowed"
+                            disabled
+                          >
+                            <option value="">Select Gender</option>
+                            <option value="Men">Men</option>
+                            <option value="Women">Women</option>
+                            <option value="Unisex">Unisex</option>
+                          </select>
+                          {requestFormErrors.gender && (
+                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.gender}</p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label htmlFor="request_type" className="label-field">
+                            Piece: Top / Bottom *
+                          </label>
+                          <select
+                            id="request_type"
+                            name="type"
+                            value={requestFormData.type}
+                            onChange={handleRequestInputChange}
+                            className="input-field bg-gray-50 cursor-not-allowed"
+                            disabled
+                          >
+                            <option value="">Select Piece</option>
+                            {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                          {requestFormErrors.type && (
+                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.type}</p>
+                          )}
+                        </div>
+                      </>
+                    )}
+
                     <div>
                       <label htmlFor="requested_quantity" className="label-field">
-                        Requested Quantity <span className="text-red-500">*</span>
+                        Quantity <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="number"
@@ -1144,60 +1758,13 @@ const AdminMerchandise = () => {
                         <p className="mt-1 text-sm text-red-600">{requestFormErrors.request_reason}</p>
                       )}
                     </div>
-
-                    {/* Gender and Type fields - only show for uniforms */}
-                    {requestFormData.merchandise_name && requestFormData.merchandise_name.toLowerCase().includes('uniform') && (
-                      <>
-                        <div>
-                          <label htmlFor="request_gender" className="label-field">
-                            Gender
-                          </label>
-                          <select
-                            id="request_gender"
-                            name="gender"
-                            value={requestFormData.gender}
-                            onChange={handleRequestInputChange}
-                            className={`input-field ${requestFormErrors.gender ? 'border-red-500' : ''} ${isRequestingSpecificStock ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                            disabled={isRequestingSpecificStock}
-                          >
-                            <option value="">Select Gender</option>
-                            <option value="Men">Men</option>
-                            <option value="Women">Women</option>
-                            <option value="Unisex">Unisex</option>
-                          </select>
-                          {requestFormErrors.gender && (
-                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.gender}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="request_type" className="label-field">
-                            Type
-                          </label>
-                          <select
-                            id="request_type"
-                            name="type"
-                            value={requestFormData.type}
-                            onChange={handleRequestInputChange}
-                            className={`input-field ${requestFormErrors.type ? 'border-red-500' : ''} ${isRequestingSpecificStock ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                            disabled={isRequestingSpecificStock}
-                          >
-                            <option value="">Select Type</option>
-                            <option value="Top">Top</option>
-                            <option value="Bottom">Bottom</option>
-                          </select>
-                          {requestFormErrors.type && (
-                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.type}</p>
-                          )}
-                        </div>
-                      </>
-                    )}
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Modal Footer */}
-              <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
+              <div className="flex items-center justify-end gap-2 sm:gap-3 p-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
                 <button
                   type="button"
                   onClick={closeRequestModal}
@@ -1244,6 +1811,68 @@ const AdminMerchandise = () => {
   if (viewingStocksFor) {
     const stocks = getStocksByMerchandiseName(viewingStocksFor);
     const showSizeColumn = requiresSizingForMerchandise(viewingStocksFor);
+    const showGenderTypeColumns =
+      isUniformMerchandiseName(viewingStocksFor) ||
+      stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
+    const isUniformStocks = isUniformMerchandiseName(viewingStocksFor);
+    const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
+
+    const genderFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.gender || '').trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    if (genderFilterOptions.length === 0 && isUniformStocks) {
+      genderFilterOptions.push('Men', 'Women', 'Unisex');
+    }
+
+    const typeFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.type || '').trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    if (typeFilterOptions.length === 0 && isUniformStocks) {
+      UNIFORM_PIECE_OPTIONS.forEach((o) => typeFilterOptions.push(o.value));
+    }
+
+    const sizeFilterOptions = [
+      ...new Set(
+        stocks
+          .map((s) => (s.size || '').trim())
+          .filter((sz) => sz && sz !== 'N/A')
+      ),
+    ].sort((a, b) => {
+      const ai = UNIFORM_SIZE_OPTIONS.indexOf(a);
+      const bi = UNIFORM_SIZE_OPTIONS.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    if (sizeFilterOptions.length === 0 && showSizeColumn) {
+      UNIFORM_SIZE_OPTIONS.forEach((sz) => sizeFilterOptions.push(sz));
+    }
+
+    const hasActiveStockFilters =
+      !!stockFilters.gender || !!stockFilters.type || !!stockFilters.size;
+
+    const filteredStocks = stocks.filter((stock) => {
+      if (stockFilters.gender) {
+        if (String(stock.gender || '').trim() !== stockFilters.gender) return false;
+      }
+      if (stockFilters.type) {
+        if (String(stock.type || '').trim() !== stockFilters.type) return false;
+      }
+      if (stockFilters.size) {
+        const stockSize = stock.size && stock.size !== 'N/A' ? String(stock.size).trim() : '';
+        if (stockSize !== stockFilters.size) return false;
+      }
+      return true;
+    });
     
     return (
       <div className="space-y-6">
@@ -1263,6 +1892,21 @@ const AdminMerchandise = () => {
                 Stocks: {viewingStocksFor}
               </h1>
               <p className="text-sm text-gray-500 mt-1">{selectedBranchName}</p>
+              {pieceCounts && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                    Top: {pieceCounts.top}
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                    Bottom: {pieceCounts.bottom}
+                  </span>
+                  {pieceCounts.unspecified > 0 && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">
+                      Unspecified piece: {pieceCounts.unspecified}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1274,12 +1918,103 @@ const AdminMerchandise = () => {
           </div>
         )}
 
+        {/* Uniform stock filters */}
+        {(isUniformStocks || showSizeColumn || showGenderTypeColumns) && (
+          <div className="bg-white rounded-lg shadow border border-gray-100 p-3 sm:p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {hasActiveStockFilters && (
+                <div className="sm:col-span-3 flex justify-end -mb-1">
+                  <button
+                    type="button"
+                    onClick={() => setStockFilters({ gender: '', type: '', size: '' })}
+                    className="text-xs font-medium text-gray-600 hover:text-gray-900 underline underline-offset-2"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
+              {(isUniformStocks || showGenderTypeColumns) && (
+                <div>
+                  <label htmlFor="stock-filter-gender" className="block text-xs font-medium text-gray-600 mb-1">
+                    Gender
+                  </label>
+                  <select
+                    id="stock-filter-gender"
+                    value={stockFilters.gender}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, gender: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All genders</option>
+                    {genderFilterOptions.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {(isUniformStocks || showGenderTypeColumns) && (
+                <div>
+                  <label htmlFor="stock-filter-type" className="block text-xs font-medium text-gray-600 mb-1">
+                    Type (piece)
+                  </label>
+                  <select
+                    id="stock-filter-type"
+                    value={stockFilters.type}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, type: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All types</option>
+                    {typeFilterOptions.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {showSizeColumn && (
+                <div>
+                  <label htmlFor="stock-filter-size" className="block text-xs font-medium text-gray-600 mb-1">
+                    Size
+                  </label>
+                  <select
+                    id="stock-filter-size"
+                    value={stockFilters.size}
+                    onChange={(e) =>
+                      setStockFilters((prev) => ({ ...prev, size: e.target.value }))
+                    }
+                    className="input-field text-sm"
+                  >
+                    <option value="">All sizes</option>
+                    {sizeFilterOptions.map((sz) => (
+                      <option key={sz} value={sz}>
+                        {sz}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Stocks Table */}
         <div className="bg-white rounded-lg shadow">
           <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
             <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: showSizeColumn ? '900px' : '750px' }}>
               <thead className="bg-white">
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Gender
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Type
+                  </th>
                   {showSizeColumn && (
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Size
@@ -1294,18 +2029,18 @@ const AdminMerchandise = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Remarks
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Gender
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Type
-                  </th>
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                {stocks.length > 0 ? (
-                  stocks.map((stock) => (
+                {filteredStocks.length > 0 ? (
+                  filteredStocks.map((stock) => (
                     <tr key={stock.merchandise_id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">{stock.type || '-'}</div>
+                      </td>
                       {showSizeColumn && (
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{stock.size || 'N/A'}</div>
@@ -1324,18 +2059,14 @@ const AdminMerchandise = () => {
                           {stock.remarks || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{stock.type || '-'}</div>
-                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
                     <td colSpan={showSizeColumn ? 6 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
-                      No stock information available for this merchandise type.
+                      {stocks.length === 0
+                        ? 'No stock information available for this merchandise type.'
+                        : 'No stocks match the selected filters.'}
                     </td>
                   </tr>
                 )}
@@ -1385,8 +2116,9 @@ const AdminMerchandise = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-        <button 
+        <nav className="-mb-px flex flex-wrap gap-x-8 gap-y-1">
+          <button
+            type="button"
             onClick={() => setActiveTab('inventory')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'inventory'
@@ -1395,8 +2127,9 @@ const AdminMerchandise = () => {
             }`}
           >
             Inventory
-        </button>
+          </button>
           <button
+            type="button"
             onClick={() => setActiveTab('requests')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors flex items-center space-x-2 ${
               activeTab === 'requests'
@@ -1405,11 +2138,22 @@ const AdminMerchandise = () => {
             }`}
           >
             <span>My Requests</span>
-            {requests.filter(r => r.status === 'Pending').length > 0 && (
+            {requests.filter((r) => r.status === 'Pending').length > 0 && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                {requests.filter(r => r.status === 'Pending').length}
+                {requests.filter((r) => r.status === 'Pending').length}
               </span>
             )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('logs')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'logs'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Merchandise Logs
           </button>
         </nav>
       </div>
@@ -1483,8 +2227,14 @@ const AdminMerchandise = () => {
         </div>
       )}
         </>
-                      ) : (
-                        <>
+      ) : activeTab === 'logs' ? (
+        <MerchandiseReleaseLogsPanel
+          branchId={adminBranchId || ''}
+          branchName={selectedBranchName || 'Your Branch'}
+          showBranchColumn={false}
+        />
+      ) : (
+        <>
           {/* Requests List */}
           {requests.length > 0 ? (
             <div className="bg-white rounded-lg shadow">
@@ -1499,7 +2249,7 @@ const AdminMerchandise = () => {
                         Size
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Quantity
+                        Quantity
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Reason
@@ -1536,7 +2286,7 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4">
                           <div className="text-sm text-gray-900 max-w-xs truncate" title={request.request_reason}>
                             {request.request_reason}
-                        </div>
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{request.gender || '-'}</div>
@@ -1552,20 +2302,20 @@ const AdminMerchandise = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && (
-                <button
+                            <button
                               onClick={() => handleCancelRequest(request.request_id)}
                               className="px-3 py-1 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
+                            >
+                              Cancel
+                            </button>
                           )}
                           {request.status === 'Rejected' && request.review_notes && (
-                <button
+                            <button
                               onClick={() => appAlert(`Rejection reason: ${request.review_notes}`)}
                               className="px-3 py-1 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
+                            >
                               View Notes
-                </button>
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -1573,16 +2323,16 @@ const AdminMerchandise = () => {
                   </tbody>
                 </table>
               </div>
-          </div>
+            </div>
           ) : (
             <div className="bg-white rounded-lg shadow p-12 text-center">
               <p className="text-gray-500">
                 No requests found. Click "Request Stock" to submit a request to Superadmin.
-                        </p>
-                      </div>
+              </p>
+            </div>
           )}
-                      </>
-                    )}
+        </>
+      )}
 
       {/* Modals */}
       {renderModals()}

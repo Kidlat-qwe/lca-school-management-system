@@ -12,6 +12,7 @@ import MonthlyOperationalDashboard from './pages/superadmin/MonthlyOperationalDa
 import DailyAttendanceDashboard from './pages/superadmin/DailyAttendanceDashboard';
 import MonthlyAttendanceDashboard from './pages/superadmin/MonthlyAttendanceDashboard';
 import OperationalDashboard from './pages/superadmin/OperationalDashboard';
+import Leadershipboard from './pages/superadmin/Leadershipboard';
 import PhaseEnrollmentDashboard from './pages/superadmin/PhaseEnrollmentDashboard';
 import MonthlyEnrollmentDashboard from './pages/superadmin/MonthlyEnrollmentDashboard';
 import Branch from './pages/superadmin/Branch';
@@ -44,6 +45,7 @@ import AdminMonthlyOperationalDashboard from './pages/admin/adminMonthlyOperatio
 import AdminDailyAttendanceDashboard from './pages/admin/adminDailyAttendanceDashboard';
 import AdminMonthlyAttendanceDashboard from './pages/admin/adminMonthlyAttendanceDashboard';
 import AdminOperationalDashboard from './pages/admin/adminOperationalDashboard';
+import AdminLeadershipboard from './pages/admin/adminLeadershipboard';
 import AdminCalendar from './pages/admin/adminCalendar';
 import AdminPersonnel from './pages/admin/adminPersonnel';
 import AdminTeachers from './pages/admin/adminTeachers';
@@ -121,6 +123,7 @@ function App() {
             <Route path="daily-attendance-dashboard" element={<DailyAttendanceDashboard />} />
             <Route path="monthly-attendance-dashboard" element={<MonthlyAttendanceDashboard />} />
             <Route path="financial-dashboard" element={<FinancialDashboard />} />
+            <Route path="leadershipboard" element={<Leadershipboard />} />
             <Route path="operational-dashboard" element={<OperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
             <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
@@ -168,6 +171,7 @@ function App() {
             <Route path="daily-attendance-dashboard" element={<AdminDailyAttendanceDashboard />} />
             <Route path="monthly-attendance-dashboard" element={<AdminMonthlyAttendanceDashboard />} />
             <Route path="financial-dashboard" element={<AdminFinancialDashboard />} />
+            <Route path="leadershipboard" element={<AdminLeadershipboard />} />
             <Route path="operational-dashboard" element={<AdminOperationalDashboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
             <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
@@ -274,6 +278,7 @@ function App() {
           >
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<SuperfinanceFinancialDashboard />} />
+            <Route path="leadershipboard" element={<Leadershipboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
             <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
             <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />

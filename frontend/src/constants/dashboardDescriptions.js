@@ -217,6 +217,47 @@ export const OPERATIONAL_DASHBOARD = {
     'Students are grouped by the month they first enrolled. The table shows what percentage of that same group enrolled again in each later month.',
 };
 
+export const LEADERSHIPBOARD = {
+  pageIntro:
+    'Compare every branch side by side using the same numbers as the Monthly Operational Dashboard: invoice sales, new enrollees, re-enrollment, rejoin, upsell, and active students.',
+  adminPageIntro:
+    'See where your branch places among the network. Peer names and ranks stay visible; only your branch shows performance numbers — with a personal standing and climb guide.',
+  focusPageIntro:
+    'Stacked compare view: selected branch details on top, then the full network ranking below — both full width.',
+  focusSelectedPanel:
+    'Full-width snapshot and Overall breakdown for the branch chosen in the global branch filter.',
+  focusNetworkPanel:
+    'Full-width network ranking with metrics so you can compare the selected branch against peers.',
+  focusNetworkHint:
+    'Gold, silver, and bronze mark the top three. The focused branch row is highlighted.',
+  adminNetworkRace:
+    'All branches appear in Overall place order. Peer metric totals stay hidden — only names, medals, and your highlighted row are shown.',
+  adminNetworkRaceHint:
+    'Who is ahead of you is clear. Their sales and enrollment numbers are not.',
+  adminOwnSnapshot:
+    'Your Monthly Operational metrics for the selected month. Use these to drive your Overall score.',
+  adminWeightStory:
+    'Each bar is how you rank on that criterion versus other branches (lowest → highest). Absolute peer numbers are never shown.',
+  adminChartSalesTrend:
+    'Your branch invoice sales for the last six months (peer series omitted for privacy).',
+  compositeScore:
+    'Overall = weighted score: Invoice Sales 40%, New 20%, Re-enrolled 20%, Rejoin 10%, Upsell 10%. Each metric is scaled 0–1 vs other branches, then weighted. Active is shown in the table but not used in Overall (avoids double-counting). Ties break on Invoice Sales, then name.',
+  metricToggle:
+    'Ranks by the selected metric. Overall = weighted sales + growth + retention (Active excluded). Invoice Sales = Monthly Operational payments. New / Re-enrolled / Rejoin / Upsell from the matrix; Active = sum of those four (display only for Overall).',
+  chartSalesTrend:
+    'Invoice sales by branch for the last six months (completed payments by payment date, excluding returned and rejected) — same definition as Monthly Operational invoice sales.',
+  chartBranchShare:
+    'Share of the selected metric across branches. Sales use Monthly Operational invoice sales; enrollment counts use the Month Re-enrollment matrix.',
+  topBranch:
+    'Branch leading for the active compare metric. Overall uses the weighted score; other toggles use that metric’s highest value.',
+  rankingTable:
+    'Branches re-rank when you change the compare metric. Gold, silver, and bronze badges mark the top three for the active metric.',
+  invoiceSales:
+    'Same as Monthly Operational Invoice Sales / completed payment Total Payments for the month: payable + tips on Completed payments by issue date, excluding Returned and Rejected. Does not include Acknowledgement Receipt sales.',
+  activeStudents:
+    'Same as Monthly Operational Total Active Students: New + Re-enrollment + Rejoin + Upsell for the selected month (Month Re-enrollment matrix).',
+};
+
 export const PHASE_ENROLLMENT_DASHBOARD = {
   kpiCardsAlignWithMonthYear: (year) =>
     `KPI cards for ${year} match the Month Re-enrollment dashboard (Jan–Dec billing-month matrix). The phase table below is for phase-by-phase analysis only — its rate row may differ.`,

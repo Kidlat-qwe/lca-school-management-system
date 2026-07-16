@@ -101,3 +101,96 @@
     box-sizing: border-box;
   }
 }
+
+/* Leadershipboard hero — floating glass bubbles */
+@keyframes lb-hero-float-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(18px, -22px, 0) scale(1.08);
+  }
+}
+
+@keyframes lb-hero-float-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-16px, 14px, 0) scale(0.94);
+  }
+}
+
+@keyframes lb-hero-float-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  33% {
+    transform: translate3d(12px, 10px, 0);
+  }
+  66% {
+    transform: translate3d(-8px, -16px, 0);
+  }
+}
+
+.lb-hero-bubble {
+  position: absolute;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+  will-change: transform;
+}
+
+.lb-hero-bubble--a {
+  width: 11rem;
+  height: 11rem;
+  top: -3.5rem;
+  right: -2.5rem;
+  animation: lb-hero-float-a 16s ease-in-out infinite;
+}
+
+.lb-hero-bubble--b {
+  width: 9rem;
+  height: 9rem;
+  bottom: -4rem;
+  left: 8%;
+  background: rgba(99, 102, 241, 0.28);
+  animation: lb-hero-float-b 18s ease-in-out infinite;
+}
+
+.lb-hero-bubble--c {
+  width: 5.5rem;
+  height: 5.5rem;
+  top: 18%;
+  left: 42%;
+  background: rgba(255, 255, 255, 0.08);
+  animation: lb-hero-float-c 14s ease-in-out infinite;
+}
+
+.lb-hero-bubble--d {
+  width: 7rem;
+  height: 7rem;
+  right: 22%;
+  bottom: -2.5rem;
+  background: rgba(167, 139, 250, 0.22);
+  animation: lb-hero-float-a 20s ease-in-out infinite reverse;
+  animation-delay: -4s;
+}
+
+.lb-hero-bubble--e {
+  width: 3.5rem;
+  height: 3.5rem;
+  top: 28%;
+  right: 38%;
+  background: rgba(255, 255, 255, 0.16);
+  animation: lb-hero-float-b 12s ease-in-out infinite;
+  animation-delay: -2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lb-hero-bubble {
+    animation: none !important;
+  }
+}

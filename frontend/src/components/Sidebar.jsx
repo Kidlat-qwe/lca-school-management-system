@@ -51,6 +51,11 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Finance'], // Dropdown for Superadmin, Admin, Finance/Superfinance
       children: [
         {
+          name: 'Leadershipboard',
+          path: `${basePath}/leadershipboard`,
+          roles: ['Superadmin', 'Finance', 'Admin'],
+        },
+        {
           name: 'Operational',
           roles: ['Superadmin', 'Admin'],
           children: [
@@ -501,6 +506,7 @@ const Sidebar = ({ isOpen, onClose }) => {
             return { ...child, children: nested };
           }
           let path = child.path;
+          if (child.name === 'Leadershipboard') path = `${basePath}/leadershipboard`;
           if (child.name === 'Financial Dashboard') path = `${basePath}/financial-dashboard`;
           if (child.name === 'Daily Operational Dashboard') path = `${basePath}/daily-operational-dashboard`;
           if (child.name === 'Monthly Operational Dashboard') path = `${basePath}/monthly-operational-dashboard`;
@@ -513,6 +519,13 @@ const Sidebar = ({ isOpen, onClose }) => {
         };
         children = item.children
           ?.filter((child) => !child.roles || child.roles.includes(userType))
+          ?.filter(
+            (child) =>
+              child.name !== 'Leadershipboard' ||
+              basePath === '/superadmin' ||
+              basePath === '/superfinance' ||
+              basePath === '/admin'
+          )
           ?.map(mapDashboardChild)
           ?.filter((child) => !child.children || child.children.length > 0);
       }

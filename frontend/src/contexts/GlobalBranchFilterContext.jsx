@@ -12,6 +12,7 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'daily-attendance-dashboard',
   'monthly-attendance-dashboard',
   'financial-dashboard',
+  'leadershipboard',
   'operational-dashboard',
   'phase-enrollment-dashboard',
   'monthly-enrollment-dashboard',

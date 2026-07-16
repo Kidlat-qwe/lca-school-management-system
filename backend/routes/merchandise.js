@@ -3,8 +3,37 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
+import { PACKAGE_UNIFORM_TYPE_NAMES } from '../lib/merchandiseReleaseLog.js';
 
 const router = express.Router();
+
+/** Keep aligned with frontend isUniformMerchandiseName / UNIFORM_TOP_BOTTOM_TYPE_NAMES. */
+function isUniformMerchandiseName(merchandiseName) {
+  const name = String(merchandiseName || '').trim();
+  if (!name) return false;
+  if (PACKAGE_UNIFORM_TYPE_NAMES.includes(name)) return true;
+  return name.toLowerCase().includes('uniform');
+}
+
+/**
+ * Uniforms are always separate Top/Bottom SKUs; size, gender, and piece are required.
+ * @returns {string|null} error message or null if ok
+ */
+function validateUniformPieceFields(merchandiseName, size, gender, type) {
+  if (!isUniformMerchandiseName(merchandiseName)) return null;
+  if (!size || !String(size).trim()) {
+    return 'Size is required for uniforms';
+  }
+  const g = String(gender || '').trim();
+  if (!g || !['Men', 'Women', 'Unisex'].includes(g)) {
+    return 'Gender is required for uniforms (Men, Women, or Unisex)';
+  }
+  const t = String(type || '').trim();
+  if (!t || !['Top', 'Bottom'].includes(t)) {
+    return 'Piece (Top or Bottom) is required for uniforms';
+  }
+  return null;
+}
 
 // All routes require authentication
 router.use(verifyFirebaseToken);
@@ -180,6 +209,43 @@ router.post(
 
       const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks } = req.body;
 
+      const uniformError = validateUniformPieceFields(merchandise_name, size, gender, type);
+      if (uniformError) {
+        return res.status(400).json({
+          success: false,
+          message: uniformError,
+        });
+      }
+
+      // Uniforms are unique per branch + name + size + gender + piece (Top/Bottom)
+      if (isUniformMerchandiseName(merchandise_name) && branch_id) {
+        const duplicateCheck = await query(
+          `SELECT merchandise_id, merchandise_name, size, gender, type, quantity
+           FROM merchandisestbl
+           WHERE branch_id = $1
+             AND merchandise_name = $2
+             AND COALESCE(TRIM(size), '') = COALESCE(TRIM($3::text), '')
+             AND COALESCE(TRIM(gender), '') = COALESCE(TRIM($4::text), '')
+             AND COALESCE(TRIM(type), '') = COALESCE(TRIM($5::text), '')
+           LIMIT 1`,
+          [
+            parseInt(branch_id, 10),
+            merchandise_name,
+            size || null,
+            gender || null,
+            type || null,
+          ]
+        );
+        if (duplicateCheck.rows.length > 0) {
+          const row = duplicateCheck.rows[0];
+          return res.status(409).json({
+            success: false,
+            message: `Stock already exists for ${row.gender || gender} · ${row.type || type} · ${row.size || size}. Edit the existing stock to adjust quantity instead of creating a duplicate.`,
+            data: { existing_merchandise_id: row.merchandise_id },
+          });
+        }
+      }
+
       const result = await query(
         `INSERT INTO merchandisestbl (merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -280,6 +346,68 @@ router.put(
           success: false,
           message: 'Merchandise not found',
         });
+      }
+
+      const existing = existingMerchandise.rows[0];
+      const touchesStockPieceFields =
+        merchandise_name !== undefined ||
+        size !== undefined ||
+        gender !== undefined ||
+        type !== undefined;
+      if (touchesStockPieceFields) {
+        const mergedName =
+          merchandise_name !== undefined ? merchandise_name : existing.merchandise_name;
+        const mergedSize = size !== undefined ? size : existing.size;
+        const mergedGender = gender !== undefined ? gender : existing.gender;
+        const mergedType = type !== undefined ? type : existing.type;
+        const uniformError = validateUniformPieceFields(
+          mergedName,
+          mergedSize,
+          mergedGender,
+          mergedType
+        );
+        if (uniformError) {
+          return res.status(400).json({
+            success: false,
+            message: uniformError,
+          });
+        }
+
+        if (isUniformMerchandiseName(mergedName)) {
+          const branchForDup =
+            branch_id !== undefined && branch_id !== null && branch_id !== ''
+              ? parseInt(branch_id, 10)
+              : existing.branch_id;
+          if (branchForDup) {
+            const duplicateCheck = await query(
+              `SELECT merchandise_id, size, gender, type
+               FROM merchandisestbl
+               WHERE branch_id = $1
+                 AND merchandise_name = $2
+                 AND COALESCE(TRIM(size), '') = COALESCE(TRIM($3::text), '')
+                 AND COALESCE(TRIM(gender), '') = COALESCE(TRIM($4::text), '')
+                 AND COALESCE(TRIM(type), '') = COALESCE(TRIM($5::text), '')
+                 AND merchandise_id <> $6
+               LIMIT 1`,
+              [
+                branchForDup,
+                mergedName,
+                mergedSize || null,
+                mergedGender || null,
+                mergedType || null,
+                parseInt(id, 10),
+              ]
+            );
+            if (duplicateCheck.rows.length > 0) {
+              const row = duplicateCheck.rows[0];
+              return res.status(409).json({
+                success: false,
+                message: `Stock already exists for ${row.gender || mergedGender} · ${row.type || mergedType} · ${row.size || mergedSize}. Edit that stock row to adjust quantity instead.`,
+                data: { existing_merchandise_id: row.merchandise_id },
+              });
+            }
+          }
+        }
       }
 
       const updates = [];

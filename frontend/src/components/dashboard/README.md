@@ -2,6 +2,20 @@
 
 Shared UI for operational, enrollment, and financial dashboards.
 
+## Leadershipboard
+
+Cross-branch ranking:
+
+| Role | UI |
+|------|-----|
+| Superadmin / Superfinance | Full peer metrics — `LeadershipboardView.jsx` |
+| Superadmin / Superfinance + branch filter | Side-by-side compare — `BranchFocusStandingView.jsx` |
+| Admin | Competitive standing — `AdminStandingView.jsx` (place + name-only network race + own snapshot) |
+
+Hero banner shell (navy→indigo gradient + animated bubbles): `LeadershipboardHeroShell.jsx`.
+
+**Overall scoring and Admin privacy:** see [docs/LEADERSHIPBOARD.md](../../../docs/LEADERSHIPBOARD.md).
+
 ## Operational attendance shortcuts
 
 Superadmin and **Admin** operational dashboards use a compact **Take attendance** card in the Sales summary row (alongside Sales & Payments and Recent invoice payments). **Superadmin does not see this card** — use the dedicated Daily/Monthly Attendance dashboards to view summaries only.

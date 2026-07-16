@@ -1,9 +1,10 @@
 import express from 'express';
 import { query as queryValidator } from 'express-validator';
-import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { verifyFirebaseToken, requireRole, requireBranchAccess, isSuperfinanceOperator } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
+import { loadLeadershipboardPayload, applyLeadershipboardAdminPrivacy } from '../lib/leadershipboardData.js';
 import { loadOperationalAttendanceSessions, loadOperationalAttendanceFilterOptions } from '../lib/operationalAttendanceSessions.js';
 import { todayYmdManila } from '../utils/dateUtils.js';
 import {
@@ -900,6 +901,76 @@ router.get(
         return res.status(400).json({ success: false, message: 'Invalid summary_month' });
       }
       console.error('Error fetching monthly operational dashboard:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/dashboard/leadershipboard
+ * Cross-branch leadership ranking.
+ * - Superadmin / Superfinance: full numbers; optional branch_id filter.
+ * - Admin: all branch names + ranks, peer metrics redacted; spotlight = own branch.
+ */
+router.get(
+  '/leadershipboard',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    queryValidator('summary_month').optional().matches(/^\d{4}-\d{2}$/).withMessage('summary_month must be YYYY-MM'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Finance', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const userType = req.user.userType || req.user.user_type;
+      const userBranchId = req.user.branchId ?? req.user.branch_id;
+      if (userType === 'Finance' && !isSuperfinanceOperator(userType, userBranchId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Leadershipboard is available to Superadmin, Superfinance, and Admin only.',
+        });
+      }
+
+      const summaryMonth = req.query.summary_month || getCurrentManilaMonthKey();
+      const parsed = parseMonthRange(summaryMonth);
+      if (!parsed) {
+        return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+      }
+      if (parsed.key > getCurrentManilaMonthKey()) {
+        return res.status(400).json({ success: false, message: 'summary_month cannot be in the future' });
+      }
+
+      const isAdmin = userType === 'Admin';
+      if (isAdmin && (userBranchId === null || userBranchId === undefined)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Admin account has no branch assigned.',
+        });
+      }
+
+      // Always score the full network. Superadmin/Superfinance branch_id = focus only
+      // (side-by-side compare). Admin privacy redacts peers afterward.
+      const optionalFocus =
+        !isAdmin && req.query.branch_id ? parseInt(req.query.branch_id, 10) : null;
+      if (req.query.branch_id && !isAdmin && !Number.isInteger(optionalFocus)) {
+        return res.status(400).json({ success: false, message: 'Invalid branch_id' });
+      }
+
+      let data = await loadLeadershipboardPayload({
+        summaryMonth: parsed.key,
+        focusBranchId: isAdmin ? null : optionalFocus,
+      });
+
+      if (isAdmin) {
+        data = applyLeadershipboardAdminPrivacy(data, userBranchId);
+      }
+
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error?.message === 'INVALID_MONTH') {
+        return res.status(400).json({ success: false, message: 'Invalid summary_month' });
+      }
+      console.error('Error fetching leadershipboard:', error);
       next(error);
     }
   }
