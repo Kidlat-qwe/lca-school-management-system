@@ -27,11 +27,16 @@ const GENDER_MAP = {
   Female: 'Female',
 };
 
-const TYPE_MAP = {
+const SCHOOL_UNIFORM_TYPE_MAP = {
+  Top: 'Polo',
+  Bottom: 'Short',
+  Polo: 'Polo',
+  Short: 'Short',
+};
+
+const PE_UNIFORM_TYPE_MAP = {
   Top: 'Shirt',
   Bottom: 'Pants',
-  Polo: 'Shirt',
-  Short: 'Pants',
   Shirt: 'Shirt',
   Pants: 'Pants',
 };
@@ -86,10 +91,18 @@ export function mapGenderToInventory(gender) {
   return GENDER_MAP[key] || key;
 }
 
-export function mapTypeToInventory(type) {
+function isPeUniform(merchandiseName) {
+  return String(merchandiseName || '')
+    .trim()
+    .toLowerCase()
+    .includes('pe');
+}
+
+export function mapTypeToInventory(type, merchandiseName = '') {
   if (!type) return undefined;
   const key = String(type).trim();
-  return TYPE_MAP[key] || key;
+  const typeMap = isPeUniform(merchandiseName) ? PE_UNIFORM_TYPE_MAP : SCHOOL_UNIFORM_TYPE_MAP;
+  return typeMap[key] || key;
 }
 
 export function mapSizeToInventory(size) {
@@ -109,7 +122,7 @@ export function buildInventoryStockRequestItem(requestRow) {
     return {
       categoryName,
       gender: mapGenderToInventory(requestRow.gender),
-      type: mapTypeToInventory(requestRow.type),
+      type: mapTypeToInventory(requestRow.type, requestRow.merchandise_name),
       size: mapSizeToInventory(requestRow.size),
       quantity: Number(requestRow.requested_quantity),
       externalReference,

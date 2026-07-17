@@ -353,17 +353,22 @@ Inventory matches using:
 categoryName + gender + type + size
 ```
 
+School uniforms use `Polo` / `Short`. PE uniforms use `Shirt` / `Pants`.
+
 This maps to inventory variation:
 
 ```text
-Male · Shirt · M
+Male · Polo · M
 ```
 
 **Example**
 
 | PSMS sends | Inventory looks for |
 |---|---|
-| `School Uniform`, `Male`, `Shirt`, `M` | Variation = `Male · Shirt · M` |
+| `School Uniform`, `Male`, `Polo`, `M` | Variation = `Male · Polo · M` |
+| `School Uniform`, `Male`, `Short`, `M` | Variation = `Male · Short · M` |
+| `PE Uniform`, `Male`, `Shirt`, `M` | Variation = `Male · Shirt · M` |
+| `PE Uniform`, `Male`, `Pants`, `M` | Variation = `Male · Pants · M` |
 
 ### Non-uniform categories (Bag, Book, Accessory, etc.)
 
