@@ -13,6 +13,8 @@ const DEFAULT_SYSTEM_CODE = 'PSMS';
 const CATEGORY_NAME_MAP = {
   'LCA Uniform': 'School Uniform',
   'LCA PE Uniform': 'PE Uniform',
+  'School Uniform_Replacement': 'School Uniform',
+  'PE Uniform_Replacement': 'PE Uniform',
 };
 
 const GENDER_MAP = {

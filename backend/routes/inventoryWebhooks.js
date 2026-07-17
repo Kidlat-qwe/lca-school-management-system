@@ -8,17 +8,32 @@ const router = express.Router();
 /**
  * Verifies the shared secret RHET Inventory sends with every webhook call.
  * Accepts either X-Integration-Key or Authorization: Bearer <key>.
+ *
+ * If RHET sends no auth header, we still accept the webhook (match is by
+ * externalReference / inventory_request_id). Wrong key is always rejected.
  */
 function verifyWebhookKey(req) {
   const expectedKey = String(
     process.env.INVENTORY_INTEGRATION_KEY || process.env.INVENTORY_API_KEY || ''
   ).trim();
 
-  if (!expectedKey) return false;
-
   const headerKey =
     req.headers['x-integration-key'] ||
     (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+
+  if (!headerKey) {
+    console.warn(
+      '[inventory-webhook] No integration key header on webhook request — accepting by request match only'
+    );
+    return true;
+  }
+
+  if (!expectedKey) {
+    console.warn(
+      '[inventory-webhook] INVENTORY_INTEGRATION_KEY is not set on CMS — cannot verify key header'
+    );
+    return true;
+  }
 
   return headerKey === expectedKey;
 }

@@ -9,9 +9,11 @@ import {
   getCatalog as getInventoryCatalog,
   checkAvailability as checkInventoryAvailability,
   submitStockRequests,
+  getStockRequest,
   InventoryApiError,
 } from '../services/inventory/inventoryClient.js';
 import { buildInventorySubmitPayload } from '../services/inventory/inventoryFieldMapping.js';
+import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
 
 const router = express.Router();
 
@@ -42,21 +44,35 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
     throw new InventoryApiError('RHET Inventory did not return a request ID');
   }
 
-  await dbQuery(
-    `UPDATE merchandiserequestlogtbl
-     SET inventory_request_id = $1,
-         inventory_status = $2,
-         inventory_external_reference = $3,
-         inventory_synced_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE request_id = $4`,
-    [
-      inventoryItem.requestId,
-      inventoryItem.status || 'PENDING',
-      inventoryItem.externalReference || payload.items[0].externalReference,
-      requestRow.request_id,
-    ]
-  );
+  try {
+    await dbQuery(
+      `UPDATE merchandiserequestlogtbl
+       SET inventory_request_id = $1,
+           inventory_status = $2,
+           inventory_external_reference = $3,
+           inventory_synced_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE request_id = $4`,
+      [
+        inventoryItem.requestId,
+        inventoryItem.status || 'PENDING',
+        inventoryItem.externalReference || payload.items[0].externalReference,
+        requestRow.request_id,
+      ]
+    );
+  } catch (dbError) {
+    const missingColumn =
+      dbError?.code === '42703' ||
+      String(dbError?.message || '').includes('inventory_request_id');
+    if (missingColumn) {
+      throw new InventoryApiError(
+        'RHET Inventory accepted the request, but CMS is missing inventory tracking columns. ' +
+          'Run migration 124_add_inventory_integration_fields_to_merchandiserequestlogtbl.sql on the production database, then redeploy/retry.',
+        { code: 'INVENTORY_SCHEMA_MISSING', status: 500 }
+      );
+    }
+    throw dbError;
+  }
 
   return inventoryItem;
 }
@@ -184,6 +200,72 @@ router.get(
         data: result.rows[0],
       });
     } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/merchandise-requests/inventory/catalog
+ * Proxy to RHET Inventory catalog (categories + items) for dropdowns.
+ * Must be registered BEFORE /:id so "inventory" is not parsed as an id.
+ * Access: Superadmin, Admin
+ */
+router.get(
+  '/inventory/catalog',
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      if (!isInventoryIntegrationEnabled()) {
+        return res.status(503).json({
+          success: false,
+          message: 'RHET Inventory integration is not configured',
+          error: { code: 'INTEGRATION_DISABLED' },
+        });
+      }
+      const result = await getInventoryCatalog();
+      res.json(result);
+    } catch (error) {
+      if (error instanceof InventoryApiError) {
+        return res.status(error.status || 502).json({
+          success: false,
+          message: error.message,
+          error: { code: error.code },
+        });
+      }
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/merchandise-requests/inventory/availability
+ * Proxy to RHET Inventory availability check.
+ * Access: Superadmin, Admin
+ */
+router.get(
+  '/inventory/availability',
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      if (!isInventoryIntegrationEnabled()) {
+        return res.status(503).json({
+          success: false,
+          message: 'RHET Inventory integration is not configured',
+          error: { code: 'INTEGRATION_DISABLED' },
+        });
+      }
+      const { categoryName, gender, type, size, itemName } = req.query;
+      const result = await checkInventoryAvailability({ categoryName, gender, type, size, itemName });
+      res.json(result);
+    } catch (error) {
+      if (error instanceof InventoryApiError) {
+        return res.status(error.status || 502).json({
+          success: false,
+          message: error.message,
+          error: { code: error.code },
+        });
+      }
       next(error);
     }
   }
@@ -318,14 +400,33 @@ router.post(
           reason: request_reason,
         });
       } catch (inventoryError) {
-        await dbQuery('DELETE FROM merchandiserequestlogtbl WHERE request_id = $1', [requestId]);
+        // If RHET already accepted the request but CMS could not store the link
+        // (e.g. migration 124 not applied), keep the local row so webhook/repair
+        // can still match by PSMS-{request_id}. Do not silently delete.
+        const keepLocal =
+          inventoryError?.code === 'INVENTORY_SCHEMA_MISSING' ||
+          String(inventoryError?.message || '').includes('missing inventory tracking columns');
+
+        if (!keepLocal) {
+          await dbQuery('DELETE FROM merchandiserequestlogtbl WHERE request_id = $1', [requestId]);
+        } else {
+          console.error(
+            '[merchandise-requests] RHET accepted request but CMS schema is incomplete. Local row kept:',
+            requestId
+          );
+        }
+
         console.error('[merchandise-requests] RHET Inventory forward failed:', {
           message: inventoryError.message,
           code: inventoryError.code,
           status: inventoryError.status,
           details: inventoryError.details,
+          localRequestKept: keepLocal,
         });
-        const statusCode = inventoryError instanceof InventoryApiError ? 502 : 500;
+        const statusCode =
+          inventoryError instanceof InventoryApiError
+            ? inventoryError.status || 502
+            : 500;
         return res.status(statusCode).json({
           success: false,
           message:
@@ -335,6 +436,7 @@ router.post(
             code: inventoryError.code || 'INVENTORY_FORWARD_FAILED',
             details: inventoryError.details || null,
           },
+          data: keepLocal ? requestRow : undefined,
         });
       }
 
@@ -389,59 +491,118 @@ router.post(
 );
 
 /**
- * GET /api/v1/merchandise-requests/inventory/catalog
- * Proxy to RHET Inventory catalog (categories + items) for dropdowns.
- * Frontend never holds the integration key.
- * Access: Superadmin, Admin
+ * POST /api/v1/merchandise-requests/:id/sync-inventory
+ * Poll RHET for this request's status and, if FULFILLED, add branch stock.
+ * Use when the webhook was missed (e.g. before migration 124 / Coolify env issues).
+ * Access: Superadmin, Admin (own branch)
  */
-router.get(
-  '/inventory/catalog',
+router.post(
+  '/:id/sync-inventory',
+  [
+    param('id').isInt().withMessage('Request ID must be an integer'),
+    handleValidationErrors,
+  ],
   requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
+    const client = await getClient();
     try {
       if (!isInventoryIntegrationEnabled()) {
         return res.status(503).json({
           success: false,
           message: 'RHET Inventory integration is not configured',
-          error: { code: 'INTEGRATION_DISABLED' },
         });
       }
-      const result = await getInventoryCatalog();
-      res.json(result);
-    } catch (error) {
-      if (error instanceof InventoryApiError) {
-        return res.status(error.status || 502).json({
-          success: false,
-          message: error.message,
-          error: { code: error.code },
-        });
-      }
-      next(error);
-    }
-  }
-);
 
-/**
- * GET /api/v1/merchandise-requests/inventory/availability
- * Proxy to RHET Inventory availability check.
- * Access: Superadmin, Admin
- */
-router.get(
-  '/inventory/availability',
-  requireRole('Superadmin', 'Admin'),
-  async (req, res, next) => {
-    try {
-      if (!isInventoryIntegrationEnabled()) {
-        return res.status(503).json({
+      await client.query('BEGIN');
+
+      let sql = 'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE';
+      const params = [req.params.id];
+      if (req.user.userType === 'Admin') {
+        sql = 'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 AND requested_branch_id = $2 FOR UPDATE';
+        params.push(req.user.branchId);
+      }
+
+      const locked = await client.query(sql, params);
+      if (locked.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Request not found' });
+      }
+
+      const request = locked.rows[0];
+      if (!request.inventory_request_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
           success: false,
-          message: 'RHET Inventory integration is not configured',
-          error: { code: 'INTEGRATION_DISABLED' },
+          message:
+            'This request has no inventory_request_id. Run migration 124 and re-submit, or use the repair script with the RHET request UUID.',
         });
       }
-      const { categoryName, gender, type, size, itemName } = req.query;
-      const result = await checkInventoryAvailability({ categoryName, gender, type, size, itemName });
-      res.json(result);
+
+      if (request.status === 'Approved') {
+        await client.query('COMMIT');
+        return res.json({
+          success: true,
+          message: 'Request is already approved and stock was applied',
+          data: request,
+        });
+      }
+
+      const remote = await getStockRequest(request.inventory_request_id);
+      const remoteStatus = String(remote.data?.status || '').toUpperCase();
+
+      await client.query(
+        `UPDATE merchandiserequestlogtbl
+         SET inventory_status = $1,
+             inventory_matched_sku = COALESCE($2, inventory_matched_sku),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $3`,
+        [remoteStatus || null, remote.data?.matchedSku || null, request.request_id]
+      );
+
+      if (remoteStatus !== 'FULFILLED') {
+        await client.query('COMMIT');
+        return res.json({
+          success: true,
+          message: `RHET status is ${remoteStatus || 'unknown'} — stock is only added when FULFILLED`,
+          data: { ...request, inventory_status: remoteStatus },
+        });
+      }
+
+      if (request.status !== 'Pending') {
+        await client.query('COMMIT');
+        return res.status(400).json({
+          success: false,
+          message: `Cannot apply stock for local status: ${request.status}`,
+        });
+      }
+
+      const stockResult = await applyMerchandiseRequestStock(client, request);
+      const updated = await client.query(
+        `UPDATE merchandiserequestlogtbl
+         SET status = 'Approved',
+             reviewed_at = CURRENT_TIMESTAMP,
+             review_notes = COALESCE(review_notes, $1),
+             inventory_status = 'FULFILLED',
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $2
+         RETURNING *`,
+        [
+          `Synced from RHET Inventory (${remote.data?.matchedSku || request.inventory_request_id}). Stock ${stockResult.action}.`,
+          request.request_id,
+        ]
+      );
+
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: 'RHET fulfillment synced — branch stock updated',
+        data: updated.rows[0],
+        stockResult,
+      });
     } catch (error) {
+      await client.query('ROLLBACK');
       if (error instanceof InventoryApiError) {
         return res.status(error.status || 502).json({
           success: false,
@@ -450,6 +611,8 @@ router.get(
         });
       }
       next(error);
+    } finally {
+      client.release();
     }
   }
 );

@@ -14,7 +14,7 @@ import { getClient } from '../config/database.js';
 
 const STUDENT_EMAILS = [
   // Target by email (leave empty to use STUDENT_NAMES)
-'gbulaong1994@icloud.com',
+'angelitaperezpup@gmail.com',
 ];
 
 const STUDENT_NAMES = [

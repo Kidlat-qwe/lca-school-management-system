@@ -141,12 +141,14 @@ app.get('/health', (req, res) => {
   });
 });
 
-// RHET Inventory webhook — authenticated by shared integration key, not Firebase.
-// Mounted outside API_VERSION since it's called by RHET Inventory, not the PSMS frontend.
+// RHET Inventory webhook — not Firebase-auth'd (verified by integration key / request match).
 app.use('/api/webhooks/inventory', inventoryWebhooksRoutes);
 
 // API routes
 const API_VERSION = '/api/sms';
+
+// Also expose webhook under the API prefix (in case proxies only forward /api/sms/*).
+app.use(`${API_VERSION}/webhooks/inventory`, inventoryWebhooksRoutes);
 
 // Log mutating API requests after response (req.user set by route auth)
 app.use(API_VERSION, activityLogger);
