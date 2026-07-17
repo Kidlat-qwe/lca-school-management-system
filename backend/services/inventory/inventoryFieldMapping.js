@@ -30,6 +30,8 @@ const GENDER_MAP = {
 const TYPE_MAP = {
   Top: 'Shirt',
   Bottom: 'Pants',
+  Polo: 'Shirt',
+  Short: 'Pants',
   Shirt: 'Shirt',
   Pants: 'Pants',
 };

@@ -1,8 +1,14 @@
 /**
- * Uniform types that use separate Top / Bottom stock rows (type column on merchandisestbl).
+ * Uniform types that use separate upper/lower stock rows (type column on merchandisestbl).
  * Keep in sync with backend PACKAGE_UNIFORM_TYPE_NAMES in merchandiseReleaseLog.js.
  *
- * Locked model: always separate Top and Bottom SKUs (no Complete Set).
+ * Piece labels by merchandise:
+ * - School uniform (LCA Uniform, etc.): Polo + Short
+ * - PE uniform (LCA PE Uniform, etc.): Shirt + Pants
+ *
+ * Enrollment/package matching still uses Top/Bottom roles via getUniformCategory
+ * (Polo/Shirt → Top, Short/Pants → Bottom).
+ *
  * Same-size “full set” = two rows / two selections with the same size.
  */
 export const UNIFORM_SCHOOL_NAME = 'LCA Uniform';
@@ -21,10 +27,72 @@ export const UNIFORM_SIZE_OPTIONS = [
   '4XL',
 ];
 
+/** School uniform piece options (stored in merchandisestbl.type). */
+export const UNIFORM_SCHOOL_PIECE_OPTIONS = [
+  { value: 'Polo', label: 'Polo' },
+  { value: 'Short', label: 'Short' },
+];
+
+/** PE uniform piece options (stored in merchandisestbl.type). */
+export const UNIFORM_PE_PIECE_OPTIONS = [
+  { value: 'Shirt', label: 'Shirt' },
+  { value: 'Pants', label: 'Pants' },
+];
+
+/**
+ * All known piece values (new + legacy Top/Bottom) for filters.
+ * Prefer getUniformPieceOptions(merchandiseName) in forms.
+ */
 export const UNIFORM_PIECE_OPTIONS = [
+  ...UNIFORM_SCHOOL_PIECE_OPTIONS,
+  ...UNIFORM_PE_PIECE_OPTIONS,
   { value: 'Top', label: 'Top' },
   { value: 'Bottom', label: 'Bottom' },
 ];
+
+export function isPeUniformMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  return String(merchandiseName).toLowerCase().includes('pe');
+}
+
+/** Piece dropdown options for the given merchandise name. */
+export function getUniformPieceOptions(merchandiseName) {
+  if (isPeUniformMerchandiseName(merchandiseName)) {
+    return UNIFORM_PE_PIECE_OPTIONS;
+  }
+  return UNIFORM_SCHOOL_PIECE_OPTIONS;
+}
+
+/** Human labels for upper/lower badges (Polo/Short or Shirt/Pants). */
+export function getUniformPieceLabels(merchandiseName) {
+  const opts = getUniformPieceOptions(merchandiseName);
+  return {
+    upper: opts[0]?.label || 'Upper',
+    lower: opts[1]?.label || 'Lower',
+  };
+}
+
+export function isUpperUniformPiece(type) {
+  const t = String(type || '')
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+  return t === 'top' || t === 'polo' || t === 'shirt' || t.includes('blouse');
+}
+
+export function isLowerUniformPiece(type) {
+  const t = String(type || '')
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+  return (
+    t === 'bottom' ||
+    t === 'short' ||
+    t === 'shorts' ||
+    t === 'pants' ||
+    t.includes('skirt')
+  );
+}
 
 export function isUniformTopBottomType(merchandiseName) {
   if (!merchandiseName) return false;
@@ -32,7 +100,7 @@ export function isUniformTopBottomType(merchandiseName) {
 }
 
 /**
- * True when this merchandise name should use size + gender + piece (Top/Bottom) fields.
+ * True when this merchandise name should use size + gender + piece fields.
  * Includes canonical names and any name containing "uniform".
  */
 export function isUniformMerchandiseName(merchandiseName) {
@@ -47,20 +115,24 @@ export function requiresUniformPieceFields(merchandiseName) {
 }
 
 /**
- * Count Top vs Bottom stock rows for a merchandise type (stock list badge).
+ * Count upper vs lower stock rows for a merchandise type (stock list badge).
+ * `top`/`bottom` keys kept for backward compatibility (= upper/lower).
  * @param {object[]} stocks
- * @returns {{ top: number, bottom: number, unspecified: number }}
+ * @returns {{ top: number, bottom: number, upper: number, lower: number, unspecified: number }}
  */
 export function countUniformPiecesByType(stocks) {
-  const result = { top: 0, bottom: 0, unspecified: 0 };
+  const result = { top: 0, bottom: 0, upper: 0, lower: 0, unspecified: 0 };
   if (!Array.isArray(stocks)) return result;
   for (const item of stocks) {
-    const t = String(item?.type || '')
-      .trim()
-      .toLowerCase();
-    if (t === 'top') result.top += 1;
-    else if (t === 'bottom') result.bottom += 1;
-    else result.unspecified += 1;
+    if (isUpperUniformPiece(item?.type)) {
+      result.top += 1;
+      result.upper += 1;
+    } else if (isLowerUniformPiece(item?.type)) {
+      result.bottom += 1;
+      result.lower += 1;
+    } else {
+      result.unspecified += 1;
+    }
   }
   return result;
 }

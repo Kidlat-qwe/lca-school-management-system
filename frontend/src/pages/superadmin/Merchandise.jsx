@@ -8,9 +8,10 @@ import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import {
   UNIFORM_SIZE_OPTIONS,
-  UNIFORM_PIECE_OPTIONS,
   UNIFORM_SCHOOL_NAME,
   UNIFORM_PE_NAME,
+  getUniformPieceOptions,
+  getUniformPieceLabels,
   isUniformMerchandiseName,
   requiresUniformPieceFields,
   countUniformPiecesByType,
@@ -504,7 +505,7 @@ const Merchandise = () => {
         errors.gender = 'Gender is required for uniforms';
       }
       if (!formData.type?.trim()) {
-        errors.type = 'Piece (Top or Bottom) is required';
+        errors.type = 'Piece is required';
       }
     }
 
@@ -899,7 +900,7 @@ const Merchandise = () => {
                         className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
                       >
                         <span className="text-lg font-semibold text-gray-900">Uniform (School)</span>
-                        <span className="text-xs text-gray-500 mt-1">School uniform with Top/Bottom, Size, Gender</span>
+                        <span className="text-xs text-gray-500 mt-1">School uniform with Polo/Short, Size, Gender</span>
                       </button>
                       <button
                         type="button"
@@ -907,7 +908,7 @@ const Merchandise = () => {
                         className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
                       >
                         <span className="text-lg font-semibold text-gray-900">Uniform (PE)</span>
-                        <span className="text-xs text-gray-500 mt-1">PE uniform with Top/Bottom, Size, Gender</span>
+                        <span className="text-xs text-gray-500 mt-1">PE uniform with Shirt/Pants, Size, Gender</span>
                       </button>
                       <button
                         type="button"
@@ -1121,7 +1122,8 @@ const Merchandise = () => {
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Piece: Top / Bottom *
+                              Piece: {getUniformPieceLabels(formData.merchandise_name).upper} /{' '}
+                              {getUniformPieceLabels(formData.merchandise_name).lower} *
                             </label>
                             <select
                               id="type"
@@ -1131,7 +1133,7 @@ const Merchandise = () => {
                               className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Piece</option>
-                              {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                              {getUniformPieceOptions(formData.merchandise_name).map((opt) => (
                                 <option key={opt.value} value={opt.value}>
                                   {opt.label}
                                 </option>
@@ -1141,7 +1143,10 @@ const Merchandise = () => {
                               <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
                             )}
                             <p className="mt-1 text-xs text-gray-500">
-                              Each stock row is one piece (Top or Bottom). Sizes may differ.
+                              Each stock row is one piece (
+                              {getUniformPieceLabels(formData.merchandise_name).upper} or{' '}
+                              {getUniformPieceLabels(formData.merchandise_name).lower}). Sizes may
+                              differ.
                             </p>
                           </div>
                         </>
@@ -1547,6 +1552,7 @@ const Merchandise = () => {
       stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
     const isUniformStocks = isUniformMerchandiseName(viewingStocksFor);
     const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
+    const pieceLabels = isUniformStocks ? getUniformPieceLabels(viewingStocksFor) : null;
 
     const genderFilterOptions = [
       ...new Set(
@@ -1567,7 +1573,7 @@ const Merchandise = () => {
       ),
     ].sort((a, b) => a.localeCompare(b));
     if (typeFilterOptions.length === 0 && isUniformStocks) {
-      UNIFORM_PIECE_OPTIONS.forEach((o) => typeFilterOptions.push(o.value));
+      getUniformPieceOptions(viewingStocksFor).forEach((o) => typeFilterOptions.push(o.value));
     }
 
     const sizeFilterOptions = [
@@ -1626,10 +1632,10 @@ const Merchandise = () => {
               {pieceCounts && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-                    Top: {pieceCounts.top}
+                    {pieceLabels?.upper || 'Upper'}: {pieceCounts.top}
                   </span>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-                    Bottom: {pieceCounts.bottom}
+                    {pieceLabels?.lower || 'Lower'}: {pieceCounts.bottom}
                   </span>
                   {pieceCounts.unspecified > 0 && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">

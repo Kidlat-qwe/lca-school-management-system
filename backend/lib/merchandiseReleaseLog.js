@@ -245,6 +245,8 @@ export function normalizePackageMerchLines(lines) {
 
 /**
  * Resolve Top/Bottom uniform SKU for package issue (1:1 with configured category + size).
+ * Package lines still use category Top/Bottom; stock rows may use Polo/Shirt (upper)
+ * or Short/Pants (lower), plus legacy Top/Bottom.
  * @param {import('pg').PoolClient} client
  */
 export async function resolvePackageUniformMerchandiseId(
@@ -257,16 +259,19 @@ export async function resolvePackageUniformMerchandiseId(
   if (cat !== 'Top' && cat !== 'Bottom') return null;
   if (!size || !branchId) return null;
 
+  const typeAliases =
+    cat === 'Top' ? ['Top', 'Polo', 'Shirt'] : ['Bottom', 'Short', 'Pants', 'Shorts'];
+
   const r = await client.query(
     `SELECT merchandise_id
      FROM merchandisestbl
      WHERE merchandise_name = $1
        AND size = $2
        AND branch_id = $3
-       AND LOWER(COALESCE(type, '')) = LOWER($4)
+       AND LOWER(COALESCE(type, '')) = ANY($4::text[])
      ORDER BY merchandise_id ASC
      LIMIT 1`,
-    [name, size, branchId, cat]
+    [name, size, branchId, typeAliases.map((t) => t.toLowerCase())]
   );
   return r.rows[0]?.merchandise_id ?? null;
 }

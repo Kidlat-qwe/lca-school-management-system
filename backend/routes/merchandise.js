@@ -16,7 +16,8 @@ function isUniformMerchandiseName(merchandiseName) {
 }
 
 /**
- * Uniforms are always separate Top/Bottom SKUs; size, gender, and piece are required.
+ * Uniforms are always separate upper/lower SKUs; size, gender, and piece are required.
+ * School: Polo/Short | PE: Shirt/Pants | Legacy: Top/Bottom
  * @returns {string|null} error message or null if ok
  */
 function validateUniformPieceFields(merchandiseName, size, gender, type) {
@@ -29,8 +30,9 @@ function validateUniformPieceFields(merchandiseName, size, gender, type) {
     return 'Gender is required for uniforms (Men, Women, or Unisex)';
   }
   const t = String(type || '').trim();
-  if (!t || !['Top', 'Bottom'].includes(t)) {
-    return 'Piece (Top or Bottom) is required for uniforms';
+  const allowedPieces = ['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom'];
+  if (!t || !allowedPieces.includes(t)) {
+    return 'Piece is required for uniforms (Polo/Short for school, Shirt/Pants for PE)';
   }
   return null;
 }
@@ -164,7 +166,7 @@ router.post(
       return !isNaN(num);
     }).withMessage('Branch ID must be an integer'),
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Top', 'Bottom', null, '']).withMessage('Type must be one of: Top, Bottom'),
+    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
@@ -294,7 +296,7 @@ router.put(
       return !isNaN(num);
     }).withMessage('Branch ID must be an integer'),
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Top', 'Bottom', null, '']).withMessage('Type must be one of: Top, Bottom'),
+    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,

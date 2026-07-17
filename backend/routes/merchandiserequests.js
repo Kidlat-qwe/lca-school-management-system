@@ -346,7 +346,7 @@ router.post(
     body('requested_quantity').isInt({ min: 1 }).withMessage('Requested quantity must be at least 1'),
     body('request_reason').optional().trim(),
     body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Top', 'Bottom', null, '']).withMessage('Type must be one of: Top, Bottom'),
+    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
     handleValidationErrors,
   ],
   requireRole('Admin'),

@@ -8,7 +8,8 @@ import { formatDateManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import {
   UNIFORM_SIZE_OPTIONS,
-  UNIFORM_PIECE_OPTIONS,
+  getUniformPieceOptions,
+  getUniformPieceLabels,
   isUniformMerchandiseName,
   requiresUniformPieceFields,
   countUniformPiecesByType,
@@ -351,9 +352,10 @@ const AdminMerchandise = () => {
           const needsSizing = requiresSizingForMerchandise(value);
           const isUniform = requiresUniformPieceFields(value);
           if (!needsSizing) updated.size = '';
+          // Always clear piece when item changes (school Polo/Short vs PE Shirt/Pants).
+          updated.type = '';
           if (!isUniform) {
             updated.gender = '';
-            updated.type = '';
           }
         }
         return updated;
@@ -482,10 +484,19 @@ const AdminMerchandise = () => {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => {
+      const updated = { ...prev, [name]: value };
+      if (name === 'merchandise_name') {
+        updated.type = '';
+        if (!requiresUniformPieceFields(value)) {
+          updated.gender = '';
+        }
+        if (!requiresSizingForMerchandise(value)) {
+          updated.size = '';
+        }
+      }
+      return updated;
+    });
     if (formErrors[name]) {
       setFormErrors((prev) => {
         const newErrors = { ...prev };
@@ -507,17 +518,16 @@ const AdminMerchandise = () => {
       // When merchandise name changes, reset size, gender, and type if new type doesn't require them
       if (name === 'merchandise_name') {
         const requiresSizing = requiresSizingForMerchandise(value);
-        const isUniform = value.toLowerCase().includes('uniform');
-        
-        // Reset size if new merchandise type doesn't require sizing
+        const isUniform = requiresUniformPieceFields(value);
+
         if (!requiresSizing) {
           updated.size = '';
         }
-        
-        // Reset gender and type if not a uniform
+
+        // Always clear piece when item changes (school vs PE options differ).
+        updated.type = '';
         if (!isUniform) {
           updated.gender = '';
-          updated.type = '';
         }
       }
       
@@ -557,7 +567,7 @@ const AdminMerchandise = () => {
         errors.gender = 'Gender is required for uniforms';
       }
       if (!formData.type?.trim()) {
-        errors.type = 'Piece (Top or Bottom) is required';
+        errors.type = 'Piece is required';
       }
     }
 
@@ -649,7 +659,7 @@ const AdminMerchandise = () => {
         errors.gender = 'Gender is required for uniforms';
       }
       if (!requestFormData.type?.trim()) {
-        errors.type = 'Piece (Top or Bottom) is required';
+        errors.type = 'Piece is required';
       }
     }
 
@@ -1213,7 +1223,8 @@ const AdminMerchandise = () => {
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Piece: Top / Bottom *
+                              Piece: {getUniformPieceLabels(formData.merchandise_name).upper} /{' '}
+                              {getUniformPieceLabels(formData.merchandise_name).lower} *
                             </label>
                             <select
                               id="type"
@@ -1223,7 +1234,7 @@ const AdminMerchandise = () => {
                               className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Piece</option>
-                              {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                              {getUniformPieceOptions(formData.merchandise_name).map((opt) => (
                                 <option key={opt.value} value={opt.value}>
                                   {opt.label}
                                 </option>
@@ -1233,7 +1244,10 @@ const AdminMerchandise = () => {
                               <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
                             )}
                             <p className="mt-1 text-xs text-gray-500">
-                              Each stock row is one piece (Top or Bottom). Sizes may differ.
+                              Each stock row is one piece (
+                              {getUniformPieceLabels(formData.merchandise_name).upper} or{' '}
+                              {getUniformPieceLabels(formData.merchandise_name).lower}). Sizes may
+                              differ.
                             </p>
                           </div>
                         </>
@@ -1490,7 +1504,7 @@ const AdminMerchandise = () => {
                                     aria-label={`Type row ${rowIndex + 1}`}
                                   >
                                     <option value="">{isUniform ? 'Select' : '—'}</option>
-                                    {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                                    {getUniformPieceOptions(line.merchandise_name).map((opt) => (
                                       <option key={opt.value} value={opt.value}>
                                         {opt.label}
                                       </option>
@@ -1710,7 +1724,8 @@ const AdminMerchandise = () => {
 
                         <div>
                           <label htmlFor="request_type" className="label-field">
-                            Piece: Top / Bottom *
+                            Piece: {getUniformPieceLabels(requestFormData.merchandise_name).upper} /{' '}
+                            {getUniformPieceLabels(requestFormData.merchandise_name).lower} *
                           </label>
                           <select
                             id="request_type"
@@ -1721,7 +1736,7 @@ const AdminMerchandise = () => {
                             disabled
                           >
                             <option value="">Select Piece</option>
-                            {UNIFORM_PIECE_OPTIONS.map((opt) => (
+                            {getUniformPieceOptions(requestFormData.merchandise_name).map((opt) => (
                               <option key={opt.value} value={opt.value}>
                                 {opt.label}
                               </option>
@@ -1830,6 +1845,7 @@ const AdminMerchandise = () => {
       stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
     const isUniformStocks = isUniformMerchandiseName(viewingStocksFor);
     const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
+    const pieceLabels = isUniformStocks ? getUniformPieceLabels(viewingStocksFor) : null;
 
     const genderFilterOptions = [
       ...new Set(
@@ -1850,7 +1866,7 @@ const AdminMerchandise = () => {
       ),
     ].sort((a, b) => a.localeCompare(b));
     if (typeFilterOptions.length === 0 && isUniformStocks) {
-      UNIFORM_PIECE_OPTIONS.forEach((o) => typeFilterOptions.push(o.value));
+      getUniformPieceOptions(viewingStocksFor).forEach((o) => typeFilterOptions.push(o.value));
     }
 
     const sizeFilterOptions = [
@@ -1909,10 +1925,10 @@ const AdminMerchandise = () => {
               {pieceCounts && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-                    Top: {pieceCounts.top}
+                    {pieceLabels?.upper || 'Upper'}: {pieceCounts.top}
                   </span>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-                    Bottom: {pieceCounts.bottom}
+                    {pieceLabels?.lower || 'Lower'}: {pieceCounts.bottom}
                   </span>
                   {pieceCounts.unspecified > 0 && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">

@@ -4184,9 +4184,11 @@ const initializePackageMerchSelections = useCallback(
     // Use the type field directly
     const typeValue = typeof item === 'string' ? item : (item.type || '');
     const typeLower = typeValue.toLowerCase();
-    if (typeLower === 'top' || typeLower.includes('blouse')) return 'Top';
+    if (typeLower === 'top' || typeLower === 'polo' || typeLower === 'shirt' || typeLower.includes('blouse')) return 'Top';
     if (
       typeLower === 'bottom' ||
+      typeLower === 'short' ||
+      typeLower === 'shorts' ||
       typeLower.includes('skirt') ||
       typeLower.includes('pants') ||
       typeLower.includes('short')
