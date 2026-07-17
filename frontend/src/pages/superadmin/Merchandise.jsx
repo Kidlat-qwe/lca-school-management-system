@@ -2326,13 +2326,19 @@ const Merchandise = () => {
                           {formatDateManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          {request.status === 'Pending' && (
+                          {request.status === 'Pending' && !request.inventory_request_id && (
                             <button
                               onClick={() => openReviewModal(request)}
                               className="px-3 py-1 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
                             >
                               Review
                             </button>
+                          )}
+                          {request.status === 'Pending' && request.inventory_request_id && (
+                            <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                              Awaiting RHET Inventory
+                              {request.inventory_status ? ` (${request.inventory_status})` : ''}
+                            </span>
                           )}
                           {(request.status === 'Approved' || request.status === 'Rejected') && (
                             <button

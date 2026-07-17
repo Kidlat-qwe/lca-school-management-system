@@ -41,6 +41,7 @@ import reportsRoutes from './routes/reports.js';
 import dailySummarySalesRoutes from './routes/dailySummarySales.js';
 import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
 import systemLogsRoutes from './routes/systemLogs.js';
+import inventoryWebhooksRoutes from './routes/inventoryWebhooks.js';
 
 // Import middleware
 import { activityLogger } from './middleware/activityLogger.js';
@@ -139,6 +140,10 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// RHET Inventory webhook — authenticated by shared integration key, not Firebase.
+// Mounted outside API_VERSION since it's called by RHET Inventory, not the PSMS frontend.
+app.use('/api/webhooks/inventory', inventoryWebhooksRoutes);
 
 // API routes
 const API_VERSION = '/api/sms';

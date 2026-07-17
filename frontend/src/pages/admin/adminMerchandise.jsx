@@ -579,6 +579,8 @@ const AdminMerchandise = () => {
 
     if (!requestFormData.request_reason.trim()) {
       errors.request_reason = 'Request reason is required';
+    } else if (requestFormData.request_reason.trim().length < 5) {
+      errors.request_reason = 'Request reason must be at least 5 characters';
     }
 
     if (!bulkRequestLines.length) {
@@ -657,6 +659,8 @@ const AdminMerchandise = () => {
 
     if (!requestFormData.request_reason.trim()) {
       errors.request_reason = 'Request reason is required';
+    } else if (requestFormData.request_reason.trim().length < 5) {
+      errors.request_reason = 'Request reason must be at least 5 characters';
     }
 
     setRequestFormErrors(errors);
@@ -846,14 +850,16 @@ const AdminMerchandise = () => {
         }));
 
         let successCount = 0;
+        let inventoryIntegrated = false;
         const failures = [];
         for (let i = 0; i < payloads.length; i += 1) {
           const payload = payloads[i];
           try {
-            await apiRequest('/merchandise-requests', {
+            const response = await apiRequest('/merchandise-requests', {
               method: 'POST',
               body: JSON.stringify(payload),
             });
+            inventoryIntegrated = Boolean(response?.inventoryIntegrated);
             successCount += 1;
           } catch (lineErr) {
             failures.push(
@@ -867,7 +873,11 @@ const AdminMerchandise = () => {
         if (failures.length === 0) {
           closeRequestModal();
           appAlert(
-            `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! Superadmin will be notified.`
+            `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! ${
+              inventoryIntegrated
+                ? 'Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
+                : 'Superadmin will be notified.'
+            }`
           );
         } else if (successCount === 0) {
           appAlert(`Failed to submit bulk request:\n${failures.join('\n')}`);
@@ -889,17 +899,21 @@ const AdminMerchandise = () => {
         type: requestFormData.type?.trim() || null,
       };
 
-      await apiRequest('/merchandise-requests', {
+      const response = await apiRequest('/merchandise-requests', {
         method: 'POST',
         body: JSON.stringify(basePayload),
       });
-      
+
       closeRequestModal();
       // Refresh requests
       await fetchMerchandiseRequests();
-      
-      // Show success message
-      appAlert('Stock request submitted successfully! Superadmin will be notified.');
+
+      // Show success message (backend indicates whether RHET Inventory received the request)
+      appAlert(
+        response?.inventoryIntegrated
+          ? 'Stock request submitted successfully! Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
+          : 'Stock request submitted successfully! Superadmin will be notified.'
+      );
     } catch (err) {
       appAlert(err.message || 'Failed to submit stock request');
       console.error('Error submitting request:', err);
@@ -1545,7 +1559,7 @@ const AdminMerchandise = () => {
                       onChange={handleRequestInputChange}
                       className={`input-field min-h-[72px] resize-y ${requestFormErrors.request_reason ? 'border-red-500' : ''}`}
                       required
-                      placeholder="Please explain why you need this stock..."
+                      placeholder="Please explain why you need this stock (min. 5 characters)..."
                       rows={3}
                     />
                     {requestFormErrors.request_reason && (
@@ -1751,7 +1765,7 @@ const AdminMerchandise = () => {
                         onChange={handleRequestInputChange}
                         className={`input-field min-h-[100px] resize-y ${requestFormErrors.request_reason ? 'border-red-500' : ''}`}
                         required
-                        placeholder="Please explain why you need this stock..."
+                        placeholder="Please explain why you need this stock (min. 5 characters)..."
                         rows={4}
                       />
                       {requestFormErrors.request_reason && (
