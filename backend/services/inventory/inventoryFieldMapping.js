@@ -2,19 +2,36 @@
  * Maps this system's merchandise request fields to RHET Inventory API format,
  * and builds/parses the `externalReference` used to correlate records across systems.
  *
+ * Preferred path (Request Stock redesign): pass through exact RHET catalog values
+ * stored on the request row (`inventory_category_name`, `inventory_item_name`,
+ * `inventory_requested_sku`, plus gender/type/size for uniforms).
+ *
+ * Legacy path: map local CMS labels (LCA Uniform, Men, Extra Small) → RHET labels.
+ * Never invent RHET categories from free-text local names like "LCA Bag" without
+ * a concrete itemName/sku.
+ *
  * externalReference format: `<SYSTEM_CODE>-<local_request_id>`
- * SYSTEM_CODE comes from INVENTORY_SYSTEM_CODE (default "PSMS") — never hardcode
- * a single system code, since this client pattern is reused by other systems
- * (HR, VENDOR, etc.) connecting to the same RHET Inventory.
  */
 
 const DEFAULT_SYSTEM_CODE = 'PSMS';
 
+/** Local CMS merchandise_name → RHET categoryName (legacy bridge only). */
 const CATEGORY_NAME_MAP = {
   'LCA Uniform': 'School Uniform',
   'LCA PE Uniform': 'PE Uniform',
   'School Uniform_Replacement': 'School Uniform',
   'PE Uniform_Replacement': 'PE Uniform',
+  'LCA Bag': 'Backpack',
+  'LCA T-Shirt': 'LCA T-Shirt',
+  'LCA Tshirt': 'LCA T-Shirt',
+};
+
+/** RHET categoryName → preferred local merchandisestbl name for fulfill apply. */
+const CATEGORY_NAME_TO_LOCAL = {
+  'School Uniform': 'School Uniform',
+  'PE Uniform': 'PE Uniform',
+  'LCA T-Shirt': 'LCA T-Shirt',
+  Backpack: 'Backpack',
 };
 
 const GENDER_MAP = {
@@ -27,6 +44,12 @@ const GENDER_MAP = {
   Female: 'Female',
 };
 
+const GENDER_TO_LOCAL = {
+  Male: 'Men',
+  Female: 'Women',
+  Unisex: 'Unisex',
+};
+
 // CRITICAL: Polo and Shirt are distinct RHET types — never collapse one into the
 // other. School Uniform pieces map to Polo/Short; PE Uniform pieces map to
 // Shirt/Pants. Sending the wrong type means RHET finds no matching stock row.
@@ -35,6 +58,8 @@ const SCHOOL_UNIFORM_TYPE_MAP = {
   Bottom: 'Short',
   Polo: 'Polo',
   Short: 'Short',
+  Blouse: 'Blouse',
+  Skirt: 'Skirt',
 };
 
 const PE_UNIFORM_TYPE_MAP = {
@@ -61,6 +86,18 @@ const SIZE_MAP = {
   XL: 'XL',
 };
 
+const SIZE_TO_LOCAL = {
+  XS: 'Extra Small',
+  S: 'Small',
+  M: 'Medium',
+  L: 'Large',
+  XL: 'Extra Large',
+  '2XL': '2XL',
+  '3XL': '3XL',
+  '4XL': '4XL',
+  '5XL': '5XL',
+};
+
 export function getInventorySystemCode() {
   return String(process.env.INVENTORY_SYSTEM_CODE || DEFAULT_SYSTEM_CODE).trim() || DEFAULT_SYSTEM_CODE;
 }
@@ -77,27 +114,42 @@ export function parseLocalRequestIdFromExternalReference(externalReference) {
   return match ? parseInt(match[1], 10) : null;
 }
 
-function isUniformCategory(merchandiseName) {
-  if (!merchandiseName) return false;
-  const normalized = String(merchandiseName).trim();
-  if (CATEGORY_NAME_MAP[normalized]) return true;
-  return normalized.toLowerCase().includes('uniform');
-}
-
 /**
  * Learning Kit requests are not yet supported by Request Stock. RHET Inventory
  * matches kits via a category-slot BOM + request-time `components[]`, which
- * CMS does not collect yet. Callers must reject these before calling RHET
- * (see POST /api/v1/merchandise-requests guard in merchandiserequests.js).
+ * CMS does not collect yet. Callers must reject these before calling RHET.
  */
-export function isLearningKitCategory(merchandiseName) {
-  if (!merchandiseName) return false;
-  return String(merchandiseName).toLowerCase().includes('learning kit');
+export function isLearningKitCategory(name) {
+  if (!name) return false;
+  return String(name).toLowerCase().includes('learning kit');
+}
+
+/**
+ * Uniform-like RHET categories (and legacy local names that map to them).
+ */
+export function isUniformLikeCategory(categoryOrMerchandiseName) {
+  if (!categoryOrMerchandiseName) return false;
+  const raw = String(categoryOrMerchandiseName).trim();
+  if (isLearningKitCategory(raw)) return false;
+  const mapped = CATEGORY_NAME_MAP[raw] || raw;
+  const name = mapped.toLowerCase();
+  if (name === 'school uniform' || name === 'pe uniform') return true;
+  if (name === 'lca t-shirt' || name === 'lca tshirt' || name === 'lca shirt') return true;
+  if (name.endsWith(' uniform')) return true;
+  // Legacy local names
+  if (CATEGORY_NAME_MAP[raw]) return true;
+  return raw.toLowerCase().includes('uniform');
 }
 
 export function mapCategoryNameToInventory(merchandiseName) {
   const name = String(merchandiseName || '').trim();
   return CATEGORY_NAME_MAP[name] || name;
+}
+
+/** RHET category → local merchandisestbl name for branch stock apply. */
+export function mapCategoryNameToLocal(rhetCategoryName) {
+  const name = String(rhetCategoryName || '').trim();
+  return CATEGORY_NAME_TO_LOCAL[name] || name;
 }
 
 export function mapGenderToInventory(gender) {
@@ -106,16 +158,26 @@ export function mapGenderToInventory(gender) {
   return GENDER_MAP[key] || key;
 }
 
-function isPeUniform(merchandiseName) {
-  return String(merchandiseName || '')
-    .trim()
-    .toLowerCase()
-    .includes('pe');
+export function mapGenderToLocal(gender) {
+  if (!gender) return null;
+  const key = String(gender).trim();
+  // Prefer RHET-canonical Male/Female when already canonical
+  if (key === 'Male' || key === 'Female' || key === 'Unisex') return key;
+  return GENDER_TO_LOCAL[key] || key;
+}
+
+function isPeUniform(categoryOrMerchandiseName) {
+  const mapped = mapCategoryNameToInventory(categoryOrMerchandiseName);
+  return mapped.toLowerCase().includes('pe');
 }
 
 export function mapTypeToInventory(type, merchandiseName = '') {
   if (!type) return undefined;
   const key = String(type).trim();
+  // Exact RHET types pass through — never Polo → Shirt.
+  if (['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants'].includes(key)) {
+    return key;
+  }
   const typeMap = isPeUniform(merchandiseName) ? PE_UNIFORM_TYPE_MAP : SCHOOL_UNIFORM_TYPE_MAP;
   return typeMap[key] || key;
 }
@@ -126,30 +188,159 @@ export function mapSizeToInventory(size) {
   return SIZE_MAP[key] || key;
 }
 
+export function mapSizeToLocal(size) {
+  if (!size) return null;
+  const key = String(size).trim();
+  // Prefer RHET-canonical XS/S/… when already canonical
+  if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(key)) {
+    return key;
+  }
+  return SIZE_TO_LOCAL[key] || key;
+}
+
+/**
+ * Resolve the RHET categoryName for a request row (catalog-first).
+ */
+export function resolveInventoryCategoryName(requestRow) {
+  const fromInventory = String(requestRow?.inventory_category_name || '').trim();
+  if (fromInventory) return fromInventory;
+  return mapCategoryNameToInventory(requestRow?.merchandise_name);
+}
+
 /**
  * Build one RHET stock-request item from a local merchandiserequestlogtbl row.
+ * Prefer inventory_* catalog fields; never send local-only names as category
+ * without itemName for non-uniforms.
  */
 export function buildInventoryStockRequestItem(requestRow) {
-  const categoryName = mapCategoryNameToInventory(requestRow.merchandise_name);
+  const categoryName = resolveInventoryCategoryName(requestRow);
   const externalReference = buildExternalReference(requestRow.request_id);
+  const quantity = Number(requestRow.requested_quantity);
 
-  if (isUniformCategory(requestRow.merchandise_name)) {
-    return {
+  if (isUniformLikeCategory(categoryName) || isUniformLikeCategory(requestRow.merchandise_name)) {
+    const item = {
       categoryName,
       gender: mapGenderToInventory(requestRow.gender),
-      type: mapTypeToInventory(requestRow.type, requestRow.merchandise_name),
+      type: mapTypeToInventory(requestRow.type, categoryName || requestRow.merchandise_name),
       size: mapSizeToInventory(requestRow.size),
-      quantity: Number(requestRow.requested_quantity),
+      quantity,
       externalReference,
+    };
+    return omitEmpty(item);
+  }
+
+  const itemName = String(
+    requestRow.inventory_item_name || requestRow.item_name || ''
+  ).trim();
+  const sku = String(
+    requestRow.inventory_requested_sku || requestRow.sku || ''
+  ).trim();
+
+  // Non-uniform MUST have itemName and/or sku — never category-only (LCA Bag bug).
+  const item = {
+    categoryName,
+    quantity,
+    externalReference,
+  };
+  if (itemName) item.itemName = itemName;
+  if (sku) item.sku = sku;
+  return omitEmpty(item);
+}
+
+function omitEmpty(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null || v === '') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Normalize create-request body into DB + RHET identity fields.
+ * Accepts catalog-driven fields: category_name, item_name, sku, gender, type, size.
+ */
+export function normalizeMerchandiseRequestInput(body = {}) {
+  const categoryName = String(body.category_name || body.categoryName || '').trim();
+  const itemName = String(body.item_name || body.itemName || '').trim();
+  const sku = String(body.sku || '').trim();
+  const merchandiseNameInput = String(body.merchandise_name || body.merchandiseName || '').trim();
+
+  // Prefer explicit RHET category; fall back to mapping local merchandise_name.
+  const inventoryCategoryName =
+    categoryName || (merchandiseNameInput ? mapCategoryNameToInventory(merchandiseNameInput) : '');
+
+  if (!inventoryCategoryName) {
+    return { error: 'RHET category is required' };
+  }
+
+  if (isLearningKitCategory(inventoryCategoryName) || isLearningKitCategory(merchandiseNameInput)) {
+    return { error: 'LEARNING_KIT_NOT_SUPPORTED' };
+  }
+
+  const uniform = isUniformLikeCategory(inventoryCategoryName);
+  const gender = String(body.gender || '').trim() || null;
+  const type = String(body.type || '').trim() || null;
+  const size = String(body.size || '').trim() || null;
+
+  if (uniform) {
+    if (!gender || !type || !size) {
+      return { error: 'Gender, type, and size are required for uniform categories' };
+    }
+    return {
+      inventory_category_name: inventoryCategoryName,
+      inventory_item_name: null,
+      inventory_requested_sku: sku || null,
+      // Local branch stock labels (fulfill apply)
+      merchandise_name: mapCategoryNameToLocal(inventoryCategoryName),
+      gender: mapGenderToLocal(mapGenderToInventory(gender)),
+      type: mapTypeToInventory(type, inventoryCategoryName),
+      size: mapSizeToLocal(mapSizeToInventory(size)),
+      is_uniform: true,
+    };
+  }
+
+  const resolvedItemName = itemName || '';
+  if (!resolvedItemName && !sku) {
+    return {
+      error:
+        'Select a concrete catalog item (item name or SKU). Free-text category-only requests are not allowed.',
     };
   }
 
   return {
-    categoryName,
-    itemName: String(requestRow.merchandise_name || '').trim(),
-    quantity: Number(requestRow.requested_quantity),
-    externalReference,
+    inventory_category_name: inventoryCategoryName,
+    inventory_item_name: resolvedItemName || null,
+    inventory_requested_sku: sku || null,
+    // Local stock row named after the RHET item (not the local "LCA Bag" label)
+    merchandise_name: resolvedItemName || sku || inventoryCategoryName,
+    gender: null,
+    type: null,
+    size: null,
+    is_uniform: false,
   };
+}
+
+/**
+ * Validate that a non-uniform RHET payload has item identity (guard against LCA Bag bug).
+ */
+export function assertInventoryItemHasMatchKey(item) {
+  if (!item?.categoryName) {
+    return 'categoryName is required';
+  }
+  if (isLearningKitCategory(item.categoryName)) {
+    return 'Learning Kit is not supported via Request Stock';
+  }
+  if (isUniformLikeCategory(item.categoryName)) {
+    if (!item.gender || !item.type || !item.size) {
+      return 'Uniform requests require gender, type, and size';
+    }
+    return null;
+  }
+  if (!item.itemName && !item.sku) {
+    return 'Non-uniform requests require itemName and/or sku';
+  }
+  return null;
 }
 
 /**
@@ -170,11 +361,19 @@ export function normalizeInventoryReason(reason, fallbackReason) {
  * Omits empty optional fields so RHET does not reject null/undefined values.
  */
 export function buildInventorySubmitPayload({ requestRow, requestedBy, reason, webhookUrl }) {
+  const item = buildInventoryStockRequestItem(requestRow);
+  const matchError = assertInventoryItemHasMatchKey(item);
+  if (matchError) {
+    const err = new Error(matchError);
+    err.code = 'INVALID_INVENTORY_ITEM';
+    throw err;
+  }
+
   const payload = {
     requestDate: new Date().toISOString().slice(0, 10),
     requestedBy: String(requestedBy || 'PSMS Admin').trim() || 'PSMS Admin',
     reason: normalizeInventoryReason(reason, requestRow.request_reason),
-    items: [buildInventoryStockRequestItem(requestRow)],
+    items: [item],
   };
 
   const webhook = String(webhookUrl || '').trim();

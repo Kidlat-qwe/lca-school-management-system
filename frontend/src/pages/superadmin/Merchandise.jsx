@@ -10,11 +10,17 @@ import {
   UNIFORM_SIZE_OPTIONS,
   UNIFORM_SCHOOL_NAME,
   UNIFORM_PE_NAME,
+  UNIFORM_TSHIRT_NAME,
+  NON_UNIFORM_BACKPACK_NAME,
   getUniformPieceOptions,
   getUniformPieceLabels,
+  getUniformGenderOptions,
   isUniformMerchandiseName,
+  isLearningKitMerchandiseName,
   requiresUniformPieceFields,
   countUniformPiecesByType,
+  normalizeMerchandiseAttributes,
+  formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
@@ -373,14 +379,20 @@ const Merchandise = () => {
     setRequiresSizing(
       isUniformMerchandiseName(item.merchandise_name) || !!item.size
     );
+    const normalized = normalizeMerchandiseAttributes({
+      merchandise_name: item.merchandise_name,
+      gender: item.gender,
+      size: item.size,
+      type: item.type,
+    });
     setFormData({
-      merchandise_name: item.merchandise_name || '',
-      size: item.size || '',
+      merchandise_name: normalized.merchandise_name || item.merchandise_name || '',
+      size: normalized.size || item.size || '',
       quantity: item.quantity?.toString() || '',
       price: item.price?.toString() || '',
       branch_id: item.branch_id ? item.branch_id.toString() : '',
-      gender: item.gender || '',
-      type: item.type || '',
+      gender: normalized.gender || item.gender || '',
+      type: normalized.type || item.type || '',
       image_url: item.image_url || '',
       remarks: item.remarks || '',
     });
@@ -446,13 +458,49 @@ const Merchandise = () => {
     setMerchandiseCategory(category);
 
     if (category === 'uniform_school') {
-      setFormData(prev => ({ ...prev, merchandise_name: UNIFORM_SCHOOL_NAME, gender: '', type: '' }));
+      setFormData((prev) => ({
+        ...prev,
+        merchandise_name: UNIFORM_SCHOOL_NAME,
+        gender: '',
+        type: '',
+        size: '',
+      }));
       setRequiresSizing(true);
     } else if (category === 'uniform_pe') {
-      setFormData(prev => ({ ...prev, merchandise_name: UNIFORM_PE_NAME, gender: '', type: '' }));
+      setFormData((prev) => ({
+        ...prev,
+        merchandise_name: UNIFORM_PE_NAME,
+        gender: '',
+        type: '',
+        size: '',
+      }));
       setRequiresSizing(true);
+    } else if (category === 'uniform_tshirt') {
+      setFormData((prev) => ({
+        ...prev,
+        merchandise_name: UNIFORM_TSHIRT_NAME,
+        gender: 'Unisex',
+        type: 'Shirt',
+        size: '',
+      }));
+      setRequiresSizing(true);
+    } else if (category === 'backpack') {
+      setFormData((prev) => ({
+        ...prev,
+        merchandise_name: NON_UNIFORM_BACKPACK_NAME,
+        gender: '',
+        type: '',
+        size: '',
+      }));
+      setRequiresSizing(false);
     } else {
-      setFormData(prev => ({ ...prev, merchandise_name: '', gender: '', type: '' }));
+      setFormData((prev) => ({
+        ...prev,
+        merchandise_name: '',
+        gender: '',
+        type: '',
+        size: '',
+      }));
       setRequiresSizing(false);
     }
     setModalStep('form');
@@ -461,7 +509,7 @@ const Merchandise = () => {
   const handleBackToBranchSelection = () => {
     setModalStep('branch-selection');
     setSelectedBranch(null);
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
       branch_id: '',
     }));
@@ -469,10 +517,17 @@ const Merchandise = () => {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => {
+      const updated = { ...prev, [name]: value };
+      // Changing gender resets piece so School Male Polo/Short vs Female Blouse/Skirt stay valid.
+      if (name === 'gender') {
+        updated.type = '';
+      }
+      if (name === 'merchandise_name' && isLearningKitMerchandiseName(value)) {
+        // Learning Kit blocked on create — clear name so validation fails with clear message.
+      }
+      return updated;
+    });
     if (formErrors[name]) {
       setFormErrors((prev) => {
         const newErrors = { ...prev };
@@ -484,10 +539,15 @@ const Merchandise = () => {
 
   const validateForm = () => {
     const errors = {};
-    
+
     // When editing merchandise type image only, we don't need merchandise_name validation
     if (!editingMerchandiseType && !formData.merchandise_name.trim()) {
       errors.merchandise_name = 'Merchandise name is required';
+    }
+
+    if (isLearningKitMerchandiseName(formData.merchandise_name)) {
+      errors.merchandise_name =
+        'Learning Kit is not available via Create Merchandise yet. Request kits in RHET Inventory.';
     }
 
     const name = formData.merchandise_name?.trim() || '';
@@ -594,14 +654,20 @@ const Merchandise = () => {
     setSubmitting(true);
     setError('');
     try {
-      const basePayload = {
+      const normalized = normalizeMerchandiseAttributes({
         merchandise_name: formData.merchandise_name.trim(),
-        size: formData.size?.trim() || null,
+        gender: formData.gender,
+        size: formData.size,
+        type: formData.type,
+      });
+      const basePayload = {
+        merchandise_name: normalized.merchandise_name,
+        size: normalized.size,
         quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
         price: formData.price && formData.price !== '' ? parseFloat(formData.price) : null,
         branch_id: formData.branch_id ? parseInt(formData.branch_id) : null,
-        gender: formData.gender && formData.gender.trim() !== '' ? formData.gender.trim() : null,
-        type: formData.type && formData.type.trim() !== '' ? formData.type.trim() : null,
+        gender: normalized.gender,
+        type: normalized.type,
         image_url: formData.image_url || null,
         remarks: formData.remarks?.trim() || null,
       };
@@ -894,22 +960,40 @@ const Merchandise = () => {
                 <div className="flex flex-col overflow-hidden">
                   <div className="p-6">
                     <p className="text-sm text-gray-500 mb-4">What type of merchandise do you want to add?</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       <button
                         type="button"
                         onClick={() => handleCategorySelect('uniform_school')}
                         className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
                       >
-                        <span className="text-lg font-semibold text-gray-900">Uniform (School)</span>
-                        <span className="text-xs text-gray-500 mt-1">School uniform with Polo/Short, Size, Gender</span>
+                        <span className="text-lg font-semibold text-gray-900">School Uniform</span>
+                        <span className="text-xs text-gray-500 mt-1">
+                          Male: Polo/Short · Female: Blouse/Skirt · Size XS–5XL
+                        </span>
                       </button>
                       <button
                         type="button"
                         onClick={() => handleCategorySelect('uniform_pe')}
                         className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
                       >
-                        <span className="text-lg font-semibold text-gray-900">Uniform (PE)</span>
-                        <span className="text-xs text-gray-500 mt-1">PE uniform with Shirt/Pants, Size, Gender</span>
+                        <span className="text-lg font-semibold text-gray-900">PE Uniform</span>
+                        <span className="text-xs text-gray-500 mt-1">Shirt / Pants · Gender · Size XS–5XL</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCategorySelect('uniform_tshirt')}
+                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
+                      >
+                        <span className="text-lg font-semibold text-gray-900">LCA T-Shirt</span>
+                        <span className="text-xs text-gray-500 mt-1">Shirt · usually Unisex · Size XS–5XL</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCategorySelect('backpack')}
+                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
+                      >
+                        <span className="text-lg font-semibold text-gray-900">Backpack</span>
+                        <span className="text-xs text-gray-500 mt-1">Non-uniform item (no gender/type/size)</span>
                       </button>
                       <button
                         type="button"
@@ -917,7 +1001,7 @@ const Merchandise = () => {
                         className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
                       >
                         <span className="text-lg font-semibold text-gray-900">Other merchandise</span>
-                        <span className="text-xs text-gray-500 mt-1">Bag, kit, keychain, etc.</span>
+                        <span className="text-xs text-gray-500 mt-1">Book, Accessory, etc. (not Learning Kit)</span>
                       </button>
                     </div>
                   </div>
@@ -974,7 +1058,7 @@ const Merchandise = () => {
                               onChange={handleInputChange}
                               className={`input-field ${formErrors.merchandise_name ? 'border-red-500' : ''}`}
                               required
-                              placeholder="e.g., LCA Uniform, LCA Learning Kit, LCA Bag, LCA Keychain, LCA Totebag"
+                              placeholder="e.g., School Uniform, PE Uniform, Backpack, Book, Accessory"
                             />
                             {formErrors.merchandise_name && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
@@ -1033,13 +1117,18 @@ const Merchandise = () => {
                             <option value="">Select Size</option>
                             {UNIFORM_SIZE_OPTIONS.map((size) => (
                               <option key={size} value={size}>
-                                {size}
+                                {formatUniformSizeDisplayLabel(size)}
                               </option>
                             ))}
+                            {formData.size &&
+                              !UNIFORM_SIZE_OPTIONS.includes(formData.size) && (
+                              <option value={formData.size}>{formData.size} (legacy)</option>
+                            )}
                           </select>
                           {formErrors.size && (
                             <p className="mt-1 text-sm text-red-600">{formErrors.size}</p>
                           )}
+                          <p className="mt-1 text-xs text-gray-500">Stored as RHET size (XS, S, M, …)</p>
                         </div>
                       )}
 
@@ -1098,7 +1187,10 @@ const Merchandise = () => {
                       </div>
 
                       {/* Gender and Piece fields - uniforms only */}
-                      {((merchandiseCategory === 'uniform_school' || merchandiseCategory === 'uniform_pe') || isUniformMerchandiseName(formData.merchandise_name)) && (
+                      {((merchandiseCategory === 'uniform_school' ||
+                        merchandiseCategory === 'uniform_pe' ||
+                        merchandiseCategory === 'uniform_tshirt') ||
+                        isUniformMerchandiseName(formData.merchandise_name)) && (
                         <>
                           <div>
                             <label htmlFor="gender" className="label-field">
@@ -1112,19 +1204,33 @@ const Merchandise = () => {
                               className={`input-field ${formErrors.gender ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Gender</option>
-                              <option value="Men">Men</option>
-                              <option value="Women">Women</option>
-                              <option value="Unisex">Unisex</option>
+                              {getUniformGenderOptions(formData.merchandise_name).map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                              {formData.gender &&
+                                !getUniformGenderOptions(formData.merchandise_name).some(
+                                  (o) => o.value === formData.gender
+                                ) && (
+                                  <option value={formData.gender}>
+                                    {formData.gender} (legacy)
+                                  </option>
+                                )}
                             </select>
                             {formErrors.gender && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.gender}</p>
                             )}
+                            <p className="mt-1 text-xs text-gray-500">Stored as Male / Female / Unisex</p>
                           </div>
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Piece: {getUniformPieceLabels(formData.merchandise_name).upper} /{' '}
-                              {getUniformPieceLabels(formData.merchandise_name).lower} *
+                              Piece: {getUniformPieceLabels(formData.merchandise_name, formData.gender).upper}
+                              {getUniformPieceOptions(formData.merchandise_name, formData.gender).length > 1
+                                ? ` / ${getUniformPieceLabels(formData.merchandise_name, formData.gender).lower}`
+                                : ''}{' '}
+                              *
                             </label>
                             <select
                               id="type"
@@ -1134,20 +1240,29 @@ const Merchandise = () => {
                               className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Piece</option>
-                              {getUniformPieceOptions(formData.merchandise_name).map((opt) => (
+                              {getUniformPieceOptions(
+                                formData.merchandise_name,
+                                formData.gender
+                              ).map((opt) => (
                                 <option key={opt.value} value={opt.value}>
                                   {opt.label}
                                 </option>
                               ))}
+                              {formData.type &&
+                                !getUniformPieceOptions(
+                                  formData.merchandise_name,
+                                  formData.gender
+                                ).some((o) => o.value === formData.type) && (
+                                  <option value={formData.type}>
+                                    {formData.type} (legacy)
+                                  </option>
+                                )}
                             </select>
                             {formErrors.type && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
                             )}
                             <p className="mt-1 text-xs text-gray-500">
-                              Each stock row is one piece (
-                              {getUniformPieceLabels(formData.merchandise_name).upper} or{' '}
-                              {getUniformPieceLabels(formData.merchandise_name).lower}). Sizes may
-                              differ.
+                              Each stock row is one piece. Polo and Shirt are different types.
                             </p>
                           </div>
                         </>
@@ -1563,7 +1678,7 @@ const Merchandise = () => {
       ),
     ].sort((a, b) => a.localeCompare(b));
     if (genderFilterOptions.length === 0 && isUniformStocks) {
-      genderFilterOptions.push('Men', 'Women', 'Unisex');
+      genderFilterOptions.push('Male', 'Female', 'Unisex', 'Men', 'Women');
     }
 
     const typeFilterOptions = [

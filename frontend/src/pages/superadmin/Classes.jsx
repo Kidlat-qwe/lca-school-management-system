@@ -57,6 +57,7 @@ import {
   formatMerchandiseGenderLabel,
   formatUniformSizeOptionLabel,
   formatUniformSameSizePairOptionLabel,
+  isSchoolUniformMerchandiseName,
 } from '../../utils/uniformMerchandise';
 import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock.js';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
@@ -4469,7 +4470,7 @@ const initializePackageMerchSelections = useCallback(
         if (selectedEnrollmentOption === 'per-phase' && selectedStudents.length > 0) {
           const itemsForType = getMerchandiseItemsByType(merchandiseName);
           const hasSizes = itemsForType.some(item => item.size);
-          if (merchandiseName !== 'LCA Uniform' && !hasSizes) {
+          if (!isSchoolUniformMerchandiseName(merchandiseName) && !hasSizes) {
             // Remove from all students' selections
             setStudentMerchandiseSelections(prevSelections => {
               const updated = { ...prevSelections };
@@ -4495,7 +4496,7 @@ const initializePackageMerchSelections = useCallback(
         if (selectedEnrollmentOption === 'per-phase' && selectedStudents.length > 0) {
           const itemsForType = getMerchandiseItemsByType(merchandiseName);
           const hasSizes = itemsForType.some(item => item.size);
-          if (merchandiseName !== 'LCA Uniform' && !hasSizes) {
+          if (!isSchoolUniformMerchandiseName(merchandiseName) && !hasSizes) {
             // Add to all existing students' selections
             setStudentMerchandiseSelections(prevSelections => {
               const updated = { ...prevSelections };
@@ -12620,7 +12621,7 @@ const initializePackageMerchSelections = useCallback(
                                       </label>
                                       
                                       {/* Size selector for LCA Uniform with Top/Bottom categories - Only show if students are selected */}
-                                      {isSelected && item.merchandise_name === 'LCA Uniform' && hasSizes && selectedStudents.length > 0 && (
+                                      {isSelected && isSchoolUniformMerchandiseName(item.merchandise_name) && hasSizes && selectedStudents.length > 0 && (
                                         <div className="mt-3 pt-3 border-t border-gray-200">
                                           {(() => {
                                             const uniformCategories = Array.from(
@@ -12899,7 +12900,7 @@ const initializePackageMerchSelections = useCallback(
                                       )}
                                       
                                       {/* Show message if LCA Uniform is selected but no students selected yet */}
-                                      {isSelected && item.merchandise_name === 'LCA Uniform' && hasSizes && selectedStudents.length === 0 && (
+                                      {isSelected && isSchoolUniformMerchandiseName(item.merchandise_name) && hasSizes && selectedStudents.length === 0 && (
                                         <div className="mt-2 ml-5 p-2 bg-yellow-50 border border-yellow-200 rounded text-[11px] text-yellow-800">
                                           Please select students first to configure uniform sizes.
                                         </div>

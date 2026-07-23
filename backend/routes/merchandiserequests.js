@@ -17,8 +17,10 @@ import {
   pickApproverName,
   looksLikeUuid,
   isLearningKitCategory,
+  normalizeMerchandiseRequestInput,
 } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
+import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
 
 const router = express.Router();
 
@@ -35,12 +37,20 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
     return null;
   }
 
-  const payload = buildInventorySubmitPayload({
-    requestRow,
-    requestedBy,
-    reason,
-    webhookUrl: getInventoryWebhookUrl(),
-  });
+  let payload;
+  try {
+    payload = buildInventorySubmitPayload({
+      requestRow,
+      requestedBy,
+      reason,
+      webhookUrl: getInventoryWebhookUrl(),
+    });
+  } catch (buildError) {
+    throw new InventoryApiError(buildError.message || 'Invalid stock request for RHET Inventory', {
+      code: buildError.code || 'INVALID_INVENTORY_ITEM',
+      status: 400,
+    });
+  }
 
   const result = await submitStockRequests(payload);
   const inventoryItem = Array.isArray(result.data) ? result.data[0] : null;
@@ -49,19 +59,32 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
     throw new InventoryApiError('RHET Inventory did not return a request ID');
   }
 
+  const failureReason =
+    inventoryItem.failureReason ||
+    inventoryItem.rejectionReason ||
+    result.data?.failureReason ||
+    null;
+  const inventoryStatus = failureReason
+    ? 'FAILED'
+    : inventoryItem.status || 'PENDING';
+
   try {
-    await dbQuery(
+    await runIgnoringMissingUpdatedAt(dbQuery, 
       `UPDATE merchandiserequestlogtbl
        SET inventory_request_id = $1,
            inventory_status = $2,
            inventory_external_reference = $3,
+           inventory_matched_sku = COALESCE($4, inventory_matched_sku),
+           inventory_rejection_reason = COALESCE($5, inventory_rejection_reason),
            inventory_synced_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP
-       WHERE request_id = $4`,
+       WHERE request_id = $6`,
       [
         inventoryItem.requestId,
-        inventoryItem.status || 'PENDING',
+        inventoryStatus,
         inventoryItem.externalReference || payload.items[0].externalReference,
+        inventoryItem.matchedSku || null,
+        failureReason,
         requestRow.request_id,
       ]
     );
@@ -282,8 +305,15 @@ router.get(
           error: { code: 'INTEGRATION_DISABLED' },
         });
       }
-      const { categoryName, gender, type, size, itemName } = req.query;
-      const result = await checkInventoryAvailability({ categoryName, gender, type, size, itemName });
+      const { categoryName, gender, type, size, itemName, sku } = req.query;
+      const result = await checkInventoryAvailability({
+        categoryName,
+        gender,
+        type,
+        size,
+        itemName,
+        sku,
+      });
       res.json(result);
     } catch (error) {
       if (error instanceof InventoryApiError) {
@@ -367,30 +397,84 @@ router.get(
 router.post(
   '/',
   [
-    body('merchandise_id').optional().isInt().withMessage('Merchandise ID must be an integer'),
-    body('merchandise_name').notEmpty().trim().withMessage('Merchandise name is required'),
-    body('size').optional().trim(),
+    body('merchandise_id').optional({ nullable: true }).isInt().withMessage('Merchandise ID must be an integer'),
+    body('category_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('merchandise_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('item_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('sku').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('size').optional({ nullable: true, checkFalsy: true }).trim(),
     body('requested_quantity').isInt({ min: 1 }).withMessage('Requested quantity must be at least 1'),
     body('request_reason').optional().trim(),
-    body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
+    body('gender')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Men', 'Women', 'Unisex', 'Male', 'Female', 'Boys', 'Girls', null, ''])
+      .withMessage('Gender must be Male/Female/Unisex (or Men/Women)'),
+    body('type')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Blouse', 'Skirt', 'Top', 'Bottom', null, ''])
+      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
     handleValidationErrors,
   ],
   requireRole('Admin'),
   async (req, res, next) => {
     try {
-      const { merchandise_id, merchandise_name, size, requested_quantity, request_reason, gender, type } = req.body;
+      const { merchandise_id, requested_quantity, request_reason } = req.body;
+      const inventoryOn = isInventoryIntegrationEnabled();
 
-      // Learning Kit requests are not yet supported: RHET Inventory matches kits via a
-      // category-slot BOM + request-time components[], which Request Stock does not
-      // collect yet. Block before insert so no orphaned local/RHET rows are created.
-      if (isLearningKitCategory(merchandise_name)) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Learning Kit requests are not yet supported via Request Stock. Please request Learning Kit stock directly through RHET Inventory.',
-          error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
-        });
+      let merchandise_name;
+      let size;
+      let gender;
+      let type;
+      let inventory_category_name = null;
+      let inventory_item_name = null;
+      let inventory_requested_sku = null;
+
+      if (inventoryOn) {
+        // Catalog-first: RHET category + variant/item (never free-text "LCA Bag" alone).
+        const normalized = normalizeMerchandiseRequestInput(req.body);
+        if (normalized.error === 'LEARNING_KIT_NOT_SUPPORTED') {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Learning Kit requests are not yet supported via Request Stock. Please request Learning Kit stock directly through RHET Inventory.',
+            error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
+          });
+        }
+        if (normalized.error) {
+          return res.status(400).json({
+            success: false,
+            message: normalized.error,
+            error: { code: 'INVALID_STOCK_REQUEST' },
+          });
+        }
+        merchandise_name = normalized.merchandise_name;
+        size = normalized.size;
+        gender = normalized.gender;
+        type = normalized.type;
+        inventory_category_name = normalized.inventory_category_name || null;
+        inventory_item_name = normalized.inventory_item_name || null;
+        inventory_requested_sku = normalized.inventory_requested_sku || null;
+      } else {
+        // Legacy Superadmin-approval path: local merchandise_name only.
+        merchandise_name = String(req.body.merchandise_name || req.body.category_name || '').trim();
+        size = req.body.size ? String(req.body.size).trim() : null;
+        gender = req.body.gender ? String(req.body.gender).trim() : null;
+        type = req.body.type ? String(req.body.type).trim() : null;
+        if (!merchandise_name) {
+          return res.status(400).json({
+            success: false,
+            message: 'Merchandise name is required',
+            error: { code: 'MERCHANDISE_NAME_REQUIRED' },
+          });
+        }
+        if (isLearningKitCategory(merchandise_name)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Learning Kit requests are not yet supported via Request Stock. Please request Learning Kit stock directly through RHET Inventory.',
+            error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
+          });
+        }
       }
 
       // Validate merchandise_id if provided
@@ -408,24 +492,59 @@ router.post(
         }
       }
 
-      // Create request
-      const result = await dbQuery(
-        `INSERT INTO merchandiserequestlogtbl 
-        (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Pending')
-        RETURNING *`,
-        [
-          merchandise_id || null,
-          req.user.userId,
-          req.user.branchId,
-          merchandise_name,
-          size || null,
-          requested_quantity,
-          request_reason || null,
-          gender || null,
-          type || null,
-        ]
-      );
+      // Create request (RHET identity on inventory_* columns when migration 128 applied)
+      let result;
+      try {
+        result = await dbQuery(
+          `INSERT INTO merchandiserequestlogtbl 
+          (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type,
+           inventory_category_name, inventory_item_name, inventory_requested_sku, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'Pending')
+          RETURNING *`,
+          [
+            merchandise_id || null,
+            req.user.userId,
+            req.user.branchId,
+            merchandise_name,
+            size || null,
+            requested_quantity,
+            request_reason || null,
+            gender || null,
+            type || null,
+            inventory_category_name,
+            inventory_item_name,
+            inventory_requested_sku,
+          ]
+        );
+      } catch (insertError) {
+        const missingRhetCols =
+          insertError?.code === '42703' ||
+          String(insertError?.message || '').includes('inventory_category_name');
+        if (!missingRhetCols) throw insertError;
+
+        // Migration 128 not applied yet — insert core columns only; mapping still
+        // uses in-memory RHET fields on the row for this forward call.
+        result = await dbQuery(
+          `INSERT INTO merchandiserequestlogtbl 
+          (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Pending')
+          RETURNING *`,
+          [
+            merchandise_id || null,
+            req.user.userId,
+            req.user.branchId,
+            merchandise_name,
+            size || null,
+            requested_quantity,
+            request_reason || null,
+            gender || null,
+            type || null,
+          ]
+        );
+        result.rows[0].inventory_category_name = inventory_category_name;
+        result.rows[0].inventory_item_name = inventory_item_name;
+        result.rows[0].inventory_requested_sku = inventory_requested_sku;
+      }
 
       const requestRow = result.rows[0];
       const requestId = requestRow.request_id;
@@ -587,7 +706,8 @@ router.post(
           processedBy && (!existingProcessedBy || looksLikeUuid(existingProcessedBy));
 
         if (needsNameBackfill) {
-          await client.query(
+          await runIgnoringMissingUpdatedAt(
+            client.query.bind(client),
             `UPDATE merchandiserequestlogtbl
              SET inventory_processed_by = $1,
                  inventory_status = COALESCE($2, inventory_status),
@@ -625,7 +745,8 @@ router.post(
       const remoteStatus = String(remote.data?.status || '').toUpperCase();
       const processedBy = pickApproverName(remote.data || remote);
 
-      await client.query(
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
          SET inventory_status = $1,
              inventory_matched_sku = COALESCE($2, inventory_matched_sku),
@@ -663,7 +784,8 @@ router.post(
       }
 
       const stockResult = await applyMerchandiseRequestStock(client, request);
-      const updated = await client.query(
+      const updated = await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
          SET status = 'Approved',
              reviewed_at = CURRENT_TIMESTAMP,
@@ -837,11 +959,12 @@ router.put(
       }
 
       // Update request status to Approved
-      const updateResult = await client.query(
-        `UPDATE merchandiserequestlogtbl 
-         SET status = 'Approved', 
-             reviewed_by = $1, 
-             reviewed_at = CURRENT_TIMESTAMP, 
+      const updateResult = await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = 'Approved',
+             reviewed_by = $1,
+             reviewed_at = CURRENT_TIMESTAMP,
              review_notes = $2,
              updated_at = CURRENT_TIMESTAMP
          WHERE request_id = $3
@@ -927,7 +1050,8 @@ router.put(
       }
 
       // Update request status to Rejected
-      const result = await dbQuery(
+      const result = await runIgnoringMissingUpdatedAt(
+        dbQuery,
         `UPDATE merchandiserequestlogtbl 
          SET status = 'Rejected', 
              reviewed_by = $1, 
@@ -1007,7 +1131,8 @@ router.put(
       }
 
       // Update request status to Cancelled
-      const result = await dbQuery(
+      const result = await runIgnoringMissingUpdatedAt(
+        dbQuery,
         `UPDATE merchandiserequestlogtbl 
          SET status = 'Cancelled', 
              updated_at = CURRENT_TIMESTAMP

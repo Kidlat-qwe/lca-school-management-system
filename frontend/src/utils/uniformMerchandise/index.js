@@ -1,47 +1,157 @@
 /**
- * Uniform types that use separate upper/lower stock rows (type column on merchandisestbl).
+ * Uniform / merchandise attribute helpers — RHET Inventory–aligned labels.
  * Keep in sync with backend PACKAGE_UNIFORM_TYPE_NAMES in merchandiseReleaseLog.js.
  *
- * Piece labels by merchandise:
- * - School uniform (LCA Uniform, etc.): Polo + Short
- * - PE uniform (LCA PE Uniform, etc.): Shirt + Pants
+ * Canonical (stored) values match RHET:
+ * - Categories: School Uniform, PE Uniform, LCA T-Shirt, Backpack, …
+ * - Gender: Male | Female | Unisex
+ * - Size: XS | S | M | L | XL | 2XL | 3XL | 4XL | 5XL
+ * - Type: Polo | Short | Blouse | Skirt | Shirt | Pants
+ *
+ * Legacy CMS labels (LCA Uniform, Men, Extra Small, …) are still recognized on
+ * read and normalized to canonical values on write.
+ *
+ * Piece labels by category:
+ * - School Uniform + Male → Polo + Short
+ * - School Uniform + Female → Blouse + Skirt
+ * - PE Uniform → Shirt + Pants
+ * - LCA T-Shirt → Shirt
  *
  * Enrollment/package matching still uses Top/Bottom roles via getUniformCategory
- * (Polo/Shirt → Top, Short/Pants → Bottom).
- *
- * Same-size “full set” = two rows / two selections with the same size.
+ * (Polo/Shirt/Blouse → Top, Short/Pants/Skirt → Bottom).
  */
-export const UNIFORM_SCHOOL_NAME = 'LCA Uniform';
-export const UNIFORM_PE_NAME = 'LCA PE Uniform';
-export const UNIFORM_TOP_BOTTOM_TYPE_NAMES = [UNIFORM_SCHOOL_NAME, UNIFORM_PE_NAME];
 
-/** Uniform size dropdown options (Add Stock / merchandise forms). */
+/** RHET-aligned canonical category names (persist these going forward). */
+export const UNIFORM_SCHOOL_NAME = 'School Uniform';
+export const UNIFORM_PE_NAME = 'PE Uniform';
+export const UNIFORM_TSHIRT_NAME = 'LCA T-Shirt';
+export const NON_UNIFORM_BACKPACK_NAME = 'Backpack';
+
+/** Legacy names still present in DB / packages — treat as aliases of canonical. */
+export const LEGACY_UNIFORM_SCHOOL_NAME = 'LCA Uniform';
+export const LEGACY_UNIFORM_PE_NAME = 'LCA PE Uniform';
+export const LEGACY_BACKPACK_NAMES = ['LCA Bag', 'Bag'];
+
+export const UNIFORM_TOP_BOTTOM_TYPE_NAMES = [
+  UNIFORM_SCHOOL_NAME,
+  UNIFORM_PE_NAME,
+  LEGACY_UNIFORM_SCHOOL_NAME,
+  LEGACY_UNIFORM_PE_NAME,
+];
+
+/** RHET-aligned size dropdown options (stored values). */
 export const UNIFORM_SIZE_OPTIONS = [
-  'Extra Small',
-  'Small',
-  'Medium',
-  'Large',
-  'Extra Large',
+  'XS',
+  'S',
+  'M',
+  'L',
+  'XL',
   '2XL',
   '3XL',
   '4XL',
+  '5XL',
 ];
+
+/** Optional friendly labels for sizes (UI only — DB stores XS/S/…). */
+export const UNIFORM_SIZE_DISPLAY_LABELS = {
+  XS: 'XS (Extra Small)',
+  S: 'S (Small)',
+  M: 'M (Medium)',
+  L: 'L (Large)',
+  XL: 'XL (Extra Large)',
+  '2XL': '2XL',
+  '3XL': '3XL',
+  '4XL': '4XL',
+  '5XL': '5XL',
+  'Extra Small': 'XS (Extra Small)',
+  Small: 'S (Small)',
+  Medium: 'M (Medium)',
+  Large: 'L (Large)',
+  'Extra Large': 'XL (Extra Large)',
+};
+
+/** RHET-aligned gender options (stored values). */
+export const UNIFORM_GENDER_OPTIONS = [
+  { value: 'Male', label: 'Male' },
+  { value: 'Female', label: 'Female' },
+  { value: 'Unisex', label: 'Unisex' },
+];
+
+const SIZE_TO_CANONICAL = {
+  'Extra Small': 'XS',
+  Small: 'S',
+  Medium: 'M',
+  Large: 'L',
+  'Extra Large': 'XL',
+  '2XL': '2XL',
+  '3XL': '3XL',
+  '4XL': '4XL',
+  '5XL': '5XL',
+  XS: 'XS',
+  S: 'S',
+  M: 'M',
+  L: 'L',
+  XL: 'XL',
+};
+
+const GENDER_TO_CANONICAL = {
+  Men: 'Male',
+  Male: 'Male',
+  Man: 'Male',
+  Boys: 'Male',
+  Boy: 'Male',
+  Women: 'Female',
+  Female: 'Female',
+  Woman: 'Female',
+  Girls: 'Female',
+  Girl: 'Female',
+  Unisex: 'Unisex',
+};
+
+const CATEGORY_TO_CANONICAL = {
+  'LCA Uniform': UNIFORM_SCHOOL_NAME,
+  'School Uniform': UNIFORM_SCHOOL_NAME,
+  'School Uniform_Replacement': UNIFORM_SCHOOL_NAME,
+  'LCA PE Uniform': UNIFORM_PE_NAME,
+  'PE Uniform': UNIFORM_PE_NAME,
+  'PE Uniform_Replacement': UNIFORM_PE_NAME,
+  'LCA T-Shirt': UNIFORM_TSHIRT_NAME,
+  'LCA Tshirt': UNIFORM_TSHIRT_NAME,
+  'LCA Shirt': UNIFORM_TSHIRT_NAME,
+  'LCA Bag': NON_UNIFORM_BACKPACK_NAME,
+  Bag: NON_UNIFORM_BACKPACK_NAME,
+  Backpack: NON_UNIFORM_BACKPACK_NAME,
+};
 
 /** School uniform piece options (stored in merchandisestbl.type). */
 export const UNIFORM_SCHOOL_PIECE_OPTIONS = [
   { value: 'Polo', label: 'Polo' },
   { value: 'Short', label: 'Short' },
+  { value: 'Blouse', label: 'Blouse' },
+  { value: 'Skirt', label: 'Skirt' },
 ];
 
-/** PE uniform piece options (stored in merchandisestbl.type). */
+export const UNIFORM_SCHOOL_MALE_PIECE_OPTIONS = [
+  { value: 'Polo', label: 'Polo' },
+  { value: 'Short', label: 'Short' },
+];
+
+export const UNIFORM_SCHOOL_FEMALE_PIECE_OPTIONS = [
+  { value: 'Blouse', label: 'Blouse' },
+  { value: 'Skirt', label: 'Skirt' },
+];
+
+/** PE uniform piece options. */
 export const UNIFORM_PE_PIECE_OPTIONS = [
   { value: 'Shirt', label: 'Shirt' },
   { value: 'Pants', label: 'Pants' },
 ];
 
+export const UNIFORM_TSHIRT_PIECE_OPTIONS = [{ value: 'Shirt', label: 'Shirt' }];
+
 /**
  * All known piece values (new + legacy Top/Bottom) for filters.
- * Prefer getUniformPieceOptions(merchandiseName) in forms.
+ * Prefer getUniformPieceOptions(merchandiseName, gender) in forms.
  */
 export const UNIFORM_PIECE_OPTIONS = [
   ...UNIFORM_SCHOOL_PIECE_OPTIONS,
@@ -50,26 +160,121 @@ export const UNIFORM_PIECE_OPTIONS = [
   { value: 'Bottom', label: 'Bottom' },
 ];
 
-export function isPeUniformMerchandiseName(merchandiseName) {
-  if (!merchandiseName) return false;
-  return String(merchandiseName).toLowerCase().includes('pe');
+/** Normalize merchandise category/type name to RHET-aligned value when known. */
+export function normalizeMerchandiseCategoryName(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  if (CATEGORY_TO_CANONICAL[raw]) return CATEGORY_TO_CANONICAL[raw];
+  return raw;
 }
 
-/** Piece dropdown options for the given merchandise name. */
-export function getUniformPieceOptions(merchandiseName) {
+/** Normalize gender to Male | Female | Unisex (or original if unknown). */
+export function normalizeMerchandiseGender(gender) {
+  if (gender == null || gender === '') return null;
+  const key = String(gender).trim();
+  return GENDER_TO_CANONICAL[key] || key;
+}
+
+/** Normalize size to XS…5XL (or original if unknown). */
+export function normalizeMerchandiseSize(size) {
+  if (size == null || size === '') return null;
+  const key = String(size).trim();
+  return SIZE_TO_CANONICAL[key] || key;
+}
+
+/** Normalize piece type — never map Polo → Shirt. */
+export function normalizeMerchandiseType(type) {
+  if (type == null || type === '') return null;
+  const key = String(type).trim();
+  if (key === 'Top') return 'Polo'; // ambiguous legacy; prefer Polo for school
+  if (key === 'Bottom') return 'Short';
+  return key;
+}
+
+/**
+ * Normalize a merchandise form/API payload to RHET-canonical stored values.
+ */
+export function normalizeMerchandiseAttributes({
+  merchandise_name,
+  gender,
+  size,
+  type,
+} = {}) {
+  return {
+    merchandise_name: normalizeMerchandiseCategoryName(merchandise_name) || merchandise_name,
+    gender: normalizeMerchandiseGender(gender),
+    size: normalizeMerchandiseSize(size),
+    type: normalizeMerchandiseType(type),
+  };
+}
+
+export function isLearningKitMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  return String(merchandiseName).toLowerCase().includes('learning kit');
+}
+
+export function isPeUniformMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  const n = String(merchandiseName).trim().toLowerCase();
+  if (n === 'pe uniform' || n === 'lca pe uniform') return true;
+  return n.includes('pe') && n.includes('uniform');
+}
+
+export function isSchoolUniformMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  const n = String(merchandiseName).trim().toLowerCase();
+  if (n === 'school uniform' || n === 'lca uniform') return true;
+  if (isPeUniformMerchandiseName(n) || isTshirtMerchandiseName(n)) return false;
+  return n.includes('uniform');
+}
+
+export function isTshirtMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  const n = String(merchandiseName).trim().toLowerCase();
+  return (
+    n === 'lca t-shirt' ||
+    n === 'lca tshirt' ||
+    n === 'lca shirt' ||
+    n.includes('t-shirt') ||
+    n.includes('tshirt')
+  );
+}
+
+/**
+ * Gender options for Create Merchandise by category (RHET rules).
+ * School Uniform: Male / Female only. PE / T-Shirt: may include Unisex.
+ */
+export function getUniformGenderOptions(merchandiseName) {
+  if (isSchoolUniformMerchandiseName(merchandiseName)) {
+    return UNIFORM_GENDER_OPTIONS.filter((o) => o.value !== 'Unisex');
+  }
+  return UNIFORM_GENDER_OPTIONS;
+}
+
+/**
+ * Piece dropdown options for the given merchandise name (+ optional gender).
+ */
+export function getUniformPieceOptions(merchandiseName, gender = null) {
+  if (isTshirtMerchandiseName(merchandiseName)) {
+    return UNIFORM_TSHIRT_PIECE_OPTIONS;
+  }
   if (isPeUniformMerchandiseName(merchandiseName)) {
     return UNIFORM_PE_PIECE_OPTIONS;
   }
+  const g = normalizeMerchandiseGender(gender);
+  if (g === 'Male') return UNIFORM_SCHOOL_MALE_PIECE_OPTIONS;
+  if (g === 'Female') return UNIFORM_SCHOOL_FEMALE_PIECE_OPTIONS;
+  // No gender yet — show all school pieces so the dropdown is usable
   return UNIFORM_SCHOOL_PIECE_OPTIONS;
 }
 
 /** Human labels for upper/lower badges (Polo/Short or Shirt/Pants). */
-export function getUniformPieceLabels(merchandiseName) {
-  const opts = getUniformPieceOptions(merchandiseName);
-  return {
-    upper: opts[0]?.label || 'Upper',
-    lower: opts[1]?.label || 'Lower',
-  };
+export function getUniformPieceLabels(merchandiseName, gender = null) {
+  const opts = getUniformPieceOptions(merchandiseName, gender);
+  if (opts.length >= 2) {
+    return { upper: opts[0]?.label || 'Upper', lower: opts[1]?.label || 'Lower' };
+  }
+  return { upper: opts[0]?.label || 'Upper', lower: 'Lower' };
 }
 
 export function isUpperUniformPiece(type) {
@@ -96,15 +301,19 @@ export function isLowerUniformPiece(type) {
 
 export function isUniformTopBottomType(merchandiseName) {
   if (!merchandiseName) return false;
-  return UNIFORM_TOP_BOTTOM_TYPE_NAMES.includes(String(merchandiseName).trim());
+  const name = String(merchandiseName).trim();
+  if (UNIFORM_TOP_BOTTOM_TYPE_NAMES.includes(name)) return true;
+  return isSchoolUniformMerchandiseName(name) || isPeUniformMerchandiseName(name);
 }
 
 /**
  * True when this merchandise name should use size + gender + piece fields.
- * Includes canonical names and any name containing "uniform".
+ * Includes canonical names, legacy names, LCA T-Shirt, and any name containing "uniform".
  */
 export function isUniformMerchandiseName(merchandiseName) {
   if (!merchandiseName) return false;
+  if (isLearningKitMerchandiseName(merchandiseName)) return false;
+  if (isTshirtMerchandiseName(merchandiseName)) return true;
   if (isUniformTopBottomType(merchandiseName)) return true;
   return String(merchandiseName).toLowerCase().includes('uniform');
 }
@@ -112,6 +321,12 @@ export function isUniformMerchandiseName(merchandiseName) {
 /** Alias: uniforms require Size, Gender, and Piece (type) on the Merchandise form. */
 export function requiresUniformPieceFields(merchandiseName) {
   return isUniformMerchandiseName(merchandiseName);
+}
+
+/** Display label for a size option (canonical or legacy). */
+export function formatUniformSizeDisplayLabel(size) {
+  const key = String(size || '').trim();
+  return UNIFORM_SIZE_DISPLAY_LABELS[key] || key;
 }
 
 /**
@@ -240,6 +455,7 @@ export function getUniformSizePairAvailability(itemsForType, studentGender, getC
 
 /**
  * Student gender (Male/Female) → merchandise genders that may be shown.
+ * Includes RHET-canonical Male/Female and legacy Men/Women/Boys/Girls.
  * Always includes Unisex. Returns null when student gender is unknown (show all stock).
  * @param {string|null|undefined} studentGender
  * @returns {string[]|null}
@@ -249,33 +465,27 @@ export function merchandiseGendersForStudent(studentGender) {
     .trim()
     .toLowerCase();
   if (g === 'male' || g === 'men' || g === 'man' || g === 'boy' || g === 'boys') {
-    return ['Men', 'Boys', 'Unisex'];
+    return ['Male', 'Men', 'Boys', 'Unisex'];
   }
   if (g === 'female' || g === 'women' || g === 'woman' || g === 'girl' || g === 'girls') {
-    return ['Women', 'Girls', 'Unisex'];
+    return ['Female', 'Women', 'Girls', 'Unisex'];
   }
   return null;
 }
 
 /**
- * Display label for merchandise gender on size options.
+ * Display label for merchandise gender on size options (RHET-aligned).
  * @param {string|null|undefined} gender
  * @returns {string}
  */
 export function formatMerchandiseGenderLabel(gender) {
-  const g = String(gender || '').trim();
-  if (!g) return 'Unisex';
-  const lower = g.toLowerCase();
-  if (lower === 'men' || lower === 'male' || lower === 'man') return 'Men';
-  if (lower === 'women' || lower === 'female' || lower === 'woman') return 'Women';
-  if (lower === 'boys' || lower === 'boy') return 'Boys';
-  if (lower === 'girls' || lower === 'girl') return 'Girls';
-  if (lower === 'unisex') return 'Unisex';
-  return g;
+  const canonical = normalizeMerchandiseGender(gender);
+  if (!canonical) return 'Unisex';
+  return canonical;
 }
 
 /**
- * True when stock row gender is allowed for the student (Unisex + matching Men/Women/Boys/Girls).
+ * True when stock row gender is allowed for the student.
  * Null/empty merchandise gender is treated as Unisex (legacy rows).
  * @param {string|null|undefined} itemGender
  * @param {string|null|undefined} studentGender
@@ -285,8 +495,12 @@ export function isMerchandiseGenderMatchForStudent(itemGender, studentGender) {
   if (!allowed) return true;
   const raw = String(itemGender || '').trim();
   if (!raw) return true;
-  if (raw.toLowerCase() === 'unisex') return true;
-  return allowed.some((a) => a.toLowerCase() === raw.toLowerCase());
+  const itemCanon = normalizeMerchandiseGender(raw) || raw;
+  if (String(itemCanon).toLowerCase() === 'unisex') return true;
+  return allowed.some((a) => {
+    const aCanon = normalizeMerchandiseGender(a) || a;
+    return String(aCanon).toLowerCase() === String(itemCanon).toLowerCase();
+  });
 }
 
 /**

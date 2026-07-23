@@ -10,25 +10,29 @@ import {
   UNIFORM_SIZE_OPTIONS,
   getUniformPieceOptions,
   getUniformPieceLabels,
+  getUniformGenderOptions as getMerchandiseFormGenderOptions,
   isUniformMerchandiseName,
   requiresUniformPieceFields,
   countUniformPiecesByType,
+  normalizeMerchandiseAttributes,
+  formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 import {
-  isLearningKitMerchandiseName,
-  LEARNING_KIT_NOT_SUPPORTED_MESSAGE,
-} from '../../utils/merchandiseRequests/learningKit';
+  createEmptyCatalogRequestLine,
+  unwrapCatalogPayload,
+  isUniformLikeCategory,
+  getCatalogItemsForCategory,
+  getUniformGenderOptions,
+  getUniformTypeOptions,
+  getUniformSizeOptions,
+  formatNonUniformItemLabel,
+  buildCatalogRequestPayload,
+} from '../../utils/merchandiseRequests/catalogOptions';
+import { isLearningKitMerchandiseName } from '../../utils/merchandiseRequests/learningKit';
 
-const createEmptyBulkLine = () => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-  merchandise_name: '',
-  size: '',
-  gender: '',
-  type: '',
-  quantity: '',
-});
+const createEmptyBulkLine = createEmptyCatalogRequestLine;
 
 const AdminMerchandise = () => {
   const location = useLocation();
@@ -62,15 +66,13 @@ const AdminMerchandise = () => {
     remarks: '',
   });
   const [requestFormData, setRequestFormData] = useState({
-    merchandise_name: '',
-    size: '',
-    requested_quantity: '',
     request_reason: '',
-    gender: '',
-    type: '',
   });
   const [bulkRequestLines, setBulkRequestLines] = useState([createEmptyBulkLine()]);
   const [bulkLineErrors, setBulkLineErrors] = useState({});
+  const [inventoryCatalog, setInventoryCatalog] = useState({ categories: [], items: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
   const [formErrors, setFormErrors] = useState({});
   const [requestFormErrors, setRequestFormErrors] = useState({});
@@ -283,36 +285,38 @@ const AdminMerchandise = () => {
     setIsModalOpen(true);
   };
 
-  // Open request modal from global "Request Stock" button (bulk spreadsheet by default)
-  const openRequestModal = (merchandiseDetails = null) => {
+  // Open request modal from global "Request Stock" button (catalog-driven bulk form)
+  const openRequestModal = () => {
     setIsRequestModalOpen(true);
-    const isSpecificRequest = Boolean(merchandiseDetails);
-    setIsRequestingSpecificStock(isSpecificRequest);
+    setIsRequestingSpecificStock(false);
     setBulkRequestLines([createEmptyBulkLine()]);
     setBulkLineErrors({});
-    
-    if (isSpecificRequest) {
-      const { name, size, gender, type } = merchandiseDetails;
-      setRequestFormData({
-        merchandise_name: name,
-        size: size || '',
-        requested_quantity: '',
-        request_reason: '',
-        gender: gender || '',
-        type: type || '',
-      });
-      setRequestFormErrors({});
-    } else {
-      // Reset form for general bulk request
-      setRequestFormData({
-        merchandise_name: '',
-        size: '',
-        requested_quantity: '',
-        request_reason: '',
-        gender: '',
-        type: '',
-      });
-      setRequestFormErrors({});
+    setRequestFormData({ request_reason: '' });
+    setRequestFormErrors({});
+    setCatalogError('');
+    void loadInventoryCatalog();
+  };
+
+  const loadInventoryCatalog = async () => {
+    setCatalogLoading(true);
+    setCatalogError('');
+    try {
+      const response = await apiRequest('/merchandise-requests/inventory/catalog');
+      const catalog = unwrapCatalogPayload(response);
+      setInventoryCatalog(catalog);
+      if (!catalog.categories.length) {
+        setCatalogError(
+          'No RHET Inventory categories returned. Check inventory integration or try again.'
+        );
+      }
+    } catch (err) {
+      setInventoryCatalog({ categories: [], items: [] });
+      setCatalogError(
+        err.message ||
+          'Could not load RHET Inventory catalog. Request Stock requires a live catalog.'
+      );
+    } finally {
+      setCatalogLoading(false);
     }
   };
 
@@ -321,15 +325,9 @@ const AdminMerchandise = () => {
     setIsRequestingSpecificStock(false);
     setBulkRequestLines([createEmptyBulkLine()]);
     setBulkLineErrors({});
-    setRequestFormData({
-      merchandise_name: '',
-      size: '',
-      requested_quantity: '',
-      request_reason: '',
-      gender: '',
-      type: '',
-    });
+    setRequestFormData({ request_reason: '' });
     setRequestFormErrors({});
+    setCatalogError('');
   };
 
   const addBulkRequestLine = () => {
@@ -353,23 +351,50 @@ const AdminMerchandise = () => {
       prev.map((line) => {
         if (line.id !== lineId) return line;
         const updated = { ...line, [field]: value };
-        if (field === 'merchandise_name') {
-          const needsSizing = requiresSizingForMerchandise(value);
-          const isUniform = requiresUniformPieceFields(value);
-          if (!needsSizing) updated.size = '';
-          // Always clear piece when item changes (school Polo/Short vs PE Shirt/Pants).
+
+        if (field === 'category_name') {
+          updated.gender = '';
           updated.type = '';
-          if (!isUniform) {
-            updated.gender = '';
-          }
+          updated.size = '';
+          updated.item_name = '';
+          updated.sku = '';
+          updated.inventory_id = '';
         }
+        if (field === 'gender') {
+          updated.type = '';
+          updated.size = '';
+        }
+        if (field === 'type') {
+          updated.size = '';
+        }
+        if (field === 'catalog_item_key') {
+          const items = getCatalogItemsForCategory(inventoryCatalog.items, line.category_name);
+          const selected =
+            items.find((item) => `${item.sku}|${item.itemName}|${item.inventoryId}` === value) ||
+            null;
+          updated.item_name = selected?.itemName || '';
+          updated.sku = selected?.sku || '';
+          updated.inventory_id = selected?.inventoryId || '';
+          updated.catalog_item_key = value;
+        }
+
         return updated;
       })
     );
     setBulkLineErrors((prev) => {
-      if (!prev[lineId]?.[field]) return prev;
+      if (!prev[lineId]) return prev;
       const nextLine = { ...prev[lineId] };
       delete nextLine[field];
+      if (field === 'catalog_item_key') {
+        delete nextLine.item_name;
+        delete nextLine.sku;
+      }
+      if (field === 'category_name') {
+        delete nextLine.gender;
+        delete nextLine.type;
+        delete nextLine.size;
+        delete nextLine.item_name;
+      }
       const next = { ...prev };
       if (Object.keys(nextLine).length === 0) delete next[lineId];
       else next[lineId] = nextLine;
@@ -500,6 +525,9 @@ const AdminMerchandise = () => {
           updated.size = '';
         }
       }
+      if (name === 'gender') {
+        updated.type = '';
+      }
       return updated;
     });
     if (formErrors[name]) {
@@ -513,32 +541,7 @@ const AdminMerchandise = () => {
 
   const handleRequestInputChange = (e) => {
     const { name, value } = e.target;
-    
-    setRequestFormData((prev) => {
-      const updated = {
-        ...prev,
-        [name]: value,
-      };
-      
-      // When merchandise name changes, reset size, gender, and type if new type doesn't require them
-      if (name === 'merchandise_name') {
-        const requiresSizing = requiresSizingForMerchandise(value);
-        const isUniform = requiresUniformPieceFields(value);
-
-        if (!requiresSizing) {
-          updated.size = '';
-        }
-
-        // Always clear piece when item changes (school vs PE options differ).
-        updated.type = '';
-        if (!isUniform) {
-          updated.gender = '';
-        }
-      }
-      
-      return updated;
-    });
-    
+    setRequestFormData((prev) => ({ ...prev, [name]: value }));
     if (requestFormErrors[name]) {
       setRequestFormErrors((prev) => {
         const newErrors = { ...prev };
@@ -592,36 +595,46 @@ const AdminMerchandise = () => {
     const errors = {};
     const lineErrors = {};
 
-    if (!requestFormData.request_reason.trim()) {
+    if (!requestFormData.request_reason?.trim()) {
       errors.request_reason = 'Request reason is required';
     } else if (requestFormData.request_reason.trim().length < 5) {
       errors.request_reason = 'Request reason must be at least 5 characters';
+    }
+
+    if (catalogError || !inventoryCatalog.categories.length) {
+      errors.bulk = catalogError || 'RHET Inventory catalog is required before submitting.';
     }
 
     if (!bulkRequestLines.length) {
       errors.bulk = 'Add at least one item row';
     }
 
+    const catalogCategoryNames = new Set(
+      inventoryCatalog.categories.map((c) => c.categoryName.toLowerCase())
+    );
+
     bulkRequestLines.forEach((line, index) => {
       const row = {};
-      const name = (line.merchandise_name || '').trim();
-      if (!name) {
-        row.merchandise_name = 'Item is required';
-      } else if (isLearningKitMerchandiseName(name)) {
-        row.merchandise_name = LEARNING_KIT_NOT_SUPPORTED_MESSAGE;
+      const categoryName = String(line.category_name || '').trim();
+
+      if (!categoryName) {
+        row.category_name = 'Category is required';
+      } else if (isLearningKitMerchandiseName(categoryName)) {
+        row.category_name = 'Learning Kits are not available via Request Stock yet.';
+      } else if (
+        inventoryCatalog.categories.length &&
+        !catalogCategoryNames.has(categoryName.toLowerCase())
+      ) {
+        row.category_name = 'Select a category from the RHET catalog';
       }
 
-      const needsSizing = requiresSizingForMerchandise(name);
-      if (needsSizing && !(line.size || '').trim()) {
-        row.size = 'Size is required';
-      }
-
-      if (requiresUniformPieceFields(name)) {
-        if (!(line.gender || '').trim()) {
-          row.gender = 'Gender is required';
-        }
-        if (!(line.type || '').trim()) {
-          row.type = 'Piece is required';
+      if (categoryName && isUniformLikeCategory(categoryName)) {
+        if (!(line.gender || '').trim()) row.gender = 'Gender is required';
+        if (!(line.type || '').trim()) row.type = 'Type is required';
+        if (!(line.size || '').trim()) row.size = 'Size is required';
+      } else if (categoryName) {
+        if (!(line.item_name || '').trim() && !(line.sku || '').trim()) {
+          row.item_name = 'Select a catalog item';
         }
       }
 
@@ -641,49 +654,30 @@ const AdminMerchandise = () => {
     return Object.keys(lineErrors).length === 0 && !errors.request_reason && !errors.bulk;
   };
 
-  const validateRequestForm = () => {
-    if (!isRequestingSpecificStock) {
-      return validateBulkRequestForm();
-    }
+  const validateRequestForm = () => validateBulkRequestForm();
 
-    const errors = {};
-    
-    if (!requestFormData.merchandise_name.trim()) {
-      errors.merchandise_name = 'Item is required';
-    } else if (isLearningKitMerchandiseName(requestFormData.merchandise_name)) {
-      errors.merchandise_name = LEARNING_KIT_NOT_SUPPORTED_MESSAGE;
-    }
+  const checkLineAvailability = async (payload) => {
+    const params = new URLSearchParams();
+    params.set('categoryName', payload.category_name);
+    if (payload.gender) params.set('gender', payload.gender);
+    if (payload.type) params.set('type', payload.type);
+    if (payload.size) params.set('size', payload.size);
+    if (payload.item_name) params.set('itemName', payload.item_name);
+    if (payload.sku) params.set('sku', payload.sku);
 
-    // Check if merchandise requires sizing (not just uniforms, but any item type that has sizes)
-    const sizingRequired = requiresSizingForMerchandise(requestFormData.merchandise_name);
-    
-    // Size is required for items that require sizing
-    if (sizingRequired && !requestFormData.size.trim()) {
-      errors.size = 'Size is required for this merchandise type';
+    const result = await apiRequest(
+      `/merchandise-requests/inventory/availability?${params.toString()}`
+    );
+    const data = result?.data && typeof result.data === 'object' ? result.data : result;
+    if (data?.available === false) {
+      const reason =
+        data.failureReason ||
+        data.message ||
+        data.status ||
+        'Item is not available in RHET Inventory';
+      throw new Error(reason);
     }
-
-    const isUniform = requiresUniformPieceFields(requestFormData.merchandise_name);
-    if (isUniform) {
-      if (!requestFormData.gender?.trim()) {
-        errors.gender = 'Gender is required for uniforms';
-      }
-      if (!requestFormData.type?.trim()) {
-        errors.type = 'Piece is required';
-      }
-    }
-
-    if (!requestFormData.requested_quantity || parseInt(requestFormData.requested_quantity) <= 0) {
-      errors.requested_quantity = 'Requested quantity must be greater than 0';
-    }
-
-    if (!requestFormData.request_reason.trim()) {
-      errors.request_reason = 'Request reason is required';
-    } else if (requestFormData.request_reason.trim().length < 5) {
-      errors.request_reason = 'Request reason must be at least 5 characters';
-    }
-
-    setRequestFormErrors(errors);
-    return Object.keys(errors).length === 0;
+    return data;
   };
 
   const findExistingUniformStockRow = ({
@@ -757,14 +751,27 @@ const AdminMerchandise = () => {
     setSubmitting(true);
     setError('');
     try {
-      const basePayload = {
+      if (isLearningKitMerchandiseName(formData.merchandise_name)) {
+        setSubmitting(false);
+        setError(
+          'Learning Kit is not available via Create Merchandise yet. Request kits in RHET Inventory.'
+        );
+        return;
+      }
+      const normalized = normalizeMerchandiseAttributes({
         merchandise_name: formData.merchandise_name.trim(),
-        size: formData.size?.trim() || null,
+        gender: formData.gender,
+        size: formData.size,
+        type: formData.type,
+      });
+      const basePayload = {
+        merchandise_name: normalized.merchandise_name,
+        size: normalized.size,
         quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
         price: formData.price && formData.price !== '' ? parseFloat(formData.price) : null,
         branch_id: adminBranchId || (formData.branch_id ? parseInt(formData.branch_id) : null),
-        gender: formData.gender && formData.gender.trim() !== '' ? formData.gender.trim() : null,
-        type: formData.type && formData.type.trim() !== '' ? formData.type.trim() : null,
+        gender: normalized.gender,
+        type: normalized.type,
         image_url: formData.image_url || null,
         remarks: formData.remarks?.trim() || null,
       };
@@ -849,7 +856,7 @@ const AdminMerchandise = () => {
 
   const handleRequestSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!validateRequestForm()) {
       return;
     }
@@ -857,82 +864,71 @@ const AdminMerchandise = () => {
     setSubmitting(true);
     try {
       const sharedReason = requestFormData.request_reason.trim();
+      const payloads = bulkRequestLines.map((line) =>
+        buildCatalogRequestPayload(line, sharedReason)
+      );
 
-      if (!isRequestingSpecificStock) {
-        const payloads = bulkRequestLines.map((line) => ({
-          merchandise_name: line.merchandise_name.trim(),
-          size: line.size?.trim() || null,
-          requested_quantity: parseInt(line.quantity, 10),
-          request_reason: sharedReason,
-          gender: line.gender?.trim() || null,
-          type: line.type?.trim() || null,
-        }));
-
-        let successCount = 0;
-        let inventoryIntegrated = false;
-        const failures = [];
-        for (let i = 0; i < payloads.length; i += 1) {
-          const payload = payloads[i];
-          try {
-            const response = await apiRequest('/merchandise-requests', {
-              method: 'POST',
-              body: JSON.stringify(payload),
-            });
-            inventoryIntegrated = Boolean(response?.inventoryIntegrated);
-            successCount += 1;
-          } catch (lineErr) {
-            failures.push(
-              `Row ${i + 1} (${payload.merchandise_name}): ${lineErr.message || 'Failed'}`
+      // Prefer availability check before submit (block unmatched / out of stock).
+      for (let i = 0; i < payloads.length; i += 1) {
+        const payload = payloads[i];
+        try {
+          await checkLineAvailability(payload);
+        } catch (availErr) {
+          // 503 / integration off — skip pre-check; create path still validates.
+          const msg = String(availErr.message || '');
+          const skip =
+            msg.includes('not configured') ||
+            msg.includes('INTEGRATION_DISABLED') ||
+            msg.includes('503');
+          if (!skip) {
+            appAlert(
+              `Row ${i + 1} (${payload.category_name}): ${msg || 'Not available in RHET Inventory'}`
             );
+            setSubmitting(false);
+            return;
           }
         }
-
-        await fetchMerchandiseRequests();
-
-        if (failures.length === 0) {
-          closeRequestModal();
-          appAlert(
-            `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! ${
-              inventoryIntegrated
-                ? 'Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
-                : 'Superadmin will be notified.'
-            }`
-          );
-        } else if (successCount === 0) {
-          appAlert(`Failed to submit bulk request:\n${failures.join('\n')}`);
-        } else {
-          closeRequestModal();
-          appAlert(
-            `${successCount} of ${payloads.length} submitted. The rest failed:\n${failures.join('\n')}`
-          );
-        }
-        return;
       }
 
-      const basePayload = {
-        merchandise_name: requestFormData.merchandise_name.trim(),
-        size: requestFormData.size?.trim() || null,
-        requested_quantity: parseInt(requestFormData.requested_quantity),
-        request_reason: sharedReason,
-        gender: requestFormData.gender?.trim() || null,
-        type: requestFormData.type?.trim() || null,
-      };
+      let successCount = 0;
+      let inventoryIntegrated = false;
+      const failures = [];
+      for (let i = 0; i < payloads.length; i += 1) {
+        const payload = payloads[i];
+        const label = isUniformLikeCategory(payload.category_name)
+          ? `${payload.category_name} ${payload.gender || ''} ${payload.type || ''} ${payload.size || ''}`.trim()
+          : `${payload.category_name} / ${payload.item_name || payload.sku || 'item'}`;
+        try {
+          const response = await apiRequest('/merchandise-requests', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+          inventoryIntegrated = Boolean(response?.inventoryIntegrated);
+          successCount += 1;
+        } catch (lineErr) {
+          failures.push(`Row ${i + 1} (${label}): ${lineErr.message || 'Failed'}`);
+        }
+      }
 
-      const response = await apiRequest('/merchandise-requests', {
-        method: 'POST',
-        body: JSON.stringify(basePayload),
-      });
-
-      closeRequestModal();
-      // Refresh requests
       await fetchMerchandiseRequests();
 
-      // Show success message (backend indicates whether RHET Inventory received the request)
-      appAlert(
-        response?.inventoryIntegrated
-          ? 'Stock request submitted successfully! Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
-          : 'Stock request submitted successfully! Superadmin will be notified.'
-      );
+      if (failures.length === 0) {
+        closeRequestModal();
+        appAlert(
+          `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! ${
+            inventoryIntegrated
+              ? 'Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
+              : 'Superadmin will be notified.'
+          }`
+        );
+      } else if (successCount === 0) {
+        appAlert(`Failed to submit stock request:\n${failures.join('\n')}`);
+      } else {
+        closeRequestModal();
+        appAlert(
+          `${successCount} of ${payloads.length} submitted. The rest failed:\n${failures.join('\n')}`
+        );
+      }
     } catch (err) {
       appAlert(err.message || 'Failed to submit stock request');
       console.error('Error submitting request:', err);
@@ -1001,13 +997,6 @@ const AdminMerchandise = () => {
     // Convert to array and sort alphabetically
     return Array.from(typeMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
-
-  /**
-   * Merchandise types selectable in Request Stock. Excludes Learning Kit —
-   * see frontend/src/utils/merchandiseRequests/learningKit.js.
-   */
-  const getRequestableMerchandiseTypes = () =>
-    getUniqueMerchandiseTypes().filter((merchType) => !isLearningKitMerchandiseName(merchType.name));
 
   const getStatusBadge = (status) => {
     const statusStyles = {
@@ -1148,9 +1137,13 @@ const AdminMerchandise = () => {
                             <option value="">Select Size</option>
                             {UNIFORM_SIZE_OPTIONS.map((size) => (
                               <option key={size} value={size}>
-                                {size}
+                                {formatUniformSizeDisplayLabel(size)}
                               </option>
                             ))}
+                            {formData.size &&
+                              !UNIFORM_SIZE_OPTIONS.includes(formData.size) && (
+                              <option value={formData.size}>{formData.size} (legacy)</option>
+                            )}
                           </select>
                           {formErrors.size && (
                             <p className="mt-1 text-sm text-red-600">{formErrors.size}</p>
@@ -1227,9 +1220,11 @@ const AdminMerchandise = () => {
                               className={`input-field ${formErrors.gender ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Gender</option>
-                              <option value="Men">Men</option>
-                              <option value="Women">Women</option>
-                              <option value="Unisex">Unisex</option>
+                              {getMerchandiseFormGenderOptions(formData.merchandise_name).map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
                             </select>
                             {formErrors.gender && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.gender}</p>
@@ -1238,8 +1233,11 @@ const AdminMerchandise = () => {
 
                           <div>
                             <label htmlFor="type" className="label-field">
-                              Piece: {getUniformPieceLabels(formData.merchandise_name).upper} /{' '}
-                              {getUniformPieceLabels(formData.merchandise_name).lower} *
+                              Piece: {getUniformPieceLabels(formData.merchandise_name, formData.gender).upper}
+                              {getUniformPieceOptions(formData.merchandise_name, formData.gender).length > 1
+                                ? ` / ${getUniformPieceLabels(formData.merchandise_name, formData.gender).lower}`
+                                : ''}{' '}
+                              *
                             </label>
                             <select
                               id="type"
@@ -1249,7 +1247,10 @@ const AdminMerchandise = () => {
                               className={`input-field ${formErrors.type ? 'border-red-500' : ''}`}
                             >
                               <option value="">Select Piece</option>
-                              {getUniformPieceOptions(formData.merchandise_name).map((opt) => (
+                              {getUniformPieceOptions(
+                                formData.merchandise_name,
+                                formData.gender
+                              ).map((opt) => (
                                 <option key={opt.value} value={opt.value}>
                                   {opt.label}
                                 </option>
@@ -1259,10 +1260,7 @@ const AdminMerchandise = () => {
                               <p className="mt-1 text-sm text-red-600">{formErrors.type}</p>
                             )}
                             <p className="mt-1 text-xs text-gray-500">
-                              Each stock row is one piece (
-                              {getUniformPieceLabels(formData.merchandise_name).upper} or{' '}
-                              {getUniformPieceLabels(formData.merchandise_name).lower}). Sizes may
-                              differ.
+                              Each stock row is one piece. Polo and Shirt are different types.
                             </p>
                           </div>
                         </>
@@ -1330,516 +1328,761 @@ const AdminMerchandise = () => {
         document.body
       )}
 
-      {/* Request Stock Modal */}
+      {/* Request Stock Modal — RHET catalog-driven */}
+
       {isRequestModalOpen && createPortal(
-        <div 
+
+        <div
+
           className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
+
           onClick={closeRequestModal}
+
         >
-          <div 
-            className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] min-h-0 flex flex-col overflow-hidden ${
-              !isRequestingSpecificStock ? 'max-w-5xl' : 'max-w-2xl'
-            }`}
+
+          <div
+
+            className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] min-h-0 flex flex-col overflow-hidden"
+
             onClick={(e) => e.stopPropagation()}
+
           >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  {isRequestingSpecificStock
-                    ? 'Request Additional Stock'
-                    : 'Request Merchandise Stock'}
-                </h2>
+
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg gap-3">
+
+              <div className="min-w-0">
+
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Request Merchandise Stock</h2>
+
                 <p className="text-sm text-gray-500 mt-1">
-                  {isRequestingSpecificStock 
-                    ? 'Submit a request to add more stock to this specific item' 
-                    : 'Add one or more items in a single request. Each row is submitted as a separate pending request.'}
+
+                  Pick a RHET Inventory category, then the exact variant or item RHET stocks. Each row is submitted as a separate request.
+
                 </p>
-            </div>
+
+              </div>
+
               <button
+
+                type="button"
+
                 onClick={closeRequestModal}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+
+                className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+
+                aria-label="Close"
+
               >
+
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+
                 </svg>
+
               </button>
-          </div>
 
-            {/* Modal Body */}
+            </div>
+
+
+
             <form onSubmit={handleRequestSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
-              {!isRequestingSpecificStock ? (
-                <div className="p-6 flex flex-col flex-1 min-h-0 overflow-hidden gap-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-shrink-0">
-                    <div>
-                      <label className="label-field">Request Date</label>
-                      <input
-                        type="text"
-                        value={requestDateDisplay}
-                        className="input-field bg-gray-50 cursor-not-allowed"
-                        readOnly
-                      />
-                    </div>
-                    <div>
-                      <label className="label-field">Requested By</label>
-                      <input
-                        type="text"
-                        value={requestedByDisplay}
-                        className="input-field bg-gray-50 cursor-not-allowed"
-                        readOnly
-                      />
-                    </div>
+
+              <div className="p-4 sm:p-6 flex flex-col flex-1 min-h-0 overflow-hidden gap-4">
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-shrink-0">
+
+                  <div>
+
+                    <label className="label-field">Request Date</label>
+
+                    <input type="text" value={requestDateDisplay} className="input-field bg-gray-50 cursor-not-allowed" readOnly />
+
                   </div>
 
-                  <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-                    <div className="flex items-center justify-between gap-3 mb-2 flex-shrink-0">
-                      <label className="label-field mb-0">Items</label>
+                  <div>
+
+                    <label className="label-field">Requested By</label>
+
+                    <input type="text" value={requestedByDisplay} className="input-field bg-gray-50 cursor-not-allowed" readOnly />
+
+                  </div>
+
+                </div>
+
+
+
+                {(catalogLoading || catalogError) && (
+
+                  <div
+
+                    className={`flex-shrink-0 rounded-lg border px-3 py-2 text-sm flex items-start justify-between gap-3 ${
+
+                      catalogError
+
+                        ? 'border-red-200 bg-red-50 text-red-800'
+
+                        : 'border-blue-100 bg-blue-50 text-blue-800'
+
+                    }`}
+
+                  >
+
+                    <span>{catalogLoading ? 'Loading RHET Inventory catalog…' : catalogError}</span>
+
+                    {catalogError && !catalogLoading && (
+
                       <button
+
                         type="button"
-                        onClick={addBulkRequestLine}
-                        className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors"
+
+                        onClick={loadInventoryCatalog}
+
+                        className="underline font-medium flex-shrink-0"
+
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                        Add row
+
+                        Retry
+
                       </button>
-                    </div>
-                    {requestFormErrors.bulk && (
-                      <p className="mb-2 text-sm text-red-600 flex-shrink-0">{requestFormErrors.bulk}</p>
+
                     )}
-                    <div
-                      className="rounded-lg border border-gray-200 flex-1 min-h-[120px] max-h-[min(42vh,380px)] overflow-y-auto"
-                      style={{
-                        scrollbarWidth: 'thin',
-                        scrollbarColor: '#cbd5e0 #f7fafc',
-                      }}
-                    >
-                      <table
-                        className="divide-y divide-gray-200 table-fixed"
-                        style={{ width: '100%' }}
-                      >
-                        <thead className="bg-gray-50 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '28%' }}>
-                              Items
-                            </th>
-                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '18%' }}>
-                              Size
-                            </th>
-                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '16%' }}>
-                              Gender
-                            </th>
-                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '14%' }}>
-                              Type
-                            </th>
-                            <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '14%' }}>
-                              Quantity
-                            </th>
-                            <th className="px-1 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50" style={{ width: '40px' }}>
-                              {' '}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-100">
-                          {bulkRequestLines.map((line, rowIndex) => {
-                            const lineErr = bulkLineErrors[line.id] || {};
-                            const needsSizing = requiresSizingForMerchandise(line.merchandise_name);
-                            const isUniform = requiresUniformPieceFields(line.merchandise_name);
-                            return (
-                              <tr key={line.id}>
-                                <td className="px-2 py-2 align-top">
-                                  <select
-                                    value={line.merchandise_name}
-                                    onChange={(e) =>
-                                      handleBulkLineChange(line.id, 'merchandise_name', e.target.value)
-                                    }
-                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.merchandise_name ? 'border-red-500' : ''}`}
-                                    aria-label={`Item row ${rowIndex + 1}`}
-                                  >
-                                    <option value="">-- Select --</option>
-                                    {getRequestableMerchandiseTypes().map((merchType) => (
-                                      <option key={merchType.name} value={merchType.name}>
-                                        {merchType.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {lineErr.merchandise_name && (
-                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.merchandise_name}</p>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2 align-top">
-                                  <select
-                                    value={line.size}
-                                    onChange={(e) =>
-                                      handleBulkLineChange(line.id, 'size', e.target.value)
-                                    }
-                                    disabled={!needsSizing}
-                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.size ? 'border-red-500' : ''} ${!needsSizing ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                                    aria-label={`Size row ${rowIndex + 1}`}
-                                  >
-                                    <option value="">{needsSizing ? 'Select' : '—'}</option>
-                                    {UNIFORM_SIZE_OPTIONS.map((size) => (
-                                      <option key={size} value={size}>
-                                        {size}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {lineErr.size && (
-                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.size}</p>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2 align-top">
-                                  <select
-                                    value={line.gender}
-                                    onChange={(e) =>
-                                      handleBulkLineChange(line.id, 'gender', e.target.value)
-                                    }
-                                    disabled={!isUniform}
-                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.gender ? 'border-red-500' : ''} ${!isUniform ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                                    aria-label={`Gender row ${rowIndex + 1}`}
-                                  >
-                                    <option value="">{isUniform ? 'Select' : '—'}</option>
-                                    <option value="Men">Men</option>
-                                    <option value="Women">Women</option>
-                                    <option value="Unisex">Unisex</option>
-                                  </select>
-                                  {lineErr.gender && (
-                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.gender}</p>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2 align-top">
-                                  <select
-                                    value={line.type}
-                                    onChange={(e) =>
-                                      handleBulkLineChange(line.id, 'type', e.target.value)
-                                    }
-                                    disabled={!isUniform}
-                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.type ? 'border-red-500' : ''} ${!isUniform ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                                    aria-label={`Type row ${rowIndex + 1}`}
-                                  >
-                                    <option value="">{isUniform ? 'Select' : '—'}</option>
-                                    {getUniformPieceOptions(line.merchandise_name).map((opt) => (
-                                      <option key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {lineErr.type && (
-                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.type}</p>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2 align-top">
-                                  <input
-                                    type="number"
-                                    min="1"
-                                    value={line.quantity}
-                                    onChange={(e) =>
-                                      handleBulkLineChange(line.id, 'quantity', e.target.value)
-                                    }
-                                    className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${lineErr.quantity ? 'border-red-500' : ''}`}
-                                    placeholder="0"
-                                    aria-label={`Quantity row ${rowIndex + 1}`}
-                                  />
-                                  {lineErr.quantity && (
-                                    <p className="mt-1 text-[11px] text-red-600">{lineErr.quantity}</p>
-                                  )}
-                                </td>
-                                <td className="px-1 py-2 align-top text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => removeBulkRequestLine(line.id)}
-                                    disabled={bulkRequestLines.length <= 1}
-                                    className="p-1.5 text-gray-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-gray-400 rounded transition-colors"
-                                    title="Remove row"
-                                    aria-label={`Remove row ${rowIndex + 1}`}
-                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+
+                  </div>
+
+                )}
+
+
+
+                <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+
+                  <div className="flex items-center justify-between gap-3 mb-2 flex-shrink-0">
+
+                    <label className="label-field mb-0">Items</label>
+
                     <button
+
                       type="button"
+
                       onClick={addBulkRequestLine}
-                      className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800 flex-shrink-0 self-start"
+
+                      disabled={catalogLoading || !!catalogError}
+
+                      className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors disabled:opacity-50"
+
                     >
+
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+
                       </svg>
-                      Add another item
+
+                      Add row
+
                     </button>
+
                   </div>
 
-                  <div className="flex-shrink-0">
-                    <label htmlFor="request_reason_bulk" className="label-field">
-                      Reason for Request <span className="text-red-500">*</span>
-                    </label>
-                    <textarea
-                      id="request_reason_bulk"
-                      name="request_reason"
-                      value={requestFormData.request_reason}
-                      onChange={handleRequestInputChange}
-                      className={`input-field min-h-[72px] resize-y ${requestFormErrors.request_reason ? 'border-red-500' : ''}`}
-                      required
-                      placeholder="Please explain why you need this stock (min. 5 characters)..."
-                      rows={3}
-                    />
-                    {requestFormErrors.request_reason && (
-                      <p className="mt-1 text-sm text-red-600">{requestFormErrors.request_reason}</p>
-                    )}
-                    <p className="mt-1 text-xs text-gray-500">
-                      This reason is applied to every item in the bulk request.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-              <div className="p-6 overflow-y-auto flex-1">
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label htmlFor="request_date" className="label-field">
-                        Request Date
-                      </label>
-                      <input
-                        type="text"
-                        id="request_date"
-                        value={requestDateDisplay}
-                        className="input-field bg-gray-50 cursor-not-allowed"
-                        readOnly
-                      />
-                    </div>
+                  {requestFormErrors.bulk && (
 
-                    <div>
-                      <label htmlFor="requested_by" className="label-field">
-                        Requested By
-                      </label>
-                      <input
-                        type="text"
-                        id="requested_by"
-                        value={requestedByDisplay}
-                        className="input-field bg-gray-50 cursor-not-allowed"
-                        readOnly
-                      />
-                    </div>
+                    <p className="mb-2 text-sm text-red-600 flex-shrink-0">{requestFormErrors.bulk}</p>
 
-                    <div className="md:col-span-2">
-                      <label htmlFor="request_merchandise_name" className="label-field">
-                        Items <span className="text-red-500">*</span>
-                      </label>
-                      {isRequestingSpecificStock ? (
-                        <>
-                          <input
-                            type="text"
-                            id="request_merchandise_name"
-                            name="merchandise_name"
-                            value={requestFormData.merchandise_name}
-                            className="input-field bg-gray-50 cursor-not-allowed"
-                            readOnly
-                          />
-                          <p className="mt-1 text-xs text-gray-500">Merchandise type is pre-filled for this specific stock item</p>
-                        </>
-                      ) : (
-                        <>
-                          <select
-                            id="request_merchandise_name"
-                            name="merchandise_name"
-                            value={requestFormData.merchandise_name}
-                            onChange={handleRequestInputChange}
-                            className={`input-field ${requestFormErrors.merchandise_name ? 'border-red-500' : ''}`}
-                            required
-                          >
-                            <option value="">-- Select Merchandise Type --</option>
-                            {getRequestableMerchandiseTypes().map((merchType) => (
-                              <option key={merchType.name} value={merchType.name}>
-                                {merchType.name}
-                              </option>
-                            ))}
-                          </select>
-                          <p className="mt-1 text-xs text-gray-500">Select the merchandise type you want to request stock for</p>
-                        </>
-                      )}
-                      {requestFormErrors.merchandise_name && (
-                        <p className="mt-1 text-sm text-red-600">{requestFormErrors.merchandise_name}</p>
-                      )}
-                    </div>
-
-                    {/* Only show size field if merchandise type requires sizing */}
-                    {((requestFormData.merchandise_name && requiresSizingForMerchandise(requestFormData.merchandise_name)) || isRequestingSpecificStock) && (
-                      <div>
-                        <label htmlFor="request_size" className="label-field">
-                          Size <span className="text-red-500">*</span>
-                        </label>
-                        {isRequestingSpecificStock && requestFormData.size ? (
-                          <>
-                            <input
-                              type="text"
-                              value={requestFormData.size}
-                              className="input-field bg-gray-50 cursor-not-allowed"
-                              readOnly
-                            />
-                            <p className="mt-1 text-xs text-gray-500">Size is pre-filled for this specific stock item</p>
-                          </>
-                        ) : (
-                          <>
-                            <select
-                              id="request_size"
-                              name="size"
-                              value={requestFormData.size}
-                              onChange={handleRequestInputChange}
-                              className={`input-field ${requestFormErrors.size ? 'border-red-500' : ''}`}
-                              required={requiresSizingForMerchandise(requestFormData.merchandise_name)}
-                            >
-                              <option value="">Select Size</option>
-                              {UNIFORM_SIZE_OPTIONS.map((size) => (
-                                <option key={size} value={size}>
-                                  {size}
-                                </option>
-                              ))}
-                            </select>
-                            {requestFormErrors.size && (
-                              <p className="mt-1 text-sm text-red-600">{requestFormErrors.size}</p>
-                            )}
-                            <p className="mt-1 text-xs text-gray-500">Size is required for this merchandise type</p>
-                          </>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Gender and Piece fields - only show for uniforms */}
-                    {isUniformMerchandiseName(requestFormData.merchandise_name) && (
-                      <>
-                        <div>
-                          <label htmlFor="request_gender" className="label-field">
-                            Gender *
-                          </label>
-                          <select
-                            id="request_gender"
-                            name="gender"
-                            value={requestFormData.gender}
-                            onChange={handleRequestInputChange}
-                            className="input-field bg-gray-50 cursor-not-allowed"
-                            disabled
-                          >
-                            <option value="">Select Gender</option>
-                            <option value="Men">Men</option>
-                            <option value="Women">Women</option>
-                            <option value="Unisex">Unisex</option>
-                          </select>
-                          {requestFormErrors.gender && (
-                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.gender}</p>
-                          )}
-                        </div>
-
-                        <div>
-                          <label htmlFor="request_type" className="label-field">
-                            Piece: {getUniformPieceLabels(requestFormData.merchandise_name).upper} /{' '}
-                            {getUniformPieceLabels(requestFormData.merchandise_name).lower} *
-                          </label>
-                          <select
-                            id="request_type"
-                            name="type"
-                            value={requestFormData.type}
-                            onChange={handleRequestInputChange}
-                            className="input-field bg-gray-50 cursor-not-allowed"
-                            disabled
-                          >
-                            <option value="">Select Piece</option>
-                            {getUniformPieceOptions(requestFormData.merchandise_name).map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                          {requestFormErrors.type && (
-                            <p className="mt-1 text-sm text-red-600">{requestFormErrors.type}</p>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    <div>
-                      <label htmlFor="requested_quantity" className="label-field">
-                        Quantity <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        id="requested_quantity"
-                        name="requested_quantity"
-                        value={requestFormData.requested_quantity}
-                        onChange={handleRequestInputChange}
-                        className={`input-field ${requestFormErrors.requested_quantity ? 'border-red-500' : ''}`}
-                        required
-                        placeholder="0"
-                      />
-                      {requestFormErrors.requested_quantity && (
-                        <p className="mt-1 text-sm text-red-600">{requestFormErrors.requested_quantity}</p>
-                      )}
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <label htmlFor="request_reason" className="label-field">
-                        Reason for Request <span className="text-red-500">*</span>
-                      </label>
-                      <textarea
-                        id="request_reason"
-                        name="request_reason"
-                        value={requestFormData.request_reason}
-                        onChange={handleRequestInputChange}
-                        className={`input-field min-h-[100px] resize-y ${requestFormErrors.request_reason ? 'border-red-500' : ''}`}
-                        required
-                        placeholder="Please explain why you need this stock (min. 5 characters)..."
-                        rows={4}
-                      />
-                      {requestFormErrors.request_reason && (
-                        <p className="mt-1 text-sm text-red-600">{requestFormErrors.request_reason}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              )}
-
-              {/* Modal Footer */}
-              <div className="flex items-center justify-end gap-2 sm:gap-3 p-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
-                <button
-                  type="button"
-                  onClick={closeRequestModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                  disabled={submitting}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-                  disabled={submitting}
-                >
-                  {submitting ? (
-                    <span className="flex items-center space-x-2">
-                      <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <span>Submitting...</span>
-                    </span>
-                  ) : (
-                    'Submit Request'
                   )}
-                </button>
+
+                  <div
+
+                    className="rounded-lg border border-gray-200 flex-1 min-h-[140px] max-h-[min(48vh,420px)] overflow-x-auto overflow-y-auto"
+
+                    style={{
+
+                      scrollbarWidth: 'thin',
+
+                      scrollbarColor: '#cbd5e0 #f7fafc',
+
+                      WebkitOverflowScrolling: 'touch',
+
+                    }}
+
+                  >
+
+                    <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '720px' }}>
+
+                      <thead className="bg-gray-50 sticky top-0 z-10">
+
+                        <tr>
+
+                          <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+
+                            Category
+
+                          </th>
+
+                          <th className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+
+                            Variant / Item
+
+                          </th>
+
+                          <th
+
+                            className="px-2 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider bg-gray-50"
+
+                            style={{ width: '100px' }}
+
+                          >
+
+                            Qty
+
+                          </th>
+
+                          <th className="px-1 py-2 bg-gray-50" style={{ width: '40px' }}>
+
+                            {' '}
+
+                          </th>
+
+                        </tr>
+
+                      </thead>
+
+                      <tbody className="bg-white divide-y divide-gray-100">
+
+                        {bulkRequestLines.map((line, rowIndex) => {
+
+                          const lineErr = bulkLineErrors[line.id] || {};
+
+                          const isUniform = isUniformLikeCategory(line.category_name);
+
+                          const genderOpts = getUniformGenderOptions(
+
+                            inventoryCatalog.items,
+
+                            line.category_name
+
+                          );
+
+                          const typeOpts = getUniformTypeOptions(
+
+                            inventoryCatalog.items,
+
+                            line.category_name,
+
+                            line.gender
+
+                          );
+
+                          const sizeOpts = getUniformSizeOptions(
+
+                            inventoryCatalog.items,
+
+                            line.category_name,
+
+                            line.gender,
+
+                            line.type
+
+                          );
+
+                          const nonUniformItems = getCatalogItemsForCategory(
+
+                            inventoryCatalog.items,
+
+                            line.category_name
+
+                          );
+
+                          const catalogItemKey =
+
+                            line.catalog_item_key ||
+
+                            (line.sku || line.item_name
+
+                              ? `${line.sku}|${line.item_name}|${line.inventory_id || ''}`
+
+                              : '');
+
+
+
+                          return (
+
+                            <tr key={line.id}>
+
+                              <td className="px-2 py-2 align-top">
+
+                                <select
+
+                                  value={line.category_name}
+
+                                  onChange={(e) =>
+
+                                    handleBulkLineChange(line.id, 'category_name', e.target.value)
+
+                                  }
+
+                                  className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${
+
+                                    lineErr.category_name ? 'border-red-500' : ''
+
+                                  }`}
+
+                                  aria-label={`Category row ${rowIndex + 1}`}
+
+                                  disabled={catalogLoading}
+
+                                >
+
+                                  <option value="">-- Select RHET category --</option>
+
+                                  {inventoryCatalog.categories.map((cat) => (
+
+                                    <option
+
+                                      key={cat.categoryId || cat.categoryName}
+
+                                      value={cat.categoryName}
+
+                                    >
+
+                                      {cat.categoryName}
+
+                                    </option>
+
+                                  ))}
+
+                                </select>
+
+                                {lineErr.category_name && (
+
+                                  <p className="mt-1 text-[11px] text-red-600">{lineErr.category_name}</p>
+
+                                )}
+
+                              </td>
+
+                              <td className="px-2 py-2 align-top">
+
+                                {!line.category_name ? (
+
+                                  <p className="text-xs text-gray-400 py-2">Select a category first</p>
+
+                                ) : isUniform ? (
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+
+                                    <div>
+
+                                      <select
+
+                                        value={line.gender}
+
+                                        onChange={(e) =>
+
+                                          handleBulkLineChange(line.id, 'gender', e.target.value)
+
+                                        }
+
+                                        className={`input-field text-sm py-1.5 w-full ${
+
+                                          lineErr.gender ? 'border-red-500' : ''
+
+                                        }`}
+
+                                        aria-label={`Gender row ${rowIndex + 1}`}
+
+                                      >
+
+                                        <option value="">Gender</option>
+
+                                        {(genderOpts.length
+
+                                          ? genderOpts
+
+                                          : ['Male', 'Female', 'Unisex']
+
+                                        ).map((g) => (
+
+                                          <option key={g} value={g}>
+
+                                            {g}
+
+                                          </option>
+
+                                        ))}
+
+                                      </select>
+
+                                      {lineErr.gender && (
+
+                                        <p className="mt-1 text-[11px] text-red-600">{lineErr.gender}</p>
+
+                                      )}
+
+                                    </div>
+
+                                    <div>
+
+                                      <select
+
+                                        value={line.type}
+
+                                        onChange={(e) =>
+
+                                          handleBulkLineChange(line.id, 'type', e.target.value)
+
+                                        }
+
+                                        className={`input-field text-sm py-1.5 w-full ${
+
+                                          lineErr.type ? 'border-red-500' : ''
+
+                                        }`}
+
+                                        aria-label={`Type row ${rowIndex + 1}`}
+
+                                      >
+
+                                        <option value="">Type</option>
+
+                                        {(typeOpts.length
+
+                                          ? typeOpts
+
+                                          : ['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants']
+
+                                        ).map((t) => (
+
+                                          <option key={t} value={t}>
+
+                                            {t}
+
+                                          </option>
+
+                                        ))}
+
+                                      </select>
+
+                                      {lineErr.type && (
+
+                                        <p className="mt-1 text-[11px] text-red-600">{lineErr.type}</p>
+
+                                      )}
+
+                                    </div>
+
+                                    <div>
+
+                                      <select
+
+                                        value={line.size}
+
+                                        onChange={(e) =>
+
+                                          handleBulkLineChange(line.id, 'size', e.target.value)
+
+                                        }
+
+                                        className={`input-field text-sm py-1.5 w-full ${
+
+                                          lineErr.size ? 'border-red-500' : ''
+
+                                        }`}
+
+                                        aria-label={`Size row ${rowIndex + 1}`}
+
+                                      >
+
+                                        <option value="">Size</option>
+
+                                        {(sizeOpts.length
+
+                                          ? sizeOpts
+
+                                          : ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']
+
+                                        ).map((sz) => (
+
+                                          <option key={sz} value={sz}>
+
+                                            {sz}
+
+                                          </option>
+
+                                        ))}
+
+                                      </select>
+
+                                      {lineErr.size && (
+
+                                        <p className="mt-1 text-[11px] text-red-600">{lineErr.size}</p>
+
+                                      )}
+
+                                    </div>
+
+                                  </div>
+
+                                ) : (
+
+                                  <div>
+
+                                    <select
+
+                                      value={catalogItemKey}
+
+                                      onChange={(e) =>
+
+                                        handleBulkLineChange(
+
+                                          line.id,
+
+                                          'catalog_item_key',
+
+                                          e.target.value
+
+                                        )
+
+                                      }
+
+                                      className={`input-field text-sm py-1.5 w-full max-w-full min-w-0 ${
+
+                                        lineErr.item_name ? 'border-red-500' : ''
+
+                                      }`}
+
+                                      aria-label={`Item row ${rowIndex + 1}`}
+
+                                    >
+
+                                      <option value="">-- Select catalog item --</option>
+
+                                      {nonUniformItems.map((item) => {
+
+                                        const key = `${item.sku}|${item.itemName}|${item.inventoryId || ''}`;
+
+                                        return (
+
+                                          <option key={key} value={key}>
+
+                                            {formatNonUniformItemLabel(item)}
+
+                                          </option>
+
+                                        );
+
+                                      })}
+
+                                    </select>
+
+                                    {lineErr.item_name && (
+
+                                      <p className="mt-1 text-[11px] text-red-600">{lineErr.item_name}</p>
+
+                                    )}
+
+                                    {!nonUniformItems.length && (
+
+                                      <p className="mt-1 text-[11px] text-amber-700">
+
+                                        No catalog items for this category.
+
+                                      </p>
+
+                                    )}
+
+                                  </div>
+
+                                )}
+
+                              </td>
+
+                              <td className="px-2 py-2 align-top">
+
+                                <input
+
+                                  type="number"
+
+                                  min="1"
+
+                                  value={line.quantity}
+
+                                  onChange={(e) =>
+
+                                    handleBulkLineChange(line.id, 'quantity', e.target.value)
+
+                                  }
+
+                                  className={`input-field text-sm py-1.5 w-full ${
+
+                                    lineErr.quantity ? 'border-red-500' : ''
+
+                                  }`}
+
+                                  placeholder="0"
+
+                                  aria-label={`Quantity row ${rowIndex + 1}`}
+
+                                />
+
+                                {lineErr.quantity && (
+
+                                  <p className="mt-1 text-[11px] text-red-600">{lineErr.quantity}</p>
+
+                                )}
+
+                              </td>
+
+                              <td className="px-1 py-2 align-top text-right">
+
+                                <button
+
+                                  type="button"
+
+                                  onClick={() => removeBulkRequestLine(line.id)}
+
+                                  disabled={bulkRequestLines.length <= 1}
+
+                                  className="p-1.5 text-gray-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-gray-400 rounded transition-colors"
+
+                                  title="Remove row"
+
+                                  aria-label={`Remove row ${rowIndex + 1}`}
+
+                                >
+
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                                    <path
+
+                                      strokeLinecap="round"
+
+                                      strokeLinejoin="round"
+
+                                      strokeWidth={2}
+
+                                      d="M6 18L18 6M6 6l12 12"
+
+                                    />
+
+                                  </svg>
+
+                                </button>
+
+                              </td>
+
+                            </tr>
+
+                          );
+
+                        })}
+
+                      </tbody>
+
+                    </table>
+
+                  </div>
+
+                </div>
+
+
+
+                <div className="flex-shrink-0">
+
+                  <label htmlFor="request_reason_bulk" className="label-field">
+
+                    Reason for Request <span className="text-red-500">*</span>
+
+                  </label>
+
+                  <textarea
+
+                    id="request_reason_bulk"
+
+                    name="request_reason"
+
+                    value={requestFormData.request_reason}
+
+                    onChange={handleRequestInputChange}
+
+                    className={`input-field min-h-[72px] resize-y ${
+
+                      requestFormErrors.request_reason ? 'border-red-500' : ''
+
+                    }`}
+
+                    required
+
+                    placeholder="Please explain why you need this stock (min. 5 characters)..."
+
+                    rows={3}
+
+                  />
+
+                  {requestFormErrors.request_reason && (
+
+                    <p className="mt-1 text-sm text-red-600">{requestFormErrors.request_reason}</p>
+
+                  )}
+
+                  <p className="mt-1 text-xs text-gray-500">
+
+                    Applied to every item. Categories and items come from RHET Inventory — local
+
+                    names like &quot;LCA Bag&quot; are not sent.
+
+                  </p>
+
+                </div>
+
               </div>
+
+
+
+              <div className="flex items-center justify-end gap-2 sm:gap-3 p-4 sm:p-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
+
+                <button
+
+                  type="button"
+
+                  onClick={closeRequestModal}
+
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+
+                  disabled={submitting}
+
+                >
+
+                  Cancel
+
+                </button>
+
+                <button
+
+                  type="submit"
+
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+
+                  disabled={submitting || catalogLoading || !!catalogError}
+
+                >
+
+                  {submitting ? 'Submitting...' : 'Submit Request'}
+
+                </button>
+
+              </div>
+
             </form>
+
           </div>
+
         </div>,
+
         document.body
+
       )}
+
+
     </>
   );
 
@@ -2323,7 +2566,25 @@ const AdminMerchandise = () => {
                     {requests.map((request) => (
                       <tr key={request.request_id}>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">{request.merchandise_name}</div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {request.inventory_category_name || request.merchandise_name}
+                          </div>
+                          {request.inventory_item_name && (
+                            <div className="text-xs text-gray-500">{request.inventory_item_name}</div>
+                          )}
+                          {(request.inventory_matched_sku || request.inventory_requested_sku) && (
+                            <div className="text-xs text-gray-400">
+                              SKU: {request.inventory_matched_sku || request.inventory_requested_sku}
+                            </div>
+                          )}
+                          {request.inventory_rejection_reason && (
+                            <div
+                              className="text-xs text-red-600 max-w-[220px] truncate"
+                              title={request.inventory_rejection_reason}
+                            >
+                              {request.inventory_rejection_reason}
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{request.size || 'N/A'}</div>

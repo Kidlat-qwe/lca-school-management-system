@@ -5,6 +5,10 @@ import {
   pickApproverName,
 } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
+import {
+  isMissingColumnError,
+  runIgnoringMissingUpdatedAt,
+} from '../services/inventory/runMerchRequestSql.js';
 
 const router = express.Router();
 
@@ -101,10 +105,7 @@ function resolveProcessedByName(payload) {
 }
 
 function isMissingInventoryProcessedByColumn(error) {
-  return (
-    error?.code === '42703' ||
-    String(error?.message || '').includes('inventory_processed_by')
-  );
+  return isMissingColumnError(error, 'inventory_processed_by');
 }
 
 async function findLocalRequest(payload, client = null) {
@@ -155,7 +156,8 @@ async function syncInventoryFields(
 
   try {
     if (writeApproverName) {
-      await run(
+      await runIgnoringMissingUpdatedAt(
+        run,
         `UPDATE merchandiserequestlogtbl
          SET inventory_request_id = COALESCE($1, inventory_request_id),
              inventory_status = COALESCE($2, inventory_status),
@@ -178,7 +180,8 @@ async function syncInventoryFields(
       );
     } else {
       // created / PENDING — never write inventory_processed_by (always null on created)
-      await run(
+      await runIgnoringMissingUpdatedAt(
+        run,
         `UPDATE merchandiserequestlogtbl
          SET inventory_request_id = COALESCE($1, inventory_request_id),
              inventory_status = COALESCE($2, inventory_status),
@@ -204,7 +207,8 @@ async function syncInventoryFields(
     console.error(
       '[inventory-webhook] inventory_processed_by column missing — run migration 126. Continuing without Approved By.'
     );
-    await run(
+    await runIgnoringMissingUpdatedAt(
+      run,
       `UPDATE merchandiserequestlogtbl
        SET inventory_request_id = COALESCE($1, inventory_request_id),
            inventory_status = COALESCE($2, inventory_status),
@@ -278,12 +282,15 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
     const stockResult = await applyMerchandiseRequestStock(client, request);
 
     try {
-      await client.query(
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
          SET status = 'Approved',
              reviewed_at = CURRENT_TIMESTAMP,
              review_notes = COALESCE(review_notes, $1),
+             inventory_status = 'FULFILLED',
              inventory_processed_by = $2,
+             inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
          WHERE request_id = $3`,
         [
@@ -294,11 +301,14 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
       );
     } catch (error) {
       if (!isMissingInventoryProcessedByColumn(error)) throw error;
-      await client.query(
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
          SET status = 'Approved',
              reviewed_at = CURRENT_TIMESTAMP,
              review_notes = COALESCE(review_notes, $1),
+             inventory_status = 'FULFILLED',
+             inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
          WHERE request_id = $2`,
         [
@@ -371,7 +381,8 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
 
     if (request.status === 'Pending') {
       try {
-        await client.query(
+        await runIgnoringMissingUpdatedAt(
+          client.query.bind(client),
           `UPDATE merchandiserequestlogtbl
            SET status = 'Rejected',
                reviewed_at = CURRENT_TIMESTAMP,
@@ -388,7 +399,8 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
         );
       } catch (error) {
         if (!isMissingInventoryProcessedByColumn(error)) throw error;
-        await client.query(
+        await runIgnoringMissingUpdatedAt(
+          client.query.bind(client),
           `UPDATE merchandiserequestlogtbl
            SET status = 'Rejected',
                reviewed_at = CURRENT_TIMESTAMP,
@@ -423,7 +435,8 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
     } else if (processedBy) {
       // Re-delivered reject webhook or status already Rejected — still backfill Approved By
       try {
-        await client.query(
+        await runIgnoringMissingUpdatedAt(
+          client.query.bind(client),
           `UPDATE merchandiserequestlogtbl
            SET inventory_processed_by = $1,
                updated_at = CURRENT_TIMESTAMP

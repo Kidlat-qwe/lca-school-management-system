@@ -17,7 +17,8 @@ function isUniformMerchandiseName(merchandiseName) {
 
 /**
  * Uniforms are always separate upper/lower SKUs; size, gender, and piece are required.
- * School: Polo/Short | PE: Shirt/Pants | Legacy: Top/Bottom
+ * RHET-aligned: Male/Female/Unisex · XS…5XL · Polo/Short/Blouse/Skirt/Shirt/Pants
+ * Legacy Men/Women and Top/Bottom still accepted and normalized on write.
  * @returns {string|null} error message or null if ok
  */
 function validateUniformPieceFields(merchandiseName, size, gender, type) {
@@ -26,15 +27,79 @@ function validateUniformPieceFields(merchandiseName, size, gender, type) {
     return 'Size is required for uniforms';
   }
   const g = String(gender || '').trim();
-  if (!g || !['Men', 'Women', 'Unisex'].includes(g)) {
-    return 'Gender is required for uniforms (Men, Women, or Unisex)';
+  if (!g || !['Male', 'Female', 'Unisex', 'Men', 'Women'].includes(g)) {
+    return 'Gender is required for uniforms (Male, Female, or Unisex)';
   }
   const t = String(type || '').trim();
-  const allowedPieces = ['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom'];
+  const allowedPieces = [
+    'Polo',
+    'Short',
+    'Blouse',
+    'Skirt',
+    'Shirt',
+    'Pants',
+    'Top',
+    'Bottom',
+  ];
   if (!t || !allowedPieces.includes(t)) {
-    return 'Piece is required for uniforms (Polo/Short for school, Shirt/Pants for PE)';
+    return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt for school, Shirt/Pants for PE)';
   }
   return null;
+}
+
+const GENDER_TO_CANONICAL = {
+  Men: 'Male',
+  Male: 'Male',
+  Women: 'Female',
+  Female: 'Female',
+  Unisex: 'Unisex',
+};
+
+const SIZE_TO_CANONICAL = {
+  'Extra Small': 'XS',
+  Small: 'S',
+  Medium: 'M',
+  Large: 'L',
+  'Extra Large': 'XL',
+  XS: 'XS',
+  S: 'S',
+  M: 'M',
+  L: 'L',
+  XL: 'XL',
+  '2XL': '2XL',
+  '3XL': '3XL',
+  '4XL': '4XL',
+  '5XL': '5XL',
+};
+
+const CATEGORY_TO_CANONICAL = {
+  'LCA Uniform': 'School Uniform',
+  'School Uniform': 'School Uniform',
+  'LCA PE Uniform': 'PE Uniform',
+  'PE Uniform': 'PE Uniform',
+  'LCA Bag': 'Backpack',
+  Bag: 'Backpack',
+  Backpack: 'Backpack',
+  'LCA T-Shirt': 'LCA T-Shirt',
+  'LCA Tshirt': 'LCA T-Shirt',
+};
+
+function normalizeMerchandisePayload(body = {}) {
+  const name = String(body.merchandise_name || '').trim();
+  const genderRaw = body.gender != null && body.gender !== '' ? String(body.gender).trim() : null;
+  const sizeRaw = body.size != null && body.size !== '' ? String(body.size).trim() : null;
+  const typeRaw = body.type != null && body.type !== '' ? String(body.type).trim() : null;
+
+  let type = typeRaw;
+  if (type === 'Top') type = 'Polo';
+  if (type === 'Bottom') type = 'Short';
+
+  return {
+    merchandise_name: CATEGORY_TO_CANONICAL[name] || name,
+    gender: genderRaw ? GENDER_TO_CANONICAL[genderRaw] || genderRaw : null,
+    size: sizeRaw ? SIZE_TO_CANONICAL[sizeRaw] || sizeRaw : null,
+    type: type || null,
+  };
 }
 
 // All routes require authentication
@@ -165,8 +230,14 @@ router.post(
       const num = parseInt(value);
       return !isNaN(num);
     }).withMessage('Branch ID must be an integer'),
-    body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
+    body('gender')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Male', 'Female', 'Unisex', 'Men', 'Women', null, ''])
+      .withMessage('Gender must be one of: Male, Female, Unisex'),
+    body('type')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Top', 'Bottom', null, ''])
+      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
@@ -209,7 +280,23 @@ router.post(
         console.log('Column check:', err.message);
       }
 
-      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks } = req.body;
+      const normalized = normalizeMerchandisePayload(req.body);
+      const merchandise_name = normalized.merchandise_name;
+      const size = normalized.size;
+      const gender = normalized.gender;
+      const type = normalized.type;
+      const { quantity, price, branch_id, image_url, remarks } = req.body;
+
+      if (String(merchandise_name || '')
+        .toLowerCase()
+        .includes('learning kit')) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Learning Kit is not available via Create Merchandise yet. Request kits in RHET Inventory.',
+          error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
+        });
+      }
 
       const uniformError = validateUniformPieceFields(merchandise_name, size, gender, type);
       if (uniformError) {
@@ -219,7 +306,7 @@ router.post(
         });
       }
 
-      // Uniforms are unique per branch + name + size + gender + piece (Top/Bottom)
+      // Uniforms are unique per branch + name + size + gender + piece
       if (isUniformMerchandiseName(merchandise_name) && branch_id) {
         const duplicateCheck = await query(
           `SELECT merchandise_id, merchandise_name, size, gender, type, quantity
@@ -233,9 +320,9 @@ router.post(
           [
             parseInt(branch_id, 10),
             merchandise_name,
-            size || null,
-            gender || null,
-            type || null,
+            size || '',
+            gender || '',
+            type || '',
           ]
         );
         if (duplicateCheck.rows.length > 0) {
@@ -295,8 +382,14 @@ router.put(
       const num = parseInt(value);
       return !isNaN(num);
     }).withMessage('Branch ID must be an integer'),
-    body('gender').optional({ nullable: true, checkFalsy: true }).isIn(['Men', 'Women', 'Unisex', null, '']).withMessage('Gender must be one of: Men, Women, Unisex'),
-    body('type').optional({ nullable: true, checkFalsy: true }).isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Top', 'Bottom', null, '']).withMessage('Type must be one of: Polo, Short, Shirt, Pants (or legacy Top, Bottom)'),
+    body('gender')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Male', 'Female', 'Unisex', 'Men', 'Women', null, ''])
+      .withMessage('Gender must be one of: Male, Female, Unisex'),
+    body('type')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Top', 'Bottom', null, ''])
+      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     handleValidationErrors,
@@ -340,7 +433,34 @@ router.put(
       }
 
       const { id } = req.params;
-      const { merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks } = req.body;
+      const { quantity, price, branch_id, image_url, remarks } = req.body;
+      const normalized = normalizeMerchandisePayload({
+        merchandise_name:
+          req.body.merchandise_name !== undefined
+            ? req.body.merchandise_name
+            : undefined,
+        gender: req.body.gender !== undefined ? req.body.gender : undefined,
+        size: req.body.size !== undefined ? req.body.size : undefined,
+        type: req.body.type !== undefined ? req.body.type : undefined,
+      });
+      // Only overwrite fields that were actually sent
+      const merchandise_name =
+        req.body.merchandise_name !== undefined ? normalized.merchandise_name : undefined;
+      const size = req.body.size !== undefined ? normalized.size : undefined;
+      const gender = req.body.gender !== undefined ? normalized.gender : undefined;
+      const type = req.body.type !== undefined ? normalized.type : undefined;
+
+      if (
+        merchandise_name &&
+        String(merchandise_name).toLowerCase().includes('learning kit')
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Learning Kit is not available via Create Merchandise yet. Request kits in RHET Inventory.',
+          error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
+        });
+      }
 
       const existingMerchandise = await query('SELECT * FROM merchandisestbl WHERE merchandise_id = $1', [id]);
       if (existingMerchandise.rows.length === 0) {

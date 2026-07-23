@@ -389,9 +389,22 @@ Send `itemName` instead of gender/type/size:
 Learning Kit is **blocked** in PSMS Request Stock. RHET matches kits via a
 category-slot bill of materials plus a request-time `components[]` array,
 which PSMS does not collect yet. `POST /api/v1/merchandise-requests` rejects
-any request where `merchandise_name` contains "Learning Kit" with
-`400 { error: { code: 'LEARNING_KIT_NOT_SUPPORTED' } }`. Request Learning Kit
+any request where `merchandise_name` / `category_name` contains "Learning Kit"
+with `400 { error: { code: 'LEARNING_KIT_NOT_SUPPORTED' } }`. Request Learning Kit
 stock directly in RHET Inventory until kit support ships in a future pass.
+
+### Request Stock UI (catalog-first)
+
+Admin Merchandise → Request Stock loads RHET categories/items via
+`GET /api/sms/merchandise-requests/inventory/catalog` (backend proxy only).
+
+- Uniform-like: pick category → gender → type → size (exact RHET labels).
+- Non-uniform: pick category → concrete catalog item (`itemName` + `sku`).
+- Never send local-only names like `LCA Bag` as `categoryName` without an item.
+
+Persisted on create (migration 128): `inventory_category_name`,
+`inventory_item_name`, `inventory_requested_sku`. RHET `failureReason` is stored
+in `inventory_rejection_reason` when present on submit response.
 
 ---
 

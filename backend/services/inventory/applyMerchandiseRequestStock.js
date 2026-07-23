@@ -32,7 +32,7 @@ async function resolvePrice(client, request) {
        AND (gender = $3 OR (gender IS NULL AND $3 IS NULL))
        AND (type = $4 OR (type IS NULL AND $4 IS NULL))
        AND price IS NOT NULL
-     ORDER BY updated_at DESC NULLS LAST, merchandise_id DESC
+     ORDER BY merchandise_id DESC
      LIMIT 1`,
     [request.merchandise_name, request.size || null, request.gender || null, request.type || null]
   );

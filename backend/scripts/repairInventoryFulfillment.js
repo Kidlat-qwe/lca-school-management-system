@@ -18,6 +18,7 @@ import { query, getClient } from '../config/database.js';
 import { getStockRequest, isInventoryIntegrationEnabled } from '../services/inventory/inventoryClient.js';
 import { pickApproverName } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
+import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
 
 function argValue(name) {
   const prefix = `--${name}=`;
@@ -75,7 +76,8 @@ try {
 
   // Best-effort store tracking fields (requires migrations 124 + 126).
   try {
-    await client.query(
+    await runIgnoringMissingUpdatedAt(
+      client.query.bind(client),
       `UPDATE merchandiserequestlogtbl
        SET inventory_request_id = $1,
            inventory_status = 'FULFILLED',
@@ -98,7 +100,8 @@ try {
   }
 
   const stockResult = await applyMerchandiseRequestStock(client, request);
-  await client.query(
+  await runIgnoringMissingUpdatedAt(
+    client.query.bind(client),
     `UPDATE merchandiserequestlogtbl
      SET status = 'Approved',
          reviewed_at = CURRENT_TIMESTAMP,

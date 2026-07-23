@@ -13,7 +13,12 @@ export const MERCH_RELEASE_SOURCE = {
 export const MERCH_PENDING_MARKER = 'MERCH_PENDING:';
 
 /** Package uniforms are issued as Top + Bottom; generic placeholder SKUs must not duplicate configured lines. */
-export const PACKAGE_UNIFORM_TYPE_NAMES = ['LCA Uniform', 'LCA PE Uniform'];
+export const PACKAGE_UNIFORM_TYPE_NAMES = [
+  'School Uniform',
+  'PE Uniform',
+  'LCA Uniform', // legacy
+  'LCA PE Uniform', // legacy
+];
 
 let releaseLogTableKnown = false;
 

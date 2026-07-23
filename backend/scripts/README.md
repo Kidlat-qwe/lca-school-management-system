@@ -4,6 +4,30 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `migrateMerchandiseLabelsToRhet.js`
+
+Rewrites `merchandisestbl` category / gender / size labels to RHET-canonical values
+(`School Uniform`, `Male`/`Female`, `XS`/`S`/`M`/…). Run migration **129** first.
+
+```bash
+node scripts/migrateMerchandiseLabelsToRhet.js --dry-run
+node scripts/migrateMerchandiseLabelsToRhet.js
+```
+
+### `repairInventoryFulfillment.js`
+
+Repairs a CMS merchandise request that RHET already marked **FULFILLED** but CMS left
+**Pending** (e.g. webhook 500 `column "updated_at" does not exist` — PSMS-33).
+Run migration **130** first when possible. Idempotent stock apply via
+`applyMerchandiseRequestStock`.
+
+```bash
+node scripts/repairInventoryFulfillment.js --production --request-id=33
+node scripts/repairInventoryFulfillment.js --production --request-id=33 --inventory-request-id=<uuid>
+```
+
+Prefer `POST /api/v1/merchandise-requests/:id/sync-inventory` when the API is up.
+
 ### `auditClassActivePhase.js`
 
 **Read-only** audit of Class Details **Current / auto-opened phase**. Compares the old buggy UI rule (often stuck on Phase 2 after Phase 1 ends) vs the fixed date-based rule. Does not update the database.
