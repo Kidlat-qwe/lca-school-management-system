@@ -69,6 +69,11 @@ When integration env is missing, CMS falls back to the legacy Superadmin-approva
 | `applyMerchandiseRequestStock.js` | Adds fulfilled qty to branch `merchandisestbl` |
 | `runMerchRequestSql.js` | Retries merch-request UPDATEs if `updated_at` column is missing |
 
+**Fulfill matching (critical):** CMS type = RHET `categoryName` (`Backpack`), never
+RHET `itemName` (`lca-backpack`) or SKU. Prefer `merchandise_id` on the request,
+then match existing type name aliases (`Backpack` / `LCA Bag`), then create a row
+named after `categoryName` only.
+
 ## Webhook
 
 `POST /api/webhooks/inventory` (`backend/routes/inventoryWebhooks.js`):
@@ -124,9 +129,21 @@ Then confirm each against RHET; if RHET is FULFILLED, run sync/repair above.
 ## Regression checklist
 
 - `node backend/tests/runMerchRequestSql.test.js` — strip/retry helper
+- `node backend/tests/merchandiseFulfillTypeMatch.test.js` — category vs itemName
 - Grep: no `merchandisestbl` SQL should reference `updated_at`
 - Fulfill webhook → 200, Approved, stock +qty once; replay → 200, stock unchanged
 - Reject webhook → Rejected, no stock add
+- Branch has type Backpack qty 0 → fulfill Backpack/lca-backpack → Backpack qty += N;
+  **no** new type `lca-backpack`
+
+### Repair mistaken itemName types
+
+If fulfill already created `lca-backpack` (etc.):
+
+```bash
+node scripts/mergeMistakenMerchandiseTypes.js --dry-run
+node scripts/mergeMistakenMerchandiseTypes.js --apply
+```
 
 ## Price when creating a new merchandise row
 

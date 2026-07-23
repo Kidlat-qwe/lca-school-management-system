@@ -7,6 +7,7 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** UI.
 | `approvedBy.js` | Display label for who approved/rejected a request (RHET Inventory user or CMS Superadmin). Ignores UUID user ids. |
 | `learningKit.js` | Blocks Learning Kit in Request Stock (RHET kit `components[]` not supported yet). |
 | `catalogOptions.js` | RHET catalog unwrap, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
+| `createTypeCategory.js` | RHET category dropdown options + defaults for Superadmin/Admin Add Merchandise Type. |
 
 ## Request Stock mental model (match RHET Inventory)
 
@@ -47,3 +48,14 @@ import {
   buildCatalogRequestPayload,
 } from '../utils/merchandiseRequests/catalogOptions';
 ```
+
+## Create Merchandise Type (RHET categories)
+
+```js
+import {
+  getCreateMerchandiseCategoryOptions,
+  applyCreateTypeCategoryDefaults,
+} from '../utils/merchandiseRequests/createTypeCategory';
+```
+
+Use with `RhetCategorySelect` — never free-text invent category names.

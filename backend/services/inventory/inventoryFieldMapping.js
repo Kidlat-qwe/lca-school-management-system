@@ -152,6 +152,95 @@ export function mapCategoryNameToLocal(rhetCategoryName) {
   return CATEGORY_NAME_TO_LOCAL[name] || name;
 }
 
+/**
+ * CMS merchandise type/category name to use when applying fulfilled stock.
+ * Prefer inventory_category_name (RHET categoryName). Never use itemName/sku
+ * as the type title (that created erroneous types like `lca-backpack`).
+ */
+export function resolveLocalMerchandiseTypeName(requestRow) {
+  const fromInventoryCol = String(requestRow?.inventory_category_name || '').trim();
+  if (fromInventoryCol) {
+    return mapCategoryNameToLocal(fromInventoryCol);
+  }
+
+  const raw = String(requestRow?.merchandise_name || '').trim();
+  if (!raw) return '';
+
+  const itemName = String(
+    requestRow?.inventory_item_name || requestRow?.item_name || ''
+  ).trim();
+  if (itemName && raw.toLowerCase() === itemName.toLowerCase()) {
+    return '';
+  }
+
+  const sku = String(
+    requestRow?.inventory_requested_sku || requestRow?.inventory_matched_sku || ''
+  ).trim();
+  if (sku && raw.toLowerCase() === sku.toLowerCase()) {
+    return '';
+  }
+
+  // Slug-like RHET item names are never CMS type titles
+  if (/^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(raw) && !CATEGORY_NAME_MAP[raw]) {
+    return '';
+  }
+
+  return mapCategoryNameToLocal(mapCategoryNameToInventory(raw));
+}
+
+/**
+ * Name variants to match an existing CMS type on the branch
+ * (e.g. Backpack + legacy LCA Bag).
+ */
+export function localMerchandiseTypeNameCandidates(requestRow) {
+  const preferred = resolveLocalMerchandiseTypeName(requestRow);
+  const candidates = new Set();
+  if (preferred) candidates.add(preferred);
+
+  const category = String(requestRow?.inventory_category_name || '').trim();
+  if (category) {
+    candidates.add(mapCategoryNameToLocal(category));
+    candidates.add(category);
+    for (const [localName, rhetName] of Object.entries(CATEGORY_NAME_MAP)) {
+      if (
+        String(rhetName).toLowerCase() === String(category).toLowerCase() ||
+        (preferred &&
+          mapCategoryNameToLocal(rhetName).toLowerCase() === preferred.toLowerCase())
+      ) {
+        candidates.add(localName);
+      }
+    }
+  }
+
+  const raw = String(requestRow?.merchandise_name || '').trim();
+  if (raw && (CATEGORY_NAME_MAP[raw] || CATEGORY_NAME_TO_LOCAL[raw])) {
+    candidates.add(raw);
+    candidates.add(mapCategoryNameToLocal(mapCategoryNameToInventory(raw)));
+  }
+  for (const localCanonical of Object.values(CATEGORY_NAME_TO_LOCAL)) {
+    if (raw && raw.toLowerCase() === String(localCanonical).toLowerCase()) {
+      candidates.add(localCanonical);
+    }
+  }
+
+  const itemName = String(requestRow?.inventory_item_name || '').trim().toLowerCase();
+  const sku = String(
+    requestRow?.inventory_requested_sku || requestRow?.inventory_matched_sku || ''
+  )
+    .trim()
+    .toLowerCase();
+  for (const name of [...candidates]) {
+    const key = String(name).toLowerCase();
+    if (itemName && key === itemName) candidates.delete(name);
+    if (sku && key === sku) candidates.delete(name);
+    if (/^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(name) && !CATEGORY_NAME_MAP[name]) {
+      candidates.delete(name);
+    }
+  }
+
+  return [...candidates].filter(Boolean);
+}
+
 export function mapGenderToInventory(gender) {
   if (!gender) return undefined;
   const key = String(gender).trim();
@@ -312,8 +401,8 @@ export function normalizeMerchandiseRequestInput(body = {}) {
     inventory_category_name: inventoryCategoryName,
     inventory_item_name: resolvedItemName || null,
     inventory_requested_sku: sku || null,
-    // Local stock row named after the RHET item (not the local "LCA Bag" label)
-    merchandise_name: resolvedItemName || sku || inventoryCategoryName,
+    // CMS type/category bucket = RHET categoryName (Backpack), NEVER itemName (lca-backpack)
+    merchandise_name: mapCategoryNameToLocal(inventoryCategoryName),
     gender: null,
     type: null,
     size: null,

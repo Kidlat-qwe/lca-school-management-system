@@ -8,10 +8,6 @@ import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import {
   UNIFORM_SIZE_OPTIONS,
-  UNIFORM_SCHOOL_NAME,
-  UNIFORM_PE_NAME,
-  UNIFORM_TSHIRT_NAME,
-  NON_UNIFORM_BACKPACK_NAME,
   getUniformPieceOptions,
   getUniformPieceLabels,
   getUniformGenderOptions,
@@ -23,7 +19,13 @@ import {
   formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
+import { unwrapCatalogPayload } from '../../utils/merchandiseRequests/catalogOptions';
+import {
+  getCreateMerchandiseCategoryOptions,
+  applyCreateTypeCategoryDefaults,
+} from '../../utils/merchandiseRequests/createTypeCategory';
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -61,12 +63,35 @@ const Merchandise = () => {
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
-  const [merchandiseCategory, setMerchandiseCategory] = useState(''); // 'uniform_school' | 'uniform_pe' | 'other' – used when creating new type
+  const [merchandiseCategory, setMerchandiseCategory] = useState(''); // RHET categoryName when creating new type
   /** Stocks list filters (uniforms): gender, piece type, size */
   const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'requests' | 'logs'
+  const [inventoryCatalog, setInventoryCatalog] = useState({ categories: [], items: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [pendingCategoryName, setPendingCategoryName] = useState('');
+
+  const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
+
+  const fetchInventoryCatalog = async () => {
+    setCatalogLoading(true);
+    setCatalogError('');
+    try {
+      const response = await apiRequest('/merchandise-requests/inventory/catalog');
+      setInventoryCatalog(unwrapCatalogPayload(response));
+    } catch (err) {
+      setInventoryCatalog({ categories: [], items: [] });
+      setCatalogError(
+        err.message ||
+          'Could not load RHET Inventory categories. Check inventory integration settings.'
+      );
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetchBranches();
@@ -78,6 +103,12 @@ const Merchandise = () => {
       fetchMerchandiseByBranch(selectedBranchId);
     }
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    if (isModalOpen && modalStep === 'category-selection') {
+      fetchInventoryCatalog();
+    }
+  }, [isModalOpen, modalStep]);
 
   useEffect(() => {
     if (globalBranchId) {
@@ -441,7 +472,8 @@ const Merchandise = () => {
     setSelectedBranch(null);
     setFormErrors({});
     setRequiresSizing(false);
-
+    setMerchandiseCategory('');
+    setPendingCategoryName('');
   };
 
   const handleBranchSelect = (branch) => {
@@ -454,55 +486,25 @@ const Merchandise = () => {
     setModalStep('category-selection');
   };
 
-  const handleCategorySelect = (category) => {
-    setMerchandiseCategory(category);
-
-    if (category === 'uniform_school') {
-      setFormData((prev) => ({
-        ...prev,
-        merchandise_name: UNIFORM_SCHOOL_NAME,
-        gender: '',
-        type: '',
-        size: '',
-      }));
-      setRequiresSizing(true);
-    } else if (category === 'uniform_pe') {
-      setFormData((prev) => ({
-        ...prev,
-        merchandise_name: UNIFORM_PE_NAME,
-        gender: '',
-        type: '',
-        size: '',
-      }));
-      setRequiresSizing(true);
-    } else if (category === 'uniform_tshirt') {
-      setFormData((prev) => ({
-        ...prev,
-        merchandise_name: UNIFORM_TSHIRT_NAME,
-        gender: 'Unisex',
-        type: 'Shirt',
-        size: '',
-      }));
-      setRequiresSizing(true);
-    } else if (category === 'backpack') {
-      setFormData((prev) => ({
-        ...prev,
-        merchandise_name: NON_UNIFORM_BACKPACK_NAME,
-        gender: '',
-        type: '',
-        size: '',
-      }));
-      setRequiresSizing(false);
-    } else {
-      setFormData((prev) => ({
-        ...prev,
-        merchandise_name: '',
-        gender: '',
-        type: '',
-        size: '',
-      }));
-      setRequiresSizing(false);
+  const handleCategorySelect = (categoryName) => {
+    const name = String(categoryName || '').trim();
+    if (!name) return;
+    if (isLearningKitMerchandiseName(name)) {
+      appAlert('Learning Kit is not available via Create Merchandise yet.');
+      return;
     }
+
+    const defaults = applyCreateTypeCategoryDefaults(name);
+    setMerchandiseCategory(name);
+    setPendingCategoryName(name);
+    setFormData((prev) => ({
+      ...prev,
+      merchandise_name: defaults.merchandise_name,
+      gender: defaults.gender,
+      type: defaults.type,
+      size: defaults.size,
+    }));
+    setRequiresSizing(defaults.requiresSizing);
     setModalStep('form');
   };
 
@@ -551,6 +553,18 @@ const Merchandise = () => {
     }
 
     const name = formData.merchandise_name?.trim() || '';
+    // New type must be an exact RHET category when catalog is available
+    if (
+      !editingMerchandise &&
+      !editingMerchandiseType &&
+      !viewingStocksFor &&
+      createTypeCategoryOptions.length > 0 &&
+      name &&
+      !createTypeCategoryOptions.some((c) => c.toLowerCase() === name.toLowerCase())
+    ) {
+      errors.merchandise_name =
+        'Select a category from the RHET Inventory list (exact category name required).';
+    }
     const needsSizing =
       requiresSizing ||
       requiresSizingForMerchandise(name) ||
@@ -958,54 +972,20 @@ const Merchandise = () => {
                 </div>
               ) : modalStep === 'category-selection' ? (
                 <div className="flex flex-col overflow-hidden">
-                  <div className="p-6">
-                    <p className="text-sm text-gray-500 mb-4">What type of merchandise do you want to add?</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      <button
-                        type="button"
-                        onClick={() => handleCategorySelect('uniform_school')}
-                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
-                      >
-                        <span className="text-lg font-semibold text-gray-900">School Uniform</span>
-                        <span className="text-xs text-gray-500 mt-1">
-                          Male: Polo/Short · Female: Blouse/Skirt · Size XS–5XL
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCategorySelect('uniform_pe')}
-                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
-                      >
-                        <span className="text-lg font-semibold text-gray-900">PE Uniform</span>
-                        <span className="text-xs text-gray-500 mt-1">Shirt / Pants · Gender · Size XS–5XL</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCategorySelect('uniform_tshirt')}
-                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
-                      >
-                        <span className="text-lg font-semibold text-gray-900">LCA T-Shirt</span>
-                        <span className="text-xs text-gray-500 mt-1">Shirt · usually Unisex · Size XS–5XL</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCategorySelect('backpack')}
-                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
-                      >
-                        <span className="text-lg font-semibold text-gray-900">Backpack</span>
-                        <span className="text-xs text-gray-500 mt-1">Non-uniform item (no gender/type/size)</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCategorySelect('other')}
-                        className="flex flex-col items-center justify-center p-6 rounded-lg border-2 border-gray-200 hover:border-[#F7C844] hover:bg-amber-50 transition-colors text-left w-full"
-                      >
-                        <span className="text-lg font-semibold text-gray-900">Other merchandise</span>
-                        <span className="text-xs text-gray-500 mt-1">Book, Accessory, etc. (not Learning Kit)</span>
-                      </button>
-                    </div>
+                  <div className="p-6 space-y-4">
+                    <p className="text-sm text-gray-500">
+                      Choose the merchandise category from RHET Inventory. The name must match exactly.
+                    </p>
+                    <RhetCategorySelect
+                      id="create_type_rhet_category"
+                      value={pendingCategoryName}
+                      options={createTypeCategoryOptions}
+                      onChange={setPendingCategoryName}
+                      loading={catalogLoading}
+                      error={catalogError}
+                    />
                   </div>
-                  <div className="flex items-center justify-end space-x-3 px-6 pb-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
+                  <div className="flex flex-wrap items-center justify-end gap-3 px-6 pb-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
                     {!selectedBranchId && (
                       <button
                         type="button"
@@ -1021,6 +1001,14 @@ const Merchandise = () => {
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                     >
                       Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCategorySelect(pendingCategoryName)}
+                      disabled={!pendingCategoryName || catalogLoading || Boolean(catalogError)}
+                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      Continue
                     </button>
                   </div>
                 </div>
@@ -1048,6 +1036,20 @@ const Merchandise = () => {
                             />
                             <p className="mt-1 text-xs text-gray-500">Merchandise name is pre-filled from the selected type</p>
                           </div>
+                        ) : merchandiseCategory && !editingMerchandise && !editingMerchandiseType ? (
+                          <div>
+                            <input
+                              type="text"
+                              id="merchandise_name"
+                              name="merchandise_name"
+                              value={formData.merchandise_name}
+                              readOnly
+                              className="input-field bg-gray-50 cursor-not-allowed"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              Locked to RHET Inventory category. Use Back to pick a different category.
+                            </p>
+                          </div>
                         ) : (
                           <>
                             <input
@@ -1058,7 +1060,7 @@ const Merchandise = () => {
                               onChange={handleInputChange}
                               className={`input-field ${formErrors.merchandise_name ? 'border-red-500' : ''}`}
                               required
-                              placeholder="e.g., School Uniform, PE Uniform, Backpack, Book, Accessory"
+                              placeholder="RHET category name"
                             />
                             {formErrors.merchandise_name && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
@@ -1293,7 +1295,12 @@ const Merchandise = () => {
                   {!editingMerchandise && !viewingStocksFor && selectedBranch && (
                     <button
                       type="button"
-                      onClick={() => setModalStep('category-selection')}
+                      onClick={() => {
+                        setPendingCategoryName(
+                          merchandiseCategory || formData.merchandise_name || ''
+                        );
+                        setModalStep('category-selection');
+                      }}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                       disabled={submitting}
                     >

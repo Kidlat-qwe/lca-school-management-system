@@ -15,3 +15,8 @@ Tab panel listing **released stocks** from `merchandise_release_logtbl`.
 **API:** `GET /dashboard/merchandise-released-details` with `summary_month` or `summary_date` (+ optional `branch_id`).
 
 Sources: Package first payment (`package_enroll`) and Merchandise AR (`merchandise_ar`).
+
+## RhetCategorySelect
+
+Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**.
+Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy). Learning Kit excluded.

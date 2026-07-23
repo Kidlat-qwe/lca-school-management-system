@@ -14,6 +14,31 @@ node scripts/migrateMerchandiseLabelsToRhet.js --dry-run
 node scripts/migrateMerchandiseLabelsToRhet.js
 ```
 
+### `clearAllMerchandise.js`
+
+**Destructive.** Deletes all (or one branch’s) `merchandisestbl` catalog/stock rows.
+Also deletes blocking `promomerchandisetbl` links and `merchandise_release_logtbl`
+rows. Keeps merchandise request history (`merchandise_id` set NULL by FK).
+Default is dry-run; require `--apply` to write.
+
+```bash
+node scripts/clearAllMerchandise.js --dry-run
+node scripts/clearAllMerchandise.js --apply
+node scripts/clearAllMerchandise.js --dry-run --branch-id=3
+node scripts/clearAllMerchandise.js --apply --branch-id=3
+```
+
+### `mergeMistakenMerchandiseTypes.js`
+
+Merges mistaken types created from RHET `itemName` (e.g. `lca-backpack`) into the
+real CMS category type (`Backpack`). Moves qty, repoints FKs, deletes the mistaken row.
+Default dry-run.
+
+```bash
+node scripts/mergeMistakenMerchandiseTypes.js --dry-run
+node scripts/mergeMistakenMerchandiseTypes.js --apply
+```
+
 ### `repairInventoryFulfillment.js`
 
 Repairs a CMS merchandise request that RHET already marked **FULFILLED** but CMS left

@@ -19,7 +19,7 @@ import {
   isLearningKitCategory,
   normalizeMerchandiseRequestInput,
 } from '../services/inventory/inventoryFieldMapping.js';
-import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
+import { applyMerchandiseRequestStock, findExistingMerchandiseStockRow } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
 
 const router = express.Router();
@@ -478,10 +478,11 @@ router.post(
       }
 
       // Validate merchandise_id if provided
-      if (merchandise_id) {
+      let linkedMerchandiseId = merchandise_id || null;
+      if (linkedMerchandiseId) {
         const merchandiseCheck = await dbQuery(
           'SELECT merchandise_id, merchandise_name, size FROM merchandisestbl WHERE merchandise_id = $1',
-          [merchandise_id]
+          [linkedMerchandiseId]
         );
 
         if (merchandiseCheck.rows.length === 0) {
@@ -489,6 +490,26 @@ router.post(
             success: false,
             message: 'Merchandise not found',
           });
+        }
+      } else {
+        // Prefer linking the existing CMS type on this branch (Backpack, not lca-backpack)
+        try {
+          const existing = await findExistingMerchandiseStockRow(dbQuery, {
+            requested_branch_id: req.user.branchId,
+            merchandise_id: null,
+            merchandise_name,
+            inventory_category_name,
+            inventory_item_name,
+            inventory_requested_sku,
+            size: size || null,
+            gender: gender || null,
+            type: type || null,
+          });
+          if (existing?.merchandise_id) {
+            linkedMerchandiseId = existing.merchandise_id;
+          }
+        } catch (linkErr) {
+          console.warn('[merchandise-requests] Could not auto-link merchandise_id:', linkErr.message);
         }
       }
 
@@ -502,7 +523,7 @@ router.post(
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'Pending')
           RETURNING *`,
           [
-            merchandise_id || null,
+            linkedMerchandiseId,
             req.user.userId,
             req.user.branchId,
             merchandise_name,
@@ -530,7 +551,7 @@ router.post(
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Pending')
           RETURNING *`,
           [
-            merchandise_id || null,
+            linkedMerchandiseId,
             req.user.userId,
             req.user.branchId,
             merchandise_name,

@@ -18,6 +18,7 @@ import {
   formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 import {
   createEmptyCatalogRequestLine,
@@ -31,6 +32,10 @@ import {
   buildCatalogRequestPayload,
 } from '../../utils/merchandiseRequests/catalogOptions';
 import { isLearningKitMerchandiseName } from '../../utils/merchandiseRequests/learningKit';
+import {
+  getCreateMerchandiseCategoryOptions,
+  applyCreateTypeCategoryDefaults,
+} from '../../utils/merchandiseRequests/createTypeCategory';
 
 const createEmptyBulkLine = createEmptyCatalogRequestLine;
 
@@ -91,6 +96,19 @@ const AdminMerchandise = () => {
     userInfo?.email ||
     'Admin';
   const requestDateDisplay = formatDateManila(new Date());
+  const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
+
+  const applyRhetCategoryToCreateForm = (categoryName) => {
+    const defaults = applyCreateTypeCategoryDefaults(categoryName);
+    setFormData((prev) => ({
+      ...prev,
+      merchandise_name: defaults.merchandise_name,
+      gender: defaults.gender,
+      type: defaults.type,
+      size: defaults.size,
+    }));
+    setRequiresSizing(defaults.requiresSizing);
+  };
 
   // Fetch branch name if not in userInfo
   useEffect(() => {
@@ -280,6 +298,7 @@ const AdminMerchandise = () => {
         remarks: '',
       });
       setEditingMerchandiseType(null);
+      void loadInventoryCatalog();
     }
     setFormErrors({});
     setIsModalOpen(true);
@@ -560,6 +579,21 @@ const AdminMerchandise = () => {
     }
 
     const name = formData.merchandise_name?.trim() || '';
+    if (
+      !editingMerchandise &&
+      !editingMerchandiseType &&
+      !viewingStocksFor &&
+      createTypeCategoryOptions.length > 0 &&
+      name &&
+      !createTypeCategoryOptions.some((c) => c.toLowerCase() === name.toLowerCase())
+    ) {
+      errors.merchandise_name =
+        'Select a category from the RHET Inventory list (exact category name required).';
+    }
+    if (isLearningKitMerchandiseName(name)) {
+      errors.merchandise_name =
+        'Learning Kit is not available via Create Merchandise yet.';
+    }
     const needsSizing =
       requiresSizing ||
       requiresSizingForMerchandise(name) ||
@@ -1063,21 +1097,41 @@ const AdminMerchandise = () => {
                   <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="md:col-span-2">
-                        <label htmlFor="merchandise_name" className="label-field">
-                          Merchandise Name <span className="text-red-500">*</span>
-                        </label>
                         {viewingStocksFor && !editingMerchandise ? (
-                          <div>
-                            <input
-                              type="text"
+                          <>
+                            <label htmlFor="merchandise_name" className="label-field">
+                              Merchandise Name <span className="text-red-500">*</span>
+                            </label>
+                            <div>
+                              <input
+                                type="text"
+                                value={formData.merchandise_name}
+                                readOnly
+                                className="input-field bg-gray-50 cursor-not-allowed"
+                              />
+                              <p className="mt-1 text-xs text-gray-500">Merchandise name is pre-filled from the selected type</p>
+                            </div>
+                          </>
+                        ) : !editingMerchandise && !editingMerchandiseType ? (
+                          <>
+                            <RhetCategorySelect
+                              id="merchandise_name"
                               value={formData.merchandise_name}
-                              readOnly
-                              className="input-field bg-gray-50 cursor-not-allowed"
+                              options={createTypeCategoryOptions}
+                              onChange={applyRhetCategoryToCreateForm}
+                              loading={catalogLoading}
+                              error={catalogError}
+                              className={formErrors.merchandise_name ? 'border-red-500' : ''}
                             />
-                            <p className="mt-1 text-xs text-gray-500">Merchandise name is pre-filled from the selected type</p>
-                          </div>
+                            {formErrors.merchandise_name && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
+                            )}
+                          </>
                         ) : (
                           <>
+                            <label htmlFor="merchandise_name" className="label-field">
+                              Merchandise Name <span className="text-red-500">*</span>
+                            </label>
                             <input
                               type="text"
                               id="merchandise_name"
@@ -1086,7 +1140,7 @@ const AdminMerchandise = () => {
                               onChange={handleInputChange}
                               className={`input-field ${formErrors.merchandise_name ? 'border-red-500' : ''}`}
                               required
-                              placeholder="e.g., LCA Uniform, LCA Learning Kit, LCA Bag, LCA Keychain, LCA Totebag"
+                              placeholder="RHET category name"
                             />
                             {formErrors.merchandise_name && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
