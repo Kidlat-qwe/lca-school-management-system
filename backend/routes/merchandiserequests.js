@@ -12,7 +12,12 @@ import {
   getStockRequest,
   InventoryApiError,
 } from '../services/inventory/inventoryClient.js';
-import { buildInventorySubmitPayload } from '../services/inventory/inventoryFieldMapping.js';
+import {
+  buildInventorySubmitPayload,
+  pickApproverName,
+  looksLikeUuid,
+  isLearningKitCategory,
+} from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
 
 const router = express.Router();
@@ -94,7 +99,7 @@ router.get(
   requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
-      const { status, branch_id, page = 1, limit = 15 } = req.query;
+      const { status, branch_id, page = 1, limit = 100 } = req.query;
       const offset = (page - 1) * limit;
 
       let sql = `
@@ -148,9 +153,31 @@ router.get(
 
       const result = await dbQuery(sql, params);
 
+      // Explicitly surface Approved By so the UI never depends on SELECT * quirks.
+      // Skip raw UUIDs (RHET sometimes sends user id instead of display name).
+      const uuidRe =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const data = result.rows.map((row) => {
+        const rawProcessed =
+          row.inventory_processed_by != null
+            ? String(row.inventory_processed_by).trim()
+            : '';
+        const inventoryProcessedBy =
+          rawProcessed && !uuidRe.test(rawProcessed) ? rawProcessed : '';
+        const reviewedByName =
+          row.reviewed_by_name != null ? String(row.reviewed_by_name).trim() : '';
+        const approvedBy = inventoryProcessedBy || reviewedByName || null;
+
+        return {
+          ...row,
+          inventory_processed_by: inventoryProcessedBy || null,
+          approved_by: approvedBy,
+        };
+      });
+
       res.json({
         success: true,
-        data: result.rows,
+        data,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -354,6 +381,18 @@ router.post(
     try {
       const { merchandise_id, merchandise_name, size, requested_quantity, request_reason, gender, type } = req.body;
 
+      // Learning Kit requests are not yet supported: RHET Inventory matches kits via a
+      // category-slot BOM + request-time components[], which Request Stock does not
+      // collect yet. Block before insert so no orphaned local/RHET rows are created.
+      if (isLearningKitCategory(merchandise_name)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Learning Kit requests are not yet supported via Request Stock. Please request Learning Kit stock directly through RHET Inventory.',
+          error: { code: 'LEARNING_KIT_NOT_SUPPORTED' },
+        });
+      }
+
       // Validate merchandise_id if provided
       if (merchandise_id) {
         const merchandiseCheck = await dbQuery(
@@ -539,6 +578,41 @@ router.post(
       }
 
       if (request.status === 'Approved') {
+        const remote = await getStockRequest(request.inventory_request_id);
+        const processedBy = pickApproverName(remote.data || remote);
+        const existingProcessedBy = request.inventory_processed_by
+          ? String(request.inventory_processed_by).trim()
+          : '';
+        const needsNameBackfill =
+          processedBy && (!existingProcessedBy || looksLikeUuid(existingProcessedBy));
+
+        if (needsNameBackfill) {
+          await client.query(
+            `UPDATE merchandiserequestlogtbl
+             SET inventory_processed_by = $1,
+                 inventory_status = COALESCE($2, inventory_status),
+                 inventory_matched_sku = COALESCE($3, inventory_matched_sku),
+                 inventory_synced_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $4`,
+            [
+              processedBy,
+              remote.data?.status ? String(remote.data.status).toUpperCase() : null,
+              remote.data?.matchedSku || null,
+              request.request_id,
+            ]
+          );
+          const refreshed = await client.query(
+            'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1',
+            [request.request_id]
+          );
+          await client.query('COMMIT');
+          return res.json({
+            success: true,
+            message: 'Request already approved — backfilled Approved By from RHET',
+            data: refreshed.rows[0],
+          });
+        }
         await client.query('COMMIT');
         return res.json({
           success: true,
@@ -549,15 +623,22 @@ router.post(
 
       const remote = await getStockRequest(request.inventory_request_id);
       const remoteStatus = String(remote.data?.status || '').toUpperCase();
+      const processedBy = pickApproverName(remote.data || remote);
 
       await client.query(
         `UPDATE merchandiserequestlogtbl
          SET inventory_status = $1,
              inventory_matched_sku = COALESCE($2, inventory_matched_sku),
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
              inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE request_id = $3`,
-        [remoteStatus || null, remote.data?.matchedSku || null, request.request_id]
+         WHERE request_id = $4`,
+        [
+          remoteStatus || null,
+          remote.data?.matchedSku || null,
+          processedBy,
+          request.request_id,
+        ]
       );
 
       if (remoteStatus !== 'FULFILLED') {
@@ -565,7 +646,11 @@ router.post(
         return res.json({
           success: true,
           message: `RHET status is ${remoteStatus || 'unknown'} — stock is only added when FULFILLED`,
-          data: { ...request, inventory_status: remoteStatus },
+          data: {
+            ...request,
+            inventory_status: remoteStatus,
+            inventory_processed_by: processedBy || request.inventory_processed_by,
+          },
         });
       }
 
@@ -584,12 +669,14 @@ router.post(
              reviewed_at = CURRENT_TIMESTAMP,
              review_notes = COALESCE(review_notes, $1),
              inventory_status = 'FULFILLED',
+             inventory_processed_by = COALESCE($2, inventory_processed_by),
              inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE request_id = $2
+         WHERE request_id = $3
          RETURNING *`,
         [
           `Synced from RHET Inventory (${remote.data?.matchedSku || request.inventory_request_id}). Stock ${stockResult.action}.`,
+          processedBy,
           request.request_id,
         ]
       );

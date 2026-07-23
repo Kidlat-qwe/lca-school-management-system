@@ -9,10 +9,11 @@ const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
 const ENROLLED_STATUSES_LIST = ['new', 're_enrolled', 'upsell', 'rejoin', 'completed'];
 
-/** Billing anchor: earliest active enrolled phase (exclude dropped/unenrolled rows). */
+/** Billing anchor: earliest enrolled-status phase (new/re_enrolled/…).
+ * Includes historical rows with removed_at set after a later drop so Feb/Mar
+ * billing months still resolve when the student is already dropped. */
 const MATRIX_BILLING_ANCHOR_ACTIVE_WHERE = `
   AND program_enrollment_status IN ${ENROLLED_STATUSES}
-  AND removed_at IS NULL
 `;
 
 /**
@@ -475,6 +476,32 @@ const isDroppedMonthMatrixCell = (cell) =>
   cell?.label === 'dropped' ||
   cell?.calendar_dropped === true;
 
+const getMatrixDropAnchorTime = (dropCell) => {
+  if (!dropCell) return null;
+  const raw = dropCell.removed_at || dropCell.enrolled_at || null;
+  if (!raw) return null;
+  const t = new Date(raw);
+  return Number.isNaN(t.getTime()) ? null : t;
+};
+
+/**
+ * True comeback after a drop — rejoin, or enrolled row created after the drop timestamp.
+ * Stale pre-drop enrollment rows (e.g. phase 3 re_enrolled before drop at phase 2) are excluded.
+ */
+const isValidMatrixComebackAfterDrop = (cell, dropCell) => {
+  if (!cell || cell.mark !== '1') return false;
+  const status = String(cell.status || '').toLowerCase();
+  if (status === 'rejoin' || cell.label === 'rejoin') return true;
+  if (!ENROLLED_STATUSES_LIST.includes(status)) return false;
+  if (cell.removed_at) return false;
+  const dropAt = getMatrixDropAnchorTime(dropCell);
+  const enrollAt = cell.enrolled_at ? new Date(cell.enrolled_at) : null;
+  if (dropAt && enrollAt && !Number.isNaN(enrollAt.getTime())) {
+    return enrollAt > dropAt;
+  }
+  return false;
+};
+
 const isActiveMonthMatrixCell = (cell) =>
   cell?.mark === '1' &&
   ENROLLED_STATUSES_LIST.includes(String(cell?.status || '').toLowerCase());
@@ -508,13 +535,28 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
       let comebackIdx = -1;
       for (let j = i + 1; j < monthKeys.length; j += 1) {
         const cell = student.months[monthKeys[j]];
-        if (isActiveMonthMatrixCell(cell)) {
+        if (isValidMatrixComebackAfterDrop(cell, dropCell)) {
           comebackIdx = j;
           break;
         }
         if (isDroppedMonthMatrixCell(cell)) break;
       }
-      if (comebackIdx < 0) continue;
+      if (comebackIdx < 0) {
+        for (let j = i + 1; j < monthKeys.length; j += 1) {
+          const gapKey = monthKeys[j];
+          const gapCell = student.months[gapKey];
+          if (String(gapCell?.label || '').toLowerCase() === 'inactive') continue;
+          if (gapCell?.mark === '1' || isValidMatrixComebackAfterDrop(gapCell, dropCell)) continue;
+          student.months[gapKey] = {
+            mark: '-',
+            label: null,
+            status: null,
+            phase_number: null,
+            matrix_drop_rejoin_cleared: true,
+          };
+        }
+        continue;
+      }
 
       const gapStart = i + 1;
       const gapEnd = comebackIdx - 1;
@@ -561,6 +603,94 @@ const applyDropRejoinGapMonthMatrixRules = (students, displayMonths) => {
         comebackCell.label = 'rejoin';
         comebackCell.status = 'rejoin';
         delete comebackCell.matrix_rejoin_shifted;
+      }
+    }
+  }
+};
+
+/** Phase-matrix drop/rejoin gap rules (mirrors month matrix; uses enrolled_at vs drop time). */
+const applyDropRejoinGapPhaseMatrixRules = (students, phases) => {
+  const phaseKeys = phases.map((p) => p.key);
+
+  for (const student of students) {
+    if (!student.phases) continue;
+
+    for (const key of phaseKeys) {
+      const cell = student.phases[key];
+      if (isDroppedMonthMatrixCell(cell)) {
+        cell.label = 'dropped';
+        cell.status = 'dropped';
+      }
+    }
+
+    for (let i = 0; i < phaseKeys.length; i += 1) {
+      const dropKey = phaseKeys[i];
+      const dropCell = student.phases[dropKey];
+      if (!isDroppedMonthMatrixCell(dropCell)) continue;
+
+      let comebackIdx = -1;
+      for (let j = i + 1; j < phaseKeys.length; j += 1) {
+        const cell = student.phases[phaseKeys[j]];
+        if (isValidMatrixComebackAfterDrop(cell, dropCell)) {
+          comebackIdx = j;
+          break;
+        }
+        if (isDroppedMonthMatrixCell(cell)) break;
+      }
+
+      if (comebackIdx < 0) {
+        for (let j = i + 1; j < phaseKeys.length; j += 1) {
+          const gapKey = phaseKeys[j];
+          const gapCell = student.phases[gapKey];
+          if (String(gapCell?.label || '').toLowerCase() === 'inactive') continue;
+          student.phases[gapKey] = {
+            mark: '-',
+            label: '',
+            status: null,
+            phase_number: parseInt(gapKey, 10) || null,
+            matrix_drop_rejoin_cleared: true,
+          };
+        }
+        continue;
+      }
+
+      const gapStart = i + 1;
+      const gapEnd = comebackIdx - 1;
+      if (gapStart <= gapEnd) {
+        for (let g = gapStart; g <= gapEnd; g += 1) {
+          const gapKey = phaseKeys[g];
+          const gapCell = student.phases[gapKey];
+          if (g === i + 1 && String(gapCell?.label || '').toLowerCase() === 'inactive') {
+            continue;
+          }
+          if (
+            !gapCell ||
+            gapCell.matrix_drop_rejoin_gap ||
+            gapCell.mark === '1' ||
+            gapCell.label === 'rejoin' ||
+            gapCell.status === 'rejoin'
+          ) {
+            student.phases[gapKey] = {
+              mark: '-',
+              label: '',
+              status: null,
+              phase_number: parseInt(gapKey, 10) || null,
+              matrix_drop_rejoin_cleared: true,
+            };
+          }
+        }
+      }
+
+      const comebackCell = student.phases[phaseKeys[comebackIdx]];
+      if (
+        comebackCell &&
+        (comebackCell.status === 'rejoin' ||
+          comebackCell.label === 'rejoin' ||
+          comebackCell.calendar_rejoin)
+      ) {
+        comebackCell.mark = '1';
+        comebackCell.label = 'rejoin';
+        comebackCell.status = 'rejoin';
       }
     }
   }
@@ -745,7 +875,10 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
     if (!anchor) continue;
 
     const anchorIdx = levelTagIndex(anchor.class_level_tag);
-    const handoffMonthKey = findLastCompletedMonthKey(anchor);
+    // Prefer a completed handoff; fall back to last enrolled month when the lower
+    // track ended without "completed" (e.g. dropped, then moved to a higher program).
+    const handoffMonthKey =
+      findLastCompletedMonthKey(anchor) || findLastEnrolledMonthKey(anchor);
     if (!handoffMonthKey) continue;
 
     const handoffUpsellMonthKey = nextCalendarMonthKey(handoffMonthKey);
@@ -863,7 +996,8 @@ const applyUpsellMonthMatrixSameRowRules = (tracks, { siblingTracksByStudent = n
 
 /**
  * Phase matrix: upsell students stay on their own row (higher program track).
- * First enrolled phase shows "upsell" when a lower program was completed.
+ * First enrolled phase shows "upsell" when a lower program was completed or
+ * previously enrolled (including drop-then-level-up).
  */
 const applyUpsellPhaseMatrixSeparateRowRules = (tracks, { siblingTracksByStudent = null } = {}) => {
   const byStudent = new Map();
@@ -889,16 +1023,19 @@ const applyUpsellPhaseMatrixSeparateRowRules = (tracks, { siblingTracksByStudent
       const curIdx = levelTagIndex(track.class_level_tag);
       if (curIdx < 0) continue;
 
-      const hasCompletedLowerProgram = studentTracks.some((other) => {
+      const hasLowerProgramHistory = studentTracks.some((other) => {
         if (other.class_id === track.class_id) return false;
         const otherIdx = levelTagIndex(other.class_level_tag);
+        if (otherIdx < 0 || otherIdx >= curIdx) return false;
         return (
-          otherIdx >= 0 &&
-          otherIdx < curIdx &&
-          trackHasCompletedEnrollment(other, 'phases')
+          trackHasCompletedEnrollment(other, 'phases') ||
+          trackHasEnrolledMonth(other, 'phases') ||
+          Object.values(other.phases || {}).some((cell) =>
+            isDroppedMonthMatrixCell(cell)
+          )
         );
       });
-      if (!hasCompletedLowerProgram) continue;
+      if (!hasLowerProgramHistory) continue;
 
       const cells = track.phases || {};
       let firstKey = track.first_enrolled_phase;
@@ -2551,6 +2688,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           sr.phase_number,
           sr.program_enrollment_status,
           sr.removed_at,
+          sr.enrolled_at,
           sr.is_full_payment,
           ROW_NUMBER() OVER (
             PARTITION BY sr.student_id, sr.class_id, sr.phase_number
@@ -2566,6 +2704,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
           ps.phase_number,
           spl.program_enrollment_status,
           spl.removed_at,
+          spl.enrolled_at,
           spl.is_full_payment
         FROM cohort co
         CROSS JOIN phase_series ps
@@ -2584,6 +2723,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
         m.phase_number,
         m.program_enrollment_status,
         m.removed_at,
+        m.enrolled_at,
         m.is_full_payment,
         tfe.first_enrolled_at,
         tm.class_number_of_phase,
@@ -2651,6 +2791,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
       ...cell,
       phase_number: phaseNumber,
       is_full_payment: Boolean(row.is_full_payment),
+      enrolled_at: row.enrolled_at || null,
+      removed_at: removedAt,
     };
   }
 
@@ -2704,6 +2846,8 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     siblingTracksByStudent,
   });
   applyMatrixTrackDisplayNames(students);
+
+  applyDropRejoinGapPhaseMatrixRules(students, phases);
 
   const reservationTrackKeys = await loadReservationToEnrollmentTrackKeys(queryFn, {
     branchId,
@@ -2813,6 +2957,25 @@ const buildPaymentLifecycleCell = (isActive, phaseNumber, dueDateYmd = null) => 
   payment_lifecycle: true,
   invoice_due_date: dueDateYmd,
 });
+
+/**
+ * True when the track's only enrollment badge is "completed"
+ * (Active/Inactive lifecycle cells are ignored). Used to suppress a redundant
+ * Active after a finished single-status / single-phase package.
+ */
+const trackHasOnlyCompletedEnrollmentStatus = (cellBucket) => {
+  let enrolledCount = 0;
+  let completedCount = 0;
+  for (const cell of Object.values(cellBucket || {})) {
+    if (!cell || cell.payment_lifecycle) continue;
+    const status = String(cell.status || '').toLowerCase();
+    if (cell.mark !== '1') continue;
+    if (!MATRIX_LIFECYCLE_ANCHOR_STATUSES.has(status)) continue;
+    enrolledCount += 1;
+    if (status === 'completed') completedCount += 1;
+  }
+  return enrolledCount === 1 && completedCount === 1;
+};
 
 /** Map student_id → installment track keys (student_id:class_id) in matrix scope. */
 const buildInstallmentTrackKeysByStudent = (installmentTrackKeys) => {
@@ -3398,6 +3561,7 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
     if (!cell) continue;
     const status = String(cell?.status || '').toLowerCase();
     if (cell.mark === '1' && MATRIX_LIFECYCLE_ANCHOR_STATUSES.has(status)) {
+      if (cell.removed_at) continue;
       latestIdx = i;
     } else if (isDroppedMonthMatrixCell(cell)) {
       latestIdx = i;
@@ -3414,6 +3578,8 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
  * - After **pending_enrollment**, the immediate next period is always **Inactive**
  *   (downpayment paid but Phase 1 not settled — not yet Active).
  * - After enrolled cells: **Active** when no unpaid invoice exists yet; **Inactive** when unpaid.
+ * - When the track's **only** enrollment status is **completed**, do not overlay Active/Inactive
+ *   (package already finished — Active is redundant).
  * - Paid periods keep re-enrolled / new from enrollment rows.
  */
 const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, options = {}) => {
@@ -3444,6 +3610,9 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
     );
     if (!installmentTrackKey) continue;
     if (installmentCompleteByTrack.get(installmentTrackKey)) continue;
+
+    // Single-status completed tracks (e.g. Active Champs short course): show completed only.
+    if (trackHasOnlyCompletedEnrollmentStatus(cellBucket)) continue;
 
     const latestEnrolledIdx = findLatestInstallmentLifecycleAnchorIndex(cellBucket, periods);
     if (latestEnrolledIdx < 0 || latestEnrolledIdx >= periods.length - 1) continue;
@@ -3732,11 +3901,13 @@ const loadUpsellSiblingTracksForMonthMatrix = async (
 
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
+    // Historical paid phases keep new/re_enrolled with removed_at after a later drop.
+    // Only status "dropped" is the drop marker — removed_at alone must not imply dropped.
+    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status);
     const mark = isEnrolled ? '1' : '-';
     const label = isEnrolled
       ? normalizeEnrollmentLabel(status)
-      : status === 'dropped' || removedAt != null
+      : status === 'dropped'
         ? 'dropped/unenrolled'
         : normalizeEnrollmentLabel(status);
 
@@ -3746,6 +3917,8 @@ const loadUpsellSiblingTracksForMonthMatrix = async (
       status,
       phase_number: matrixCellPhaseNumber(row.phase_number),
       is_full_payment: Boolean(row.is_full_payment),
+      enrolled_at: row.enrolled_at || null,
+      removed_at: removedAt,
     };
   }
 
@@ -4414,7 +4587,6 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         FROM phase_billing
         WHERE billing_month IS NOT NULL
           AND program_enrollment_status IN ${ENROLLED_STATUSES}
-          AND removed_at IS NULL
         GROUP BY student_id, class_id
       ),
       last_full_pay AS (
@@ -4561,13 +4733,15 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     const status = row.program_enrollment_status || null;
     const removedAt = row.removed_at || null;
-    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status) && removedAt == null;
+    // Historical paid phases keep new/re_enrolled with removed_at after a later drop.
+    // Only status "dropped" is the drop marker — removed_at alone must not imply dropped.
+    const isEnrolled = status && ENROLLED_STATUSES_LIST.includes(status);
     const isReservedOrPending =
-      (status === 'reserved' || status === 'pending_enrollment') && removedAt == null;
+      status === 'reserved' || status === 'pending_enrollment';
     const mark = isEnrolled || isReservedOrPending ? '1' : '-';
     const label = isEnrolled || isReservedOrPending
       ? normalizeEnrollmentLabel(status)
-      : status === 'dropped' || removedAt != null
+      : status === 'dropped'
         ? 'dropped/unenrolled'
         : normalizeEnrollmentLabel(status);
 
@@ -4577,6 +4751,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
       status,
       phase_number: matrixCellPhaseNumber(row.phase_number),
       is_full_payment: Boolean(row.is_full_payment),
+      enrolled_at: row.enrolled_at || null,
+      removed_at: removedAt,
     };
   }
 

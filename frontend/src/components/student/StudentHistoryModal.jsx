@@ -444,6 +444,11 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
   const userType = userInfo?.userType || userInfo?.user_type;
   const isFinanceLimitedView = userType === 'Finance' || userType === 'Superfinance';
 
+  const focusClassId =
+    student?.focus_class_id != null ? Number(student.focus_class_id) : null;
+  const focusClassName = String(student?.focus_class_name || '').trim();
+  const openInitialTab = student?.initial_tab || student?.initialTab || null;
+
   const visibleTabs = useMemo(
     () => (isFinanceLimitedView ? TABS.filter((tab) => FINANCE_LIMITED_TAB_IDS.has(tab.id)) : TABS),
     [isFinanceLimitedView]
@@ -464,6 +469,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
   const [uploadingPicture, setUploadingPicture] = useState(false);
   const [guardianDirtyMap, setGuardianDirtyMap] = useState({});
   const fileInputRef = useRef(null);
+  const focusedPlanRef = useRef(null);
 
   const studentId = student?.user_id;
 
@@ -546,7 +552,12 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
 
   useEffect(() => {
     if (isOpen && studentId) {
-      setActiveTab(isFinanceLimitedView ? FINANCE_DEFAULT_TAB : 'student');
+      const defaultTab = isFinanceLimitedView ? FINANCE_DEFAULT_TAB : 'student';
+      const nextTab =
+        openInitialTab && visibleTabs.some((tab) => tab.id === openInitialTab)
+          ? openInitialTab
+          : defaultTab;
+      setActiveTab(nextTab);
       loadData();
     } else if (!isOpen) {
       setDetailUser(null);
@@ -562,7 +573,17 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
       setSaving(false);
       setSavingMessage('');
     }
-  }, [isOpen, studentId, loadData, isFinanceLimitedView]);
+  }, [isOpen, studentId, loadData, isFinanceLimitedView, openInitialTab, visibleTabs]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'invoices' || focusClassId == null || loading) return;
+    const el = focusedPlanRef.current;
+    if (!el) return;
+    const timer = window.setTimeout(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, activeTab, focusClassId, loading, installmentRows.length]);
 
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.id === activeTab)) {
@@ -1168,6 +1189,9 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                     installmentRows.map((inv, idx) => {
                       const profileId = inv.installmentinvoiceprofiles_id;
                       if (!profileId) return null;
+                      const isFocusedPlan =
+                        focusClassId != null &&
+                        Number(inv.class_id) === focusClassId;
                       const planTitleParts = [
                         inv.program_name,
                         inv.package_description,
@@ -1175,7 +1199,18 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                       return (
                         <section
                           key={`plan-${profileId}`}
-                          className="rounded-lg border border-gray-200 bg-white p-2 sm:p-3"
+                          ref={isFocusedPlan ? focusedPlanRef : null}
+                          className={[
+                            'rounded-lg border bg-white p-2 sm:p-3 transition-shadow',
+                            isFocusedPlan
+                              ? 'border-primary-500 ring-2 ring-primary-400/60 bg-primary-50/30 shadow-md'
+                              : 'border-gray-200',
+                          ].join(' ')}
+                          aria-label={
+                            isFocusedPlan && focusClassName
+                              ? `Selected plan for ${focusClassName}`
+                              : undefined
+                          }
                         >
                           <header className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
                             <h3 className="text-sm sm:text-base font-semibold text-gray-900">
@@ -1183,6 +1218,11 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                               {planTitleParts.length > 0 ? (
                                 <span className="ml-2 text-gray-500 font-normal">
                                   · {planTitleParts.join(' \u2013 ')}
+                                </span>
+                              ) : null}
+                              {isFocusedPlan ? (
+                                <span className="ml-2 inline-flex items-center rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-800">
+                                  Selected class
                                 </span>
                               ) : null}
                             </h3>

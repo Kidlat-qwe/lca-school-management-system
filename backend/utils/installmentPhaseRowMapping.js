@@ -247,6 +247,7 @@ const INSTALLMENT_PLAN_ENROLLMENT_KEYS = new Set([
   'dropped',
   'rejoin',
   're_enrolled',
+  'upsell',
   'completed',
 ]);
 
@@ -308,7 +309,7 @@ export function inferInstallmentPhaseEnrollmentStatus({
 
 /**
  * Enrollment label for installment plan phase rows (absolute class phase).
- * Canonical display values: new, dropped, rejoin, re_enrolled, completed.
+ * Canonical display values: new, dropped, rejoin, re_enrolled, upsell, completed.
  *
  * @param {Map<number, { program_enrollment_status: string }>} enrollmentByAbsolutePhase
  */
@@ -327,6 +328,10 @@ export function resolveInstallmentPhaseEnrollmentStatus({
   }
   if (dbStatus === 'completed') {
     return 'completed';
+  }
+  // Prefer stored upsell over paid-phase inference (which would otherwise yield "new").
+  if (dbStatus === 'upsell') {
+    return 'upsell';
   }
 
   if (phaseRow?.billing_kind === 'late_start_gap') {
@@ -376,9 +381,6 @@ export function resolveInstallmentPhaseEnrollmentStatus({
 
   if (dbStatus && INSTALLMENT_PLAN_ENROLLMENT_KEYS.has(dbStatus)) {
     return dbStatus;
-  }
-  if (dbStatus === 'upsell') {
-    return 're_enrolled';
   }
 
   return null;

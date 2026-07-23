@@ -4,6 +4,21 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `auditClassActivePhase.js`
+
+**Read-only** audit of Class Details **Current / auto-opened phase**. Compares the old buggy UI rule (often stuck on Phase 2 after Phase 1 ends) vs the fixed date-based rule. Does not update the database.
+
+Flag **`WOULD_OPEN_WRONG_PHASE`** means schedule **data is fine**, but the **old UI logic** would open the wrong Current phase. It is not a data-quality error.
+
+```bash
+node scripts/auditClassActivePhase.js
+node scripts/auditClassActivePhase.js --mismatches-only
+node scripts/auditClassActivePhase.js --branch-id=3 --today=2026-07-20
+node scripts/auditClassActivePhase.js --class-id=123 --json
+```
+
+Exit code `0` = old UI and correct rule agree; `2` = at least one class where old UI would open wrong phase; `1` = script error.
+
 ### `findStudentsWithDueDateAndPenalty.js`
 
 Lists **students** whose invoice **due_date** falls on a target calendar day/month and who already have a **late penalty** (`late_penalty_applied_for_due_date` and/or `invoiceitemstbl.penalty_amount > 0`).

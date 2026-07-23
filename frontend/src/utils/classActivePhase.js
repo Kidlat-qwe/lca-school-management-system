@@ -88,8 +88,16 @@ export const getPhaseLastSessionDate = (
 
 /**
  * Which phase is "current" for display and enrollment floor.
- * Once today is after a phase's last session date, the next phase becomes the floor
- * (enrollment into earlier phases is closed).
+ *
+ * Walk phases in order and pick the first whose last session is still on/after today.
+ * That covers:
+ * - today inside a phase date range → that phase
+ * - today in a gap after phase N ended → upcoming phase N+1
+ * - today before phase 1 starts → phase 1
+ * - today after every phase ended → last phase
+ *
+ * Important: do NOT return as soon as the first completed phase is found
+ * (that incorrectly forced Phase 2 whenever Phase 1 had ended).
  */
 export const calculateActivePhase = (
   phaseSessions,
@@ -127,48 +135,13 @@ export const calculateActivePhase = (
       lastSession.phase_session_number
     );
 
-    if (firstSessionDate && lastSessionDate) {
-      if (todayStr >= firstSessionDate && todayStr <= lastSessionDate) {
-        return phaseNum;
-      }
-    } else if (firstSessionDate && todayStr >= firstSessionDate) {
+    // Prefer last-session boundary: still active, upcoming (gap), or not-yet-started.
+    if (lastSessionDate && todayStr <= lastSessionDate) {
       return phaseNum;
     }
-  }
 
-  const firstPhase = phases[0];
-  if (firstPhase?.sessions?.length) {
-    const firstSession = firstPhase.sessions[0];
-    const firstSessionDate = resolveSessionDate(
-      classSessions,
-      classDetails,
-      daysOfWeek,
-      sessionsPerPhase,
-      firstSession.phase_number,
-      firstSession.phase_session_number
-    );
-
-    if (firstSessionDate && todayStr < firstSessionDate) {
-      return firstPhase.phaseNum;
-    }
-  }
-
-  for (let i = 0; i < phases.length; i += 1) {
-    const { phaseNum, sessions } = phases[i];
-    const lastSession = sessions[sessions.length - 1];
-    const lastSessionDate = resolveSessionDate(
-      classSessions,
-      classDetails,
-      daysOfWeek,
-      sessionsPerPhase,
-      lastSession.phase_number,
-      lastSession.phase_session_number
-    );
-
-    if (lastSessionDate && todayStr > lastSessionDate) {
-      if (i < phases.length - 1) {
-        return phases[i + 1].phaseNum;
-      }
+    // Incomplete schedule: fall back to first-session date only.
+    if (!lastSessionDate && firstSessionDate && todayStr >= firstSessionDate) {
       return phaseNum;
     }
   }

@@ -16,6 +16,7 @@
 import '../config/loadEnv.js';
 import { query, getClient } from '../config/database.js';
 import { getStockRequest, isInventoryIntegrationEnabled } from '../services/inventory/inventoryClient.js';
+import { pickApproverName } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
 
 function argValue(name) {
@@ -65,13 +66,14 @@ try {
 
   const remote = await getStockRequest(inventoryRequestId);
   const remoteStatus = String(remote.data?.status || '').toUpperCase();
-  console.log('RHET status:', remoteStatus, 'SKU:', remote.data?.matchedSku);
+  const processedBy = pickApproverName(remote.data || remote);
+  console.log('RHET status:', remoteStatus, 'SKU:', remote.data?.matchedSku, 'by:', processedBy);
 
   if (remoteStatus !== 'FULFILLED') {
     throw new Error(`RHET status is ${remoteStatus}, expected FULFILLED`);
   }
 
-  // Best-effort store tracking fields (requires migration 124).
+  // Best-effort store tracking fields (requires migrations 124 + 126).
   try {
     await client.query(
       `UPDATE merchandiserequestlogtbl
@@ -79,18 +81,20 @@ try {
            inventory_status = 'FULFILLED',
            inventory_external_reference = COALESCE($2, inventory_external_reference),
            inventory_matched_sku = COALESCE($3, inventory_matched_sku),
+           inventory_processed_by = COALESCE($4, inventory_processed_by),
            inventory_synced_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP
-       WHERE request_id = $4`,
+       WHERE request_id = $5`,
       [
         inventoryRequestId,
         remote.data?.externalReference || null,
         remote.data?.matchedSku || null,
+        processedBy,
         request.request_id,
       ]
     );
   } catch (e) {
-    console.warn('Could not update inventory_* columns (run migration 124):', e.message);
+    console.warn('Could not update inventory_* columns (run migrations 124/126):', e.message);
   }
 
   const stockResult = await applyMerchandiseRequestStock(client, request);

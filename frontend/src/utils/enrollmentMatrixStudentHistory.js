@@ -8,6 +8,9 @@ export const matrixTrackToHistoryStudent = (track) => {
     user_id: userId,
     full_name: track.full_name || track.display_name || '',
     email: track.email || '',
+    focus_class_id: track.class_id ?? null,
+    focus_class_name: track.class_name || track.class_level_tag || '',
+    initial_tab: 'invoices',
   };
 };
 

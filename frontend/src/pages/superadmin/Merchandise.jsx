@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import {
@@ -17,6 +17,7 @@ import {
   countUniformPiecesByType,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -123,7 +124,7 @@ const Merchandise = () => {
 
   const fetchAllRequests = async () => {
     try {
-      const response = await apiRequest('/merchandise-requests');
+      const response = await apiRequest('/merchandise-requests?limit=100');
       setRequests(response.data || []);
     } catch (err) {
       console.error('Error fetching requests:', err);
@@ -1490,12 +1491,12 @@ const Merchandise = () => {
                   <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                     <h3 className="text-sm font-medium text-gray-700 mb-3">Review Information</h3>
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                      {selectedRequest.reviewed_by_name && (
-                        <div>
-                          <span className="text-gray-500">Reviewed by:</span>
-                          <p className="font-medium text-gray-900">{selectedRequest.reviewed_by_name}</p>
-                        </div>
-                      )}
+                      <div>
+                        <span className="text-gray-500">Approved by:</span>
+                        <p className="font-medium text-gray-900">
+                          {getMerchandiseRequestApprovedBy(selectedRequest)}
+                        </p>
+                      </div>
                       {selectedRequest.reviewed_at && (
                         <div>
                           <span className="text-gray-500">Reviewed at:</span>
@@ -2296,7 +2297,7 @@ const Merchandise = () => {
           {requests.length > 0 ? (
             <div className="bg-white rounded-lg shadow">
               <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1000px' }}>
+                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px' }}>
                   <thead className="bg-white">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -2306,10 +2307,16 @@ const Merchandise = () => {
                         Branch
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Name
+                        Requested By
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Date
+                        Status
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Approved By
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Date & Time
                       </th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Actions
@@ -2328,8 +2335,16 @@ const Merchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{request.requested_by_name || 'N/A'}</div>
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {getStatusBadge(request.status)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">
+                            {getMerchandiseRequestApprovedBy(request)}
+                          </div>
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDateManila(request.created_at)}
+                          {formatDateTimeManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && !request.inventory_request_id && (

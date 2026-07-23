@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import MerchandiseImageUpload from '../../components/MerchandiseImageUploadS3';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatDateManila } from '../../utils/dateUtils';
+import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import {
   UNIFORM_SIZE_OPTIONS,
@@ -15,6 +15,11 @@ import {
   countUniformPiecesByType,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
+import {
+  isLearningKitMerchandiseName,
+  LEARNING_KIT_NOT_SUPPORTED_MESSAGE,
+} from '../../utils/merchandiseRequests/learningKit';
 
 const createEmptyBulkLine = () => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -149,7 +154,7 @@ const AdminMerchandise = () => {
 
   const fetchMerchandiseRequests = async () => {
     try {
-      const response = await apiRequest('/merchandise-requests');
+      const response = await apiRequest('/merchandise-requests?limit=100');
       setRequests(response.data || []);
     } catch (err) {
       console.error('Error fetching merchandise requests:', err);
@@ -602,6 +607,8 @@ const AdminMerchandise = () => {
       const name = (line.merchandise_name || '').trim();
       if (!name) {
         row.merchandise_name = 'Item is required';
+      } else if (isLearningKitMerchandiseName(name)) {
+        row.merchandise_name = LEARNING_KIT_NOT_SUPPORTED_MESSAGE;
       }
 
       const needsSizing = requiresSizingForMerchandise(name);
@@ -643,6 +650,8 @@ const AdminMerchandise = () => {
     
     if (!requestFormData.merchandise_name.trim()) {
       errors.merchandise_name = 'Item is required';
+    } else if (isLearningKitMerchandiseName(requestFormData.merchandise_name)) {
+      errors.merchandise_name = LEARNING_KIT_NOT_SUPPORTED_MESSAGE;
     }
 
     // Check if merchandise requires sizing (not just uniforms, but any item type that has sizes)
@@ -993,6 +1002,12 @@ const AdminMerchandise = () => {
     return Array.from(typeMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
+  /**
+   * Merchandise types selectable in Request Stock. Excludes Learning Kit —
+   * see frontend/src/utils/merchandiseRequests/learningKit.js.
+   */
+  const getRequestableMerchandiseTypes = () =>
+    getUniqueMerchandiseTypes().filter((merchType) => !isLearningKitMerchandiseName(merchType.name));
 
   const getStatusBadge = (status) => {
     const statusStyles = {
@@ -1443,7 +1458,7 @@ const AdminMerchandise = () => {
                                     aria-label={`Item row ${rowIndex + 1}`}
                                   >
                                     <option value="">-- Select --</option>
-                                    {getUniqueMerchandiseTypes().map((merchType) => (
+                                    {getRequestableMerchandiseTypes().map((merchType) => (
                                       <option key={merchType.name} value={merchType.name}>
                                         {merchType.name}
                                       </option>
@@ -1641,7 +1656,7 @@ const AdminMerchandise = () => {
                             required
                           >
                             <option value="">-- Select Merchandise Type --</option>
-                            {getUniqueMerchandiseTypes().map((merchType) => (
+                            {getRequestableMerchandiseTypes().map((merchType) => (
                               <option key={merchType.name} value={merchType.name}>
                                 {merchType.name}
                               </option>
@@ -2269,7 +2284,7 @@ const AdminMerchandise = () => {
           {requests.length > 0 ? (
             <div className="bg-white rounded-lg shadow">
               <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1200px' }}>
+                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1320px' }}>
                   <thead className="bg-white">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -2294,7 +2309,10 @@ const AdminMerchandise = () => {
                         Status
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Date
+                        Approved By
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Date & Time
                       </th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Actions
@@ -2327,8 +2345,13 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap">
                           {getStatusBadge(request.status)}
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">
+                            {getMerchandiseRequestApprovedBy(request)}
+                          </div>
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDateManila(request.created_at)}
+                          {formatDateTimeManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {request.status === 'Pending' && (

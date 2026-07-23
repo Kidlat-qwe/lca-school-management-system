@@ -57,6 +57,13 @@ const groupPhaseSessions = (phaseSessions) => {
     }));
 };
 
+/**
+ * Which phase is "current" for display and enrollment floor.
+ *
+ * Walk phases in order and pick the first whose last session is still on/after today.
+ * That covers in-progress phases, gaps before the next phase, pre-start, and finished classes.
+ * Do not return on the first completed phase (that incorrectly forced Phase 2 after Phase 1 ended).
+ */
 export const calculateActivePhaseFromSchedule = (
   phaseSessions,
   classSessions,
@@ -93,48 +100,11 @@ export const calculateActivePhaseFromSchedule = (
       lastSession.phase_session_number
     );
 
-    if (firstSessionDate && lastSessionDate) {
-      if (todayStr >= firstSessionDate && todayStr <= lastSessionDate) {
-        return phaseNum;
-      }
-    } else if (firstSessionDate && todayStr >= firstSessionDate) {
+    if (lastSessionDate && todayStr <= lastSessionDate) {
       return phaseNum;
     }
-  }
 
-  const firstPhase = phases[0];
-  if (firstPhase?.sessions?.length) {
-    const firstSession = firstPhase.sessions[0];
-    const firstSessionDate = resolveSessionDate(
-      classSessions,
-      classDetails,
-      daysOfWeek,
-      sessionsPerPhase,
-      firstSession.phase_number,
-      firstSession.phase_session_number
-    );
-
-    if (firstSessionDate && todayStr < firstSessionDate) {
-      return firstPhase.phaseNum;
-    }
-  }
-
-  for (let i = 0; i < phases.length; i += 1) {
-    const { phaseNum, sessions } = phases[i];
-    const lastSession = sessions[sessions.length - 1];
-    const lastSessionDate = resolveSessionDate(
-      classSessions,
-      classDetails,
-      daysOfWeek,
-      sessionsPerPhase,
-      lastSession.phase_number,
-      lastSession.phase_session_number
-    );
-
-    if (lastSessionDate && todayStr > lastSessionDate) {
-      if (i < phases.length - 1) {
-        return phases[i + 1].phaseNum;
-      }
+    if (!lastSessionDate && firstSessionDate && todayStr >= firstSessionDate) {
       return phaseNum;
     }
   }

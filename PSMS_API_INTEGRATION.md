@@ -103,6 +103,7 @@ Implementation: `backend/services/inventory/` (client + field mapping),
 | `inventory_matched_sku` | SKU RHET matched (from webhook, reference only) |
 | `inventory_rejection_reason` | Reason from RHET when rejected/failed |
 | `inventory_synced_at` | Last successful sync timestamp |
+| `inventory_processed_by` | RHET Inventory user who approved/rejected (migration `126_...`) |
 
 ---
 
@@ -383,6 +384,15 @@ Send `itemName` instead of gender/type/size:
 }
 ```
 
+### Learning Kit (out of scope this pass)
+
+Learning Kit is **blocked** in PSMS Request Stock. RHET matches kits via a
+category-slot bill of materials plus a request-time `components[]` array,
+which PSMS does not collect yet. `POST /api/v1/merchandise-requests` rejects
+any request where `merchandise_name` contains "Learning Kit" with
+`400 { error: { code: 'LEARNING_KIT_NOT_SUPPORTED' } }`. Request Learning Kit
+stock directly in RHET Inventory until kit support ships in a future pass.
+
 ---
 
 ## 7. Webhook setup (recommended)
@@ -416,6 +426,7 @@ POST /api/webhooks/inventory
   "rejectionReason": null,
   "failureReason": null,
   "processedAt": "2026-07-16T08:00:00.000Z",
+  "processedBy": "Inventory Admin Name",
   "timestamp": "2026-07-16T08:00:01.000Z"
 }
 ```
@@ -554,6 +565,9 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 4. Verify stock deducted in RHET Inventory.
 5. Verify PSMS receives the webhook and updates `inventory_status` to `FULFILLED`
    (check the Superadmin notification, or the `inventory_status` column).
+6. Confirm `Learning Kit` is not selectable in PSMS Request Stock, and
+   `POST /api/v1/merchandise-requests` with `merchandise_name: "LCA Learning Kit"`
+   returns `400 LEARNING_KIT_NOT_SUPPORTED`.
 
 ---
 
@@ -591,6 +605,10 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 - Hardcode `"PSMS"` as the only possible system code — use
   `INVENTORY_SYSTEM_CODE` so the same integration pattern works for other
   systems (HR, VENDOR, etc.) connecting to RHET.
+- Map `Polo` to `type: "Shirt"` (or vice versa) — School Uniform uses
+  `Polo`/`Short`, PE Uniform uses `Shirt`/`Pants`; they are distinct RHET types.
+- Send Learning Kit items via `POST /stock-requests` from PSMS — blocked
+  client- and server-side until `components[]` support is implemented.
 
 ## 15. Support contacts
 

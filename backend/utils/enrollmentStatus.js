@@ -104,19 +104,21 @@ export async function determineEnrollmentStatus({ db, studentId, classId, enroll
   const currentLevel = currentClassResult.rows[0]?.level_tag || null;
   const currentLevelIdx = levelTagIndex(currentLevel);
 
-  // Upsell: completed a lower program level, now enrolling in a higher one.
+  // Upsell: previously enrolled in a lower program level, now enrolling in a higher one
+  // (completed, dropped, or still-historical lower-track rows all qualify).
   if (currentLevelIdx > 0) {
-    const priorLowerCompleted = await db.query(
+    const priorLowerEnrollment = await db.query(
       `SELECT DISTINCT c.level_tag
        FROM classstudentstbl cs
        INNER JOIN classestbl c ON cs.class_id = c.class_id
        WHERE cs.student_id = $1
          AND cs.class_id != $2
-         AND cs.program_enrollment_status = 'completed'
-         AND cs.removed_at IS NULL`,
+         AND cs.program_enrollment_status IN (
+           'new', 're_enrolled', 'upsell', 'rejoin', 'completed', 'dropped'
+         )`,
       [studentId, classId]
     );
-    const isUpsell = priorLowerCompleted.rows.some((row) => {
+    const isUpsell = priorLowerEnrollment.rows.some((row) => {
       const prevIdx = levelTagIndex(row.level_tag);
       return prevIdx >= 0 && prevIdx < currentLevelIdx;
     });

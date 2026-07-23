@@ -4,6 +4,7 @@ import { apiRequest } from '../../config/api';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { useAuth } from '../../contexts/AuthContext';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
+import { calculateActivePhase } from '../../utils/classActivePhase';
 import { formatDateManila } from '../../utils/dateUtils';
 
 const StudentClasses = () => {
@@ -122,140 +123,6 @@ const StudentClasses = () => {
       });
       setOpenMenuId(classId);
     }
-  };
-
-  // Calculate which phase is currently active based on today's date
-  const calculateActivePhase = (phaseSessions, classSessions, classDetails, daysOfWeek, sessionsPerPhase) => {
-    if (!phaseSessions || phaseSessions.length === 0 || !classDetails.start_date) {
-      return 1;
-    }
-
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
-
-    const sessionsByPhase = phaseSessions.reduce((acc, session) => {
-      const phaseNum = session.phase_number;
-      if (!acc[phaseNum]) {
-        acc[phaseNum] = [];
-      }
-      acc[phaseNum].push(session);
-      return acc;
-    }, {});
-
-    const sortedPhases = Object.keys(sessionsByPhase)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    for (const phaseNum of sortedPhases) {
-      const phaseSessionsList = sessionsByPhase[phaseNum].sort((a, b) => a.phase_session_number - b.phase_session_number);
-      
-      const firstSession = phaseSessionsList[0];
-      const lastSession = phaseSessionsList[phaseSessionsList.length - 1];
-
-      let firstSessionDate = classSessions.find(cs => 
-        cs.phase_number === firstSession.phase_number && 
-        cs.phase_session_number === firstSession.phase_session_number
-      )?.scheduled_date;
-
-      let lastSessionDate = classSessions.find(cs => 
-        cs.phase_number === lastSession.phase_number && 
-        cs.phase_session_number === lastSession.phase_session_number
-      )?.scheduled_date;
-
-      if (!firstSessionDate && classDetails.start_date && sessionsPerPhase) {
-        firstSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          firstSession.phase_number,
-          firstSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      if (!lastSessionDate && classDetails.start_date && sessionsPerPhase) {
-        lastSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          lastSession.phase_number,
-          lastSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      if (firstSessionDate && lastSessionDate) {
-        if (todayStr >= firstSessionDate && todayStr <= lastSessionDate) {
-          return phaseNum;
-        }
-      } else if (firstSessionDate && todayStr >= firstSessionDate) {
-        return phaseNum;
-      }
-    }
-
-    const firstPhaseSessions = sessionsByPhase[sortedPhases[0]];
-    if (firstPhaseSessions && firstPhaseSessions.length > 0) {
-      const firstSession = firstPhaseSessions[0];
-      const firstSessionDate = classSessions.find(cs => 
-        cs.phase_number === firstSession.phase_number && 
-        cs.phase_session_number === firstSession.phase_session_number
-      )?.scheduled_date || (classDetails.start_date && sessionsPerPhase
-        ? calculateSessionDate(
-            classDetails.start_date,
-            daysOfWeek,
-            firstSession.phase_number,
-            firstSession.phase_session_number,
-            sessionsPerPhase,
-            classDetails.number_of_phase
-          )
-        : null);
-
-      if (firstSessionDate && todayStr < firstSessionDate) {
-        return sortedPhases[0];
-      }
-    }
-
-    // If today is past all phases' date ranges, find the first completed phase
-    // and return the next phase if it exists, otherwise return the last phase
-    // Loop forward through phases to find the first one that's completed
-    for (let i = 0; i < sortedPhases.length; i++) {
-      const phaseNum = sortedPhases[i];
-      const phaseSessionsList = sessionsByPhase[phaseNum].sort((a, b) => a.phase_session_number - b.phase_session_number);
-      const lastSession = phaseSessionsList[phaseSessionsList.length - 1];
-      
-      // Get last session date
-      let lastSessionDate = classSessions.find(cs => 
-        cs.phase_number === lastSession.phase_number && 
-        cs.phase_session_number === lastSession.phase_session_number
-      )?.scheduled_date;
-
-      // If not in database, calculate date
-      if (!lastSessionDate && classDetails.start_date && sessionsPerPhase) {
-        lastSessionDate = calculateSessionDate(
-          classDetails.start_date,
-          daysOfWeek,
-          lastSession.phase_number,
-          lastSession.phase_session_number,
-          sessionsPerPhase,
-          classDetails.number_of_phase
-        );
-      }
-
-      // If this phase is completed (today > last session date), check for next phase
-      if (lastSessionDate && todayStr > lastSessionDate) {
-        // Check if there's a next phase
-        if (i < sortedPhases.length - 1) {
-          // This phase is completed, return the next phase
-          return sortedPhases[i + 1];
-        } else {
-          // This is the last phase and it's completed, return it
-          return phaseNum;
-        }
-      }
-    }
-
-    return sortedPhases[sortedPhases.length - 1] || 1;
   };
 
   const handleViewClass = async (classItem) => {

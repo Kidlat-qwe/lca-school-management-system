@@ -27,6 +27,9 @@ const GENDER_MAP = {
   Female: 'Female',
 };
 
+// CRITICAL: Polo and Shirt are distinct RHET types — never collapse one into the
+// other. School Uniform pieces map to Polo/Short; PE Uniform pieces map to
+// Shirt/Pants. Sending the wrong type means RHET finds no matching stock row.
 const SCHOOL_UNIFORM_TYPE_MAP = {
   Top: 'Polo',
   Bottom: 'Short',
@@ -50,6 +53,7 @@ const SIZE_MAP = {
   '2XL': '2XL',
   '3XL': '3XL',
   '4XL': '4XL',
+  '5XL': '5XL',
   XS: 'XS',
   S: 'S',
   M: 'M',
@@ -78,6 +82,17 @@ function isUniformCategory(merchandiseName) {
   const normalized = String(merchandiseName).trim();
   if (CATEGORY_NAME_MAP[normalized]) return true;
   return normalized.toLowerCase().includes('uniform');
+}
+
+/**
+ * Learning Kit requests are not yet supported by Request Stock. RHET Inventory
+ * matches kits via a category-slot BOM + request-time `components[]`, which
+ * CMS does not collect yet. Callers must reject these before calling RHET
+ * (see POST /api/v1/merchandise-requests guard in merchandiserequests.js).
+ */
+export function isLearningKitCategory(merchandiseName) {
+  if (!merchandiseName) return false;
+  return String(merchandiseName).toLowerCase().includes('learning kit');
 }
 
 export function mapCategoryNameToInventory(merchandiseName) {
@@ -168,4 +183,56 @@ export function buildInventorySubmitPayload({ requestRow, requestedBy, reason, w
   }
 
   return payload;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True when value looks like a user/request UUID instead of a display name. */
+export function looksLikeUuid(value) {
+  return typeof value === 'string' && UUID_RE.test(value.trim());
+}
+
+/** @deprecated Use looksLikeUuid — kept for existing imports. */
+export function looksLikeInventoryUserId(value) {
+  return looksLikeUuid(String(value || '').trim());
+}
+
+/**
+ * Pick the RHET admin display name for Approved By.
+ * Order: processedBy → approvedBy → processedByName → rejectedBy.
+ * NEVER use processedByUserId. NEVER return a UUID.
+ */
+export function pickApproverName(body) {
+  if (!body || typeof body !== 'object') return null;
+
+  const roots = [body];
+  if (body.data && typeof body.data === 'object') roots.push(body.data);
+  if (body.payload && typeof body.payload === 'object') roots.push(body.payload);
+
+  for (const root of roots) {
+    for (const raw of [
+      root.processedBy,
+      root.approvedBy,
+      root.processedByName,
+      root.rejectedBy,
+      root.processed_by,
+      root.approved_by,
+      root.processed_by_name,
+      root.rejected_by,
+    ]) {
+      const value = String(raw || '').trim();
+      if (!value || looksLikeUuid(value)) continue;
+      return value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Alias used by webhook / sync / repair paths.
+ * Accepts webhook bodies and GET /stock-requests/:id response `data` objects.
+ */
+export function extractInventoryProcessedBy(source) {
+  return pickApproverName(source);
 }
