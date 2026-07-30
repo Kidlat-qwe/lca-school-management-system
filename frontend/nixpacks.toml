@@ -1,0 +1,14 @@
+# Used when Coolify Build Pack = Nixpacks + "Is it a static site?" enabled.
+# Prefer Dockerfile (see frontend/Dockerfile) for a reliable SPA deploy.
+
+[phases.setup]
+nixPkgs = ["nodejs_22", "npm-9_x"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build:prod"]
+
+[variables]
+NIXPACKS_NODE_VERSION = "22"

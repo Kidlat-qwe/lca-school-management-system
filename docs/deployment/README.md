@@ -6,6 +6,9 @@ Guides for deploying the Physical School Management System (PSMS).
 |---|---|
 | `COOLIFY_DEPLOYMENT.md` | Step-by-step deployment of the backend API and frontend SPA on Coolify |
 
+Frontend Coolify image: `frontend/Dockerfile` + `frontend/nginx.conf` (see `frontend/COOLIFY_DOCKER.md`).
+
+
 ## Overview
 
 PSMS deploys as two applications from one repository:
