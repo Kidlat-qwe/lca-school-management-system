@@ -6,7 +6,10 @@
  * and uniform gender · type · size values that exist on catalog items.
  */
 
-import { isLearningKitMerchandiseName } from './learningKit';
+import {
+  isLearningKitMerchandiseName,
+  serializeKitComponentsForApi,
+} from './learningKit';
 
 const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
 
@@ -60,14 +63,16 @@ export function unwrapCatalogPayload(payload) {
   const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
   const categories = Array.isArray(root?.categories) ? root.categories : [];
   const items = Array.isArray(root?.items) ? root.items : [];
+  const meta = payload?.meta || root?.meta || null;
   return {
     categories: categories
       .map((c) => ({
         categoryId: c.categoryId || c.category_id || null,
         categoryName: String(c.categoryName || c.category_name || '').trim(),
       }))
-      .filter((c) => c.categoryName && !isLearningKitMerchandiseName(c.categoryName)),
+      .filter((c) => c.categoryName),
     items: items.map(normalizeCatalogItem).filter(Boolean),
+    ...(meta ? { meta } : {}),
   };
 }
 
@@ -154,6 +159,53 @@ export function formatNonUniformItemLabel(item) {
   return `${name}${sku}${stocks}${variation}`;
 }
 
+/**
+ * Resolve a catalog item from a select value key.
+ * Key format: `${sku}|${itemName}|${inventoryId||''}`
+ * Always returns itemName + sku from the SAME catalog row (never mix).
+ */
+export function findCatalogItemByKey(items, value) {
+  const key = String(value || '').trim();
+  if (!key) return null;
+  const list = Array.isArray(items) ? items : [];
+  const parts = key.split('|');
+  const sku = String(parts[0] || '').trim();
+  const itemName = String(parts[1] || '').trim();
+  const inventoryId = String(parts[2] || '').trim();
+
+  if (inventoryId) {
+    const byId = list.find(
+      (item) => String(item.inventoryId || item.inventory_id || '').trim() === inventoryId
+    );
+    if (byId) return byId;
+  }
+
+  if (sku && itemName) {
+    const byBoth = list.find(
+      (item) =>
+        String(item.sku || '').trim() === sku &&
+        String(item.itemName || '').trim() === itemName
+    );
+    if (byBoth) return byBoth;
+  }
+
+  // Last resort: unique sku or unique itemName only
+  if (sku) {
+    const bySku = list.filter((item) => String(item.sku || '').trim() === sku);
+    if (bySku.length === 1) return bySku[0];
+  }
+  if (itemName) {
+    const byName = list.filter((item) => String(item.itemName || '').trim() === itemName);
+    if (byName.length === 1) return byName[0];
+  }
+  return null;
+}
+
+export function catalogItemSelectKey(item) {
+  if (!item) return '';
+  return `${item.sku || ''}|${item.itemName || ''}|${item.inventoryId || item.inventory_id || ''}`;
+}
+
 export function createEmptyCatalogRequestLine() {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -166,6 +218,7 @@ export function createEmptyCatalogRequestLine() {
     inventory_id: '',
     catalog_item_key: '',
     quantity: '',
+    components: [],
   };
 }
 
@@ -180,6 +233,18 @@ export function buildCatalogRequestPayload(line, requestReason) {
     requested_quantity: qty,
     request_reason: String(requestReason || '').trim(),
   };
+
+  if (isLearningKitMerchandiseName(categoryName)) {
+    return {
+      ...base,
+      item_name: String(line.item_name || '').trim() || null,
+      sku: String(line.sku || '').trim() || null,
+      gender: null,
+      type: null,
+      size: null,
+      components: serializeKitComponentsForApi(line),
+    };
+  }
 
   if (isUniformLikeCategory(categoryName)) {
     return {

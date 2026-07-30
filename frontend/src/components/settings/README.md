@@ -1,12 +1,20 @@
 # Settings Components
 
-Reusable UI for the Settings → Templates tab.
+Reusable UI for the Settings tabs.
 
 ## Files
 
 - `TemplateEditorCard.jsx` — Template form (title, subject, body, enabled) with variable palette.
 - `TemplateVariableField.jsx` — Input/textarea that locks `{variable}` tokens after insertion.
 - `TemplateVariablePalette.jsx` — Read-only, auto-detected variable chips (drag or click to insert).
+- `ArchivedClassesPanel.jsx` — Settings → **Archived Classes**: list, restore, or permanently delete soft-archived classes (30-day retention).
+
+## Archived Classes
+
+- Classes page **Archive** calls `DELETE /classes/:id` (soft archive).
+- Panel loads `GET /classes/archived`, restore via `POST /classes/:id/restore`, permanent via `DELETE /classes/:id/permanent`.
+- Superadmin sees all branches; Admin panel passes `branchId` to scope the list.
+- After 30 days, Superadmin cron `POST /classes/purge-archived` permanently deletes expired rows.
 
 ## Variable rules
 

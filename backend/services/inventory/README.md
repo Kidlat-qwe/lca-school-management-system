@@ -36,15 +36,46 @@ and normalized on write. Migration **129** + script
 Request Stock prefers catalog / `inventory_*` fields; fulfill maps RHET → local
 with identity for the new canonical names.
 
-## Learning Kit (not yet supported)
+## Learning Kit (Request Stock enabled)
 
-Learning Kit stock requests are **blocked** in CMS Request Stock
-(`isLearningKitCategory()` in `inventoryFieldMapping.js`, enforced in
-`POST /api/v1/merchandise-requests`). RHET matches kits via a category-slot
-bill of materials plus a request-time `components[]` array that CMS does not
-collect yet. Branches must request Learning Kit stock directly in RHET
-Inventory until kit support is implemented in a future pass. Kit fulfillment
-into `merchandisestbl` is out of scope while kits are blocked.
+Learning Kit is a **virtual RHET kit**: BOM = category slots only. CMS Request Stock
+collects concrete `components[]` from a CMS recipe map (`learningKitRecipes.js`).
+
+1. Admin selects category **Learning Kit** + kit item (e.g. `nc-kg-learningkits`)
+2. UI requires a choice for every recipe slot (uniform attrs or itemName/sku)
+3. CMS POSTs RHET `/stock-requests` with `components[]`
+4. On fulfill, CMS credits branch type **Learning Kit** (concrete kit in
+   `item_name` + `sku`; migration **133**). Legacy rows may still have identity
+   in `remarks` as `itemName | sku`. Request-log / merchandisestbl `type` stays
+   NULL for kits (CHECK only allows uniform pieces).
+5. Component categories are **not** auto-added to branch stock
+
+See `README_LEARNING_KIT_RECIPES.md`. Migration **131** stores
+`inventory_components_json` on the request row. Migration **133** adds
+`merchandisestbl.item_name` / `sku` for non-uniform + kit identity.
+
+## Non-uniform stock identity
+
+`merchandise_name` = RHET `categoryName` (Workbooks, Backpack).
+`item_name` / `sku` = concrete RHET product under that category.
+Fulfill matches by category + item_name/sku — never dumps all Workbooks qty
+onto one anonymous row. Stocks UI shows **Item name** (not Gender/Type) for
+non-uniform categories.
+
+**Multi-item / blank Item name bug (fixed for ALL non-uniform types):**
+Submit used to auto-link every Workbooks/Backpack request to the same empty
+shell `merchandise_id`. Fulfill then trusted that id and credited one anonymous
+row (`item_name`/`sku` null). Also `isUniformLikeCategory` wrongly treated any
+`CATEGORY_NAME_MAP` key (e.g. `LCA Bag`) as uniform. Now:
+- Request Stock requires **both** itemName and sku for every non-uniform type
+  (Workbooks, Backpack, Book, Accessory, ID Lace, Other, Learning Kit, …).
+- Catalog picker binds itemName+sku from the **same** catalog row.
+- `findExistingMerchandiseStockRow` ignores `merchandise_id` when it does not
+  match the requested item identity.
+- Blank (null item_name AND null sku) rows are **never** credited when identity
+  is present — a new identified row is created under the **category type** instead.
+- Ops: `scripts/repairBlankNonUniformStockRows.js --branch-id=… --type=all`
+  (or `--type=Workbooks` / `--type=Backpack`).
 
 ## Environment variables (backend `.env` only)
 
@@ -55,6 +86,8 @@ into `merchandisestbl` is out of scope while kits are blocked.
 | `INVENTORY_API_KEY` | Yes* | Alias for `INVENTORY_INTEGRATION_KEY` |
 | `INVENTORY_WEBHOOK_URL` | Recommended | e.g. `https://api-cms.lca-app.com/api/webhooks/inventory` |
 | `INVENTORY_SYSTEM_CODE` | No (default `PSMS`) | Prefix for `externalReference` |
+| `INVENTORY_HTTP_TIMEOUT_MS` | No (default `45000`) | Per-request abort timeout |
+| `INVENTORY_CATALOG_CACHE_MS` | No (default `120000`) | In-memory catalog TTL; `0` disables. On RHET catalog 5xx, CMS may serve a stale cache so Request Stock still opens. |
 
 \* Set one of the two key variables.
 
@@ -100,6 +133,8 @@ named after `categoryName` only.
 | `128_...` | `inventory_category_name`, `inventory_item_name`, `inventory_requested_sku` |
 | `129_...` | Gender/type CHECKs allow Male/Female + Blouse/Skirt (RHET-aligned) |
 | `130_...` | Ensure `merchandiserequestlogtbl.updated_at` exists (PSMS-33 500 fix) |
+| `131_...` | `inventory_components_json` (Learning Kit components[] snapshot) |
+| `133_...` | `merchandisestbl.item_name`, `sku` (non-uniform / kit identity under category) |
 
 ## Repair stuck FULFILLED (e.g. PSMS-33)
 

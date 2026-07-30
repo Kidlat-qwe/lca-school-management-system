@@ -321,6 +321,9 @@ CREATE TABLE IF NOT EXISTS public.classestbl
     status character varying(50) COLLATE pg_catalog."default" DEFAULT 'Active'::character varying,
     skip_holidays boolean NOT NULL DEFAULT false,
     is_vip boolean NOT NULL DEFAULT false,
+    archived_at timestamp with time zone,
+    archived_by integer,
+    archive_purge_after date,
     CONSTRAINT classestbl_pkey PRIMARY KEY (class_id)
 );
 
@@ -332,6 +335,12 @@ COMMENT ON COLUMN public.classestbl.skip_holidays
 
 COMMENT ON COLUMN public.classestbl.is_vip
     IS 'When true, class is displayed with VIP tag on details page';
+
+COMMENT ON COLUMN public.classestbl.archived_at
+    IS 'Soft-archive timestamp; when set, class is hidden from main list (Settings → Archived Classes)';
+
+COMMENT ON COLUMN public.classestbl.archive_purge_after
+    IS 'Manila date when archived class may be permanently purged (archived_at + 30 days)';
 
 CREATE TABLE IF NOT EXISTS public.classsessionstbl
 (

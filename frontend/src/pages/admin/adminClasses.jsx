@@ -59,7 +59,7 @@ import {
   formatUniformSameSizePairOptionLabel,
   isSchoolUniformMerchandiseName,
 } from '../../utils/uniformMerchandise';
-import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock.js';
+import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
 
 const AdminClasses = () => {
@@ -1459,16 +1459,17 @@ const initializePackageMerchSelections = useCallback(
     // Verify class belongs to admin's branch
     const classItem = classes.find(c => c.class_id === classId);
     if (classItem && classItem.branch_id !== adminBranchId) {
-      appAlert('You can only delete classes from your branch.');
+      appAlert('You can only archive classes from your branch.');
       return;
     }
     
     if (
       !(await appConfirm({
-        title: 'Delete class',
-        message: 'Are you sure you want to delete this class?',
+        title: 'Archive class',
+        message:
+          'Archive this class? It will move to Settings → Archived Classes and can be restored for 30 days. After 30 days it is permanently deleted if not restored.',
         destructive: true,
-        confirmLabel: 'Delete',
+        confirmLabel: 'Archive',
       }))
     ) {
       return;
@@ -1479,8 +1480,11 @@ const initializePackageMerchSelections = useCallback(
         method: 'DELETE',
       });
       fetchClasses();
+      appAlert(
+        'Class archived. Open Settings → Archived Classes to restore it within 30 days.'
+      );
     } catch (err) {
-      appAlert(err.message || 'Failed to delete class');
+      appAlert(err.message || 'Failed to archive class');
     }
   };
 
@@ -9105,7 +9109,7 @@ const resolvedBranchId =
                 }}
                 className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 transition-colors"
               >
-                Delete
+                Archive
               </button>
             </div>
           </div>

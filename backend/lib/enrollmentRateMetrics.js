@@ -4,6 +4,17 @@
  */
 
 import { levelTagIndex } from '../utils/enrollmentStatus.js';
+import { todayYmdManila } from '../utils/dateUtils.js';
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** True when both dates are valid YYYY-MM-DD and `ymd` falls strictly before `otherYmd`. */
+const isYmdBefore = (ymd, otherYmd) => {
+  const left = String(ymd || '').slice(0, 10);
+  const right = String(otherYmd || '').slice(0, 10);
+  if (!YMD_RE.test(left) || !YMD_RE.test(right)) return false;
+  return left < right;
+};
 
 const ENROLLED_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin', 'completed')";
 const ACTIVE_PROGRAM_STATUSES = "('new', 're_enrolled', 'upsell', 'rejoin')";
@@ -387,6 +398,43 @@ const toManilaMonthKey = (dateValue) => {
   const month = parts.find((p) => p.type === 'month')?.value;
   return year && month ? `${year}-${month}` : null;
 };
+
+/**
+ * True when the enrollment cell was soft-removed on or before this billing month
+ * (Asia/Manila). Used to stop mid-month unenrolls from counting as Active
+ * (e.g. Zion Capalad Playgroup class 151 removed Jul 23 while July still showed "new").
+ * Historical months before removal keep their enrolled badges.
+ */
+const isMatrixCellRemovedOnOrBeforeBillingMonth = (cell, monthKey) => {
+  if (!cell?.removed_at || !monthKey) return false;
+  const removedMonthKey = toManilaMonthKey(cell.removed_at);
+  if (!removedMonthKey) return false;
+  return removedMonthKey <= String(monthKey).slice(0, 7);
+};
+
+/**
+ * Clear enrolled-status badges for billing months on/after soft-removal.
+ * Does not alter explicit dropped markers. Runs before payment-lifecycle overlay
+ * so Active/Inactive is not anchored on a removed "new"/"re-enrolled" cell.
+ */
+const clearEnrolledMatrixCellsRemovedOnOrBeforeBillingMonth = (students, periods, periodKey = 'months') => {
+  for (const student of students || []) {
+    const bucket = periodKey === 'months' ? student.months : student.phases;
+    if (!bucket) continue;
+    for (const period of periods || []) {
+      const cell = bucket[period.key];
+      if (!cell || cell.mark !== '1') continue;
+      if (cell.payment_lifecycle) continue;
+      const status = String(cell.status || '').toLowerCase();
+      if (!ENROLLED_STATUSES_LIST.includes(status)) continue;
+      if (!isMatrixCellRemovedOnOrBeforeBillingMonth(cell, period.key)) continue;
+      cell.mark = '-';
+      cell.label = null;
+      cell.cleared_after_removal = true;
+    }
+  }
+};
+
 
 /** Earliest month that should display as "new" (billing anchor vs first enrolled_at). */
 const resolveCanonicalFirstNewMonthKey = (firstBillingKey, firstEverMonthKey) => {
@@ -2866,8 +2914,11 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     teacherId,
     lifecycleScope: true,
   };
-  const { installmentTrackKeys, installmentCompleteByTrack } =
-    await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
+  const {
+    installmentTrackKeys,
+    installmentCompleteByTrack,
+    installmentProfileActiveByTrack,
+  } = await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
   const paymentLifecycleRows = await loadInstallmentInvoiceBillingLifecycle(
     queryFn,
     lifecycleScope
@@ -2876,6 +2927,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     periodKey: 'phases',
     installmentTrackKeys,
     installmentCompleteByTrack,
+    installmentProfileActiveByTrack,
   });
 
   const visibleStudents = filterHiddenMatrixTracks(students);
@@ -3197,13 +3249,59 @@ const loadInstallmentPackageCompleteByTrack = async (queryFn, options = {}) => {
   return completeByTrack;
 };
 
+/** Latest installment profile active flag per student+class track. */
+const loadInstallmentProfileActiveByTrack = async (queryFn, options = {}) => {
+  const { studentIds = [], branchId = null, lifecycleScope = false } = options;
+  if (!studentIds.length) return new Map();
+
+  const params = [studentIds];
+  let branchJoin = '';
+  if (branchId) {
+    branchJoin = `AND c.branch_id = $2`;
+    params.push(branchId);
+  }
+
+  const result = await queryFn(
+    `
+      SELECT DISTINCT ON (ip.student_id, ip.class_id)
+        ip.student_id,
+        ip.class_id,
+        COALESCE(ip.is_active, true) AS profile_is_active
+      FROM installmentinvoiceprofilestbl ip
+      INNER JOIN classestbl c ON c.class_id = ip.class_id ${branchJoin}
+      WHERE ip.student_id = ANY($1::int[])
+        ${INSTALLMENT_PROFILE_MATRIX_VISIBILITY_SQL(lifecycleScope)}
+      ORDER BY
+        ip.student_id,
+        ip.class_id,
+        ip.installmentinvoiceprofiles_id DESC
+    `,
+    params
+  );
+
+  const activeByTrack = new Map();
+  for (const row of result.rows || []) {
+    activeByTrack.set(
+      enrollmentTrackKey(row.student_id, row.class_id),
+      Boolean(row.profile_is_active)
+    );
+  }
+  return activeByTrack;
+};
+
 const loadInstallmentPaymentLifecycleContext = async (queryFn, options = {}) => {
   const lifecycleOptions = { ...options, lifecycleScope: true };
-  const [installmentTrackKeys, installmentCompleteByTrack] = await Promise.all([
+  const [installmentTrackKeys, installmentCompleteByTrack, installmentProfileActiveByTrack] =
+    await Promise.all([
     loadInstallmentTrackKeys(queryFn, lifecycleOptions),
     loadInstallmentPackageCompleteByTrack(queryFn, lifecycleOptions),
+    loadInstallmentProfileActiveByTrack(queryFn, lifecycleOptions),
   ]);
-  return { installmentTrackKeys, installmentCompleteByTrack };
+  return {
+    installmentTrackKeys,
+    installmentCompleteByTrack,
+    installmentProfileActiveByTrack,
+  };
 };
 
 /**
@@ -3282,14 +3380,23 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
           ${MATRIX_BILLING_ANCHOR_ACTIVE_WHERE}
         ORDER BY student_id, class_id, phase_number ASC, enrolled_at ASC
       ),
-      invoice_phase AS (
+      -- Prefer TARGET_PHASE / "phase N" remarks; otherwise rank by issue_date
+      -- (same fallback as paid-phase matrix overlay). Older plans often lack
+      -- TARGET_PHASE — without this, unpaid invoices never map to a billing
+      -- month and the next cell incorrectly stays Active (e.g. Clyde Falcon).
+      invoice_ranked AS (
         SELECT
           ip.student_id,
           ip.class_id,
+          COALESCE(NULLIF(ip.phase_start, 0), 1) AS phase_start,
           COALESCE(
             (regexp_match(i.remarks, 'TARGET_PHASE:(\\d+)', 'i'))[1]::int,
             (regexp_match(i.invoice_description, 'phase\\s*(\\d+)', 'i'))[1]::int
-          ) AS phase_number,
+          ) AS target_phase,
+          ROW_NUMBER() OVER (
+            PARTITION BY ip.installmentinvoiceprofiles_id
+            ORDER BY i.issue_date ASC NULLS LAST, i.invoice_id ASC
+          )::int AS local_phase,
           TO_CHAR(i.due_date, 'YYYY-MM-DD') AS due_date_ymd,
           LOWER(TRIM(i.status)) = 'paid' AS is_paid
         FROM installmentinvoiceprofilestbl ip
@@ -3302,6 +3409,7 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
         WHERE ip.student_id = ANY($1::int[])
           AND i.due_date IS NOT NULL
           AND COALESCE(i.status, '') NOT IN ('Cancelled', 'Canceled')
+          AND COALESCE(i.invoice_description, '') NOT ILIKE '%downpayment%'
           AND (
             ip.downpayment_invoice_id IS NULL
             OR COALESCE(i.invoice_chain_root_id, i.invoice_id) <> ip.downpayment_invoice_id
@@ -3309,6 +3417,15 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
           ${programJoin}
           ${classJoin}
           ${teacherJoin}
+      ),
+      invoice_phase AS (
+        SELECT
+          student_id,
+          class_id,
+          COALESCE(target_phase, phase_start + local_phase - 1) AS phase_number,
+          due_date_ymd,
+          is_paid
+        FROM invoice_ranked
       ),
       invoice_billing AS (
         SELECT
@@ -3577,9 +3694,15 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
  * - After **dropped**, the immediate next period is always **Inactive**.
  * - After **pending_enrollment**, the immediate next period is always **Inactive**
  *   (downpayment paid but Phase 1 not settled — not yet Active).
- * - After enrolled cells: **Active** when no unpaid invoice exists yet; **Inactive** when unpaid.
+ * - After enrolled cells: **Active** until the next invoice due date passes unpaid;
+ *   **Inactive** only once that due date is already past (Manila calendar).
  * - When the track's **only** enrollment status is **completed**, do not overlay Active/Inactive
- *   (package already finished — Active is redundant).
+ *   (single-status short course — completed alone is enough).
+ * - When the latest anchor is **completed** (multi-phase / recurring finished), the next
+ *   month/phase is always **Inactive** — never Active after recurring invoices are done
+ *   (e.g. April completed → May Inactive; student counts inactive for that month).
+ * - When the installment package is already complete, never paint Active on the next cell
+ *   (force Inactive when a lifecycle cell is shown).
  * - Paid periods keep re-enrolled / new from enrollment rows.
  */
 const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, options = {}) => {
@@ -3587,9 +3710,11 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
     periodKey = 'months',
     installmentTrackKeys = new Set(),
     installmentCompleteByTrack = new Map(),
+    installmentProfileActiveByTrack = new Map(),
   } = options;
   if (!periods?.length || !installmentTrackKeys.size) return;
 
+  const todayYmd = todayYmdManila();
   const lifecycleByTrackPeriod = new Map();
   for (const row of lifecycleRows || []) {
     const trackKey = enrollmentTrackKey(row.student_id, row.class_id);
@@ -3609,7 +3734,8 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
       installmentCompleteByTrack
     );
     if (!installmentTrackKey) continue;
-    if (installmentCompleteByTrack.get(installmentTrackKey)) continue;
+    const packageIsComplete = Boolean(installmentCompleteByTrack.get(installmentTrackKey));
+    const profileIsInactive = installmentProfileActiveByTrack.get(installmentTrackKey) === false;
 
     // Single-status completed tracks (e.g. Active Champs short course): show completed only.
     if (trackHasOnlyCompletedEnrollmentStatus(cellBucket)) continue;
@@ -3618,9 +3744,10 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
     if (latestEnrolledIdx < 0 || latestEnrolledIdx >= periods.length - 1) continue;
 
     const anchorCell = cellBucket[periods[latestEnrolledIdx].key];
+    const anchorStatus = String(anchorCell?.status || '').toLowerCase();
     const anchorIsDropped = isDroppedMonthMatrixCell(anchorCell);
-    const anchorIsPending =
-      String(anchorCell?.status || '').toLowerCase() === 'pending_enrollment';
+    const anchorIsPending = anchorStatus === 'pending_enrollment';
+    const anchorIsCompleted = anchorStatus === 'completed';
     const nextPeriod = periods[latestEnrolledIdx + 1];
     const nextPeriodValue = nextPeriod.key;
     if (cellBlocksPaymentLifecycleOverlay(cellBucket[nextPeriodValue])) continue;
@@ -3632,20 +3759,38 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
       lifecycleByTrackPeriod
     );
     const dueDateYmd = lifecycle?.due_date_ymd || null;
-    const hasGeneratedUnpaidInvoice = Boolean(lifecycle);
+    // An unpaid invoice only breaks Active once its grace window (due date) has elapsed.
+    const unpaidPastDue = Boolean(lifecycle) && isYmdBefore(dueDateYmd, todayYmd);
     const inferredPhaseAfterDrop =
       anchorIsDropped && anchorCell?.phase_number != null
+        ? Number(anchorCell.phase_number) + 1
+        : null;
+    const inferredPhaseAfterInactiveProfile =
+      profileIsInactive && anchorCell?.phase_number != null
+        ? Number(anchorCell.phase_number) + 1
+        : null;
+    const inferredPhaseAfterCompleted =
+      anchorIsCompleted && anchorCell?.phase_number != null
         ? Number(anchorCell.phase_number) + 1
         : null;
     const phaseNumber =
       lifecycle?.phase_number ??
       inferredPhaseAfterDrop ??
+      inferredPhaseAfterInactiveProfile ??
+      inferredPhaseAfterCompleted ??
       (anchorIsPending ? anchorCell?.phase_number ?? null : null) ??
       (periodKey === 'phases' ? parseInt(nextPeriodValue, 10) || null : null);
 
-    // Pending and dropped both force Inactive on the next cell.
+    // Pending, dropped, completed recurring, inactive profiles, and finished packages
+    // force Inactive on the next cell — never Active after recurring invoices are done.
     const isActive =
-      anchorIsDropped || anchorIsPending ? false : !hasGeneratedUnpaidInvoice;
+      anchorIsDropped ||
+      anchorIsPending ||
+      anchorIsCompleted ||
+      profileIsInactive ||
+      packageIsComplete
+        ? false
+        : !unpaidPastDue;
 
     cellBucket[nextPeriodValue] = buildPaymentLifecycleCell(
       isActive,
@@ -5492,6 +5637,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     }
   }
 
+  // Soft-removed enrollments must not keep enrolled badges on/after the removal month
+  // (Zion Capalad class 151: July "new" after Jul 23 unenroll inflated Total Active).
+  clearEnrolledMatrixCellsRemovedOnOrBeforeBillingMonth(students, months, 'months');
+
   const lifecycleStudentIds = [...new Set(students.map((s) => s.student_id))];
   const lifecycleScope = {
     studentIds: lifecycleStudentIds,
@@ -5501,8 +5650,11 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     teacherId,
     lifecycleScope: true,
   };
-  const { installmentTrackKeys, installmentCompleteByTrack } =
-    await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
+  const {
+    installmentTrackKeys,
+    installmentCompleteByTrack,
+    installmentProfileActiveByTrack,
+  } = await loadInstallmentPaymentLifecycleContext(queryFn, lifecycleScope);
   const paymentLifecycleRows = await loadInstallmentInvoiceBillingLifecycle(
     queryFn,
     lifecycleScope
@@ -5511,6 +5663,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     periodKey: 'months',
     installmentTrackKeys,
     installmentCompleteByTrack,
+    installmentProfileActiveByTrack,
   });
 
   const visibleStudents = filterHiddenMatrixTracks(students);
@@ -5557,6 +5710,8 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
   for (const student of students) {
     const cell = student.months?.[monthKey];
     if (!cell?.label) continue;
+    if (cell.cleared_after_removal) continue;
+    if (isMatrixCellRemovedOnOrBeforeBillingMonth(cell, monthKey)) continue;
 
     switch (cell.label) {
       case 'new':
@@ -5838,9 +5993,12 @@ export const loadMonthReEnrollmentStatForMonth = loadMonthMatrixOperationalStats
  * Monthly Operational Dashboard total active students
  * (new + re-enrollment + rejoin + upsell).
  * Re-enrollment includes visible re-enrolled and completed cells in the rate numerator.
+ * Soft-removed enrollments on/before the billing month do not count.
  */
-export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student) => {
+export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student, monthKey = null) => {
   if (!cell?.label) return false;
+  if (monthKey && isMatrixCellRemovedOnOrBeforeBillingMonth(cell, monthKey)) return false;
+  if (cell.cleared_after_removal) return false;
   const label = String(cell.label).trim().toLowerCase();
   if (label === 'new' || label === 'rejoin' || label === 'upsell') return true;
   return matrixCellCountsTowardReEnrollmentRate(cell, student);
@@ -5855,7 +6013,7 @@ export const buildMonthMatrixActiveStudentIndex = (students, monthKey) => {
   const byStudentId = new Map();
   for (const track of students || []) {
     const cell = track.months?.[monthKey];
-    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track)) continue;
+    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track, monthKey)) continue;
     const sid = Number(track.student_id);
     if (!Number.isFinite(sid) || sid <= 0) continue;
     if (!byStudentId.has(sid)) {
@@ -5889,7 +6047,7 @@ export const buildMonthMatrixActiveTrackRows = (students, monthKey) => {
   const rows = [];
   for (const track of students || []) {
     const cell = track.months?.[monthKey];
-    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track)) continue;
+    if (!isMonthMatrixCellActiveForOperationalDashboard(cell, track, monthKey)) continue;
     const sid = Number(track.student_id);
     if (!Number.isFinite(sid) || sid <= 0) continue;
     rows.push({

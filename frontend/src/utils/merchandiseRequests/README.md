@@ -1,43 +1,39 @@
 # Merchandise Requests (frontend utils)
 
-Shared helpers for Admin / Superadmin Merchandise **stock request** UI.
+Shared helpers for Admin / Superadmin Merchandise **stock request** and
+**Create Merchandise Type** UI.
 
 | File | Purpose |
 |---|---|
-| `approvedBy.js` | Display label for who approved/rejected a request (RHET Inventory user or CMS Superadmin). Ignores UUID user ids. |
-| `learningKit.js` | Blocks Learning Kit in Request Stock (RHET kit `components[]` not supported yet). |
+| `approvedBy.js` | Display label for who approved/rejected a request. |
+| `learningKit.js` | Learning Kit detection, CMS kit recipes, component validation/serialize for Request Stock. |
 | `catalogOptions.js` | RHET catalog unwrap, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
-| `createTypeCategory.js` | RHET category dropdown options + defaults for Superadmin/Admin Add Merchandise Type. |
+| `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 
-## Request Stock mental model (match RHET Inventory)
+## Catalog is the source of truth for category dropdowns
 
 1. Load categories + items from CMS proxy `GET /merchandise-requests/inventory/catalog` (never call RHET from the browser).
-2. User picks an **exact RHET `categoryName`** (not local labels like `LCA Bag`).
-3. Uniform-like categories → Gender + Type + Size from catalog variants (`variation` parsed as `Gender · Type · Size`).
+   CMS may return a short-lived / stale cached catalog (`meta.cached` / `meta.stale`) when RHET `/catalog` is briefly down.
+2. **Create Merchandise Type** and **Request Stock** category dropdowns use
+   `getCreateMerchandiseCategoryOptions(catalog)` — exact RHET `categoryName` values only.
+3. Uniform-like categories → Gender + Type + Size from catalog items for that category.
 4. Non-uniform → pick a concrete catalog item (`itemName` + `sku`).
-5. Submit to `POST /merchandise-requests` with `category_name` + attrs / `item_name`/`sku`.
-6. Learning Kit stays blocked/hidden.
+5. **Learning Kit** → pick kit item + fill `components[]` for every CMS recipe BOM category.
+6. Submit to `POST /merchandise-requests` with `category_name` + attrs / `item_name`/`sku` (+ `components` for kits).
+7. Promo free-merchandise optgroups use `getMerchandiseTypeNamesFromStock(merchandise)`
+   (unique `merchandise_name` from branch stock — not a frozen CMS array).
+8. If inventory env is missing (`INTEGRATION_DISABLED`), Create Merchandise Type falls back to
+   legacy free-text; Request Stock still requires integration when forwarding to RHET.
 
-## Approved By
+Do **not** reintroduce hard-coded arrays like
+`['School Uniform', 'PE Uniform', 'Backpack', …]` or
+`['LCA Uniform', 'LCA Bag', …]` as the primary dropdown source.
 
-```js
-import { getMerchandiseRequestApprovedBy } from '../utils/merchandiseRequests/approvedBy';
+## Learning Kit
 
-getMerchandiseRequestApprovedBy(request);
-// → inventory_processed_by | reviewed_by_name | "RHET Inventory" | "—"
-```
-
-## Learning Kit block
-
-```js
-import { isLearningKitMerchandiseName, LEARNING_KIT_NOT_SUPPORTED_MESSAGE } from '../utils/merchandiseRequests/learningKit';
-
-isLearningKitMerchandiseName('LCA Learning Kit'); // → true
-```
-
-Used to hide Learning Kit from Request Stock item pickers and to show a clear
-validation error if a stale row still references it. Mirrors backend
-`isLearningKitCategory()` in `backend/services/inventory/inventoryFieldMapping.js`.
+RHET kits are virtual (category-slot BOM). CMS recipes live in
+`frontend/.../learningKit.js` and `backend/services/inventory/learningKitRecipes.js`
+(keep in sync). Missing recipe → clear error, not silent submit.
 
 ## Catalog helpers
 
@@ -55,7 +51,9 @@ import {
 import {
   getCreateMerchandiseCategoryOptions,
   applyCreateTypeCategoryDefaults,
+  getMerchandiseTypeNamesFromStock,
+  isInventoryIntegrationDisabledError,
 } from '../utils/merchandiseRequests/createTypeCategory';
 ```
 
-Use with `RhetCategorySelect` — never free-text invent category names.
+Use with `RhetCategorySelect` — never free-text invent category names when the catalog is available.

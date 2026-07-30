@@ -279,7 +279,24 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
       return { applied: false, reason: `status_${request.status}`, processedBy };
     }
 
-    const stockResult = await applyMerchandiseRequestStock(client, request);
+    const stockResult = await applyMerchandiseRequestStock(client, {
+      ...request,
+      // Prefer webhook identity when present (matchedSku / itemName from RHET)
+      inventory_matched_sku:
+        payload.matchedSku || request.inventory_matched_sku || null,
+      inventory_item_name:
+        payload.itemName ||
+        payload.item_name ||
+        request.inventory_item_name ||
+        null,
+      inventory_requested_sku:
+        request.inventory_requested_sku || payload.matchedSku || null,
+      inventory_category_name:
+        payload.categoryName ||
+        payload.category_name ||
+        request.inventory_category_name ||
+        null,
+    });
 
     try {
       await runIgnoringMissingUpdatedAt(

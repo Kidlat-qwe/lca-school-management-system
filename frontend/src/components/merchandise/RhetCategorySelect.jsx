@@ -1,6 +1,7 @@
 /**
  * Dropdown of RHET Inventory categoryName values for Add Merchandise Type.
  * Categories come from CMS proxy GET /merchandise-requests/inventory/catalog.
+ * Options must be catalog-driven — never a hard-coded category name array.
  */
 
 export default function RhetCategorySelect({
@@ -8,6 +9,7 @@ export default function RhetCategorySelect({
   value = '',
   options = [],
   onChange,
+  onRetry,
   loading = false,
   error = '',
   disabled = false,
@@ -42,11 +44,22 @@ export default function RhetCategorySelect({
         ))}
       </select>
       {error ? (
-        <p className="mt-1 text-sm text-red-600">{error}</p>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <p className="text-sm text-red-600">{error}</p>
+          {typeof onRetry === 'function' && (
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={loading}
+              className="text-sm font-medium text-[#1a5f4a] underline disabled:opacity-50"
+            >
+              Retry catalog
+            </button>
+          )}
+        </div>
       ) : (
         <p className="mt-1 text-xs text-gray-500">
-          Exact RHET Inventory category names only (e.g. Backpack, School Uniform).
-          Learning Kit is not available here yet.
+          Exact RHET Inventory category names from live catalog (not a hard-coded CMS list).
         </p>
       )}
     </div>

@@ -11,6 +11,14 @@ Shared AR status constants and list-filter SQL helpers for `routes/acknowledgeme
 
 Frontend mirror: `frontend/src/utils/acknowledgementReceiptStatus.js`.
 
+## `classLifecycle/`
+
+Soft-archive + end-of-class finalization. See [classLifecycle/README.md](./classLifecycle/README.md).
+
+- When `end_date` passes: class → **Inactive**, latest active enrollment → **completed**, installment profiles deactivated
+- Classes UI **Archive** (DELETE) soft-deletes to Settings → Archived Classes for 30 days
+- Cron: `POST /classes/purge-archived` permanently deletes expired archives
+
 ## `classSessionTeacherSync.js`
 
 Aligns `classsessionstbl` teacher fields with the class primary teacher (`classestbl.teacher_id` / `classteacherstbl`).

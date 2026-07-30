@@ -53,6 +53,23 @@ node scripts/repairInventoryFulfillment.js --production --request-id=33 --invent
 
 Prefer `POST /api/v1/merchandise-requests/:id/sync-inventory` when the API is up.
 
+### `repairBlankNonUniformStockRows.js`
+
+Splits blank non-uniform aggregator rows (`item_name`/`sku` null, piled qty)
+for **any** type (Workbooks, Backpack, Book, Accessory, …) using Approved
+request history. Creates identified stock rows, then zeros the blank
+aggregator. Dry-run by default. Default `--type=all` repairs every blank
+non-uniform type on the branch.
+
+```bash
+node scripts/repairBlankNonUniformStockRows.js --branch-id=12 --type=all
+node scripts/repairBlankNonUniformStockRows.js --branch-id=12 --type=Backpack
+node scripts/repairBlankNonUniformStockRows.js --branch-id=12 --type=Workbooks --apply
+node scripts/repairBlankNonUniformStockRows.js --branch-id=12 --type=all --apply
+```
+
+Requires migration **133** (`item_name` / `sku` columns).
+
 ### `auditClassActivePhase.js`
 
 **Read-only** audit of Class Details **Current / auto-opened phase**. Compares the old buggy UI rule (often stuck on Phase 2 after Phase 1 ends) vs the fixed date-based rule. Does not update the database.
@@ -588,6 +605,244 @@ One-off repair for **Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`, pro
 node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js
 node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js --apply
 node backend/scripts/repairKirstenMahinayMissedPhase5Generation.js --apply --generate
+```
+
+### `repairArtEnzoArbisuPhase5AugustMatrix.js`
+
+One-off repair for **Art Enzo M. Arbisu** (`magz_remie1580@yahoo.com`, student **663**, profile **490**, class **94**). Late-start **phase 5** `new` was anchored on `enrolled_at` **2026-07-14**, so Month Re-enrollment / Report counted him in **July**. Ops: phase 5 billing month is **August**.
+
+- `classstudent` **1871** `enrolled_at` → **2026-08-01**
+- Phase 5 **INV-2003** issue/due → **2026-07-25** / **2026-08-05**
+
+```bash
+node scripts/repairArtEnzoArbisuPhase5AugustMatrix.js --production
+node scripts/repairArtEnzoArbisuPhase5AugustMatrix.js --production --apply
+```
+
+### `repairSabrinaResurreccionEndedClassMatrix.js`
+
+One-off repair for **Sabrina M. Resurreccion** (`ryayo18@yahoo.com`, student **421**, Malolos Kindergarten class **84**, Inactive, end **2026-04-30**). Late payment auto-enrolls set `enrolled_at` in May/Jun 2026, so the 2026 matrix wrongly showed May=`new` through Dec=`re-enrolled`. Aligns phases 2–10 to the class calendar — **new starts Aug 2025**, Sep 2025–Mar 2026 re-enrolled, Apr 2026 completed, May+ blank.
+
+```bash
+node scripts/repairSabrinaResurreccionEndedClassMatrix.js --production
+node scripts/repairSabrinaResurreccionEndedClassMatrix.js --production --apply
+```
+
+### `repairRyanQuiendayEndedClassMatrix.js`
+
+One-off repair for **Ryan Sebastian Quienday** (`geneveivgeronca@yahoo.com`, student **225**, Malolos Pre-Kinder class **86**, Inactive, end **2026-04-27**). Late May 2026 payments auto-enrolled phases 8–10 with `enrolled_at` in May, so the matrix wrongly showed May=`new`, Jun=`re-enrolled`, Jul=`completed` (Report counted him Active). Aligns to class calendar — **new starts Feb 2026**, Mar re-enrolled, Apr completed, May Inactive.
+
+```bash
+node scripts/repairRyanQuiendayEndedClassMatrix.js --production
+node scripts/repairRyanQuiendayEndedClassMatrix.js --production --apply
+```
+
+### `moveAnastasiaYangaPreKToNursery930.js`
+
+One-off cross-program move + billing fix for **Anastasia Chrysanthe Catibog Yanga** (`mveravgc@gmail.com`, student **337**). Mis-click used package **176** "Per Phase - Old Rate" as **Fullpayment** on Pre-K class **69**, auto-enrolling all 10 phases as **upsell**. Converts package **176** → **Phase + Installment** (Nursery, phases 1–10; sole user), moves **phase 1 only** to active Nursery class **153** `VMM_Nursery_TThS 9:30 AM` as **new**, creates installment profile + phase-2 queue, retags **INV-2054** as `TARGET_PHASE:1`, deletes phases 2–10 and 2 mismatched Pre-K attendance rows.
+
+```bash
+node scripts/moveAnastasiaYangaPreKToNursery930.js --production
+node scripts/moveAnastasiaYangaPreKToNursery930.js --production --apply
+```
+
+### `repairMargauxNacarPendingEnrollment.js`
+
+One-off repair for **Margaux Emilia Nacar** (`nepjuanillo@gmail.com`, student **657**, profile **483**, class **154**). Downpayment (**INV-1968**) and Phase 1 (**INV-1995**) are Paid, but `classstudent` **1812** stayed on `pending_enrollment`, so Month Re-enrollment showed July **pending enrollment** / August **Inactive** instead of **new**. Re-runs `syncInstallmentEnrollmentForPaidInvoice` to promote → `new`.
+
+```bash
+node scripts/repairMargauxNacarPendingEnrollment.js --production
+node scripts/repairMargauxNacarPendingEnrollment.js --production --apply
+```
+
+### `repairMargauxNacarGeneratePhase2.js`
+
+Follow-up for **Margaux Emilia Nacar**: installment queue had jumped to **Aug 25 / Sep 01**. Forces queue to **2026-07-25 / 2026-08-01**, optionally generates **Phase 2**, then advances queue to **Aug 25 / Sep 01**.
+
+```bash
+node scripts/repairMargauxNacarGeneratePhase2.js --production
+node scripts/repairMargauxNacarGeneratePhase2.js --production --apply --generate
+```
+
+### `repairBrixxCabotejaPendingAndPhase2.js`
+
+Same Margaux scenario for **Brixx Irving T. Caboteja** (`marjorietanala@gmail.com`, student **666**, profile **492**, class **149**): promote `pending_enrollment` → `new`, force queue **Jul 25 / Aug 01**, generate **Phase 2**, then queue **Aug 25 / Sep 01**.
+
+```bash
+node scripts/repairBrixxCabotejaPendingAndPhase2.js --production
+node scripts/repairBrixxCabotejaPendingAndPhase2.js --production --apply --generate
+```
+
+### `repairClydeFalconInactiveStopGeneration.js`
+
+**CLYDE WESLEY Q. FALCON** (student **81**, Cavite profiles **55** Pre-Kinder + **58** Playgroup): May matrix stayed **Active** with no due date because unpaid invoices lacked `TARGET_PHASE` (lifecycle could not map them). Code fix ranks by `issue_date` when remarks are missing. This script sets both profiles `is_active=false`, clears `next_generation_date`, and keeps queue status `Generated` so generation stops.
+
+```bash
+node scripts/repairClydeFalconInactiveStopGeneration.js --production
+node scripts/repairClydeFalconInactiveStopGeneration.js --production --apply
+```
+
+### `repairMargaretEndicoMissedPhase5Generation.js`
+
+One-off repair for **Margarette Celine P. Endico** (`endico.kiel@yahoo.com`, profile **436**, class **47**) — missed **phase 5** (issue **2026-06-25**, due **2026-07-05**). Queue had jumped to Sep 25 / Oct 01; canonical schedule is also poisoned by phase 4’s Aug 26 issue, so the script **forces** Jun 25 / Jul 01, optionally generates phase 5, then advances the queue to **Jul 25 / Aug 01**.
+
+```bash
+node scripts/repairMargaretEndicoMissedPhase5Generation.js --production
+node scripts/repairMargaretEndicoMissedPhase5Generation.js --production --apply
+node scripts/repairMargaretEndicoMissedPhase5Generation.js --production --apply --generate
+```
+
+### `repairMargaretEndicoPhase45IssueDueDates.js`
+
+Follow-up date fix after phase 5 was generated with wrong dates (**INV-2074** Aug 26 / Aug 26 while Phase 4 held Jun 25 / Jul 05). Sets:
+
+| Phase | Invoice | Issue | Due |
+|-------|---------|-------|-----|
+| 4 | **1439** | 2026-05-25 | 2026-06-05 |
+| 5 | **2074** | 2026-06-25 | 2026-07-05 |
+
+Also sets installment queue to **2026-07-25** / **2026-08-01**.
+
+```bash
+node scripts/repairMargaretEndicoPhase45IssueDueDates.js --production
+node scripts/repairMargaretEndicoPhase45IssueDueDates.js --production --apply
+```
+
+### `repairPrincessMoriannePascualPhase4Dates.js`
+
+**Princess Morianne F. Pascual** (`florescomillearianne@gmail.com`) — Nursery Installment Plan 3 (profile **323**).
+
+| Target | From | To |
+|--------|------|-----|
+| Phase 4 **INV-1749** / AR **261413** | 2026-06-25 / 2026-07-05 | **2026-07-25** / **2026-08-05** |
+| Queue next_generation / next_invoice_month | (confirm) | **2026-08-25** / **2026-09-01** |
+
+Also clears late penalty on INV-1749 and recalculates amount / program payment status.
+
+```bash
+node scripts/repairPrincessMoriannePascualPhase4Dates.js
+node scripts/repairPrincessMoriannePascualPhase4Dates.js --apply
+```
+
+### `repairTheoSamuelMoralesPhase3Dates.js`
+
+**Theo Samuel P. Morales** (`charlsmorales01@gmail.com`) — Pre-Kindergarten Installment Plan 3 (profile **371**).
+
+| Target | From | To |
+|--------|------|-----|
+| Phase 3 **INV-1761** / AR **261425** | 2026-06-25 / 2026-07-05 | **2026-07-25** / **2026-08-05** |
+| Queue next_generation / next_invoice_month | (confirm; often already set) | **2026-08-25** / **2026-09-01** |
+
+Also clears late penalty on INV-1761 and recalculates amount / program payment status.
+
+```bash
+node scripts/repairTheoSamuelMoralesPhase3Dates.js
+node scripts/repairTheoSamuelMoralesPhase3Dates.js --apply
+```
+
+### `moveAndreaSalurioToVmpPreK4pm.js`
+
+**Andrea Claire Salurio** (`deegurrolajanine123@gmail.com`, user **640**) — move **completed** Phase 10 from `VMP_Pre-Kindergarten_MWF_2:30PM` (**65**) → `VMP_Pre-Kindergarten_MWF_4PM` (**66**).
+
+UI move-student cannot move `completed` enrollments; this script:
+
+| Step | Detail |
+|------|--------|
+| Soft-remove duplicate | classstudent **1532** (dup phase 10) |
+| Move | classstudent **1463** → class **66** |
+| Retag invoices | INV **1837**, **1853** remarks `CLASS_ID:65` → `CLASS_ID:66` |
+
+Phases 1–9 on **NC_Pre-Kindergarten_MWF 4PM** / Active **VMP_Pre-Kindergarten_MWF 4PM** (162) are left unchanged. Target class **66** is currently **Inactive** — confirm before apply; optional `--reactivate-target`.
+
+```bash
+node scripts/moveAndreaSalurioToVmpPreK4pm.js
+node scripts/moveAndreaSalurioToVmpPreK4pm.js --apply
+node scripts/moveAndreaSalurioToVmpPreK4pm.js --apply --reactivate-target
+```
+
+### `removeAndreaSalurioInactiveVmp4pmPhase10.js`
+
+Same student — **undo** inactive Phase 10 on old `VMP_Pre-Kindergarten_MWF_4PM` (**66**). Keep Active `VMP_Pre-Kindergarten_MWF 4PM` (**162**, phases 1–9).
+
+| Action | Class | Detail |
+|--------|-------|--------|
+| **KEEP** | **162** Active | phases 1–9 unchanged |
+| **REMOVE** | **66** Inactive | soft-remove classstudent **1463** (phase 10 completed) |
+| Retag invoices | INV **1837**, **1853** | `CLASS_ID:66` → `CLASS_ID:162` |
+
+```bash
+node scripts/removeAndreaSalurioInactiveVmp4pmPhase10.js
+node scripts/removeAndreaSalurioInactiveVmp4pmPhase10.js --apply
+```
+
+### `repairMorganAquinoPlaygroupMatrix.js`
+
+**Morgan Atlas Milag Aquino** (`kimberlymilag@gmail.com`, user **514**) — Playgroup class **89** / profile **296**.
+
+Align month re-enrollment matrix with invoice Enrollment:
+
+| Month | Label |
+|-------|-------|
+| Apr 2026 | **new** |
+| May 2026 | **re-enrolled** |
+| Jun 2026 | **re-enrolled** |
+| Jul 2026 | **dropped** |
+| Aug 2026 | **rejoin** |
+| Sep 2026 | **Active** |
+
+Also sets phase 2 `program_enrollment_status` to `re_enrolled` and `first_billing_month` to **2026-04-01**.
+
+```bash
+node scripts/repairMorganAquinoPlaygroupMatrix.js
+node scripts/repairMorganAquinoPlaygroupMatrix.js --apply
+```
+
+### `repairAlonzoDeLunaPhase7Dates.js`
+
+**Alonzo Xavier De Luna** (`larainerabago@gmail.com`) — Playgroup Installment Plan 1 (profile **495**, phase_start **6**).
+
+| Target | From | To |
+|--------|------|-----|
+| Phase 7 **INV-2347** / AR **262012** | 2026-07-26 / 2026-08-05 | **2026-08-25** / **2026-09-05** |
+| Queue next_generation / next_invoice_month | (confirm; often already set) | **2026-09-25** / **2026-10-01** |
+
+Also clears late penalty on INV-2347 if present and recalculates amount / program payment status.
+
+```bash
+node scripts/repairAlonzoDeLunaPhase7Dates.js
+node scripts/repairAlonzoDeLunaPhase7Dates.js --apply
+```
+
+### `repairAlonzoDeLunaMatrixAugustNew.js`
+
+Same student — month re-enrollment matrix: move Phase 6 **new** from July → **August**, then **Active** in September.
+
+| Month | Label |
+|-------|-------|
+| Aug 2026 | **new** |
+| Sep 2026 | **Active** |
+
+Updates classstudent **1936** `enrolled_at` → **2026-08-25** and profile **495** `first_billing_month` → **2026-08-01**.
+
+```bash
+node scripts/repairAlonzoDeLunaMatrixAugustNew.js
+node scripts/repairAlonzoDeLunaMatrixAugustNew.js --apply
+```
+
+### `repairMatthaiasDeChavezRemovePlan1.js`
+
+**Matthaias Sabino De Chavez** (`sabinomira000@gmail.com`, user **147**) — Playgroup duplicate plans on class `VMM_Playgroup_SS_11:00-12:00PM`.
+
+| Action | Profile | Package | Notes |
+|--------|---------|---------|-------|
+| **REMOVE** Plan 1 | **279** | Phase 1-8_Old Rate No DP | Unpaid INV **1929, 2248, 2335, 2351** (+ schedule) deleted |
+| **KEEP** Plan 2 | **281** | Phase 1-8_ Plan 1 No DP | Paid phases 1–4; unpaid phase 5 INV **2174** |
+
+Does not modify `classstudentstbl`. Refuses if Plan 1 has any Paid invoices.
+
+```bash
+node scripts/repairMatthaiasDeChavezRemovePlan1.js
+node scripts/repairMatthaiasDeChavezRemovePlan1.js --apply
 ```
 
 ### `repairKirstenMahinayPhaseEnrollmentAndPayments.js`

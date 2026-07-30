@@ -5,6 +5,7 @@ import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
+import { getMerchandiseTypeNamesFromStock } from '../../utils/merchandiseRequests/createTypeCategory';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -20,14 +21,6 @@ const ELIGIBILITY_TYPES = [
   { value: 'new_students_only', label: 'New Students Only' },
   { value: 'existing_students_only', label: 'Existing Students Only' },
   { value: 'referral_only', label: 'Referral Only' },
-];
-
-const MERCHANDISE_TYPES = [
-  'LCA Uniform',
-  'LCA Learning Kit',
-  'LCA Bag',
-  'LCA Keychain',
-  'LCA Totebag',
 ];
 
 const Promo = () => {
@@ -429,6 +422,9 @@ const Promo = () => {
 
   const getMerchandiseItemsByType = (typeName) =>
     merchandise.filter((item) => item.merchandise_name === typeName);
+
+  /** Optgroups from branch stock type names — not a hard-coded category list */
+  const merchandiseTypeNames = getMerchandiseTypeNamesFromStock(merchandise);
 
   const handleAddMerchandise = () => {
     if (!newMerchandise.merchandise_id) {
@@ -1825,7 +1821,7 @@ const Promo = () => {
                             className="input-field text-sm"
                           >
                             <option value="">Select Merchandise</option>
-                            {MERCHANDISE_TYPES.map((typeName) => {
+                            {merchandiseTypeNames.map((typeName) => {
                               const itemsForType = getMerchandiseItemsByType(typeName);
                               if (itemsForType.length === 0) return null;
                               

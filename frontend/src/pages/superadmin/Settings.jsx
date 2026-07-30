@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import TemplateEditorCard from '../../components/settings/TemplateEditorCard';
+import ArchivedClassesPanel from '../../components/settings/ArchivedClassesPanel';
 import {
   TEMPLATE_DEFS,
   TEMPLATE_KEYS,
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'schedule', label: 'Invoice Schedule' },
   { id: 'alerts', label: 'Alerts' },
   { id: 'templates', label: 'Templates' },
+  { id: 'archived', label: 'Archived Classes' },
 ];
 
 // Returns today as YYYY-MM-DD (local)
@@ -1081,6 +1083,8 @@ const Settings = () => {
                 </div>
               </div>
             )}
+
+            {activeTab === 'archived' && <ArchivedClassesPanel />}
           </div>
         </div>
       </div>

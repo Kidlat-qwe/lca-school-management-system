@@ -14,8 +14,18 @@ export const errorHandler = (err, req, res, next) => {
     stack: err.stack
   });
 
-  // Database errors (PostgreSQL error codes)
-  if (err.code) {
+  // Inventory / RHET upstream errors (safety net if route used next(error))
+  if (err?.name === 'InventoryApiError') {
+    return res.status(err.status || 502).json({
+      success: false,
+      message: err.message || 'RHET Inventory request failed',
+      error: { code: err.code || 'INVENTORY_API_ERROR' },
+    });
+  }
+
+  // Database errors (PostgreSQL SQLSTATE is always 5 chars, e.g. 23505).
+  // Do NOT treat InventoryApiError.code values like NETWORK_ERROR as DB errors.
+  if (typeof err.code === 'string' && /^[0-9A-Z]{5}$/.test(err.code)) {
     switch (err.code) {
       case '23505': // Unique violation
         return res.status(409).json({

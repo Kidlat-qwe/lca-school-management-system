@@ -9,6 +9,8 @@
  *   INVENTORY_INTEGRATION_KEY  Shared secret issued by RHET Inventory (Management → API Keys)
  *   INVENTORY_API_KEY          Alias for INVENTORY_INTEGRATION_KEY (fallback)
  *   INVENTORY_WEBHOOK_URL      This system's webhook receiver, sent on every stock request
+ *   INVENTORY_HTTP_TIMEOUT_MS     Optional fetch timeout (default 45000)
+ *   INVENTORY_CATALOG_CACHE_MS    Catalog memory TTL (default 120000); 0 disables
  */
 
 function readBaseUrl() {
@@ -20,6 +22,23 @@ function readIntegrationKey() {
     process.env.INVENTORY_INTEGRATION_KEY || process.env.INVENTORY_API_KEY || ''
   ).trim();
 }
+
+function readHttpTimeoutMs() {
+  const raw = Number(process.env.INVENTORY_HTTP_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw >= 3000) return Math.floor(raw);
+  // Learning Kit + components can be slower on RHET; default 45s
+  return 45000;
+}
+
+function readCatalogCacheMs() {
+  const raw = Number(process.env.INVENTORY_CATALOG_CACHE_MS);
+  if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+  // Soften intermittent RHET /catalog 5xx for Request Stock dropdowns
+  return 120000;
+}
+
+/** In-process catalog cache (per backend instance). */
+let catalogCache = { payload: null, expiresAt: 0 };
 
 export function isInventoryIntegrationEnabled() {
   return Boolean(readBaseUrl() && readIntegrationKey());
@@ -66,7 +85,7 @@ function assertConfigured() {
     if (!key) missing.push('INVENTORY_INTEGRATION_KEY (or INVENTORY_API_KEY)');
     throw new InventoryApiError(
       `RHET Inventory integration is not configured. Missing: ${missing.join(', ')}`,
-      { code: 'INTEGRATION_DISABLED' }
+      { code: 'INTEGRATION_DISABLED', status: 503 }
     );
   }
 
@@ -75,11 +94,15 @@ function assertConfigured() {
 
 async function inventoryRequest(path, options = {}) {
   const { baseUrl, key } = assertConfigured();
+  const timeoutMs = readHttpTimeoutMs();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       ...options,
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         'X-Integration-Key': key,
@@ -87,10 +110,15 @@ async function inventoryRequest(path, options = {}) {
       },
     });
   } catch (networkError) {
+    const aborted = networkError?.name === 'AbortError';
     throw new InventoryApiError(
-      `Could not reach RHET Inventory API: ${networkError.message}`,
-      { code: 'NETWORK_ERROR' }
+      aborted
+        ? `RHET Inventory API timed out after ${timeoutMs}ms (${path}). Try again — upstream may be slow.`
+        : `Could not reach RHET Inventory API: ${networkError.message}`,
+      { code: aborted ? 'NETWORK_TIMEOUT' : 'NETWORK_ERROR', status: 502 }
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   let payload = {};
@@ -101,19 +129,92 @@ async function inventoryRequest(path, options = {}) {
   }
 
   if (!response.ok) {
-    throw new InventoryApiError(formatInventoryErrorMessage(payload, response.status), {
-      status: response.status,
-      code: payload.error?.code || 'INVENTORY_API_ERROR',
-      details: payload.error?.details || null,
-    });
+    // Upstream 5xx (incl. RHET DB timeouts) → surface as 502 to CMS clients
+    const upstreamStatus = response.status;
+    const mappedStatus = upstreamStatus >= 500 ? 502 : upstreamStatus;
+    const message = formatInventoryErrorMessage(payload, upstreamStatus);
+    throw new InventoryApiError(
+      upstreamStatus >= 500
+        ? `RHET Inventory is temporarily unavailable (${message}). Please retry in a moment.`
+        : message,
+      {
+        status: mappedStatus,
+        code: payload.error?.code || 'INVENTORY_API_ERROR',
+        details: payload.error?.details || { upstreamStatus, rawMessage: message },
+      }
+    );
   }
 
   return payload;
 }
 
-/** GET /catalog — categories + items for dropdowns. */
+function isRetryableInventoryError(error) {
+  if (!error) return false;
+  if (error.code === 'NETWORK_TIMEOUT' || error.code === 'NETWORK_ERROR') return true;
+  if (error.status === 502 || error.status === 503 || error.status === 504) return true;
+  const msg = String(error.message || '').toLowerCase();
+  return (
+    msg.includes('timeout') ||
+    msg.includes('temporar') ||
+    msg.includes('econnreset') ||
+    msg.includes('fetch failed')
+  );
+}
+
+async function inventoryRequestWithRetry(path, options = {}, { retries = 0 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await inventoryRequest(path, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isRetryableInventoryError(error)) throw error;
+      const delayMs = 700 * (attempt + 1);
+      console.warn(
+        `[inventoryClient] Retry ${attempt + 1}/${retries} for ${path} after: ${error.message}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * GET /catalog — categories + items for dropdowns.
+ * Retries transient RHET failures; serves a short-lived cache when upstream
+ * remains unavailable so Request Stock can still open.
+ */
 export async function getCatalog() {
-  return inventoryRequest('/catalog');
+  const cacheMs = readCatalogCacheMs();
+  const now = Date.now();
+  if (cacheMs > 0 && catalogCache.payload && catalogCache.expiresAt > now) {
+    return catalogCache.payload;
+  }
+
+  try {
+    const payload = await inventoryRequestWithRetry('/catalog', {}, { retries: 2 });
+    if (cacheMs > 0 && payload) {
+      catalogCache = { payload, expiresAt: now + cacheMs };
+    }
+    return payload;
+  } catch (error) {
+    // Stale cache: still usable for dropdowns while RHET recovers
+    if (cacheMs > 0 && catalogCache.payload) {
+      console.warn(
+        `[inventoryClient] Serving stale RHET catalog after upstream failure: ${error.message}`
+      );
+      return {
+        ...catalogCache.payload,
+        meta: {
+          ...(catalogCache.payload.meta || {}),
+          cached: true,
+          stale: true,
+          cacheWarning: error.message,
+        },
+      };
+    }
+    throw error;
+  }
 }
 
 /** GET /availability — optional stock check before submit. */
@@ -127,10 +228,14 @@ export async function checkAvailability(queryParams = {}) {
 
 /** POST /stock-requests — submit one or more stock request line items. */
 export async function submitStockRequests(payload) {
-  return inventoryRequest('/stock-requests', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  return inventoryRequestWithRetry(
+    '/stock-requests',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    { retries: 1 }
+  );
 }
 
 /** GET /stock-requests/:id — poll status by RHET request UUID. */

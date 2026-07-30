@@ -69,6 +69,10 @@ import {
   isLcgtEventPaymentMethod,
   canCreateLcgtEventAr,
 } from '../../constants/lcgtEventAr';
+import {
+  formatMerchandiseVariantOptionLabel,
+  isItemNamedStockCategory,
+} from '../../utils/merchandiseStock';
 
 const LEVEL_TAG_OPTIONS = ['Playgroup', 'Nursery', 'Pre-Kindergarten', 'Kindergarten', 'Grade School'];
 
@@ -291,6 +295,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [branchModalStep, setBranchModalStep] = useState(1);
+  /** Package / Merchandise AR create wizard: 1 = details, 2 = payment */
+  const [arCreateStep, setArCreateStep] = useState(1);
   const [arType, setArType] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [merchandiseSelections, setMerchandiseSelections] = useState([]);
@@ -739,6 +745,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setArType('');
     setSelectedPackage(null);
     setMerchandiseSelections([]);
+    setArCreateStep(1);
     setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData({
       prospect_student_name: '',
@@ -1058,6 +1065,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     resetCreateForm();
     if (preserveArType) {
       setArType(preserveArType);
+      if (preserveArType === 'Merchandise') {
+        setMerchandiseSelections([createEmptyMerchandiseRow()]);
+      }
     }
     setShowCreateModal(true);
   };
@@ -1070,7 +1080,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setArType(newType);
     if (!newType) return;
     setSelectedPackage(null);
-    setMerchandiseSelections([]);
+    setMerchandiseSelections(newType === 'Merchandise' ? [createEmptyMerchandiseRow()] : []);
+    setArCreateStep(1);
     setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData((prev) => ({
       ...prev,
@@ -1093,46 +1104,74 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   };
 
   const uniqueMerchandiseNames = () => {
-    const names = [...new Set(merchandise.filter((m) => m.quantity == null || m.quantity > 0).map((m) => m.merchandise_name))];
+    const names = [
+      ...new Set(
+        merchandise
+          .filter((m) => m.quantity == null || m.quantity > 0)
+          .map((m) => m.merchandise_name)
+      ),
+    ];
     return names.sort((a, b) => a.localeCompare(b));
   };
+
+  const stockOptionsForCategory = (merchandiseName) =>
+    merchandise.filter(
+      (m) =>
+        m.merchandise_name === merchandiseName && (m.quantity == null || m.quantity > 0)
+    );
+
+  const createEmptyMerchandiseRow = () => ({
+    id: `sel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    merchandise_name: '',
+    sizeOptions: [],
+    selectedMerchandiseId: null,
+    quantity: 1,
+  });
 
   const merchandiseTotalAmount = () => {
     return merchandiseSelections.reduce((sum, sel) => {
       if (!sel.selectedMerchandiseId) return sum;
       const m = merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId);
-      const price = m ? (parseFloat(m.price) || 0) : 0;
+      const price = m ? parseFloat(m.price) || 0 : 0;
       return sum + price * (sel.quantity || 1);
     }, 0);
   };
 
-  const isUniformMerchandise = (name) => (name || '').toLowerCase().includes('uniform');
-
-  const addMerchandiseByName = (merchandiseName) => {
-    const sizeOptions = merchandise.filter(
-      (m) => m.merchandise_name === merchandiseName && (m.quantity == null || m.quantity > 0)
-    );
-    if (sizeOptions.length === 0) return;
-    const autoSelect = sizeOptions.length === 1 ? sizeOptions[0].merchandise_id : null;
-    setMerchandiseSelections((prev) => [
-      ...prev,
-      {
-        id: `sel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        merchandise_name: merchandiseName,
-        sizeOptions,
-        selectedMerchandiseId: autoSelect,
-        quantity: 1,
-      },
-    ]);
+  const addMerchandiseRow = () => {
+    setMerchandiseSelections((prev) => [...prev, createEmptyMerchandiseRow()]);
   };
 
   const removeMerchandiseSelection = (selectionId) => {
-    setMerchandiseSelections((prev) => prev.filter((s) => s.id !== selectionId));
+    setMerchandiseSelections((prev) => {
+      const next = prev.filter((s) => s.id !== selectionId);
+      return next.length === 0 ? [createEmptyMerchandiseRow()] : next;
+    });
+  };
+
+  const updateMerchandiseSelectionCategory = (selectionId, merchandiseName) => {
+    const sizeOptions = merchandiseName ? stockOptionsForCategory(merchandiseName) : [];
+    const autoSelect = sizeOptions.length === 1 ? sizeOptions[0].merchandise_id : null;
+    setMerchandiseSelections((prev) =>
+      prev.map((s) =>
+        s.id === selectionId
+          ? {
+              ...s,
+              merchandise_name: merchandiseName,
+              sizeOptions,
+              selectedMerchandiseId: autoSelect,
+            }
+          : s
+      )
+    );
   };
 
   const updateMerchandiseSelectionSize = (selectionId, merchandiseId) => {
     setMerchandiseSelections((prev) =>
-      prev.map((s) => (s.id === selectionId ? { ...s, selectedMerchandiseId: merchandiseId ? parseInt(merchandiseId, 10) : null } : s))
+      prev.map((s) =>
+        s.id === selectionId
+          ? { ...s, selectedMerchandiseId: merchandiseId ? parseInt(merchandiseId, 10) : null }
+          : s
+      )
     );
   };
 
@@ -1602,6 +1641,69 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     }
   };
 
+  const validateMerchandiseCreateStep1 = () => {
+    const errors = {};
+    const name = (createFormData.prospect_student_name || '').trim();
+    const guardianName = (createFormData.prospect_student_contact || '').trim();
+    const arEmail = (createFormData.prospect_student_email || '').trim();
+    const arPhone = (createFormData.prospect_student_phone || '').trim();
+    const levelTag = (createFormData.level_tag || '').trim();
+
+    if (isSuperadmin && !selectedBranchId) {
+      errors.branch_id = 'Branch is required';
+    }
+    if (!name) errors.prospect_student_name = 'Student name is required';
+    if (!guardianName) errors.prospect_student_contact = 'Guardian name is required';
+    if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    if (!isValidPhilippineMobile(arPhone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)';
+    }
+    if (!levelTag) errors.level_tag = 'Level tag is required';
+    const configuredCount = merchandiseSelections.filter((s) => s.selectedMerchandiseId).length;
+    if (merchandiseSelections.length === 0 || configuredCount === 0) {
+      errors.merchandise = 'Select at least one merchandise item and configure size / item';
+    } else if (merchandiseTotalAmount() <= 0) {
+      errors.merchandise = 'Total payment must be greater than 0';
+    }
+
+    setCreateFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const validatePackageCreateStep1 = () => {
+    const errors = {};
+    const name = (createFormData.prospect_student_name || '').trim();
+    const guardianName = (createFormData.prospect_student_contact || '').trim();
+    const arEmail = (createFormData.prospect_student_email || '').trim();
+    const arPhone = (createFormData.prospect_student_phone || '').trim();
+    const levelTag = (createFormData.level_tag || '').trim();
+
+    if (isSuperadmin && !selectedBranchId) {
+      errors.branch_id = 'Branch is required';
+    }
+    if (!name) errors.prospect_student_name = 'Student name is required';
+    if (!guardianName) errors.prospect_student_contact = 'Guardian name is required';
+    if (arEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(arEmail)) {
+      errors.prospect_student_email = 'Please enter a valid email address';
+    }
+    if (!isValidPhilippineMobile(arPhone)) {
+      errors.prospect_student_phone =
+        'A valid Philippine mobile number is required for SMS payment confirmation (e.g. 09171234567)';
+    }
+    if (!levelTag) errors.level_tag = 'Level tag is required';
+    if (!createFormData.package_id) errors.package_id = 'Package is required';
+    const amount = parseFloat(createFormData.payment_amount || '0');
+    if (!amount || amount <= 0) {
+      errors.payment_amount = 'Payment amount must be greater than 0';
+    }
+
+    setCreateFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const validateCreateForm = () => {
     const errors = {};
     const name = (createFormData.prospect_student_name || '').trim();
@@ -1722,6 +1824,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleCreateSubmit = async (e) => {
     e.preventDefault();
+    if (arType === 'Package' && arCreateStep !== 2) {
+      if (validatePackageCreateStep1()) setArCreateStep(2);
+      return;
+    }
+    if (arType === 'Merchandise' && arCreateStep !== 2) {
+      if (validateMerchandiseCreateStep1()) setArCreateStep(2);
+      return;
+    }
     if (arType === LCGT_EVENT_AR_TYPE && !canCreateLcgtEventArOption) {
       appAlert('Only Superadmin and Malolos branch admin can create Little Champions Got Talent event tickets.');
       return;
@@ -3402,26 +3512,42 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
             onClick={closeCreateModal}
           >
             <div
-              className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col min-w-0"
+              className={`bg-white rounded-lg shadow-xl w-full max-h-[90vh] overflow-hidden flex flex-col min-w-0 relative z-[101] ${
+                !arType
+                  ? 'max-w-lg'
+                  : arType === 'Merchandise'
+                    ? 'max-w-3xl'
+                    : 'max-w-2xl'
+              }`}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="shrink-0 px-4 sm:px-6 pt-4 sm:pt-6 pb-4 border-b border-gray-200 flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Create Acknowledgement Receipt</h2>
-                  <p className="text-xs text-gray-500 mt-1">
+              <div className="shrink-0 flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-gray-200 bg-white rounded-t-lg">
+                <div className="min-w-0">
+                  <h2 className="text-lg sm:text-xl font-bold text-gray-900">
+                    {(arType === 'Package' || arType === 'Merchandise') && arCreateStep === 1
+                      ? 'Create Acknowledgement Receipt - Step 1 of 2'
+                      : (arType === 'Package' || arType === 'Merchandise') && arCreateStep === 2
+                        ? 'Create Acknowledgement Receipt - Step 2 of 2'
+                        : 'Create Acknowledgement Receipt'}
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-0.5">
                     {arType === 'Merchandise'
-                      ? 'Record a merchandise payment without creating the full student record yet.'
+                      ? arCreateStep === 1
+                        ? 'Fill in the client and merchandise lines'
+                        : 'Fill in payment method, adjustments, and proof of payment'
                       : arType === LCGT_EVENT_AR_TYPE
                         ? `Record a ${LCGT_EVENT_NAME} ticket payment.`
                         : arType === 'Package'
-                          ? 'Record a payment for a package without creating the full student record yet.'
+                          ? arCreateStep === 1
+                            ? 'Fill in the client, package, and payment amount'
+                            : 'Fill in payment method, adjustments, and proof of payment'
                           : 'Select an issue type to continue.'}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={closeCreateModal}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
                   disabled={creating}
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3430,10 +3556,25 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                 </button>
               </div>
 
-              <form onSubmit={handleCreateSubmit} className="flex flex-col flex-1 min-h-0">
-                <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 space-y-4 min-w-0">
-                {(isSuperadmin || isAdminOrSuperadmin) && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <form onSubmit={handleCreateSubmit} className="flex flex-col min-h-0 flex-1">
+                <div
+                  className={`overflow-y-auto overflow-x-hidden min-w-0 ${
+                    !arType
+                      ? 'p-4 sm:p-5 space-y-3'
+                      : arType === 'Package' || arType === 'Merchandise'
+                        ? 'p-5 sm:p-6 space-y-5'
+                        : 'px-4 sm:px-5 py-4 space-y-4'
+                  }`}
+                >
+                {(isSuperadmin || isAdminOrSuperadmin) &&
+                  !((arType === 'Package' || arType === 'Merchandise') && arCreateStep === 2) && (
+                  <div
+                    className={`grid gap-3 ${
+                      !arType && !isSuperadmin
+                        ? 'grid-cols-1'
+                        : 'grid-cols-1 sm:grid-cols-2'
+                    }`}
+                  >
                 {isSuperadmin && (
                   <div>
                     <label className="label-field text-xs">
@@ -3450,7 +3591,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           return next;
                         });
                         setSelectedPackage(null);
-                        setMerchandiseSelections([]);
+                        setMerchandiseSelections(
+                          arType === 'Merchandise' ? [createEmptyMerchandiseRow()] : []
+                        );
                         setCreateFormData((prev) => ({
                           ...prev,
                           package_id: '',
@@ -3503,11 +3646,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
                   </div>
                 )}
-                {!arType ? (
-                  <p className="text-sm text-gray-500 py-2">
-                    Choose an issue type above to continue filling out this form.
-                  </p>
-                ) : arType === LCGT_EVENT_AR_TYPE ? (
+                {!arType ? null : arType === LCGT_EVENT_AR_TYPE ? (
                   <LcgtEventArCreateSection
                     eventParticipantType={eventParticipantType}
                     onParticipantTypeChange={(type) => {
@@ -3528,741 +3667,1012 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     clearAttachment={clearAttachment}
                   />
                 ) : arType === 'Merchandise' ? (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 items-start min-w-0">
-                    <div className="space-y-4 min-w-0">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="label-field text-xs">
-                          Student Name <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          name="prospect_student_name"
-                          value={createFormData.prospect_student_name}
-                          onChange={handleCreateInputChange}
-                          className={`input-field text-sm ${createFormErrors.prospect_student_name ? 'border-red-500' : ''}`}
-                        />
-                        {createFormErrors.prospect_student_name && (
-                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="label-field text-xs">
-                          Guardian Name <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          name="prospect_student_contact"
-                          value={createFormData.prospect_student_contact}
-                          onChange={handleCreateInputChange}
-                          className={`input-field text-sm ${createFormErrors.prospect_student_contact ? 'border-red-500' : ''}`}
-                        />
-                        {createFormErrors.prospect_student_contact && (
-                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                        <input
-                          type="email"
-                          name="prospect_student_email"
-                          value={createFormData.prospect_student_email}
-                          onChange={handleCreateInputChange}
-                          className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
-                          placeholder="client@example.com"
-                        />
-                        {createFormErrors.prospect_student_email && (
-                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="label-field text-xs">
-                          Mobile Number (SMS) <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="tel"
-                          name="prospect_student_phone"
-                          value={createFormData.prospect_student_phone}
-                          onChange={handleCreateInputChange}
-                          className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
-                          placeholder="09171234567"
-                          autoComplete="tel"
-                        />
-                        {createFormErrors.prospect_student_phone && (
-                          <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="label-field text-xs">
-                        Select Merchandise <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        className={`input-field text-sm ${createFormErrors.merchandise ? 'border-red-500' : ''}`}
-                        disabled={merchandiseLoading}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val) {
-                            addMerchandiseByName(val);
-                            e.target.value = '';
-                          }
-                        }}
-                      >
-                        <option value="">Add merchandise...</option>
-                        {uniqueMerchandiseNames().map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                      {createFormErrors.merchandise && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.merchandise}</p>
-                      )}
-                      {merchandiseSelections.length > 0 && (
-                        <ul className="mt-2 space-y-3">
-                          {merchandiseSelections.map((sel) => {
-                            const selectedItem = sel.selectedMerchandiseId
-                              ? merchandise.find((x) => x.merchandise_id === sel.selectedMerchandiseId)
-                              : sel.sizeOptions.length === 1
-                              ? sel.sizeOptions[0]
-                              : null;
-                            const price = selectedItem ? parseFloat(selectedItem.price) || 0 : 0;
-                            const lineTotal = price * (sel.quantity || 1);
-                            const imageUrl = selectedItem?.image_url || sel.sizeOptions.find((o) => o.image_url)?.image_url || sel.sizeOptions[0]?.image_url;
-                            return (
-                              <li
-                                key={sel.id}
-                                className="flex flex-row items-center gap-4 p-3 bg-gray-50 rounded-lg border border-gray-200"
-                              >
-                                <div className="flex items-center gap-3 flex-shrink-0">
-                                  {imageUrl && (
-                                    <img
-                                      src={imageUrl}
-                                      alt={sel.merchandise_name}
-                                      className="w-12 h-12 object-cover rounded border border-gray-200 bg-white"
-                                    />
-                                  )}
-                                  <div>
-                                    <p className="font-medium text-gray-900 text-sm">{sel.merchandise_name}</p>
-                                    <p className="text-xs text-gray-500">
-                                      {selectedItem
-                                        ? [
-                                            `₱${price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-                                            selectedItem.size && selectedItem.size,
-                                            selectedItem.gender && selectedItem.gender,
-                                            selectedItem.type && selectedItem.type,
-                                            !isUniformMerchandise(sel.merchandise_name) && selectedItem.remarks?.trim() && selectedItem.remarks.trim(),
-                                          ]
-                                            .filter(Boolean)
-                                            .join(' • ')
-                                        : isUniformMerchandise(sel.merchandise_name)
-                                          ? 'Select size'
-                                          : 'Select type'}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-3 flex-1 flex-wrap min-w-0">
-                                  {sel.sizeOptions.length > 1 ? (
-                                    <div className="min-w-[180px]">
-                                      <label className="sr-only">{isUniformMerchandise(sel.merchandise_name) ? 'Size' : 'Type'}</label>
-                                      <select
-                                        value={sel.selectedMerchandiseId || ''}
-                                        onChange={(e) => updateMerchandiseSelectionSize(sel.id, e.target.value)}
-                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"
-                                      >
-                                        <option value="">
-                                          {isUniformMerchandise(sel.merchandise_name) ? 'Select size' : 'Select type'}
-                                        </option>
-                                        {sel.sizeOptions.map((opt) => (
-                                          <option key={opt.merchandise_id} value={opt.merchandise_id}>
-                                            {[
-                                              opt.size || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type'),
-                                              opt.gender && opt.gender,
-                                              opt.type && opt.type,
-                                              !isUniformMerchandise(sel.merchandise_name) && opt.remarks?.trim(),
-                                              `₱${Number(opt.price || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
-                                            ]
-                                              .filter(Boolean)
-                                              .join(' - ')}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  ) : (
-                                    sel.sizeOptions.length === 1 && (
-                                      <span className="text-xs text-gray-500">
-                                        {[
-                                          sel.sizeOptions[0].size && `Size: ${sel.sizeOptions[0].size}`,
-                                          sel.sizeOptions[0].gender && `Gender: ${sel.sizeOptions[0].gender}`,
-                                          sel.sizeOptions[0].type && `Type: ${sel.sizeOptions[0].type}`,
-                                          !isUniformMerchandise(sel.merchandise_name) && sel.sizeOptions[0].remarks?.trim() && `Remarks: ${sel.sizeOptions[0].remarks.trim()}`,
-                                        ]
-                                          .filter(Boolean)
-                                          .join(' • ') || (isUniformMerchandise(sel.merchandise_name) ? 'One Size' : 'One Type')}
-                                      </span>
-                                    )
-                                  )}
-                                  <div>
-                                    <label className="sr-only">Quantity</label>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      value={sel.quantity || 1}
-                                      onChange={(e) => updateMerchandiseSelectionQuantity(sel.id, e.target.value)}
-                                      className="w-16 px-2 py-1.5 text-sm border border-gray-300 rounded"
-                                    />
-                                  </div>
-                                  <span className="text-sm font-medium text-gray-700">
-                                    ₱{lineTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeMerchandiseSelection(sel.id)}
-                                    className="p-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded"
-                                    title="Remove"
-                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                    </div>
-                    <div className="space-y-4 min-w-0">
-                    <div>
-                      <label className="label-field text-xs">
-                        Level Tag <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        name="level_tag"
-                        value={createFormData.level_tag}
-                        onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
-                      >
-                        <option value="">Select Level Tag</option>
-                        {LEVEL_TAG_OPTIONS.map((opt) => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                      {createFormErrors.level_tag && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label-field text-xs">
-                        Payment Date <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        name="issue_date"
-                        value={createFormData.issue_date}
-                        onChange={handleCreateInputChange}
-                        className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
-                        required
-                        disabled={creating}
-                      />
-                      {createFormErrors.issue_date && (
-                        <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
-                      )}
-                      <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
-                    </div>
-                    <div>
-                      <label className="label-field text-xs">Amount</label>
-                      <input
-                        type="text"
-                        readOnly
-                        value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                        className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                      />
-                    </div>
-                    </div>
-                    <div>
-                      <label className="label-field text-xs">Tip/Payment Adjustment</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        name="tip_amount"
-                        value={createFormData.tip_amount}
-                        onChange={handleCreateInputChange}
-                        placeholder="0.00"
-                        className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
-                      />
-                      {createFormErrors.tip_amount && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
-                      )}
-                    </div>
-                    <PaymentDiscountField
-                      className="col-span-full"
-                      hintVariant="ar"
-                      value={createFormData.discount_amount}
-                      onChange={handleCreateInputChange}
-                      error={createFormErrors.discount_amount}
-                      payableAmount={merchandiseTotalAmount()}
-                      disabled={creating}
-                    />
-                    <div>
-                      <label className="label-field text-xs">
-                        Payment Method <span className="text-red-500">*</span>
-                      </label>
-                      <PaymentMethodSelect
-                        name="payment_method"
-                        value={createFormData.payment_method}
-                        onChange={handleCreateInputChange}
-                        error={createFormErrors.payment_method}
-                        disabled={creating}
-                      />
-                      {createFormErrors.payment_method && (
-                        <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
-                      )}
-                      {createFormData.payment_method === 'Cash' ? (
-                        <p className="text-xs text-emerald-600 mt-1">
-                          Cash merchandise is auto-verified on the AR page when issued. Finance still approves the payment in Payment Logs.
-                        </p>
-                      ) : (
-                        <p className="text-xs text-amber-600 mt-1">
-                          Non-cash merchandise must be verified by Finance/Superfinance on the AR page; Payment Logs auto-approve when Finance verifies.
-                        </p>
-                      )}
-                    </div>
-                    <PaymentReferenceNumberField
-                      paymentMethod={createFormData.payment_method}
-                      name="reference_number"
-                      value={createFormData.reference_number}
-                      onChange={handleCreateInputChange}
-                      disabled={creating}
-                      placeholder="e.g. GCash transaction ID, bank ref"
-                    />
-                    <div>
-                      <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
-                  <p className="text-xs text-gray-500 mb-1">Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 50 MB)</p>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,image/gif"
-                        onChange={handleAttachmentChange}
-                        disabled={attachmentUploading || creating}
-                        className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
-                      />
-                      {attachmentUploading && <p className="text-xs text-amber-600 mt-1">Uploading…</p>}
-                      {createFormErrors.payment_attachment_url && (
-                        <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
-                      )}
-                      {createFormData.payment_attachment_url && !attachmentUploading && (
-                        <div className="mt-2">
-                          <img
-                            src={createFormData.payment_attachment_url}
-                            alt="Preview"
-                            className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
-                          />
-                          <div className="mt-2 flex gap-2">
-                            <button type="button" onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)} className="text-sm text-blue-600 hover:underline">
-                              View
-                            </button>
-                            <button type="button" onClick={clearAttachment} className="text-xs text-red-600 hover:text-red-700">
-                              Remove
-                            </button>
+                  <div className="w-full min-w-0 space-y-6">
+                    {arCreateStep === 1 ? (
+                      <div className="space-y-5">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Student Name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              name="prospect_student_name"
+                              value={createFormData.prospect_student_name}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_name ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.prospect_student_name && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_name}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Guardian Name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              name="prospect_student_contact"
+                              value={createFormData.prospect_student_contact}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_contact ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.prospect_student_contact && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_contact}
+                              </p>
+                            )}
                           </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 items-start min-w-0">
-                    <div className="space-y-4 min-w-0">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="label-field text-xs">
-                      Student Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="prospect_student_name"
-                      value={createFormData.prospect_student_name}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${
-                        createFormErrors.prospect_student_name ? 'border-red-500' : ''
-                      }`}
-                    />
-                    {createFormErrors.prospect_student_name && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_name}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="label-field text-xs">
-                      Guardian Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="prospect_student_contact"
-                      value={createFormData.prospect_student_contact}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${
-                        createFormErrors.prospect_student_contact ? 'border-red-500' : ''
-                      }`}
-                    />
-                    {createFormErrors.prospect_student_contact && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_contact}</p>
-                    )}
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="label-field text-xs">Client Email (for paid confirmation)</label>
-                    <input
-                      type="email"
-                      name="prospect_student_email"
-                      value={createFormData.prospect_student_email}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${createFormErrors.prospect_student_email ? 'border-red-500' : ''}`}
-                      placeholder="client@example.com"
-                    />
-                    {createFormErrors.prospect_student_email && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_email}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="label-field text-xs">
-                      Mobile Number (SMS) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="tel"
-                      name="prospect_student_phone"
-                      value={createFormData.prospect_student_phone}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${createFormErrors.prospect_student_phone ? 'border-red-500' : ''}`}
-                      placeholder="09171234567"
-                      autoComplete="tel"
-                    />
-                    {createFormErrors.prospect_student_phone && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.prospect_student_phone}</p>
-                    )}
-                  </div>
-                </div>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">Client Email (for paid confirmation)</label>
+                            <input
+                              type="email"
+                              name="prospect_student_email"
+                              value={createFormData.prospect_student_email}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_email ? 'border-red-500' : ''
+                              }`}
+                              placeholder="client@example.com"
+                            />
+                            {createFormErrors.prospect_student_email && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_email}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Mobile Number (SMS) <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="tel"
+                              name="prospect_student_phone"
+                              value={createFormData.prospect_student_phone}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_phone ? 'border-red-500' : ''
+                              }`}
+                              placeholder="09171234567"
+                              autoComplete="tel"
+                            />
+                            {createFormErrors.prospect_student_phone && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_phone}
+                              </p>
+                            )}
+                          </div>
+                        </div>
 
-                <div>
-                  <label className="label-field text-xs">Notes (optional)</label>
-                  <textarea
-                    name="prospect_student_notes"
-                    value={createFormData.prospect_student_notes}
-                    onChange={handleCreateInputChange}
-                    rows="2"
-                    className="input-field text-sm"
-                  />
-                </div>
+                        <div className="max-w-xs">
+                          <label className="label-field">
+                            Level Tag <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            name="level_tag"
+                            value={createFormData.level_tag}
+                            onChange={handleCreateInputChange}
+                            className={`input-field ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
+                          >
+                            <option value="">Select Level Tag</option>
+                            {LEVEL_TAG_OPTIONS.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                          {createFormErrors.level_tag && (
+                            <p className="mt-1 text-sm text-red-600">{createFormErrors.level_tag}</p>
+                          )}
+                        </div>
 
-                <div>
-                  <label className="label-field text-xs">
-                    Level Tag <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    name="level_tag"
-                    value={createFormData.level_tag}
-                    onChange={handleCreateInputChange}
-                    className={`input-field text-sm ${createFormErrors.level_tag ? 'border-red-500' : ''}`}
-                  >
-                    <option value="">Select Level Tag</option>
-                    <option value="Playgroup">Playgroup</option>
-                    <option value="Nursery">Nursery</option>
-                    <option value="Pre-Kindergarten">Pre-Kindergarten</option>
-                    <option value="Kindergarten">Kindergarten</option>
-                    <option value="Grade School">Grade School</option>
-                  </select>
-                  {createFormErrors.level_tag && (
-                    <p className="text-xs text-red-500 mt-1">{createFormErrors.level_tag}</p>
-                  )}
-                  {selectedPackage?.level_tag && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Package level: {selectedPackage.level_tag}
-                    </p>
-                  )}
-                </div>
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <label className="label-field mb-0">
+                              Merchandise <span className="text-red-500">*</span>
+                            </label>
+                            <button
+                              type="button"
+                              onClick={addMerchandiseRow}
+                              disabled={merchandiseLoading}
+                              className="text-sm font-medium text-gray-700 hover:text-gray-900 hover:underline disabled:opacity-50"
+                            >
+                              + Add row
+                            </button>
+                          </div>
+                          {createFormErrors.merchandise && (
+                            <p className="text-sm text-red-600">{createFormErrors.merchandise}</p>
+                          )}
+                          <div
+                            className="overflow-x-auto rounded-lg border border-gray-200"
+                            style={{
+                              scrollbarWidth: 'thin',
+                              scrollbarColor: '#cbd5e0 #f7fafc',
+                              WebkitOverflowScrolling: 'touch',
+                            }}
+                          >
+                            <table
+                              className="divide-y divide-gray-200"
+                              style={{ width: '100%', minWidth: '640px' }}
+                            >
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="bg-gray-50 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                                    Category
+                                  </th>
+                                  <th className="bg-gray-50 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                                    Variant / Item
+                                  </th>
+                                  <th
+                                    className="bg-gray-50 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500"
+                                    style={{ width: '88px' }}
+                                  >
+                                    Qty
+                                  </th>
+                                  <th
+                                    className="bg-gray-50 px-2 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500"
+                                    style={{ width: '110px' }}
+                                  >
+                                    Line
+                                  </th>
+                                  <th className="bg-gray-50 px-1 py-2" style={{ width: '40px' }}>
+                                    {' '}
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 bg-white">
+                                {merchandiseSelections.map((sel, rowIndex) => {
+                                  const selectedItem = sel.selectedMerchandiseId
+                                    ? merchandise.find(
+                                        (x) => x.merchandise_id === sel.selectedMerchandiseId
+                                      )
+                                    : sel.sizeOptions.length === 1
+                                      ? sel.sizeOptions[0]
+                                      : null;
+                                  const price = selectedItem ? parseFloat(selectedItem.price) || 0 : 0;
+                                  const lineTotal = price * (sel.quantity || 1);
+                                  const isItemNamed = isItemNamedStockCategory(sel.merchandise_name);
+                                  const categoryNames = uniqueMerchandiseNames();
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="label-field text-xs">
-                      Package <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="package_id"
-                      value={createFormData.package_id}
-                      onChange={handlePackageChange}
-                      className={`input-field text-sm ${
-                        createFormErrors.package_id ? 'border-red-500' : ''
-                      }`}
-                      disabled={packagesLoading}
-                    >
-                      <option value="">Select package?</option>
-                      {packages.map((pkg) => (
-                        <option key={pkg.package_id} value={pkg.package_id}>
-                          {pkg.package_name}
-                        </option>
-                      ))}
-                    </select>
-                    {createFormErrors.package_id && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.package_id}</p>
-                    )}
-                  </div>
+                                  return (
+                                    <tr key={sel.id}>
+                                      <td className="px-2 py-2 align-top">
+                                        <select
+                                          value={sel.merchandise_name || ''}
+                                          onChange={(e) =>
+                                            updateMerchandiseSelectionCategory(sel.id, e.target.value)
+                                          }
+                                          className="input-field w-full max-w-full min-w-0 py-1.5 text-sm"
+                                          aria-label={`Category row ${rowIndex + 1}`}
+                                          disabled={merchandiseLoading}
+                                        >
+                                          <option value="">-- Select category --</option>
+                                          {categoryNames.map((name) => (
+                                            <option key={name} value={name}>
+                                              {name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </td>
+                                      <td className="px-2 py-2 align-top">
+                                        {!sel.merchandise_name ? (
+                                          <p className="py-2 text-xs text-gray-400">
+                                            Select a category first
+                                          </p>
+                                        ) : sel.sizeOptions.length === 0 ? (
+                                          <p className="py-2 text-xs text-amber-600">
+                                            No in-stock variants for this category
+                                          </p>
+                                        ) : (
+                                          <select
+                                            value={sel.selectedMerchandiseId || ''}
+                                            onChange={(e) =>
+                                              updateMerchandiseSelectionSize(sel.id, e.target.value)
+                                            }
+                                            className="input-field w-full py-1.5 text-sm"
+                                            aria-label={`Variant row ${rowIndex + 1}`}
+                                          >
+                                            <option value="">
+                                              {isItemNamed ? 'Select item…' : 'Select size…'}
+                                            </option>
+                                            {sel.sizeOptions.map((opt) => (
+                                              <option
+                                                key={opt.merchandise_id}
+                                                value={opt.merchandise_id}
+                                              >
+                                                {formatMerchandiseVariantOptionLabel(opt)}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        )}
+                                      </td>
+                                      <td className="px-2 py-2 align-top">
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          value={sel.quantity || 1}
+                                          onChange={(e) =>
+                                            updateMerchandiseSelectionQuantity(sel.id, e.target.value)
+                                          }
+                                          className="input-field w-full py-1.5 text-sm"
+                                          aria-label={`Quantity row ${rowIndex + 1}`}
+                                          disabled={!sel.selectedMerchandiseId}
+                                        />
+                                      </td>
+                                      <td className="px-2 py-2 align-top text-right">
+                                        <p className="text-sm font-medium text-gray-900">
+                                          ₱
+                                          {lineTotal.toLocaleString('en-PH', {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </p>
+                                        {selectedItem && (
+                                          <p className="text-[10px] text-gray-400">
+                                            ₱
+                                            {price.toLocaleString('en-PH', {
+                                              minimumFractionDigits: 2,
+                                            })}{' '}
+                                            each
+                                          </p>
+                                        )}
+                                      </td>
+                                      <td className="px-1 py-2 align-top">
+                                        <button
+                                          type="button"
+                                          onClick={() => removeMerchandiseSelection(sel.id)}
+                                          className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                                          title="Remove row"
+                                          aria-label={`Remove row ${rowIndex + 1}`}
+                                        >
+                                          <svg
+                                            className="h-4 w-4"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                          >
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={2}
+                                              d="M6 18L18 6M6 6l12 12"
+                                            />
+                                          </svg>
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          {merchandiseLoading && (
+                            <p className="text-xs text-gray-500">Loading branch stock…</p>
+                          )}
+                        </div>
 
-                  <div>
-                    <label className="label-field text-xs">
-                      Payment Amount <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      tabIndex={-1}
-                      name="payment_amount"
-                      value={
-                        createFormData.payment_amount === '' || createFormData.payment_amount == null
-                          ? ''
-                          : `₱${Number(createFormData.payment_amount).toLocaleString('en-PH', {
+                        <div className="max-w-xs">
+                          <label className="label-field">Total</label>
+                          <input
+                            type="text"
+                            readOnly
+                            tabIndex={-1}
+                            value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
-                            })}`
-                      }
-                      className={`input-field text-sm bg-gray-100 cursor-not-allowed ${
-                        createFormErrors.payment_amount ? 'border-red-500' : ''
-                      }`}
-                      aria-readonly="true"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Amount is set from the selected package (and installment option if applicable); it cannot be edited.
-                    </p>
-                    {createFormErrors.payment_amount && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_amount}</p>
-                    )}
-                  </div>
-                </div>
-
-                {selectedPackage &&
-                  ((selectedPackage.package_type || '').toLowerCase() === 'installment' || (selectedPackage.package_type === 'Phase' && (selectedPackage.payment_option || '').toLowerCase() === 'installment')) && (() => {
-                    const downpayment = parseFloat(selectedPackage.downpayment_amount || 0);
-                    const monthly = parseFloat(selectedPackage.package_price || 0);
-                    return (
-                      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
-                        <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">
-                          Installment Payment Option
-                        </p>
-                        <div className="space-y-2">
-                          <label className="flex items-start gap-3 cursor-pointer group">
-                            <input
-                              type="radio"
-                              name="installment_option"
-                              value="downpayment_only"
-                              checked={createFormData.installment_option === 'downpayment_only'}
-                              onChange={() => handleInstallmentOptionChange('downpayment_only')}
-                              className="mt-0.5 accent-blue-600"
-                            />
-                            <span className="flex-1">
-                              <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
-                                Downpayment Only
-                              </span>
-                              <span className="block text-xs text-gray-500 mt-0.5">
-                                Amount: ₱{downpayment.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                                &nbsp;&mdash; Phase 1 invoice will be generated separately after enrollment.
-                              </span>
-                            </span>
-                          </label>
-                          <label className="flex items-start gap-3 cursor-pointer group">
-                            <input
-                              type="radio"
-                              name="installment_option"
-                              value="downpayment_plus_phase1"
-                              checked={createFormData.installment_option === 'downpayment_plus_phase1'}
-                              onChange={() => handleInstallmentOptionChange('downpayment_plus_phase1')}
-                              className="mt-0.5 accent-blue-600"
-                            />
-                            <span className="flex-1">
-                              <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
-                                Downpayment + Phase 1
-                              </span>
-                              <span className="block text-xs text-gray-500 mt-0.5">
-                                Amount: ₱{(downpayment + monthly).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                                &nbsp;(₱{downpayment.toLocaleString('en-PH', { minimumFractionDigits: 2 })} downpayment
-                                &nbsp;+ ₱{monthly.toLocaleString('en-PH', { minimumFractionDigits: 2 })} Phase 1)
-                              </span>
-                            </span>
-                          </label>
+                            })}`}
+                            className="input-field cursor-not-allowed bg-gray-50"
+                            aria-readonly="true"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">Sum of selected merchandise lines.</p>
                         </div>
                       </div>
-                    );
-                  })()
-                }
-                    </div>
-                    <div className="space-y-4 min-w-0">
-                  <div>
-                    <label className="label-field text-xs">Tip/Payment Adjustment</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      name="tip_amount"
-                      value={createFormData.tip_amount}
-                      onChange={handleCreateInputChange}
-                      placeholder="0.00"
-                      className={`input-field text-sm ${createFormErrors.tip_amount ? 'border-red-500' : ''}`}
-                    />
-                    {createFormErrors.tip_amount && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.tip_amount}</p>
-                    )}
-                  </div>
-
-                <PaymentDiscountField
-                  className="col-span-full"
-                  hintVariant="ar"
-                  value={createFormData.discount_amount}
-                  onChange={handleCreateInputChange}
-                  error={createFormErrors.discount_amount}
-                  payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
-                  disabled={creating}
-                />
-
-                {arType === 'Package' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="label-field text-xs">
-                      Payment Method <span className="text-red-500">*</span>
-                    </label>
-                    <PaymentMethodSelect
-                      name="payment_method"
-                      value={createFormData.payment_method}
-                      onChange={handleCreateInputChange}
-                      error={createFormErrors.payment_method}
-                      disabled={creating}
-                    />
-                    {createFormErrors.payment_method && (
-                      <p className="text-xs text-red-500 mt-1">{createFormErrors.payment_method}</p>
-                    )}
-                    {createFormData.payment_method === 'Cash' ? (
-                      <p className="text-xs text-emerald-600 mt-1">
-                        Cash package AR is auto-verified for enrollment use. Finance approves the payment in Payment Logs (unapplied AR row until attached, or payment row after enrollment).
-                      </p>
                     ) : (
-                      <p className="text-xs text-amber-600 mt-1">
-                        Non-cash package AR must be verified by Finance/Superfinance on the AR page before enrollment. Payment Logs auto-approve when Finance verifies.
-                      </p>
-                    )}
-                  </div>
+                      <div className="space-y-6">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                          <p className="text-sm font-medium text-gray-900">Merchandise</p>
+                          <p className="mt-1 text-xs text-gray-500">
+                            {(createFormData.prospect_student_name || '').trim() || 'Student'}
+                            {createFormData.level_tag ? ` · ${createFormData.level_tag}` : ''}
+                            {' · '}
+                            {merchandiseSelections.filter((s) => s.selectedMerchandiseId).length}{' '}
+                            {merchandiseSelections.filter((s) => s.selectedMerchandiseId).length === 1
+                              ? 'item'
+                              : 'items'}
+                            {' · '}
+                            ₱
+                            {merchandiseTotalAmount().toLocaleString('en-PH', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </p>
+                        </div>
 
-                  <div>
-                    <label className="label-field text-xs">
-                      Issue Date <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="date"
-                      name="issue_date"
-                      value={createFormData.issue_date}
-                      onChange={handleCreateInputChange}
-                      className={`input-field text-sm ${createFormErrors.issue_date ? 'border-red-500' : ''}`}
-                      required
-                      disabled={creating}
-                    />
-                    {createFormErrors.issue_date && (
-                      <p className="mt-1 text-xs text-red-500">{createFormErrors.issue_date}</p>
-                    )}
-                    <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
-                  </div>
-                  </div>
-                )}
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Payment Date <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="date"
+                              name="issue_date"
+                              value={createFormData.issue_date}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.issue_date ? 'border-red-500' : ''
+                              }`}
+                              required
+                              disabled={creating}
+                            />
+                            {createFormErrors.issue_date && (
+                              <p className="mt-1 text-sm text-red-600">{createFormErrors.issue_date}</p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
+                          </div>
+                          <div>
+                            <label className="label-field">Amount</label>
+                            <input
+                              type="text"
+                              readOnly
+                              tabIndex={-1}
+                              value={`₱${merchandiseTotalAmount().toLocaleString('en-PH', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}`}
+                              className="input-field cursor-not-allowed bg-gray-50"
+                              aria-readonly="true"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">Sum of selected merchandise lines.</p>
+                          </div>
+                          <div>
+                            <label className="label-field">Tip / Payment Adjustment</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              name="tip_amount"
+                              value={createFormData.tip_amount}
+                              onChange={handleCreateInputChange}
+                              placeholder="0.00"
+                              className={`input-field ${
+                                createFormErrors.tip_amount ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.tip_amount && (
+                              <p className="mt-1 text-sm text-red-600">{createFormErrors.tip_amount}</p>
+                            )}
+                          </div>
+                          <PaymentDiscountField
+                            hintVariant="ar"
+                            value={createFormData.discount_amount}
+                            onChange={handleCreateInputChange}
+                            error={createFormErrors.discount_amount}
+                            payableAmount={merchandiseTotalAmount()}
+                            disabled={creating}
+                          />
+                        </div>
 
-                <PaymentReferenceNumberField
-                  paymentMethod={createFormData.payment_method}
-                  name="reference_number"
-                  value={createFormData.reference_number}
-                  onChange={handleCreateInputChange}
-                  disabled={creating}
-                  placeholder="e.g. GCash transaction ID, bank ref, etc."
-                />
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Payment Method <span className="text-red-500">*</span>
+                            </label>
+                            <PaymentMethodSelect
+                              name="payment_method"
+                              value={createFormData.payment_method}
+                              onChange={handleCreateInputChange}
+                              error={createFormErrors.payment_method}
+                              disabled={creating}
+                            />
+                            {createFormErrors.payment_method && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.payment_method}
+                              </p>
+                            )}
+                            {createFormData.payment_method === 'Cash' ? (
+                              <p className="mt-1 text-xs text-emerald-700">
+                                Cash merchandise is auto-verified on the AR page when issued. Finance still
+                                approves the payment in Payment Logs.
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-xs text-amber-700">
+                                Non-cash merchandise must be verified by Finance/Superfinance on the AR page;
+                                Payment Logs auto-approve when Finance verifies.
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <PaymentReferenceNumberField
+                              paymentMethod={createFormData.payment_method}
+                              name="reference_number"
+                              value={createFormData.reference_number}
+                              onChange={handleCreateInputChange}
+                              disabled={creating}
+                              placeholder="e.g. GCash transaction ID, bank ref"
+                            />
+                          </div>
+                        </div>
 
-                <div>
-                  <label className="label-field text-xs">Attachment (image) <span className="text-red-600">*</span></label>
-                  <p className="text-xs text-gray-500 mb-1">
-                    Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF - max 50 MB)
-                  </p>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    onChange={handleAttachmentChange}
-                    disabled={attachmentUploading || creating}
-                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
-                  />
-                  {attachmentUploading && (
-                    <p className="text-xs text-amber-600 mt-1">Uploading?</p>
-                  )}
-                  {createFormData.payment_attachment_url && !attachmentUploading && (
-                    <div className="mt-2">
-                      <img
-                        src={createFormData.payment_attachment_url}
-                        alt="Payment attachment preview"
-                        className="max-h-48 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50"
-                      />
-                      <div className="mt-2 flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => openAttachmentViewer(createFormData.payment_attachment_url)}
-                          className="text-sm text-blue-600 hover:underline"
-                        >
-                          View attached image
-                        </button>
-                        <button
-                          type="button"
-                          onClick={clearAttachment}
-                          className="text-xs text-red-600 hover:text-red-700"
-                        >
-                          Remove
-                        </button>
+                        <div>
+                          <label className="label-field">
+                            Attachment (image) <span className="text-red-600">*</span>
+                          </label>
+                          <p className="mb-1 text-xs text-gray-500">
+                            Required: upload receipt/proof (JPEG, PNG, WebP, GIF – max 50 MB)
+                          </p>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            onChange={handleAttachmentChange}
+                            disabled={attachmentUploading || creating}
+                            className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200"
+                          />
+                          {attachmentUploading && (
+                            <p className="mt-1 text-xs text-amber-600">Uploading…</p>
+                          )}
+                          {createFormErrors.payment_attachment_url && (
+                            <p className="mt-1 text-sm text-red-600">
+                              {createFormErrors.payment_attachment_url}
+                            </p>
+                          )}
+                          {createFormData.payment_attachment_url && !attachmentUploading && (
+                            <div className="mt-2">
+                              <img
+                                src={createFormData.payment_attachment_url}
+                                alt="Preview"
+                                className="max-h-40 w-auto rounded-lg border border-gray-200 bg-gray-50 object-contain"
+                              />
+                              <div className="mt-2 flex flex-wrap items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openAttachmentViewer(createFormData.payment_attachment_url)
+                                  }
+                                  className="text-sm text-blue-600 hover:underline"
+                                >
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={clearAttachment}
+                                  className="text-xs text-red-600 hover:text-red-700"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  {createFormErrors.payment_attachment_url && (
-                    <p className="mt-1 text-xs text-red-500">{createFormErrors.payment_attachment_url}</p>
-                  )}
-                </div>
-                    </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="w-full min-w-0 space-y-6">
+                    {arCreateStep === 1 ? (
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Student Name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              name="prospect_student_name"
+                              value={createFormData.prospect_student_name}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_name ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.prospect_student_name && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_name}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Guardian Name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              name="prospect_student_contact"
+                              value={createFormData.prospect_student_contact}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_contact ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.prospect_student_contact && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_contact}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">Client Email (for paid confirmation)</label>
+                            <input
+                              type="email"
+                              name="prospect_student_email"
+                              value={createFormData.prospect_student_email}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_email ? 'border-red-500' : ''
+                              }`}
+                              placeholder="client@example.com"
+                            />
+                            {createFormErrors.prospect_student_email && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_email}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Mobile Number (SMS) <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="tel"
+                              name="prospect_student_phone"
+                              value={createFormData.prospect_student_phone}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.prospect_student_phone ? 'border-red-500' : ''
+                              }`}
+                              placeholder="09171234567"
+                              autoComplete="tel"
+                            />
+                            {createFormErrors.prospect_student_phone && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.prospect_student_phone}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="label-field">Notes (optional)</label>
+                          <textarea
+                            name="prospect_student_notes"
+                            value={createFormData.prospect_student_notes}
+                            onChange={handleCreateInputChange}
+                            rows="2"
+                            className="input-field"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Level Tag <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              name="level_tag"
+                              value={createFormData.level_tag}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.level_tag ? 'border-red-500' : ''
+                              }`}
+                            >
+                              <option value="">Select Level Tag</option>
+                              <option value="Playgroup">Playgroup</option>
+                              <option value="Nursery">Nursery</option>
+                              <option value="Pre-Kindergarten">Pre-Kindergarten</option>
+                              <option value="Kindergarten">Kindergarten</option>
+                              <option value="Grade School">Grade School</option>
+                            </select>
+                            {createFormErrors.level_tag && (
+                              <p className="mt-1 text-sm text-red-600">{createFormErrors.level_tag}</p>
+                            )}
+                            {selectedPackage?.level_tag && (
+                              <p className="mt-1 text-xs text-gray-500">
+                                Package level: {selectedPackage.level_tag}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Package <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              name="package_id"
+                              value={createFormData.package_id}
+                              onChange={handlePackageChange}
+                              className={`input-field ${
+                                createFormErrors.package_id ? 'border-red-500' : ''
+                              }`}
+                              disabled={packagesLoading}
+                            >
+                              <option value="">Select package</option>
+                              {packages.map((pkg) => (
+                                <option key={pkg.package_id} value={pkg.package_id}>
+                                  {pkg.package_name}
+                                </option>
+                              ))}
+                            </select>
+                            {createFormErrors.package_id && (
+                              <p className="mt-1 text-sm text-red-600">{createFormErrors.package_id}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="label-field">
+                            Payment Amount <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            tabIndex={-1}
+                            name="payment_amount"
+                            value={
+                              createFormData.payment_amount === '' ||
+                              createFormData.payment_amount == null
+                                ? ''
+                                : `₱${Number(createFormData.payment_amount).toLocaleString('en-PH', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}`
+                            }
+                            className={`input-field cursor-not-allowed bg-gray-50 ${
+                              createFormErrors.payment_amount ? 'border-red-500' : ''
+                            }`}
+                            aria-readonly="true"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">
+                            Amount is set from the selected package (and installment option if
+                            applicable); it cannot be edited.
+                          </p>
+                          {createFormErrors.payment_amount && (
+                            <p className="mt-1 text-sm text-red-600">
+                              {createFormErrors.payment_amount}
+                            </p>
+                          )}
+                        </div>
+
+                        {selectedPackage &&
+                          ((selectedPackage.package_type || '').toLowerCase() === 'installment' ||
+                            (selectedPackage.package_type === 'Phase' &&
+                              (selectedPackage.payment_option || '').toLowerCase() ===
+                                'installment')) &&
+                          (() => {
+                            const downpayment = parseFloat(selectedPackage.downpayment_amount || 0);
+                            const monthly = parseFloat(selectedPackage.package_price || 0);
+                            return (
+                              <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-blue-800">
+                                  Installment Payment Option
+                                </p>
+                                <div className="space-y-2">
+                                  <label className="group flex cursor-pointer items-start gap-3">
+                                    <input
+                                      type="radio"
+                                      name="installment_option"
+                                      value="downpayment_only"
+                                      checked={
+                                        createFormData.installment_option === 'downpayment_only'
+                                      }
+                                      onChange={() =>
+                                        handleInstallmentOptionChange('downpayment_only')
+                                      }
+                                      className="mt-0.5 accent-blue-600"
+                                    />
+                                    <span className="flex-1">
+                                      <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                                        Downpayment Only
+                                      </span>
+                                      <span className="mt-0.5 block text-xs text-gray-500">
+                                        Amount: ₱
+                                        {downpayment.toLocaleString('en-PH', {
+                                          minimumFractionDigits: 2,
+                                        })}{' '}
+                                        — Phase 1 invoice is generated separately after enrollment.
+                                      </span>
+                                    </span>
+                                  </label>
+                                  <label className="group flex cursor-pointer items-start gap-3">
+                                    <input
+                                      type="radio"
+                                      name="installment_option"
+                                      value="downpayment_plus_phase1"
+                                      checked={
+                                        createFormData.installment_option ===
+                                        'downpayment_plus_phase1'
+                                      }
+                                      onChange={() =>
+                                        handleInstallmentOptionChange('downpayment_plus_phase1')
+                                      }
+                                      className="mt-0.5 accent-blue-600"
+                                    />
+                                    <span className="flex-1">
+                                      <span className="block text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                                        Downpayment + Phase 1
+                                      </span>
+                                      <span className="mt-0.5 block text-xs text-gray-500">
+                                        Amount: ₱
+                                        {(downpayment + monthly).toLocaleString('en-PH', {
+                                          minimumFractionDigits: 2,
+                                        })}{' '}
+                                        (₱
+                                        {downpayment.toLocaleString('en-PH', {
+                                          minimumFractionDigits: 2,
+                                        })}{' '}
+                                        + ₱
+                                        {monthly.toLocaleString('en-PH', {
+                                          minimumFractionDigits: 2,
+                                        })}{' '}
+                                        Phase 1)
+                                      </span>
+                                    </span>
+                                  </label>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                          <p className="text-sm font-medium text-gray-900">
+                            {selectedPackage?.package_name || 'Package'}
+                          </p>
+                          <p className="mt-1 text-xs text-gray-500">
+                            {(createFormData.prospect_student_name || '').trim() || 'Student'}
+                            {createFormData.level_tag ? ` · ${createFormData.level_tag}` : ''}
+                            {' · '}
+                            ₱
+                            {Number(createFormData.payment_amount || 0).toLocaleString('en-PH', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">Tip / Payment Adjustment</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              name="tip_amount"
+                              value={createFormData.tip_amount}
+                              onChange={handleCreateInputChange}
+                              placeholder="0.00"
+                              className={`input-field ${
+                                createFormErrors.tip_amount ? 'border-red-500' : ''
+                              }`}
+                            />
+                            {createFormErrors.tip_amount && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.tip_amount}
+                              </p>
+                            )}
+                          </div>
+                          <PaymentDiscountField
+                            hintVariant="ar"
+                            value={createFormData.discount_amount}
+                            onChange={handleCreateInputChange}
+                            error={createFormErrors.discount_amount}
+                            payableAmount={parseFloat(createFormData.payment_amount || 0) || 0}
+                            disabled={creating}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="label-field">
+                              Payment Method <span className="text-red-500">*</span>
+                            </label>
+                            <PaymentMethodSelect
+                              name="payment_method"
+                              value={createFormData.payment_method}
+                              onChange={handleCreateInputChange}
+                              error={createFormErrors.payment_method}
+                              disabled={creating}
+                            />
+                            {createFormErrors.payment_method && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.payment_method}
+                              </p>
+                            )}
+                            {createFormData.payment_method === 'Cash' ? (
+                              <p className="mt-1 text-xs text-emerald-700">
+                                Cash package AR is auto-verified for enrollment use. Finance
+                                approves the payment in Payment Logs.
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-xs text-amber-700">
+                                Non-cash package AR must be verified by Finance/Superfinance on the
+                                AR page before enrollment.
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="label-field">
+                              Issue Date <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="date"
+                              name="issue_date"
+                              value={createFormData.issue_date}
+                              onChange={handleCreateInputChange}
+                              className={`input-field ${
+                                createFormErrors.issue_date ? 'border-red-500' : ''
+                              }`}
+                              required
+                              disabled={creating}
+                            />
+                            {createFormErrors.issue_date && (
+                              <p className="mt-1 text-sm text-red-600">
+                                {createFormErrors.issue_date}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Defaults to today (Manila time).
+                            </p>
+                          </div>
+                        </div>
+
+                        <PaymentReferenceNumberField
+                          paymentMethod={createFormData.payment_method}
+                          name="reference_number"
+                          value={createFormData.reference_number}
+                          onChange={handleCreateInputChange}
+                          disabled={creating}
+                          placeholder="e.g. GCash transaction ID, bank ref, etc."
+                        />
+
+                        <div>
+                          <label className="label-field">
+                            Attachment (image) <span className="text-red-600">*</span>
+                          </label>
+                          <p className="mb-1 text-xs text-gray-500">
+                            Required: upload a receipt or proof of payment (JPEG, PNG, WebP, GIF –
+                            max 50 MB)
+                          </p>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            onChange={handleAttachmentChange}
+                            disabled={attachmentUploading || creating}
+                            className="block w-full text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-gray-700 hover:file:bg-gray-200"
+                          />
+                          {attachmentUploading && (
+                            <p className="mt-1 text-xs text-amber-600">Uploading…</p>
+                          )}
+                          {createFormData.payment_attachment_url && !attachmentUploading && (
+                            <div className="mt-2">
+                              <img
+                                src={createFormData.payment_attachment_url}
+                                alt="Payment attachment preview"
+                                className="max-h-40 w-auto rounded-lg border border-gray-200 bg-gray-50 object-contain"
+                              />
+                              <div className="mt-2 flex flex-wrap items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openAttachmentViewer(createFormData.payment_attachment_url)
+                                  }
+                                  className="text-sm text-blue-600 hover:underline"
+                                >
+                                  View attached image
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={clearAttachment}
+                                  className="text-xs text-red-600 hover:text-red-700"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {createFormErrors.payment_attachment_url && (
+                            <p className="mt-1 text-sm text-red-600">
+                              {createFormErrors.payment_attachment_url}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 </div>
 
-                <div className="shrink-0 flex justify-end gap-3 px-4 sm:px-6 py-4 border-t border-gray-200 bg-gray-50">
+                <div
+                  className={`shrink-0 flex flex-wrap items-center justify-end gap-2 sm:gap-3 border-t border-gray-200 bg-white rounded-b-lg ${
+                    arType === 'Package' || arType === 'Merchandise'
+                      ? 'p-4 sm:p-5'
+                      : 'px-4 py-3 sm:px-5'
+                  }`}
+                >
+                  {(arType === 'Package' || arType === 'Merchandise') && arCreateStep === 2 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArCreateStep(1);
+                        setCreateFormErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.tip_amount;
+                          delete next.discount_amount;
+                          delete next.payment_method;
+                          delete next.issue_date;
+                          delete next.payment_attachment_url;
+                          delete next.reference_number;
+                          return next;
+                        });
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                      disabled={creating}
+                    >
+                      Back
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={closeCreateModal}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                     disabled={creating}
                   >
                     Cancel
                   </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={
-                      creating ||
-                      attachmentUploading ||
-                      !arType ||
-                      (!(createFormData.payment_attachment_url || '').trim() &&
-                        !(
-                          arType === LCGT_EVENT_AR_TYPE &&
-                          isCashPaymentMethod(createFormData.payment_method)
-                        )) ||
-                      (arType === 'Package' &&
-                        (!createFormData.package_id ||
-                          !(parseFloat(createFormData.payment_amount) > 0))) ||
-                      (arType === 'Merchandise' && merchandiseTotalAmount() <= 0)
-                    }
-                  >
-                    {creating ? 'Saving?' : 'Done'}
-                  </button>
+                  {(arType === 'Package' || arType === 'Merchandise') && arCreateStep === 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (arType === 'Package') {
+                          if (validatePackageCreateStep1()) setArCreateStep(2);
+                        } else if (validateMerchandiseCreateStep1()) {
+                          setArCreateStep(2);
+                        }
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={
+                        creating ||
+                        (arType === 'Package' && packagesLoading) ||
+                        (arType === 'Merchandise' && merchandiseLoading)
+                      }
+                    >
+                      Next
+                    </button>
+                  ) : arType ? (
+                    <button
+                      type="submit"
+                      className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        arType === 'Package' || arType === 'Merchandise'
+                          ? 'text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E]'
+                          : 'text-white bg-green-600 hover:bg-green-700'
+                      }`}
+                      disabled={
+                        creating ||
+                        attachmentUploading ||
+                        (!(createFormData.payment_attachment_url || '').trim() &&
+                          !(
+                            arType === LCGT_EVENT_AR_TYPE &&
+                            isCashPaymentMethod(createFormData.payment_method)
+                          )) ||
+                        (arType === 'Package' &&
+                          (!createFormData.package_id ||
+                            !(parseFloat(createFormData.payment_amount) > 0))) ||
+                        (arType === 'Merchandise' && merchandiseTotalAmount() <= 0)
+                      }
+                    >
+                      {creating ? 'Saving…' : 'Done'}
+                    </button>
+                  ) : null}
                 </div>
               </form>
             </div>

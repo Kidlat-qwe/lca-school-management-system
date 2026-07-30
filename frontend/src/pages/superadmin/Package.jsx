@@ -61,6 +61,13 @@ const Package = () => {
     setBranchDropdownRect(null);
   }, [globalBranchId]);
 
+  // Create/Edit modal: load merchandise for the selected branch so older branch
+  // stock (e.g. Pampanga LCA Bag) is not dropped by the global top-100 query.
+  useEffect(() => {
+    if (!isModalOpen) return;
+    fetchMerchandise(formData.branch_id || null);
+  }, [isModalOpen, formData.branch_id]);
+
   // Close menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -164,9 +171,13 @@ const Package = () => {
     }
   };
 
-  const fetchMerchandise = async () => {
+  const fetchMerchandise = async (branchId = null) => {
     try {
-      const response = await apiRequest('/merchandise?limit=100');
+      const params = new URLSearchParams({ limit: '100' });
+      if (branchId) {
+        params.set('branch_id', String(branchId));
+      }
+      const response = await apiRequest(`/merchandise?${params.toString()}`);
       setMerchandise(response.data || []);
     } catch (err) {
       console.error('Error fetching merchandise:', err);
@@ -294,6 +305,10 @@ const Package = () => {
           next.payment_option = 'Fullpayment';
           next.downpayment_amount = '';
         }
+      }
+      // Branch change invalidates merchandise selection from the previous branch.
+      if (name === 'branch_id') {
+        next.selectedMerchandise = [];
       }
       return next;
     });
@@ -547,9 +562,9 @@ const Package = () => {
   };
 
   const openDetailsModal = async (packageItem) => {
-    // Refresh merchandise list to ensure we have the latest data
-    await fetchMerchandise();
-    
+    // Load merchandise for this package's branch (not global top-100).
+    await fetchMerchandise(packageItem?.branch_id || null);
+
     // Fetch the latest package data with details
     try {
       const response = await apiRequest(`/packages/${packageItem.package_id}`);

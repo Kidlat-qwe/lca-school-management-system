@@ -35,6 +35,14 @@ import { checkScheduleConflict, checkTeacherScheduleConflict } from '../utils/sc
 import { setClassStatus } from '../utils/classStatusService.js';
 import { syncInstallmentProfilesWithClassStatus } from '../utils/billingNotificationEligibility.js';
 import {
+  archiveClass,
+  finalizeEndedClasses,
+  listArchivedClasses,
+  permanentlyDeleteClass,
+  purgeExpiredArchivedClasses,
+  restoreArchivedClass,
+} from '../utils/classLifecycle/classLifecycleService.js';
+import {
   MERCH_RELEASE_SOURCE,
   appendMerchPendingToRemarks,
   hasPackageMerchandiseBeenIssued,
@@ -505,14 +513,8 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      // Automatically update classes to 'Inactive' if end_date has passed
-      await query(
-        `UPDATE classestbl 
-         SET status = 'Inactive' 
-         WHERE status = 'Active' 
-         AND end_date IS NOT NULL 
-         AND end_date < CURRENT_DATE`
-      );
+      // Finalize ended classes (Inactive + complete enrollments + pause billing)
+      await finalizeEndedClasses(query);
       await syncInstallmentProfilesWithClassStatus(query);
 
       const { branch_id, program_id, search, page = 1, limit = 20 } = req.query;
@@ -563,7 +565,7 @@ router.get(
                  LEFT JOIN (
                    SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
                    FROM classstudentstbl
-                   WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+                   WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
                      AND removed_at IS NULL
                    GROUP BY class_id
                  ) enrollment_counts ON c.class_id = enrollment_counts.class_id
@@ -572,7 +574,7 @@ router.get(
                    FROM class_merge_historytbl
                    WHERE is_undone = false
                  ) mh ON c.class_id = mh.merged_class_id
-                 WHERE 1=1`;
+                 WHERE c.archived_at IS NULL`;
       const params = [];
       let paramCount = 0;
 
@@ -682,6 +684,85 @@ router.get(
           page: parseInt(page),
           limit: parseInt(limit),
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/classes/archived
+ * List soft-archived classes (Settings → Archived Classes).
+ * Access: Superadmin, Admin
+ */
+router.get(
+  '/archived',
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const branchId =
+        req.user.userType !== 'Superadmin' && req.user.branchId
+          ? req.user.branchId
+          : req.query.branch_id
+            ? parseInt(req.query.branch_id, 10)
+            : null;
+      const rows = await listArchivedClasses(query, {
+        branchId: Number.isFinite(branchId) ? branchId : null,
+      });
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/finalize-ended
+ * Run end-date finalization (Inactive + completed enrollments) on demand.
+ * Access: Superadmin
+ */
+router.post(
+  '/finalize-ended',
+  requireRole('Superadmin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const classId = req.body?.class_id != null ? parseInt(req.body.class_id, 10) : null;
+      const result = await finalizeEndedClasses(client, {
+        classId: Number.isFinite(classId) ? classId : null,
+      });
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: `Finalized ${result.finalized} class(es); completed ${result.enrollmentsCompleted} enrollment row(s).`,
+        data: result,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/classes/purge-archived
+ * Permanently delete archived classes past their 30-day retention.
+ * Access: Superadmin (cron / scheduled job)
+ */
+router.post(
+  '/purge-archived',
+  requireRole('Superadmin'),
+  async (req, res, next) => {
+    try {
+      const result = await purgeExpiredArchivedClasses(getClient);
+      res.json({
+        success: true,
+        message: `Permanently deleted ${result.purged_count} archived class(es).`,
+        data: result,
       });
     } catch (error) {
       next(error);
@@ -2291,7 +2372,7 @@ router.get(
          LEFT JOIN (
            SELECT class_id, COUNT(DISTINCT student_id) as enrolled_count
            FROM classstudentstbl
-           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
+           WHERE program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
              AND removed_at IS NULL
            GROUP BY class_id
          ) enrollment_counts ON c.class_id = enrollment_counts.class_id
@@ -3254,8 +3335,95 @@ router.put(
 );
 
 /**
- * DELETE /api/v1/classes/:id
- * Delete class
+ * POST /api/sms/classes/:id/restore
+ * Restore an archived class to the main Classes list.
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/:id/restore',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const requireBranch = req.user.userType !== 'Superadmin';
+      const restored = await restoreArchivedClass(client, {
+        classId: parseInt(req.params.id, 10),
+        branchId: req.user.branchId || null,
+        requireBranch,
+      });
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: 'Class restored successfully.',
+        data: restored,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+        });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * DELETE /api/sms/classes/:id/permanent
+ * Permanently delete an archived class (before or after purge date).
+ * Access: Superadmin, Admin
+ */
+router.delete(
+  '/:id/permanent',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const requireBranch = req.user.userType !== 'Superadmin';
+      const deleted = await permanentlyDeleteClass(client, {
+        classId: parseInt(req.params.id, 10),
+        branchId: req.user.branchId || null,
+        requireBranch,
+        requireArchived: true,
+      });
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: 'Class permanently deleted.',
+        data: deleted,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+        });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * DELETE /api/sms/classes/:id
+ * Soft-archive class (Settings → Archived Classes; purge after 30 days).
  * Access: Superadmin, Admin
  */
 router.delete(
@@ -3270,92 +3438,32 @@ router.delete(
     try {
       await client.query('BEGIN');
 
-      const { id } = req.params;
-
-      const existingClass = await client.query('SELECT * FROM classestbl WHERE class_id = $1', [id]);
-      if (existingClass.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({
-          success: false,
-          message: 'Class not found',
-        });
-      }
-
-      // Check for dependencies that prevent deletion
-      const enrolledStudents = await client.query(
-        `SELECT COUNT(DISTINCT student_id) as count FROM classstudentstbl
-         WHERE class_id = $1
-           AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin', 'completed')
-           AND removed_at IS NULL`,
-        [id]
-      );
-      const studentCount = parseInt(enrolledStudents.rows[0].count, 10);
-
-      const reservations = await client.query(
-        'SELECT COUNT(*) as count FROM reservedstudentstbl WHERE class_id = $1 AND status != $2',
-        [id, 'Cancelled']
-      );
-      const reservationCount = parseInt(reservations.rows[0].count, 10);
-
-      const installmentProfiles = await client.query(
-        'SELECT COUNT(*) as count FROM installmentinvoiceprofilestbl WHERE class_id = $1 AND is_active = true',
-        [id]
-      );
-      const profileCount = parseInt(installmentProfiles.rows[0].count, 10);
-
-      // If there are active dependencies, provide a clear error message
-      if (studentCount > 0 || reservationCount > 0 || profileCount > 0) {
-        await client.query('ROLLBACK');
-        const reasons = [];
-        if (studentCount > 0) reasons.push(`${studentCount} enrolled student(s)`);
-        if (reservationCount > 0) reasons.push(`${reservationCount} active reservation(s)`);
-        if (profileCount > 0) reasons.push(`${profileCount} active installment profile(s)`);
-        
-        return res.status(400).json({
-          success: false,
-          message: `Cannot delete class. It has ${reasons.join(', ')}. Please remove or handle these dependencies first.`,
-          dependencies: {
-            enrolled_students: studentCount,
-            active_reservations: reservationCount,
-            active_installment_profiles: profileCount
-          }
-        });
-      }
-
-      // Delete dependent records in correct order (those with CASCADE will auto-delete)
-      // 1. Delete room schedules (ON DELETE NO ACTION)
-      await client.query('DELETE FROM roomschedtbl WHERE class_id = $1', [id]);
-
-      // 2. Set class_id to NULL in installment invoice profiles (ON DELETE SET NULL, but we'll do it explicitly)
-      await client.query(
-        'UPDATE installmentinvoiceprofilestbl SET class_id = NULL WHERE class_id = $1',
-        [id]
-      );
-
-      // 3. Delete cancelled reservations (keep active ones blocked above)
-      await client.query(
-        'DELETE FROM reservedstudentstbl WHERE class_id = $1 AND status = $2',
-        [id, 'Cancelled']
-      );
-
-      // 4. Delete class sessions (ON DELETE CASCADE - will auto-delete, but we'll do it explicitly for clarity)
-      await client.query('DELETE FROM classsessionstbl WHERE class_id = $1', [id]);
-
-      // 5. Delete class teacher associations (ON DELETE CASCADE - will auto-delete, but we'll do it explicitly)
-      await client.query('DELETE FROM classteacherstbl WHERE class_id = $1', [id]);
-
-      // 6. Finally, delete the class itself
-      await client.query('DELETE FROM classestbl WHERE class_id = $1', [id]);
+      const requireBranch = req.user.userType !== 'Superadmin';
+      const archived = await archiveClass(client, {
+        classId: parseInt(req.params.id, 10),
+        userId: req.user.userId || null,
+        branchId: req.user.branchId || null,
+        requireBranch,
+      });
 
       await client.query('COMMIT');
 
       res.json({
         success: true,
-        message: 'Class deleted successfully',
+        message:
+          'Class archived successfully. It will appear under Settings → Archived Classes and be permanently deleted after 30 days if not restored.',
+        data: archived,
       });
     } catch (error) {
-      await client.query('ROLLBACK');
-      console.error('Error deleting class:', error);
+      await client.query('ROLLBACK').catch(() => {});
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          dependencies: error.dependencies || undefined,
+        });
+      }
+      console.error('Error archiving class:', error);
       next(error);
     } finally {
       client.release();

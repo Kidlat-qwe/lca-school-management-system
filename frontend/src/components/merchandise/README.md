@@ -19,4 +19,10 @@ Sources: Package first payment (`package_enroll`) and Merchandise AR (`merchandi
 ## RhetCategorySelect
 
 Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**.
-Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy). Learning Kit excluded.
+Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy) — not a hard-coded
+CMS category list. Supports `onRetry` when RHET catalog fails temporarily.
+
+## LearningKitRequestFields
+
+Request Stock panel for Learning Kit: kit picker + BOM component collector
+(recipes from `merchandiseRequests/learningKit.js`).

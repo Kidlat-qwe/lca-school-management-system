@@ -25,7 +25,16 @@ import { unwrapCatalogPayload } from '../../utils/merchandiseRequests/catalogOpt
 import {
   getCreateMerchandiseCategoryOptions,
   applyCreateTypeCategoryDefaults,
+  isInventoryIntegrationDisabledError,
 } from '../../utils/merchandiseRequests/createTypeCategory';
+import {
+  isItemNamedStockCategory,
+  isUniformStockCategory,
+  formatMerchandiseStockItemName,
+  formatMerchandiseStockSku,
+  getMerchandiseStockItemName,
+  getMerchandiseStockSku,
+} from '../../utils/merchandiseStock';
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -58,6 +67,8 @@ const Merchandise = () => {
     type: '',
     image_url: '',
     remarks: '',
+    item_name: '',
+    sku: '',
   });
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
   const [formErrors, setFormErrors] = useState({});
@@ -72,6 +83,8 @@ const Merchandise = () => {
   const [inventoryCatalog, setInventoryCatalog] = useState({ categories: [], items: [] });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  /** false = inventory env missing → legacy free-text create type */
+  const [inventoryIntegrationEnabled, setInventoryIntegrationEnabled] = useState(true);
   const [pendingCategoryName, setPendingCategoryName] = useState('');
 
   const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
@@ -79,15 +92,58 @@ const Merchandise = () => {
   const fetchInventoryCatalog = async () => {
     setCatalogLoading(true);
     setCatalogError('');
-    try {
+    const attempt = async () => {
       const response = await apiRequest('/merchandise-requests/inventory/catalog');
-      setInventoryCatalog(unwrapCatalogPayload(response));
+      return unwrapCatalogPayload(response);
+    };
+    try {
+      let catalog;
+      try {
+        catalog = await attempt();
+      } catch (firstErr) {
+        if (isInventoryIntegrationDisabledError(firstErr)) {
+          setInventoryIntegrationEnabled(false);
+          setInventoryCatalog({ categories: [], items: [] });
+          setCatalogError('');
+          return;
+        }
+        const msg = String(firstErr?.message || '').toLowerCase();
+        const retryable =
+          msg.includes('timeout') ||
+          msg.includes('timed out') ||
+          msg.includes('temporarily unavailable') ||
+          msg.includes('unexpected error') ||
+          msg.includes('502') ||
+          msg.includes('bad gateway') ||
+          msg.includes('could not reach');
+        if (!retryable) throw firstErr;
+        await new Promise((r) => setTimeout(r, 1200));
+        catalog = await attempt();
+      }
+      setInventoryIntegrationEnabled(true);
+      setInventoryCatalog(catalog);
+      if (!catalog.categories.length) {
+        setCatalogError(
+          'No RHET Inventory categories returned. Check inventory integration or try again.'
+        );
+      } else if (catalog?.meta?.stale || catalog?.meta?.cached) {
+        setCatalogError(
+          'Loaded a recent cached RHET catalog (inventory is slow right now). You can continue, or tap Retry catalog.'
+        );
+      }
     } catch (err) {
-      setInventoryCatalog({ categories: [], items: [] });
-      setCatalogError(
-        err.message ||
-          'Could not load RHET Inventory categories. Check inventory integration settings.'
-      );
+      if (isInventoryIntegrationDisabledError(err)) {
+        setInventoryIntegrationEnabled(false);
+        setInventoryCatalog({ categories: [], items: [] });
+        setCatalogError('');
+      } else {
+        setInventoryIntegrationEnabled(true);
+        setInventoryCatalog({ categories: [], items: [] });
+        setCatalogError(
+          err.message ||
+            'Could not load RHET Inventory categories. Check inventory integration settings.'
+        );
+      }
     } finally {
       setCatalogLoading(false);
     }
@@ -278,6 +334,8 @@ const Merchandise = () => {
         type: '',
         image_url: '',
         remarks: '',
+        item_name: '',
+        sku: '',
       });
       setEditingMerchandiseType(null);
     } else if (selectedBranchId) {
@@ -296,6 +354,8 @@ const Merchandise = () => {
         type: '',
         image_url: '',
         remarks: '',
+        item_name: '',
+        sku: '',
       });
       setEditingMerchandiseType(null);
     } else {
@@ -315,6 +375,8 @@ const Merchandise = () => {
       type: '',
       image_url: '',
       remarks: '',
+      item_name: '',
+      sku: '',
     });
     setEditingMerchandiseType(null);
     }
@@ -426,6 +488,8 @@ const Merchandise = () => {
       type: normalized.type || item.type || '',
       image_url: item.image_url || '',
       remarks: item.remarks || '',
+      item_name: getMerchandiseStockItemName(item),
+      sku: getMerchandiseStockSku(item),
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -459,6 +523,8 @@ const Merchandise = () => {
       type: '',
       image_url: merchType.image_url || sampleItem?.image_url || '',
       remarks: sampleItem?.remarks || merchType.remarks || '',
+      item_name: '',
+      sku: '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -489,10 +555,6 @@ const Merchandise = () => {
   const handleCategorySelect = (categoryName) => {
     const name = String(categoryName || '').trim();
     if (!name) return;
-    if (isLearningKitMerchandiseName(name)) {
-      appAlert('Learning Kit is not available via Create Merchandise yet.');
-      return;
-    }
 
     const defaults = applyCreateTypeCategoryDefaults(name);
     setMerchandiseCategory(name);
@@ -526,7 +588,7 @@ const Merchandise = () => {
         updated.type = '';
       }
       if (name === 'merchandise_name' && isLearningKitMerchandiseName(value)) {
-        // Learning Kit blocked on create — clear name so validation fails with clear message.
+        // Learning Kit allowed as local type (RHET categoryName)
       }
       return updated;
     });
@@ -548,13 +610,13 @@ const Merchandise = () => {
     }
 
     if (isLearningKitMerchandiseName(formData.merchandise_name)) {
-      errors.merchandise_name =
-        'Learning Kit is not available via Create Merchandise yet. Request kits in RHET Inventory.';
+      // Allowed — local Learning Kit type for branch stock after RHET fulfill
     }
 
     const name = formData.merchandise_name?.trim() || '';
     // New type must be an exact RHET category when catalog is available
     if (
+      inventoryIntegrationEnabled &&
       !editingMerchandise &&
       !editingMerchandiseType &&
       !viewingStocksFor &&
@@ -581,6 +643,20 @@ const Merchandise = () => {
       }
       if (!formData.type?.trim()) {
         errors.type = 'Piece is required';
+      }
+    }
+
+    if (
+      !editingMerchandiseType &&
+      isItemNamedStockCategory(name) &&
+      (viewingStocksFor || editingMerchandise)
+    ) {
+      if (!(formData.item_name || '').trim()) {
+        errors.item_name =
+          'Item name is required (RHET itemName, e.g. string-bag / nc-pk-worksheets)';
+      }
+      if (!(formData.sku || '').trim()) {
+        errors.sku = 'SKU is required for non-uniform stock (from the same catalog row)';
       }
     }
 
@@ -684,6 +760,12 @@ const Merchandise = () => {
         type: normalized.type,
         image_url: formData.image_url || null,
         remarks: formData.remarks?.trim() || null,
+        item_name: isItemNamedStockCategory(normalized.merchandise_name)
+          ? formData.item_name?.trim() || null
+          : null,
+        sku: isItemNamedStockCategory(normalized.merchandise_name)
+          ? formData.sku?.trim() || null
+          : null,
       };
       
       if (editingMerchandise) {
@@ -842,6 +924,8 @@ const Merchandise = () => {
       gender: item.gender || '',
       type: item.type || '',
       remarks: item.remarks || '',
+      item_name: item.item_name || '',
+      sku: item.sku || '',
     }));
   };
 
@@ -973,17 +1057,49 @@ const Merchandise = () => {
               ) : modalStep === 'category-selection' ? (
                 <div className="flex flex-col overflow-hidden">
                   <div className="p-6 space-y-4">
-                    <p className="text-sm text-gray-500">
-                      Choose the merchandise category from RHET Inventory. The name must match exactly.
-                    </p>
-                    <RhetCategorySelect
-                      id="create_type_rhet_category"
-                      value={pendingCategoryName}
-                      options={createTypeCategoryOptions}
-                      onChange={setPendingCategoryName}
-                      loading={catalogLoading}
-                      error={catalogError}
-                    />
+                    {inventoryIntegrationEnabled ? (
+                      <>
+                        <p className="text-sm text-gray-500">
+                          Choose the merchandise category from the live RHET Inventory catalog.
+                          The name must match exactly.
+                        </p>
+                        <RhetCategorySelect
+                          id="create_type_rhet_category"
+                          value={pendingCategoryName}
+                          options={createTypeCategoryOptions}
+                          onChange={setPendingCategoryName}
+                          onRetry={fetchInventoryCatalog}
+                          loading={catalogLoading}
+                          error={
+                            createTypeCategoryOptions.length === 0 && !catalogLoading
+                              ? catalogError || 'No categories loaded'
+                              : ''
+                          }
+                        />
+                        {catalogError && createTypeCategoryOptions.length > 0 && (
+                          <p className="text-xs text-amber-700">{catalogError}</p>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-gray-500">
+                          RHET Inventory integration is not configured. Enter a local merchandise
+                          type name (legacy mode).
+                        </p>
+                        <label htmlFor="legacy_create_type_name" className="label-field">
+                          Merchandise name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="legacy_create_type_name"
+                          type="text"
+                          value={pendingCategoryName}
+                          onChange={(e) => setPendingCategoryName(e.target.value)}
+                          className="input-field"
+                          placeholder="e.g. School Uniform"
+                          required
+                        />
+                      </>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-3 px-6 pb-6 border-t border-gray-200 flex-shrink-0 bg-white rounded-b-lg">
                     {!selectedBranchId && (
@@ -1005,7 +1121,13 @@ const Merchandise = () => {
                     <button
                       type="button"
                       onClick={() => handleCategorySelect(pendingCategoryName)}
-                      disabled={!pendingCategoryName || catalogLoading || Boolean(catalogError)}
+                      disabled={
+                        !pendingCategoryName ||
+                        catalogLoading ||
+                        (inventoryIntegrationEnabled &&
+                          createTypeCategoryOptions.length === 0 &&
+                          Boolean(catalogError))
+                      }
                       className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                     >
                       Continue
@@ -1132,6 +1254,51 @@ const Merchandise = () => {
                           )}
                           <p className="mt-1 text-xs text-gray-500">Stored as RHET size (XS, S, M, …)</p>
                         </div>
+                      )}
+
+                      {(viewingStocksFor || editingMerchandise) &&
+                        isItemNamedStockCategory(formData.merchandise_name) && (
+                        <>
+                          <div>
+                            <label htmlFor="item_name" className="label-field">
+                              Item name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              id="item_name"
+                              name="item_name"
+                              value={formData.item_name}
+                              onChange={handleInputChange}
+                              className={`input-field ${formErrors.item_name ? 'border-red-500' : ''}`}
+                              placeholder="RHET itemName (e.g. nc-pk-worksheets)"
+                              required
+                            />
+                            {formErrors.item_name && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.item_name}</p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Concrete product under this category — not the category title.
+                            </p>
+                          </div>
+                          <div>
+                            <label htmlFor="sku" className="label-field">
+                              SKU <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              id="sku"
+                              name="sku"
+                              value={formData.sku}
+                              onChange={handleInputChange}
+                              className={`input-field ${formErrors.sku ? 'border-red-500' : ''}`}
+                              placeholder="RHET SKU from the same catalog item"
+                              required
+                            />
+                            {formErrors.sku && (
+                              <p className="mt-1 text-sm text-red-600">{formErrors.sku}</p>
+                            )}
+                          </div>
+                        </>
                       )}
 
                       <div>
@@ -1669,11 +1836,10 @@ const Merchandise = () => {
   // Show stocks view
   if (viewingStocksFor) {
     const stocks = getStocksByMerchandiseName(viewingStocksFor);
-    const showSizeColumn = requiresSizingForMerchandise(viewingStocksFor);
-    const showGenderTypeColumns =
-      isUniformMerchandiseName(viewingStocksFor) ||
-      stocks.some((s) => (s.gender && s.gender.trim() !== '') || (s.type && s.type.trim() !== ''));
-    const isUniformStocks = isUniformMerchandiseName(viewingStocksFor);
+    const isUniformStocks = isUniformStockCategory(viewingStocksFor);
+    const isItemNamedStocks = isItemNamedStockCategory(viewingStocksFor);
+    const showSizeColumn = isUniformStocks && requiresSizingForMerchandise(viewingStocksFor);
+    const showGenderTypeColumns = isUniformStocks;
     const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
     const pieceLabels = isUniformStocks ? getUniformPieceLabels(viewingStocksFor) : null;
 
@@ -1733,6 +1899,13 @@ const Merchandise = () => {
       }
       return true;
     });
+
+    const stockColCount =
+      (isItemNamedStocks ? 2 : 0) + // item name + sku
+      (showGenderTypeColumns ? 2 : 0) +
+      (showSizeColumn ? 1 : 0) +
+      3 + // qty, price, remarks
+      1; // actions
     
     return (
       <div className="space-y-6">
@@ -1879,13 +2052,25 @@ const Merchandise = () => {
               className="divide-y divide-gray-200"
               style={{
                 width: '100%',
-                minWidth: showSizeColumn
-                  ? (showGenderTypeColumns ? '1100px' : '900px')
-                  : (showGenderTypeColumns ? '900px' : '750px'),
+                minWidth: isItemNamedStocks
+                  ? '900px'
+                  : showSizeColumn
+                    ? (showGenderTypeColumns ? '1100px' : '900px')
+                    : (showGenderTypeColumns ? '900px' : '750px'),
               }}
             >
               <thead className="bg-white">
                 <tr>
+                  {isItemNamedStocks && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Item name
+                    </th>
+                  )}
+                  {isItemNamedStocks && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      SKU
+                    </th>
+                  )}
                   {showGenderTypeColumns && (
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Gender
@@ -1919,6 +2104,21 @@ const Merchandise = () => {
                 {filteredStocks.length > 0 ? (
                   filteredStocks.map((stock) => (
                     <tr key={stock.merchandise_id}>
+                      {isItemNamedStocks && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div
+                            className="text-sm text-gray-900 max-w-[220px] truncate"
+                            title={formatMerchandiseStockItemName(stock)}
+                          >
+                            {formatMerchandiseStockItemName(stock)}
+                          </div>
+                        </td>
+                      )}
+                      {isItemNamedStocks && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">{formatMerchandiseStockSku(stock)}</div>
+                        </td>
+                      )}
                       {showGenderTypeColumns && (
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{stock.gender || '-'}</div>
@@ -1971,12 +2171,7 @@ const Merchandise = () => {
                 ) : (
                   <tr>
                     <td
-                        colSpan={
-                          (showGenderTypeColumns ? 2 : 0) +
-                          (showSizeColumn ? 1 : 0) +
-                          3 + // qty, price, remarks
-                          1 // actions
-                        }
+                      colSpan={stockColCount}
                       className="px-6 py-4 text-center text-sm text-gray-500"
                     >
                       {stocks.length === 0
@@ -2033,6 +2228,9 @@ const Merchandise = () => {
                 gender: '',
                 type: '',
                 image_url: '',
+                remarks: '',
+                item_name: '',
+                sku: '',
               });
               setFormErrors({});
               setIsModalOpen(true);

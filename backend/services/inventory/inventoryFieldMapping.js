@@ -13,7 +13,21 @@
  * externalReference format: `<SYSTEM_CODE>-<local_request_id>`
  */
 
+import {
+  getLearningKitRecipe,
+  validateLearningKitComponents,
+} from './learningKitRecipes.js';
+
 const DEFAULT_SYSTEM_CODE = 'PSMS';
+
+/** RHET categoryName → preferred local merchandisestbl name for fulfill apply. */
+const CATEGORY_NAME_TO_LOCAL = {
+  'School Uniform': 'School Uniform',
+  'PE Uniform': 'PE Uniform',
+  'LCA T-Shirt': 'LCA T-Shirt',
+  Backpack: 'Backpack',
+  'Learning Kit': 'Learning Kit',
+};
 
 /** Local CMS merchandise_name → RHET categoryName (legacy bridge only). */
 const CATEGORY_NAME_MAP = {
@@ -24,14 +38,8 @@ const CATEGORY_NAME_MAP = {
   'LCA Bag': 'Backpack',
   'LCA T-Shirt': 'LCA T-Shirt',
   'LCA Tshirt': 'LCA T-Shirt',
-};
-
-/** RHET categoryName → preferred local merchandisestbl name for fulfill apply. */
-const CATEGORY_NAME_TO_LOCAL = {
-  'School Uniform': 'School Uniform',
-  'PE Uniform': 'PE Uniform',
-  'LCA T-Shirt': 'LCA T-Shirt',
-  Backpack: 'Backpack',
+  'LCA Learning Kit': 'Learning Kit',
+  'Learning Kit': 'Learning Kit',
 };
 
 const GENDER_MAP = {
@@ -115,9 +123,8 @@ export function parseLocalRequestIdFromExternalReference(externalReference) {
 }
 
 /**
- * Learning Kit requests are not yet supported by Request Stock. RHET Inventory
- * matches kits via a category-slot BOM + request-time `components[]`, which
- * CMS does not collect yet. Callers must reject these before calling RHET.
+ * Learning Kit category (RHET virtual kit). Request Stock collects components[]
+ * from CMS kit recipes; fulfill credits branch type "Learning Kit".
  */
 export function isLearningKitCategory(name) {
   if (!name) return false;
@@ -126,19 +133,19 @@ export function isLearningKitCategory(name) {
 
 /**
  * Uniform-like RHET categories (and legacy local names that map to them).
+ * Non-uniform categories (Workbooks, Backpack, Accessory, …) must return false
+ * so fulfill keys stock rows by item_name/sku.
  */
 export function isUniformLikeCategory(categoryOrMerchandiseName) {
   if (!categoryOrMerchandiseName) return false;
   const raw = String(categoryOrMerchandiseName).trim();
   if (isLearningKitCategory(raw)) return false;
   const mapped = CATEGORY_NAME_MAP[raw] || raw;
-  const name = mapped.toLowerCase();
+  const name = String(mapped).trim().toLowerCase();
   if (name === 'school uniform' || name === 'pe uniform') return true;
   if (name === 'lca t-shirt' || name === 'lca tshirt' || name === 'lca shirt') return true;
   if (name.endsWith(' uniform')) return true;
-  // Legacy local names
-  if (CATEGORY_NAME_MAP[raw]) return true;
-  return raw.toLowerCase().includes('uniform');
+  return false;
 }
 
 export function mapCategoryNameToInventory(merchandiseName) {
@@ -299,12 +306,40 @@ export function resolveInventoryCategoryName(requestRow) {
 /**
  * Build one RHET stock-request item from a local merchandiserequestlogtbl row.
  * Prefer inventory_* catalog fields; never send local-only names as category
- * without itemName for non-uniforms.
+ * without itemName for non-uniforms. Learning Kits include components[].
  */
 export function buildInventoryStockRequestItem(requestRow) {
   const categoryName = resolveInventoryCategoryName(requestRow);
   const externalReference = buildExternalReference(requestRow.request_id);
   const quantity = Number(requestRow.requested_quantity);
+
+  if (isLearningKitCategory(categoryName) || isLearningKitCategory(requestRow.merchandise_name)) {
+    const itemName = String(
+      requestRow.inventory_item_name || requestRow.item_name || ''
+    ).trim();
+    const sku = String(
+      requestRow.inventory_requested_sku || requestRow.sku || ''
+    ).trim();
+    let components = requestRow.inventory_components_json;
+    if (typeof components === 'string') {
+      try {
+        components = JSON.parse(components);
+      } catch {
+        components = [];
+      }
+    }
+    if (!Array.isArray(components)) components = [];
+
+    const item = {
+      categoryName: mapCategoryNameToInventory(categoryName) || 'Learning Kit',
+      quantity,
+      externalReference,
+      components,
+    };
+    if (itemName) item.itemName = itemName;
+    if (sku) item.sku = sku;
+    return omitEmpty(item);
+  }
 
   if (isUniformLikeCategory(categoryName) || isUniformLikeCategory(requestRow.merchandise_name)) {
     const item = {
@@ -340,6 +375,7 @@ function omitEmpty(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null || v === '') continue;
+    // Keep arrays (e.g. Learning Kit components[]) even when checking emptiness elsewhere
     out[k] = v;
   }
   return out;
@@ -363,8 +399,44 @@ export function normalizeMerchandiseRequestInput(body = {}) {
     return { error: 'RHET category is required' };
   }
 
+  // Learning Kit: category + kit itemName/sku + components[] (BOM slots)
   if (isLearningKitCategory(inventoryCategoryName) || isLearningKitCategory(merchandiseNameInput)) {
-    return { error: 'LEARNING_KIT_NOT_SUPPORTED' };
+    const resolvedItemName = itemName || '';
+    if (!resolvedItemName && !sku) {
+      return {
+        error: 'Select a Learning Kit from the RHET catalog (item name or SKU).',
+      };
+    }
+    const recipe = getLearningKitRecipe({ itemName: resolvedItemName, sku });
+    if (!recipe) {
+      return {
+        error:
+          'Kit recipe not configured in CMS for this Learning Kit. Contact an admin to add the kit BOM slots.',
+        code: 'KIT_RECIPE_MISSING',
+      };
+    }
+    const qty = Number(body.requested_quantity || body.quantity || 1) || 1;
+    const validated = validateLearningKitComponents(
+      recipe,
+      body.components || body.inventory_components || [],
+      qty
+    );
+    if (!validated.ok) {
+      return { error: validated.error, code: 'KIT_COMPONENTS_INVALID' };
+    }
+    return {
+      inventory_category_name: 'Learning Kit',
+      inventory_item_name: resolvedItemName || recipe.itemName || null,
+      inventory_requested_sku: sku || recipe.sku || null,
+      inventory_components_json: validated.components,
+      merchandise_name: 'Learning Kit',
+      // Request-log `type` CHECK only allows uniform pieces — kit identity lives in inventory_*
+      gender: null,
+      type: null,
+      size: null,
+      is_uniform: false,
+      is_learning_kit: true,
+    };
   }
 
   const uniform = isUniformLikeCategory(inventoryCategoryName);
@@ -390,17 +462,18 @@ export function normalizeMerchandiseRequestInput(body = {}) {
   }
 
   const resolvedItemName = itemName || '';
-  if (!resolvedItemName && !sku) {
+  const resolvedSku = sku || '';
+  if (!resolvedItemName || !resolvedSku) {
     return {
       error:
-        'Select a concrete catalog item (item name or SKU). Free-text category-only requests are not allowed.',
+        'Select a concrete catalog item with both item name and SKU. Category-only non-uniform requests (Workbooks, Backpack, Book, Accessory, …) are not allowed.',
     };
   }
 
   return {
     inventory_category_name: inventoryCategoryName,
-    inventory_item_name: resolvedItemName || null,
-    inventory_requested_sku: sku || null,
+    inventory_item_name: resolvedItemName,
+    inventory_requested_sku: resolvedSku,
     // CMS type/category bucket = RHET categoryName (Backpack), NEVER itemName (lca-backpack)
     merchandise_name: mapCategoryNameToLocal(inventoryCategoryName),
     gender: null,
@@ -418,7 +491,13 @@ export function assertInventoryItemHasMatchKey(item) {
     return 'categoryName is required';
   }
   if (isLearningKitCategory(item.categoryName)) {
-    return 'Learning Kit is not supported via Request Stock';
+    if (!item.itemName && !item.sku) {
+      return 'Learning Kit requests require itemName and/or sku';
+    }
+    if (!Array.isArray(item.components) || item.components.length === 0) {
+      return 'Learning Kit requests require components[] for every BOM category';
+    }
+    return null;
   }
   if (isUniformLikeCategory(item.categoryName)) {
     if (!item.gender || !item.type || !item.size) {
@@ -426,8 +505,8 @@ export function assertInventoryItemHasMatchKey(item) {
     }
     return null;
   }
-  if (!item.itemName && !item.sku) {
-    return 'Non-uniform requests require itemName and/or sku';
+  if (!item.itemName || !item.sku) {
+    return 'Non-uniform requests require both itemName and sku';
   }
   return null;
 }
