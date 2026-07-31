@@ -180,6 +180,9 @@ function testLcaBagIsNotUniform() {
   assert.equal(isUniformLikeCategory('ID Lace'), false);
   assert.equal(isUniformLikeCategory('School Uniform'), true);
   assert.equal(isUniformLikeCategory('LCA Uniform'), true);
+  assert.equal(isUniformLikeCategory('Shirt'), true);
+  assert.equal(isUniformLikeCategory('Shirt', 'LCA_SHIRT'), true);
+  assert.equal(isUniformLikeCategory('Workbooks', 'OTHER'), false);
 }
 
 async function testBackpackBlankAggregatorNeverMatched() {

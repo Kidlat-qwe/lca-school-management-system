@@ -16,13 +16,16 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
    CMS may return a short-lived / stale cached catalog (`meta.cached` / `meta.stale`) when RHET `/catalog` is briefly down.
 2. **Create Merchandise Type** and **Request Stock** category dropdowns use
    `getCreateMerchandiseCategoryOptions(catalog)` — exact RHET `categoryName` values only.
-3. Uniform-like categories → Gender + Type + Size from catalog items for that category.
-4. Non-uniform → pick a concrete catalog item (`itemName` + `sku`).
-5. **Learning Kit** → pick kit item + fill `components[]` for every CMS recipe BOM category.
-6. Submit to `POST /merchandise-requests` with `category_name` + attrs / `item_name`/`sku` (+ `components` for kits).
-7. Promo free-merchandise optgroups use `getMerchandiseTypeNamesFromStock(merchandise)`
+3. Prefer `categories[].categoryKind` for form mode:
+   - `SCHOOL_UNIFORM` / `PE_UNIFORM` / `LCA_SHIRT` → Gender + Type/Logo + Size
+   - `OTHER` → concrete catalog item (`itemName` + `sku`)
+   - `LEARNING_KIT` → kit item + `components[]`
+   Name heuristics are fallback only when kind is missing (`Shirt` is still uniform).
+4. Uniform options MUST come from catalog items for that category (no inventing Logo/gender/size).
+5. Submit to `POST /merchandise-requests` with `category_name` + optional `category_kind` + attrs / `item_name`/`sku` (+ `components` for kits).
+6. Promo free-merchandise optgroups use `getMerchandiseTypeNamesFromStock(merchandise)`
    (unique `merchandise_name` from branch stock — not a frozen CMS array).
-8. If inventory env is missing (`INTEGRATION_DISABLED`), Create Merchandise Type falls back to
+7. If inventory env is missing (`INTEGRATION_DISABLED`), Create Merchandise Type falls back to
    legacy free-text; Request Stock still requires integration when forwarding to RHET.
 
 Do **not** reintroduce hard-coded arrays like

@@ -3,6 +3,7 @@ import { query as dbQuery, getClient } from '../config/database.js';
 import {
   parseLocalRequestIdFromExternalReference,
   pickApproverName,
+  resolveUniformFulfillIdentity,
 } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
 import {
@@ -279,9 +280,11 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
       return { applied: false, reason: `status_${request.status}`, processedBy };
     }
 
+    const identity = resolveUniformFulfillIdentity({ request, payload });
+
     const stockResult = await applyMerchandiseRequestStock(client, {
       ...request,
-      // Prefer webhook identity when present (matchedSku / itemName from RHET)
+      // Prefer webhook identity when present (matchedSku / itemName / uniform attrs)
       inventory_matched_sku:
         payload.matchedSku || request.inventory_matched_sku || null,
       inventory_item_name:
@@ -296,7 +299,21 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
         payload.category_name ||
         request.inventory_category_name ||
         null,
+      // Shirt / uniforms: local request first, then webhook, then matchedSku parse
+      gender: identity.gender,
+      type: identity.type,
+      size: identity.size,
     });
+
+    // Always point the request at the identified stock row (never leave blank shell link)
+    if (stockResult?.merchandiseId) {
+      await client.query(
+        `UPDATE merchandiserequestlogtbl
+         SET merchandise_id = $1
+         WHERE request_id = $2`,
+        [stockResult.merchandiseId, request.request_id]
+      );
+    }
 
     try {
       await runIgnoringMissingUpdatedAt(

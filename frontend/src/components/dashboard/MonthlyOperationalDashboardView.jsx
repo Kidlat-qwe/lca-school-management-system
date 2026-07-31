@@ -198,8 +198,15 @@ const MonthlyOperationalDashboardView = ({
       (Number(totals.new_enrollees) || 0) +
       (Number(totals.re_enrollment_count) || 0) +
       (Number(totals.rejoin_count) || 0) +
-      (Number(totals.upsell_count) || 0),
-    [totals.new_enrollees, totals.re_enrollment_count, totals.rejoin_count, totals.upsell_count]
+      (Number(totals.upsell_count) || 0) +
+      (Number(totals.active_completed_count) || 0),
+    [
+      totals.new_enrollees,
+      totals.re_enrollment_count,
+      totals.rejoin_count,
+      totals.upsell_count,
+      totals.active_completed_count,
+    ]
   );
 
   const selectedBranchName = useMemo(() => {

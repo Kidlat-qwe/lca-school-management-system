@@ -82,9 +82,9 @@ export const MONTHLY_OPERATIONAL = {
   pageIntro:
     'Same metrics as the daily dashboard, added up for the month you select.',
   newEnrolleesReenroll:
-    'Counts from the Month Re-enrollment matrix for the selected month (billing month column). New = green "new" cells. Re-enrollment = rate-row numerator (re-enrolled + completed; upsell excluded).',
+    'Counts from the Month Re-enrollment matrix for the selected month (billing month column). New = green "new" cells. Re-enrollment = purple "re-enrolled" cells only (same badge count as the Month Re-enrollment matrix). Completed cells are on the Completed card, not here.',
   totalActiveStudents:
-    'Sum of new enrollees + re-enrollment + rejoin + upsell for the selected month (Month Re-enrollment matrix column). Counts matrix cells, not unique students — one student in two classes counts twice.',
+    'Sum of new enrollees + re-enrollment + rejoin + upsell + multi-phase completed for the selected month (Month Re-enrollment matrix column). Counts matrix cells, not unique students — one student in two classes counts twice. Single-phase completed (e.g. Active Champs) is excluded.',
   droppedRejoin:
     'Dropped / unenrolled = pink cells in the matrix month column. Rejoin = orange "rejoin" cells in that column.',
   reservedUpsell:
@@ -110,7 +110,7 @@ export const MONTHLY_OPERATIONAL = {
   enrollmentSnapshot:
     'Students with activity this month: active / inactive counts and overall phase re-enrollment rate (see Re-enrollment Dashboard for details).',
   reEnrollmentSnapshot: (retained, prior) =>
-    `Re-enrollment rate for this month: ${retained} (re-enrolled + completed in matrix column) ÷ ${prior} retention base (prior-month new + re-enrolled + rejoin + upsell) × 100 — matches the Month Re-enrollment matrix rate row.`,
+    `Re-enrollment rate for this month: ${retained} ÷ ${prior} retention base × 100 — same numerator as the Re-enrollment KPI card and the Month Re-enrollment matrix rate row (purple re-enrolled cells only).`,
   salesPaymentsCard:
     'Invoice sales (completed payments by payment date in month), acknowledgement receipt sales for the month, and total payments (same amount as Invoice month total).',
   recentInvoicePayments:
@@ -266,7 +266,7 @@ export const PHASE_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
     `Track student re-enrollment by program phase and retention for ${year}.`,
   newReenrollYear: (year) =>
-    `For ${year}: New enrollees = every green "new" cell in the phase matrix. Re-enrollment KPI = sum of rate-header numerators (re-enrolled and multi-phase completed cells; upsell and single-phase completed excluded).`,
+    `For ${year}: New enrollees = every green "new" cell in the phase matrix. Re-enrollment KPI = every purple "re-enrolled" cell (completed cells are not included).`,
   reservedUpsellYear: (year) =>
     `For ${year}: Reserved = amber "reserved" cells; Upsell = teal "upsell" cells — each counted once per matrix cell in the table.`,
   droppedRejoinYear: (year) =>
@@ -281,16 +281,16 @@ export const MONTHLY_ENROLLMENT_DASHBOARD = {
   pageIntro: (year) =>
     `Track each student's re-enrollment across Jan – Dec ${year} and monthly retention.`,
   newReenrollYear: (year) =>
-    `For ${year}: New enrollees = every green "new" cell in the matrix. Re-enrollment KPI = sum of rate-header numerators (re-enrolled and multi-phase completed cells; upsell and single-phase completed excluded).`,
+    `For ${year}: New enrollees = every green "new" cell in the matrix. Re-enrollment KPI = every purple "re-enrolled" cell (completed cells are not included — they have their own Completed count).`,
   reservedUpsellYear: (year) =>
     `For ${year}: Reserved = amber "reserved" cells; Upsell = teal "upsell" cells — each counted once per matrix cell in the table. Hover "new" for Previous reserved when enrollment followed a paid reservation.`,
   droppedRejoinYear: (year) =>
     `For ${year}: Dropped = pink "dropped/unenrolled" cells; Rejoin = orange "rejoin" cells — summed from labeled cells in the matrix table.`,
   reEnrollmentRate: (retainedSum, priorMonthSum, year) =>
-    `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} ÷ ${priorMonthSum.toLocaleString()} × 100. Numerator = sum of rate-header numerators (re-enrolled + completed). Denominator = sum of prior-month new, re-enrolled, rejoin, and upsell cells.`,
+    `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} ÷ ${priorMonthSum.toLocaleString()} × 100. Numerator = sum of purple re-enrolled cells (same as the Re-enrollment KPI). Denominator = sum of prior-month new, re-enrolled, rejoin, and upsell cells.`,
   matrixTitleTooltip: (year) =>
     `Columns are Jan through Dec ${year}. Each cell is the billing month the phase covers — not the payment date.\n\n` +
-    'Re-enrollment rate row: Count of re-enrolled and completed cells in this month column ÷ prior-month cells labeled new, re-enrolled, rejoin, or upsell. Upsell is in the denominator only (not the numerator). ' +
+    'Re-enrollment rate row: Count of re-enrolled cells in this month column ÷ prior-month cells labeled new, re-enrolled, rejoin, or upsell. Completed and upsell are not in the numerator. ' +
     `January compares to December ${Number(year) - 1} when viewing a calendar year. ` +
     'Reserved cells show paid reservation fee before enrollment. Hover a "new" cell for Previous reserved when enrollment followed a reservation.\n\n' +
     'Installment: invoice generated on the 25th of each month; due on the 5th of the following month. ' +

@@ -14,6 +14,7 @@ const countMonthMatrixStatusLabels = (students, monthKey) => {
   for (const student of students) {
     const cell = student.months?.[monthKey];
     if (!cell?.label) continue;
+    if (cell.cleared_after_removal) continue;
 
     switch (normalizeMatrixCellLabel(cell.label)) {
       case MATRIX_CELL_LABEL.NEW:
@@ -21,6 +22,9 @@ const countMonthMatrixStatusLabels = (students, monthKey) => {
         break;
       case MATRIX_CELL_LABEL.RE_ENROLLED:
         reEnrollmentCount += 1;
+        break;
+      case MATRIX_CELL_LABEL.COMPLETED:
+        // Completed has its own KPI; do not fold into Re-enrollment.
         break;
       case 'upsell':
         upsellCount += 1;
@@ -60,6 +64,8 @@ const countPhaseMatrixStatusLabels = (students, phaseKey) => {
         break;
       case MATRIX_CELL_LABEL.RE_ENROLLED:
         reEnrollmentCount += 1;
+        break;
+      case MATRIX_CELL_LABEL.COMPLETED:
         break;
       case 'upsell':
         upsellCount += 1;

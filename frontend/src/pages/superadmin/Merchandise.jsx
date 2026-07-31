@@ -12,6 +12,7 @@ import {
   getUniformPieceLabels,
   getUniformGenderOptions,
   isUniformMerchandiseName,
+  isLcaShirtMerchandiseName,
   isLearningKitMerchandiseName,
   requiresUniformPieceFields,
   countUniformPiecesByType,
@@ -35,6 +36,9 @@ import {
   getMerchandiseStockItemName,
   getMerchandiseStockSku,
 } from '../../utils/merchandiseStock';
+
+/** Flip to `true` after Coolify inventory/CMS deployment is ready. */
+const ADD_MERCHANDISE_TYPE_ENABLED = false;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -556,7 +560,9 @@ const Merchandise = () => {
     const name = String(categoryName || '').trim();
     if (!name) return;
 
-    const defaults = applyCreateTypeCategoryDefaults(name);
+    const defaults = applyCreateTypeCategoryDefaults(name, {
+      categories: inventoryCatalog?.categories || [],
+    });
     setMerchandiseCategory(name);
     setPendingCategoryName(name);
     setFormData((prev) => ({
@@ -633,17 +639,20 @@ const Merchandise = () => {
       requiresUniformPieceFields(name);
     const isUniform = requiresUniformPieceFields(name);
 
-    if (!editingMerchandiseType && needsSizing && !formData.size?.trim()) {
-      errors.size = 'Size is required for this merchandise type';
-    }
-
     if (!editingMerchandiseType && isUniform) {
+      if (!formData.size?.trim() || ['n/a', 'na'].includes(formData.size.trim().toLowerCase())) {
+        errors.size = 'Size is required for uniforms (cannot be N/A)';
+      }
       if (!formData.gender?.trim()) {
         errors.gender = 'Gender is required for uniforms';
       }
       if (!formData.type?.trim()) {
-        errors.type = 'Piece is required';
+        errors.type = isLcaShirtMerchandiseName(name)
+          ? 'Logo is required'
+          : 'Piece is required';
       }
+    } else if (!editingMerchandiseType && needsSizing && !formData.size?.trim()) {
+      errors.size = 'Size is required for this merchandise type';
     }
 
     if (
@@ -2212,7 +2221,15 @@ const Merchandise = () => {
           </div>
           </div>
           <button 
+            type="button"
+            disabled={!ADD_MERCHANDISE_TYPE_ENABLED}
+            title={
+              ADD_MERCHANDISE_TYPE_ENABLED
+                ? undefined
+                : 'Temporarily disabled until inventory deployment is complete'
+            }
             onClick={() => {
+              if (!ADD_MERCHANDISE_TYPE_ENABLED) return;
               setEditingMerchandise(null);
               setError('');
               setRequiresSizing(false);
@@ -2235,7 +2252,11 @@ const Merchandise = () => {
               setFormErrors({});
               setIsModalOpen(true);
             }}
-            className="btn-primary flex items-center justify-center space-x-2 w-full sm:w-auto"
+            className={`btn-primary flex items-center justify-center space-x-2 w-full sm:w-auto ${
+              ADD_MERCHANDISE_TYPE_ENABLED
+                ? ''
+                : 'cursor-not-allowed opacity-50'
+            }`}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -2379,7 +2400,10 @@ const Merchandise = () => {
         ) : (
           <div className="bg-white rounded-lg shadow p-12 text-center">
             <p className="text-gray-500">
-              No merchandise types found for this branch. Click "Add Merchandise Type" to create one.
+              No merchandise types found for this branch.
+              {ADD_MERCHANDISE_TYPE_ENABLED
+                ? ' Click "Add Merchandise Type" to create one.'
+                : ' Adding new types is temporarily disabled until inventory deployment is complete.'}
             </p>
           </div>
         )}

@@ -5,21 +5,24 @@
  * - RHET Inventory webhook on stock_request.fulfilled
  *
  * Matching rule:
- * 1) Prefer request.merchandise_id when it belongs to the branch
- * 2) Else match existing CMS type by RHET categoryName (Backpack), never by
- *    RHET itemName (lca-backpack) as merchandise_name
+ * 1) Prefer request.merchandise_id when it belongs to the branch AND matches
+ *    the request identity (uniform attrs or item_name/sku)
+ * 2) Else match existing CMS type by RHET categoryName (Backpack / Shirt),
+ *    never by RHET itemName or Logo as merchandise_name
  * 3) Under that type:
- *    - Uniforms: match size + gender + type
+ *    - Uniforms (School/PE/Shirt LCA_SHIRT): match gender + type/Logo + size
+ *      NEVER credit blank Gender/Type ("Unspecified piece") when identity present
  *    - Non-uniform / Learning Kit: match item_name and/or sku
  * 4) Only create a new row using categoryName as merchandise_name; store
- *    concrete product in item_name (+ sku)
+ *    concrete product in item_name (+ sku) for non-uniforms, or gender/type/size
+ *    for uniforms
  */
 
 import {
   isLearningKitCategory,
   isUniformLikeCategory,
   localMerchandiseTypeNameCandidates,
-  mapGenderToLocal,
+  mapGenderToInventory,
   mapSizeToLocal,
   mapTypeToInventory,
   resolveLocalMerchandiseTypeName,
@@ -79,6 +82,41 @@ export function stockRowMatchesItemIdentity(row, { itemName, sku } = {}) {
 /** True when stock row has no concrete item identity. */
 export function isBlankItemIdentityRow(row) {
   return !getStockRowItemName(row) && !getStockRowSku(row);
+}
+
+/**
+ * Blank / "Unspecified piece" uniform shell: no gender, no type/Logo, no real size.
+ * These must NEVER absorb fulfills when the request has uniform identity.
+ */
+export function isBlankUniformIdentityRow(row) {
+  return (
+    !normalizeAttr(row?.gender) &&
+    !normalizeAttr(row?.type) &&
+    !normalizeSizeAttr(row?.size)
+  );
+}
+
+/** True when request carries at least one uniform variation attribute. */
+export function wantsUniformIdentity(request) {
+  return Boolean(
+    normalizeAttr(request?.gender) ||
+      normalizeAttr(request?.type) ||
+      normalizeSizeAttr(request?.size)
+  );
+}
+
+/**
+ * Match stock row to uniform variation (gender + type/Logo + size).
+ * Blank shells never match when identity is requested.
+ */
+export function stockRowMatchesUniformIdentity(row, { gender, type, size } = {}) {
+  if (!wantsUniformIdentity({ gender, type, size })) return false;
+  if (isBlankUniformIdentityRow(row)) return false;
+  return (
+    sizeCompatible(size, row?.size) &&
+    genderCompatible(gender, row?.gender) &&
+    attrsEqual(type, row?.type)
+  );
 }
 
 /**
@@ -143,6 +181,14 @@ function normalizeAttr(value) {
   return v || null;
 }
 
+/** Size blanks include UI "N/A" / "n/a". */
+function normalizeSizeAttr(value) {
+  const v = normalizeAttr(value);
+  if (!v) return null;
+  if (v.toLowerCase() === 'n/a' || v.toLowerCase() === 'na') return null;
+  return v;
+}
+
 function attrsEqual(a, b) {
   const left = normalizeAttr(a);
   const right = normalizeAttr(b);
@@ -167,8 +213,8 @@ function genderCompatible(requestGender, rowGender) {
 }
 
 function sizeCompatible(requestSize, rowSize) {
-  const req = normalizeAttr(requestSize);
-  const row = normalizeAttr(rowSize);
+  const req = normalizeSizeAttr(requestSize);
+  const row = normalizeSizeAttr(rowSize);
   if (req == null && row == null) return true;
   if (req == null || row == null) return false;
   const a = (mapSizeToLocal(req) || req).toLowerCase();
@@ -179,10 +225,13 @@ function sizeCompatible(requestSize, rowSize) {
 /**
  * Find an existing branch stock row for this request (type + variation / item).
  *
+ * Uniforms with gender/type/size:
+ * - NEVER fall back to blank Gender/Type ("Unspecified piece") shells
+ * - merchandise_id is only trusted when the row matches those attrs
+ *
  * Non-uniform / Learning Kit with itemName/sku:
  * - NEVER fall back to “first row under type” or empty shell when identity is present
- *   (that caused every Workbooks/Backpack request to credit the same blank row).
- * - merchandise_id is only trusted when it matches the same item identity.
+ * - merchandise_id is only trusted when it matches the same item identity
  */
 export async function findExistingMerchandiseStockRow(client, request) {
   const run = typeof client === 'function' ? client : client.query.bind(client);
@@ -192,6 +241,8 @@ export async function findExistingMerchandiseStockRow(client, request) {
   const preferredName =
     resolveLocalMerchandiseTypeName(request) || nameCandidates[0] || null;
   const type = normalizeAttr(request.type);
+  const gender = normalizeAttr(request.gender);
+  const size = normalizeSizeAttr(request.size);
   const itemName = normalizeAttr(request.inventory_item_name || request.item_name);
   const itemSku = normalizeAttr(
     request.inventory_requested_sku || request.inventory_matched_sku || request.sku
@@ -204,6 +255,7 @@ export async function findExistingMerchandiseStockRow(client, request) {
     isUniformLikeCategory(preferredName) ||
     isUniformLikeCategory(request.inventory_category_name);
   const wantsItemIdentity = Boolean(itemName || itemSku);
+  const wantsUniformAttrs = wantsUniformIdentity({ gender, type, size });
   const isItemKeyed = isKit || !isUniform;
 
   if (request.merchandise_id) {
@@ -233,15 +285,26 @@ export async function findExistingMerchandiseStockRow(client, request) {
     }
     const row = byId.rows[0];
     if (row) {
-      if (!isItemKeyed || !wantsItemIdentity) {
+      if (isItemKeyed) {
+        if (!wantsItemIdentity) {
+          return row;
+        }
+        if (stockRowMatchesItemIdentity(row, { itemName, sku: itemSku })) {
+          return row;
+        }
+        // Wrong non-uniform row linked at submit (common with empty shell) — ignore id.
+      } else if (isUniform) {
+        if (!wantsUniformAttrs) {
+          return row;
+        }
+        // Only trust merchandise_id when Gender + Type/Logo + Size match.
+        // Blank "Unspecified piece" shells must never absorb Shirt/uniform fulfills.
+        if (stockRowMatchesUniformIdentity(row, { gender, type, size })) {
+          return row;
+        }
+      } else {
         return row;
       }
-      // Only trust merchandise_id when it is the same concrete item (or legacy empty shell
-      // is NOT accepted here — identity present ⇒ must match item_name/sku).
-      if (stockRowMatchesItemIdentity(row, { itemName, sku: itemSku })) {
-        return row;
-      }
-      // Wrong non-uniform row linked at submit (common with empty shell) — ignore id.
     }
   }
 
@@ -300,9 +363,7 @@ export async function findExistingMerchandiseStockRow(client, request) {
     // Legacy request with no itemName/sku — allow single empty shell only
     const emptyShell = rowsRes.rows.find(
       (row) =>
-        !normalizeAttr(row.type) &&
-        !normalizeAttr(row.size) &&
-        !normalizeAttr(row.gender) &&
+        isBlankUniformIdentityRow(row) &&
         !getStockRowItemName(row) &&
         !getStockRowSku(row) &&
         !normalizeAttr(row.remarks)
@@ -311,14 +372,19 @@ export async function findExistingMerchandiseStockRow(client, request) {
     return null;
   }
 
-  const exact = rowsRes.rows.find(
-    (row) =>
-      sizeCompatible(request.size, row.size) &&
-      genderCompatible(request.gender, row.gender) &&
-      attrsEqual(type, row.type)
-  );
-  if (exact) return exact;
+  // Uniforms: exact gender + type/Logo + size only
+  if (wantsUniformAttrs) {
+    const exact = rowsRes.rows.find((row) =>
+      stockRowMatchesUniformIdentity(row, { gender, type, size })
+    );
+    if (exact) return exact;
+    // FORBIDDEN: blank Unspecified-piece / first Shirt row fallback
+    return null;
+  }
 
+  // Legacy uniform request with no attrs — allow single empty shell only
+  const emptyUniformShell = rowsRes.rows.find((row) => isBlankUniformIdentityRow(row));
+  if (emptyUniformShell && rowsRes.rows.length === 1) return emptyUniformShell;
   return null;
 }
 
@@ -354,21 +420,28 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
   );
 
   const merchandiseGender = isUniform
-    ? normalizeAttr(mapGenderToLocal(request.gender) || request.gender)
+    ? normalizeAttr(mapGenderToInventory(request.gender) || request.gender)
     : null;
   // Learning Kit / non-uniform: keep type NULL (CHECK only allows uniform pieces).
   const merchandiseType = isUniform
     ? normalizeAttr(mapTypeToInventory(request.type, categoryForAttrs) || request.type)
     : null;
   const merchandiseSize = isUniform
-    ? normalizeAttr(mapSizeToLocal(request.size) || request.size)
+    ? normalizeSizeAttr(mapSizeToLocal(request.size) || request.size)
     : null;
 
   // Prefer dedicated columns; keep remarks free for notes (do not force identity into remarks).
   const merchandiseItemName = isUniform ? null : stockItemName;
   const merchandiseSku = isUniform ? null : stockSku;
 
-  if (!isUniform && !merchandiseItemName && !merchandiseSku) {
+  if (isUniform && (!merchandiseGender || !merchandiseType || !merchandiseSize)) {
+    throw new Error(
+      `Cannot apply uniform stock for "${typeName}" without gender, type, and size. ` +
+        'Refusing to credit an Unspecified / blank Gender·Type row.'
+    );
+  }
+
+  if (!isUniform && !isKit && !merchandiseItemName && !merchandiseSku) {
     throw new Error(
       `Cannot apply non-uniform stock for "${typeName}" without itemName/sku. ` +
         'Refusing to credit an anonymous stock row.'
@@ -387,7 +460,7 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
 
   const existing = await findExistingMerchandiseStockRow(client, requestForMatch);
 
-  // Hard ban: never credit a blank non-uniform aggregator when identity exists
+  // Hard ban: never credit blank aggregators when identity exists
   let rowToUpdate = existing;
   if (
     rowToUpdate &&
@@ -398,6 +471,22 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
     console.warn(
       `[applyMerchandiseRequestStock] Refusing blank stock row ${rowToUpdate.merchandise_id} for ` +
         `${typeName} / ${merchandiseItemName || ''} / ${merchandiseSku || ''} — will create identified row`
+    );
+    rowToUpdate = null;
+  }
+  if (
+    rowToUpdate &&
+    isUniform &&
+    wantsUniformIdentity({
+      gender: merchandiseGender,
+      type: merchandiseType,
+      size: merchandiseSize,
+    }) &&
+    isBlankUniformIdentityRow(rowToUpdate)
+  ) {
+    console.warn(
+      `[applyMerchandiseRequestStock] Refusing blank uniform shell ${rowToUpdate.merchandise_id} for ` +
+        `${typeName} / ${merchandiseGender} / ${merchandiseType} / ${merchandiseSize} — will create identified row`
     );
     rowToUpdate = null;
   }
@@ -439,9 +528,23 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
         );
       }
     } else {
+      // Uniform: keep gender/type/size populated (never leave Unspecified piece attrs blank)
       await client.query(
-        'UPDATE merchandisestbl SET quantity = $1, price = COALESCE($2, price) WHERE merchandise_id = $3',
-        [newQuantity, price, rowToUpdate.merchandise_id]
+        `UPDATE merchandisestbl
+         SET quantity = $1,
+             price = COALESCE($2, price),
+             gender = COALESCE(NULLIF(TRIM(COALESCE(gender, '')), ''), $4),
+             type = COALESCE(NULLIF(TRIM(COALESCE(type, '')), ''), $5),
+             size = COALESCE(NULLIF(TRIM(COALESCE(size, '')), ''), $6)
+         WHERE merchandise_id = $3`,
+        [
+          newQuantity,
+          price,
+          rowToUpdate.merchandise_id,
+          merchandiseGender,
+          merchandiseType,
+          merchandiseSize,
+        ]
       );
     }
 
@@ -493,11 +596,25 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
       merchandiseName: inserted.rows[0].merchandise_name,
     };
   } catch (insertError) {
+    const msg = String(insertError?.message || '');
+    if (isUniform && (msg.includes('check_type') || msg.includes('check_request_type'))) {
+      throw new Error(
+        `Cannot save uniform type "${merchandiseType}" on branch stock. ` +
+          'Apply migration 134_allow_lca_shirt_logo_types.sql (allows Logo 1 / Logo 2), then retry fulfill. ' +
+          `Original: ${msg}`
+      );
+    }
     // Migration 133 not applied yet — fall back to remarks identity (Learning Kit legacy)
     const missingItemCols =
-      String(insertError?.message || '').includes('item_name') ||
-      String(insertError?.message || '').includes('sku');
+      msg.includes('item_name') || msg.includes('sku');
     if (!missingItemCols) throw insertError;
+
+    if (isUniform && (!merchandiseGender || !merchandiseType || !merchandiseSize)) {
+      throw new Error(
+        `Refusing legacy insert of blank uniform row for "${typeName}". ` +
+          'Gender, type, and size are required.'
+      );
+    }
 
     const legacyRemarks =
       !isUniform && (merchandiseItemName || merchandiseSku)

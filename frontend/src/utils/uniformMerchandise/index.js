@@ -117,7 +117,9 @@ const CATEGORY_TO_CANONICAL = {
   'PE Uniform_Replacement': UNIFORM_PE_NAME,
   'LCA T-Shirt': UNIFORM_TSHIRT_NAME,
   'LCA Tshirt': UNIFORM_TSHIRT_NAME,
-  'LCA Shirt': UNIFORM_TSHIRT_NAME,
+  // RHET LCA_SHIRT categoryName is "Shirt" (type = Logo 1/2), not LCA T-Shirt
+  Shirt: 'Shirt',
+  'LCA Shirt': 'Shirt',
   'LCA Bag': NON_UNIFORM_BACKPACK_NAME,
   Bag: NON_UNIFORM_BACKPACK_NAME,
   Backpack: NON_UNIFORM_BACKPACK_NAME,
@@ -149,6 +151,12 @@ export const UNIFORM_PE_PIECE_OPTIONS = [
 
 export const UNIFORM_TSHIRT_PIECE_OPTIONS = [{ value: 'Shirt', label: 'Shirt' }];
 
+/** LCA_SHIRT / category "Shirt" — RHET type is Logo 1 / Logo 2 (not PE "Shirt"). */
+export const UNIFORM_LCA_SHIRT_PIECE_OPTIONS = [
+  { value: 'Logo 1', label: 'Logo 1' },
+  { value: 'Logo 2', label: 'Logo 2' },
+];
+
 /**
  * All known piece values (new + legacy Top/Bottom) for filters.
  * Prefer getUniformPieceOptions(merchandiseName, gender) in forms.
@@ -156,6 +164,7 @@ export const UNIFORM_TSHIRT_PIECE_OPTIONS = [{ value: 'Shirt', label: 'Shirt' }]
 export const UNIFORM_PIECE_OPTIONS = [
   ...UNIFORM_SCHOOL_PIECE_OPTIONS,
   ...UNIFORM_PE_PIECE_OPTIONS,
+  ...UNIFORM_LCA_SHIRT_PIECE_OPTIONS,
   { value: 'Top', label: 'Top' },
   { value: 'Bottom', label: 'Bottom' },
 ];
@@ -224,13 +233,20 @@ export function isSchoolUniformMerchandiseName(merchandiseName) {
   if (!merchandiseName) return false;
   const n = String(merchandiseName).trim().toLowerCase();
   if (n === 'school uniform' || n === 'lca uniform') return true;
-  if (isPeUniformMerchandiseName(n) || isTshirtMerchandiseName(n)) return false;
+  if (
+    isPeUniformMerchandiseName(n) ||
+    isTshirtMerchandiseName(n) ||
+    isLcaShirtMerchandiseName(n)
+  ) {
+    return false;
+  }
   return n.includes('uniform');
 }
 
 export function isTshirtMerchandiseName(merchandiseName) {
   if (!merchandiseName) return false;
   const n = String(merchandiseName).trim().toLowerCase();
+  // Do NOT treat plain "Shirt" (LCA_SHIRT) as legacy LCA T-Shirt.
   return (
     n === 'lca t-shirt' ||
     n === 'lca tshirt' ||
@@ -238,6 +254,13 @@ export function isTshirtMerchandiseName(merchandiseName) {
     n.includes('t-shirt') ||
     n.includes('tshirt')
   );
+}
+
+/** RHET LCA_SHIRT category — plain name "Shirt" (not PE Uniform piece type). */
+export function isLcaShirtMerchandiseName(merchandiseName) {
+  if (!merchandiseName) return false;
+  const n = String(merchandiseName).trim().toLowerCase();
+  return n === 'shirt' || n === 'lca shirt';
 }
 
 /**
@@ -255,6 +278,9 @@ export function getUniformGenderOptions(merchandiseName) {
  * Piece dropdown options for the given merchandise name (+ optional gender).
  */
 export function getUniformPieceOptions(merchandiseName, gender = null) {
+  if (isLcaShirtMerchandiseName(merchandiseName)) {
+    return UNIFORM_LCA_SHIRT_PIECE_OPTIONS;
+  }
   if (isTshirtMerchandiseName(merchandiseName)) {
     return UNIFORM_TSHIRT_PIECE_OPTIONS;
   }
@@ -282,7 +308,13 @@ export function isUpperUniformPiece(type) {
     .trim()
     .toLowerCase();
   if (!t) return false;
-  return t === 'top' || t === 'polo' || t === 'shirt' || t.includes('blouse');
+  return (
+    t === 'top' ||
+    t === 'polo' ||
+    t === 'shirt' ||
+    t.includes('blouse') ||
+    t.startsWith('logo')
+  );
 }
 
 export function isLowerUniformPiece(type) {
@@ -313,6 +345,7 @@ export function isUniformTopBottomType(merchandiseName) {
 export function isUniformMerchandiseName(merchandiseName) {
   if (!merchandiseName) return false;
   if (isLearningKitMerchandiseName(merchandiseName)) return false;
+  if (isLcaShirtMerchandiseName(merchandiseName)) return true;
   if (isTshirtMerchandiseName(merchandiseName)) return true;
   if (isUniformTopBottomType(merchandiseName)) return true;
   return String(merchandiseName).toLowerCase().includes('uniform');
@@ -346,6 +379,13 @@ export function countUniformPiecesByType(stocks) {
       result.bottom += 1;
       result.lower += 1;
     } else {
+      const hasPiece = Boolean(String(item?.type || '').trim());
+      const qty =
+        item?.quantity == null || item?.quantity === ''
+          ? 0
+          : parseInt(item.quantity, 10) || 0;
+      // Ignore empty legacy shells (qty 0, no gender/type) — they are not "Unspecified" stock
+      if (!hasPiece && qty <= 0) continue;
       result.unspecified += 1;
     }
   }

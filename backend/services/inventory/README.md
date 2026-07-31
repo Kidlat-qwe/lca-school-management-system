@@ -19,22 +19,34 @@ On reject/fail, CMS marks the local request `Rejected` and notifies the Admin.
 ## RHET matching (structured attributes)
 
 RHET matches uniform stock on exact `categoryName + gender + type + size`, not
-free text. **Create Merchandise** (Superadmin) and **Request Stock** now use the
-same RHET-canonical labels in CMS:
+free text. **Request Stock** form mode prefers catalog `categoryKind`:
+
+| categoryKind | Form mode | Required fields |
+|---|---|---|
+| `SCHOOL_UNIFORM` | Uniform | gender + type + size |
+| `PE_UNIFORM` | Uniform | gender + type + size |
+| `LCA_SHIRT` | Uniform (Shirt) | gender + type (`Logo 1`/`Logo 2`) + size |
+| `LEARNING_KIT` | Kit | itemName/sku + components[] |
+| `OTHER` (or missing + not kit) | Non-uniform | itemName + sku |
+
+Name heuristics are **fallback only** when `categoryKind` is missing
+(e.g. plain name `Shirt` is still uniform). Never treat Shirt as Item/SKU-only.
 
 | Field | Stored CMS values (aligned with RHET) |
 |---|---|
-| Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `LCA T-Shirt`, `Backpack`, … |
+| Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `Shirt`, `Backpack`, … |
 | Gender | `Male`, `Female`, `Unisex` |
-| Size | `XS` … `5XL` |
-| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants` |
+| Size | `XS` … `5XL`, `Teen` |
+| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2` |
 
+Migration **134** allows `Logo 1` / `Logo 2` on merchandise + request-log type CHECKs.
 Legacy labels (`LCA Uniform`, `Men`, `Extra Small`) are still recognized on read
 and normalized on write. Migration **129** + script
 `migrateMerchandiseLabelsToRhet.js` rewrite existing rows.
 
 Request Stock prefers catalog / `inventory_*` fields; fulfill maps RHET → local
-with identity for the new canonical names.
+with identity for the new canonical names. Fulfill type name = RHET
+`categoryName` only (e.g. type `Shirt`, never `Logo 1`).
 
 ## Learning Kit (Request Stock enabled)
 
@@ -102,10 +114,21 @@ When integration env is missing, CMS falls back to the legacy Superadmin-approva
 | `applyMerchandiseRequestStock.js` | Adds fulfilled qty to branch `merchandisestbl` |
 | `runMerchRequestSql.js` | Retries merch-request UPDATEs if `updated_at` column is missing |
 
-**Fulfill matching (critical):** CMS type = RHET `categoryName` (`Backpack`), never
-RHET `itemName` (`lca-backpack`) or SKU. Prefer `merchandise_id` on the request,
-then match existing type name aliases (`Backpack` / `LCA Bag`), then create a row
-named after `categoryName` only.
+**Fulfill matching (critical):** CMS type = RHET `categoryName` (`Backpack` /
+`Shirt`), never RHET `itemName` (`lca-backpack`) or Logo (`Logo 1`). Prefer
+`merchandise_id` on the request **only when** that row matches identity.
+Uniforms (including `LCA_SHIRT` / `Shirt`): match gender + type/Logo + size;
+never credit blank Gender/Type (“Unspecified piece”) shells when identity is
+present — create an identified row instead. Non-uniforms: match item_name/sku.
+
+Identity for fulfill is resolved by `resolveUniformFulfillIdentity`:
+1. Local request `gender` / `type` / `size`
+2. Webhook payload fields
+3. Optional parse of `matchedSku` (e.g. `SHI-U-LOGO1-XS`)
+
+Webhook then sets `merchandiserequestlogtbl.merchandise_id` to the credited
+identified stock row. Do **not** rely on `repairBlankUniformStockFromRequests.js`
+for normal fulfills — that script is one-time legacy cleanup only.
 
 ## Webhook
 

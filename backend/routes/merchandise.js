@@ -17,34 +17,38 @@ function isUniformMerchandiseName(merchandiseName) {
   return name.toLowerCase().includes('uniform');
 }
 
+const ALLOWED_UNIFORM_PIECE_TYPES = [
+  'Polo',
+  'Short',
+  'Blouse',
+  'Skirt',
+  'Shirt',
+  'Pants',
+  'Top',
+  'Bottom',
+  'Logo 1',
+  'Logo 2',
+];
+
 /**
  * Uniforms are always separate upper/lower SKUs; size, gender, and piece are required.
- * RHET-aligned: Male/Female/Unisex · XS…5XL · Polo/Short/Blouse/Skirt/Shirt/Pants
+ * RHET-aligned: Male/Female/Unisex · XS…5XL · Polo/Short/…/Logo 1/Logo 2 (LCA Shirt)
  * Legacy Men/Women and Top/Bottom still accepted and normalized on write.
  * @returns {string|null} error message or null if ok
  */
 function validateUniformPieceFields(merchandiseName, size, gender, type) {
   if (!isUniformMerchandiseName(merchandiseName)) return null;
-  if (!size || !String(size).trim()) {
-    return 'Size is required for uniforms';
+  const sizeText = String(size || '').trim();
+  if (!sizeText || ['n/a', 'na'].includes(sizeText.toLowerCase())) {
+    return 'Size is required for uniforms (cannot be blank or N/A)';
   }
   const g = String(gender || '').trim();
   if (!g || !['Male', 'Female', 'Unisex', 'Men', 'Women'].includes(g)) {
     return 'Gender is required for uniforms (Male, Female, or Unisex)';
   }
   const t = String(type || '').trim();
-  const allowedPieces = [
-    'Polo',
-    'Short',
-    'Blouse',
-    'Skirt',
-    'Shirt',
-    'Pants',
-    'Top',
-    'Bottom',
-  ];
-  if (!t || !allowedPieces.includes(t)) {
-    return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt for school, Shirt/Pants for PE)';
+  if (!t || !ALLOWED_UNIFORM_PIECE_TYPES.includes(t)) {
+    return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt, Shirt/Pants for PE, Logo 1/Logo 2 for Shirt)';
   }
   return null;
 }
@@ -72,6 +76,7 @@ const SIZE_TO_CANONICAL = {
   '3XL': '3XL',
   '4XL': '4XL',
   '5XL': '5XL',
+  Teen: 'Teen',
 };
 
 const CATEGORY_TO_CANONICAL = {
@@ -84,6 +89,8 @@ const CATEGORY_TO_CANONICAL = {
   Backpack: 'Backpack',
   'LCA T-Shirt': 'LCA T-Shirt',
   'LCA Tshirt': 'LCA T-Shirt',
+  Shirt: 'Shirt',
+  'LCA Shirt': 'Shirt',
 };
 
 function normalizeMerchandisePayload(body = {}) {
@@ -238,8 +245,10 @@ router.post(
       .withMessage('Gender must be one of: Male, Female, Unisex'),
     body('type')
       .optional({ nullable: true, checkFalsy: true })
-      .isIn(['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Top', 'Bottom', null, ''])
-      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
+      .isIn([...ALLOWED_UNIFORM_PIECE_TYPES, null, ''])
+      .withMessage(
+        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Logo 1, Logo 2 (or legacy Top, Bottom)'
+      ),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     body('item_name').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Item name must be a string'),
@@ -451,8 +460,10 @@ router.put(
       .withMessage('Gender must be one of: Male, Female, Unisex'),
     body('type')
       .optional({ nullable: true, checkFalsy: true })
-      .isIn(['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Top', 'Bottom', null, ''])
-      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
+      .isIn([...ALLOWED_UNIFORM_PIECE_TYPES, null, ''])
+      .withMessage(
+        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Logo 1, Logo 2 (or legacy Top, Bottom)'
+      ),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     body('item_name').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Item name must be a string'),

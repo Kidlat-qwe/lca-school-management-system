@@ -15,11 +15,9 @@ import {
   aggregateMonthMatrixKpiTotalsForMonthKeys,
   countUniqueMatrixStudentsForMonth,
   countUniqueMatrixStudentsForMonthKeys,
-  filterMonthStatsByKeys,
   getYearToDateMonthKeys,
   reEnrollmentRateForMonth,
   reEnrollmentRateForMonthKeys,
-  sumMonthStatsReEnrolledNumerators,
 } from '../../utils/enrollmentMatrixRate';
 
 const CURRENT_YEAR = parseInt(
@@ -159,14 +157,6 @@ const MonthlyEnrollmentDashboard = () => {
     [studentMonthMatrix, yearToDateMonthKeys]
   );
 
-  const ytdReEnrollmentFromRateNumerators = useMemo(
-    () =>
-      sumMonthStatsReEnrolledNumerators(
-        filterMonthStatsByKeys(studentMonthMatrix?.month_stats ?? [], yearToDateMonthKeys)
-      ),
-    [studentMonthMatrix?.month_stats, yearToDateMonthKeys]
-  );
-
   const ytdReEnrollmentRate = useMemo(
     () => reEnrollmentRateForMonthKeys(studentMonthMatrix, yearToDateMonthKeys),
     [studentMonthMatrix, yearToDateMonthKeys]
@@ -196,12 +186,6 @@ const MonthlyEnrollmentDashboard = () => {
     if (!currentMonthInSelectedYear) return null;
     return reEnrollmentRateForMonth(studentMonthMatrix, currentMonthKey);
   }, [studentMonthMatrix, currentMonthKey, currentMonthInSelectedYear]);
-
-  const monthReEnrollmentCount = useMemo(() => {
-    if (!currentMonthInSelectedYear) return null;
-    const row = (studentMonthMatrix?.month_stats ?? []).find((r) => r.month_key === currentMonthKey);
-    return row ? Number(row.re_enrolled_count) || 0 : 0;
-  }, [studentMonthMatrix?.month_stats, currentMonthKey, currentMonthInSelectedYear]);
 
   const yearPeriodLabel = `Year ${displayYear}`;
   const shortCurrentMonthLabel = useMemo(() => {
@@ -238,8 +222,8 @@ const MonthlyEnrollmentDashboard = () => {
   }
 
   const newEnrolleesCount = ytdKpiTotals.new_enrollees_count;
-  /** Sum of rate-header numerators Jan–current month — matches matrix rate row sums in that range. */
-  const reEnrollmentCount = ytdReEnrollmentFromRateNumerators;
+  /** Re-enrollment KPI: re-enrolled + multi-phase completed (excludes single-phase completed). */
+  const reEnrollmentCount = ytdKpiTotals.re_enrollment_count;
   const droppedCount = ytdKpiTotals.dropped_count;
   const rejoinCount = ytdKpiTotals.rejoin_count;
   const upsellCount = ytdKpiTotals.upsell_count;
@@ -334,7 +318,7 @@ const MonthlyEnrollmentDashboard = () => {
             },
             {
               label: 'Re-enrollment',
-              value: monthMetricValue(monthReEnrollmentCount ?? 0),
+              value: monthMetricValue(monthKpiTotals?.re_enrollment_count ?? 0),
             },
           ]}
           tooltip={MONTHLY_ENROLLMENT_DASHBOARD.newReenrollYear(displayYear)}

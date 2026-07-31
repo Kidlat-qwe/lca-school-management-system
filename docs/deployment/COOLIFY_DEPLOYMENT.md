@@ -165,22 +165,31 @@ Paste the output as `FIREBASE_PRIVATE_KEY_BASE64`. If you prefer the raw key, us
 
 ## 5. Deploy the frontend SPA
 
-The frontend is a **Vite static SPA**. It must be served by a web server (nginx),
-not by `npm run build` / `npm start`. Repo files:
+### 5.1 Create the resource
 
-- `frontend/Dockerfile` + `frontend/nginx.conf` — **recommended** (SPA fallback built in)
-- `frontend/nixpacks.toml` — optional if you keep Nixpacks + static mode
+1. In the same `PSMS` project, click **+ New Resource → Application**.
+2. Select the same Git **Source**, repository, and branch.
+3. Build Pack: **Nixpacks**.
+4. Set **Base Directory** to `/frontend`.
+5. Configure build settings:
 
-### 5.1 Recommended: Dockerfile (fixes root `(index):1` 404)
+  ```text
+  Install Command:  npm install
+  Build Command:    npm run build
+  Publish Directory: dist
+  ```
 
-1. In the same `PSMS` project, open the frontend application (or **+ New Resource → Application**).
-2. Select the same Git **Source**, repository, and branch (`main`).
-3. Set **Base Directory** to `/frontend`.
-4. Set **Build Pack** to **Dockerfile** (Coolify will use `frontend/Dockerfile`).
-5. Set **Ports Exposes** to `80`.
-6. Clear any custom **Start Command** (the image runs nginx).
-7. Under **Domains**, set `https://cms.lca-app.com` (HTTPS, not HTTP).
-8. Optional build-time env (Coolify → Environment Variables; mark as available at build if needed):
+6. Enable the **SPA / single-page app** option (fallback all routes to
+   `index.html`) so client-side routing works on refresh. If your build pack has
+   no toggle, add a static fallback rule that serves `index.html` for unknown paths.
+
+### 5.2 Set the domain
+
+- Under **Domains**, set `https://cms.lca-app.com`.
+
+### 5.3 Environment variables (build-time)
+
+Vite variables are baked in at build time, so set them **before** deploying:
 
   ```env
   VITE_API_BASE_URL=https://api-cms.lca-app.com/api/sms
@@ -188,39 +197,15 @@ not by `npm run build` / `npm start`. Repo files:
   VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
   ```
 
-9. Click **Save** → **Redeploy**.
+> `VITE_API_BASE_URL` is optional on `*.lca-app.com` because the app auto-detects
+> the API host, but setting it explicitly is recommended and required for any
+> other domain.
 
-After deploy, `https://cms.lca-app.com/` and `/login` must load the React app.
-
-### 5.2 Alternative: Nixpacks static site
-
-Only use this if you prefer Nixpacks instead of Dockerfile:
-
-1. Build Pack: **Nixpacks**, Base Directory: `/frontend`.
-2. Check **Is it a static site?** (required — Coolify then serves with nginx).
-3. Check **Is it a SPA?** if shown (fallback to `index.html`).
-4. Settings:
-
-  ```text
-  Install Command:   npm ci
-  Build Command:     npm run build:prod
-  Start Command:     (leave empty)
-  Publish Directory: dist
-  ```
-
-5. Domain: `https://cms.lca-app.com`. Redeploy.
-
-> Do **not** put `npm run build:prod` in **Start Command**. That builds once and
-> exits; Coolify then has nothing to serve → `(index):1` / `/login` **404**.
-
-### 5.3 Deploy
+### 5.4 Deploy
 
 - Click **Deploy**. After the build finishes, open `https://cms.lca-app.com` and
   confirm the login page loads and network calls hit `api-cms.lca-app.com`.
 
-> `VITE_API_BASE_URL` is optional on `*.lca-app.com` because the app auto-detects
-> the API host, but setting it explicitly is recommended and required for any
-> other domain.
 ---
 
 ## 6. Database migrations
@@ -271,9 +256,7 @@ Always review `backend/migrations/README.md` and apply migrations in numeric ord
 | `FIREBASE_PRIVATE_KEY does not look like a PEM key` | Newlines mangled by Coolify | Prefer the BASE64 variable |
 | CORS errors in browser | Frontend origin not allowed | Add the frontend URL to `CORS_ORIGIN` |
 | Mixed-content blocked | API served over HTTP | Ensure both apps use HTTPS domains in Coolify |
-| `(index):1` or `/` **404** on cms.lca-app.com | Frontend not static / Start Command runs build | Switch to **Dockerfile** (section 5.1) or enable **Is it a static site?**, empty Start Command, Publish `dist` |
-| 404 on page refresh (`/login`) | No SPA fallback | Use Dockerfile+nginx, or enable SPA + static site |
-| `favicon.ico` 404 only | Missing file (pre-fix) | Ensure `frontend/public/favicon.ico` is deployed; ignore if site otherwise works |
+| 404 on page refresh (SPA route) | No SPA fallback | Enable SPA mode / serve `index.html` for unknown paths |
 | Frontend calls wrong API URL | Stale build-time env | Set `VITE_API_BASE_URL` and redeploy the frontend |
 
 ---

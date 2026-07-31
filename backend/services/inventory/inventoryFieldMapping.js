@@ -25,6 +25,8 @@ const CATEGORY_NAME_TO_LOCAL = {
   'School Uniform': 'School Uniform',
   'PE Uniform': 'PE Uniform',
   'LCA T-Shirt': 'LCA T-Shirt',
+  Shirt: 'Shirt',
+  'LCA Shirt': 'Shirt',
   Backpack: 'Backpack',
   'Learning Kit': 'Learning Kit',
 };
@@ -38,9 +40,20 @@ const CATEGORY_NAME_MAP = {
   'LCA Bag': 'Backpack',
   'LCA T-Shirt': 'LCA T-Shirt',
   'LCA Tshirt': 'LCA T-Shirt',
+  'LCA Shirt': 'Shirt',
   'LCA Learning Kit': 'Learning Kit',
   'Learning Kit': 'Learning Kit',
 };
+
+/** RHET catalog.categories[].categoryKind values that use gender + type + size. */
+export const UNIFORM_CATEGORY_KINDS = Object.freeze([
+  'SCHOOL_UNIFORM',
+  'PE_UNIFORM',
+  'LCA_SHIRT',
+]);
+
+export const LEARNING_KIT_CATEGORY_KIND = 'LEARNING_KIT';
+export const OTHER_CATEGORY_KIND = 'OTHER';
 
 const GENDER_MAP = {
   Men: 'Male',
@@ -131,21 +144,154 @@ export function isLearningKitCategory(name) {
   return String(name).toLowerCase().includes('learning kit');
 }
 
+/** Normalize RHET categoryKind for comparisons. */
+export function normalizeCategoryKind(categoryKind) {
+  return String(categoryKind || '').trim().toUpperCase();
+}
+
+export function isUniformCategoryKind(categoryKind) {
+  return UNIFORM_CATEGORY_KINDS.includes(normalizeCategoryKind(categoryKind));
+}
+
+export function isLearningKitCategoryKind(categoryKind) {
+  return normalizeCategoryKind(categoryKind) === LEARNING_KIT_CATEGORY_KIND;
+}
+
+export function isLcaShirtCategoryKind(categoryKind) {
+  return normalizeCategoryKind(categoryKind) === 'LCA_SHIRT';
+}
+
 /**
- * Uniform-like RHET categories (and legacy local names that map to them).
- * Non-uniform categories (Workbooks, Backpack, Accessory, …) must return false
- * so fulfill keys stock rows by item_name/sku.
+ * Name-heuristic fallback when categoryKind is missing.
+ * Includes plain "Shirt" (RHET LCA_SHIRT) — name does not end with "uniform".
  */
-export function isUniformLikeCategory(categoryOrMerchandiseName) {
+export function isUniformLikeCategoryName(categoryOrMerchandiseName) {
   if (!categoryOrMerchandiseName) return false;
   const raw = String(categoryOrMerchandiseName).trim();
   if (isLearningKitCategory(raw)) return false;
   const mapped = CATEGORY_NAME_MAP[raw] || raw;
   const name = String(mapped).trim().toLowerCase();
   if (name === 'school uniform' || name === 'pe uniform') return true;
-  if (name === 'lca t-shirt' || name === 'lca tshirt' || name === 'lca shirt') return true;
+  if (
+    name === 'lca t-shirt' ||
+    name === 'lca tshirt' ||
+    name === 'lca shirt' ||
+    name === 'shirt'
+  ) {
+    return true;
+  }
+  if (name.includes('lca') && name.includes('shirt')) return true;
   if (name.endsWith(' uniform')) return true;
   return false;
+}
+
+/**
+ * Uniform-like RHET categories.
+ * Prefer catalog categoryKind (SCHOOL_UNIFORM | PE_UNIFORM | LCA_SHIRT).
+ * Name heuristics are fallback only when kind is missing.
+ *
+ * @param {string} categoryOrMerchandiseName
+ * @param {string} [categoryKind] RHET catalog categoryKind
+ */
+export function isUniformLikeCategory(categoryOrMerchandiseName, categoryKind) {
+  const kind = normalizeCategoryKind(categoryKind);
+  if (kind) {
+    if (isLearningKitCategoryKind(kind)) return false;
+    if (isUniformCategoryKind(kind)) return true;
+    if (kind === OTHER_CATEGORY_KIND) return false;
+  }
+  return isUniformLikeCategoryName(categoryOrMerchandiseName);
+}
+
+/**
+ * Request Stock / Create Type form mode from RHET kind (preferred) or name.
+ * @returns {'uniform'|'kit'|'other'}
+ */
+export function resolveRequestStockFormMode({ categoryName, categoryKind } = {}) {
+  const kind = normalizeCategoryKind(categoryKind);
+  if (isLearningKitCategoryKind(kind)) return 'kit';
+  if (isUniformCategoryKind(kind)) return 'uniform';
+  if (kind === OTHER_CATEGORY_KIND) return 'other';
+  if (isLearningKitCategory(categoryName)) return 'kit';
+  if (isUniformLikeCategoryName(categoryName)) return 'uniform';
+  return 'other';
+}
+
+/** Shirt / LCA Shirt / LCA_SHIRT — RHET type values are Logo 1 / Logo 2. */
+export function isLcaShirtCategory(categoryName, categoryKind) {
+  if (isLcaShirtCategoryKind(categoryKind)) return true;
+  const name = String(categoryName || '').trim().toLowerCase();
+  return name === 'shirt' || name === 'lca shirt';
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = value == null ? '' : String(value).trim();
+    if (text && text.toLowerCase() !== 'n/a' && text.toLowerCase() !== 'na') {
+      return text;
+    }
+  }
+  return null;
+}
+
+/**
+ * Secondary hint from RHET matchedSku patterns like SHI-U-LOGO1-XS.
+ * Never invent values when pattern does not match.
+ */
+export function parseUniformIdentityFromMatchedSku(sku) {
+  const raw = String(sku || '').trim();
+  if (!raw) return null;
+  const m = raw.match(/^SHI-([A-Za-z])-LOGO\s*(\d+)-([A-Za-z0-9]+)$/i);
+  if (!m) return null;
+  const genderCode = m[1].toUpperCase();
+  const genderMap = { U: 'Unisex', M: 'Male', F: 'Female' };
+  const gender = genderMap[genderCode] || null;
+  const type = `Logo ${m[2]}`;
+  let size = m[3];
+  // Normalize common size tokens
+  const sizeUpper = size.toUpperCase();
+  if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(sizeUpper)) {
+    size = sizeUpper;
+  } else if (sizeUpper === 'TEEN') {
+    size = 'Teen';
+  }
+  if (!gender || !type || !size) return null;
+  return { gender, type, size };
+}
+
+/**
+ * Resolve gender + type(Logo) + size for uniform fulfill.
+ * Order: local request fields → webhook payload → matchedSku parse.
+ */
+export function resolveUniformFulfillIdentity({ request = {}, payload = {} } = {}) {
+  const fromSku = parseUniformIdentityFromMatchedSku(
+    payload.matchedSku ||
+      request.inventory_matched_sku ||
+      request.inventory_requested_sku ||
+      request.sku
+  );
+  return {
+    gender: firstNonEmpty(
+      request.gender,
+      payload.gender,
+      payload.uniformGender,
+      fromSku?.gender
+    ),
+    type: firstNonEmpty(
+      request.type,
+      payload.type,
+      payload.itemType,
+      payload.uniformType,
+      fromSku?.type
+    ),
+    size: firstNonEmpty(
+      request.size,
+      payload.size,
+      payload.sizeLabel,
+      payload.uniformSize,
+      fromSku?.size
+    ),
+  };
 }
 
 export function mapCategoryNameToInventory(merchandiseName) {
@@ -271,7 +417,15 @@ export function mapTypeToInventory(type, merchandiseName = '') {
   if (!type) return undefined;
   const key = String(type).trim();
   // Exact RHET types pass through — never Polo → Shirt.
-  if (['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants'].includes(key)) {
+  // LCA_SHIRT uses Logo 1 / Logo 2 (not piece type "Shirt").
+  if (
+    ['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Logo 1', 'Logo 2'].includes(
+      key
+    )
+  ) {
+    return key;
+  }
+  if (isLcaShirtCategory(merchandiseName)) {
     return key;
   }
   const typeMap = isPeUniform(merchandiseName) ? PE_UNIFORM_TYPE_MAP : SCHOOL_UNIFORM_TYPE_MAP;
@@ -287,8 +441,10 @@ export function mapSizeToInventory(size) {
 export function mapSizeToLocal(size) {
   if (!size) return null;
   const key = String(size).trim();
-  // Prefer RHET-canonical XS/S/… when already canonical
-  if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(key)) {
+  // Prefer RHET-canonical XS/S/… / Teen when already canonical
+  if (
+    ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'Teen'].includes(key)
+  ) {
     return key;
   }
   return SIZE_TO_LOCAL[key] || key;
@@ -390,6 +546,7 @@ export function normalizeMerchandiseRequestInput(body = {}) {
   const itemName = String(body.item_name || body.itemName || '').trim();
   const sku = String(body.sku || '').trim();
   const merchandiseNameInput = String(body.merchandise_name || body.merchandiseName || '').trim();
+  const categoryKind = String(body.category_kind || body.categoryKind || '').trim() || null;
 
   // Prefer explicit RHET category; fall back to mapping local merchandise_name.
   const inventoryCategoryName =
@@ -399,8 +556,17 @@ export function normalizeMerchandiseRequestInput(body = {}) {
     return { error: 'RHET category is required' };
   }
 
+  const formMode = resolveRequestStockFormMode({
+    categoryName: inventoryCategoryName,
+    categoryKind,
+  });
+
   // Learning Kit: category + kit itemName/sku + components[] (BOM slots)
-  if (isLearningKitCategory(inventoryCategoryName) || isLearningKitCategory(merchandiseNameInput)) {
+  if (
+    formMode === 'kit' ||
+    isLearningKitCategory(inventoryCategoryName) ||
+    isLearningKitCategory(merchandiseNameInput)
+  ) {
     const resolvedItemName = itemName || '';
     if (!resolvedItemName && !sku) {
       return {
@@ -439,25 +605,35 @@ export function normalizeMerchandiseRequestInput(body = {}) {
     };
   }
 
-  const uniform = isUniformLikeCategory(inventoryCategoryName);
+  const uniform =
+    formMode === 'uniform' ||
+    isUniformLikeCategory(inventoryCategoryName, categoryKind);
   const gender = String(body.gender || '').trim() || null;
   const type = String(body.type || '').trim() || null;
   const size = String(body.size || '').trim() || null;
+  const lcaShirt = isLcaShirtCategory(inventoryCategoryName, categoryKind);
 
   if (uniform) {
     if (!gender || !type || !size) {
-      return { error: 'Gender, type, and size are required for uniform categories' };
+      return {
+        error: lcaShirt
+          ? 'Gender, logo (type), and size are required for Shirt / LCA Shirt items'
+          : 'Gender, type, and size are required for uniform categories',
+      };
     }
+    // Never map Logo 1/2 → Shirt; pass catalog type through for LCA_SHIRT.
+    const mappedType = mapTypeToInventory(type, inventoryCategoryName);
     return {
       inventory_category_name: inventoryCategoryName,
       inventory_item_name: null,
-      inventory_requested_sku: sku || null,
+      inventory_requested_sku: null,
       // Local branch stock labels (fulfill apply)
       merchandise_name: mapCategoryNameToLocal(inventoryCategoryName),
       gender: mapGenderToLocal(mapGenderToInventory(gender)),
-      type: mapTypeToInventory(type, inventoryCategoryName),
-      size: mapSizeToLocal(mapSizeToInventory(size)),
+      type: mappedType,
+      size: mapSizeToLocal(mapSizeToInventory(size)) || size,
       is_uniform: true,
+      category_kind: categoryKind,
     };
   }
 
@@ -499,7 +675,7 @@ export function assertInventoryItemHasMatchKey(item) {
     }
     return null;
   }
-  if (isUniformLikeCategory(item.categoryName)) {
+  if (isUniformLikeCategory(item.categoryName, item.categoryKind)) {
     if (!item.gender || !item.type || !item.size) {
       return 'Uniform requests require gender, type, and size';
     }

@@ -2,6 +2,7 @@
  * RHET Inventory catalog helpers for Merchandise → Request Stock.
  *
  * Source of truth is GET /merchandise-requests/inventory/catalog (CMS proxy).
+ * Prefer categories[].categoryKind for uniform vs non-uniform form mode.
  * Never invent category names — only use exact RHET categoryName / itemName / sku
  * and uniform gender · type · size values that exist on catalog items.
  */
@@ -11,19 +12,98 @@ import {
   serializeKitComponentsForApi,
 } from './learningKit';
 
-const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'Teen'];
+
+/** RHET kinds that require gender + type + size (not Item picker). */
+export const UNIFORM_CATEGORY_KINDS = Object.freeze([
+  'SCHOOL_UNIFORM',
+  'PE_UNIFORM',
+  'LCA_SHIRT',
+]);
+
+export const LEARNING_KIT_CATEGORY_KIND = 'LEARNING_KIT';
+export const OTHER_CATEGORY_KIND = 'OTHER';
+
+export function normalizeCategoryKind(categoryKind) {
+  return String(categoryKind || '').trim().toUpperCase();
+}
+
+export function isUniformCategoryKind(categoryKind) {
+  return UNIFORM_CATEGORY_KINDS.includes(normalizeCategoryKind(categoryKind));
+}
+
+export function isLearningKitCategoryKind(categoryKind) {
+  return normalizeCategoryKind(categoryKind) === LEARNING_KIT_CATEGORY_KIND;
+}
+
+export function isLcaShirtCategoryKind(categoryKind) {
+  return normalizeCategoryKind(categoryKind) === 'LCA_SHIRT';
+}
 
 /**
- * Uniform-like RHET categories: School Uniform, PE Uniform, LCA T-Shirt,
- * and any name ending with " uniform".
+ * Name-heuristic fallback when categoryKind is missing.
+ * Includes plain "Shirt" (RHET LCA_SHIRT) — name does not end with "uniform".
  */
-export function isUniformLikeCategory(categoryName) {
+export function isUniformLikeCategoryName(categoryName) {
   if (!categoryName) return false;
   const name = String(categoryName).trim().toLowerCase();
   if (isLearningKitMerchandiseName(name)) return false;
   if (name === 'school uniform' || name === 'pe uniform') return true;
-  if (name === 'lca t-shirt' || name === 'lca tshirt' || name === 'lca shirt') return true;
+  if (
+    name === 'lca t-shirt' ||
+    name === 'lca tshirt' ||
+    name === 'lca shirt' ||
+    name === 'shirt'
+  ) {
+    return true;
+  }
+  if (name.includes('lca') && name.includes('shirt')) return true;
   return name.endsWith(' uniform');
+}
+
+/**
+ * Prefer categoryKind; fall back to name heuristics when kind is missing.
+ * @param {string} categoryName
+ * @param {string} [categoryKind]
+ */
+export function isUniformLikeCategory(categoryName, categoryKind) {
+  const kind = normalizeCategoryKind(categoryKind);
+  if (kind) {
+    if (isLearningKitCategoryKind(kind)) return false;
+    if (isUniformCategoryKind(kind)) return true;
+    if (kind === OTHER_CATEGORY_KIND) return false;
+  }
+  return isUniformLikeCategoryName(categoryName);
+}
+
+/**
+ * @returns {'uniform'|'kit'|'other'}
+ */
+export function resolveRequestStockFormMode({ categoryName, categoryKind } = {}) {
+  const kind = normalizeCategoryKind(categoryKind);
+  if (isLearningKitCategoryKind(kind)) return 'kit';
+  if (isUniformCategoryKind(kind)) return 'uniform';
+  if (kind === OTHER_CATEGORY_KIND) return 'other';
+  if (isLearningKitMerchandiseName(categoryName)) return 'kit';
+  if (isUniformLikeCategoryName(categoryName)) return 'uniform';
+  return 'other';
+}
+
+/** Shirt / LCA_SHIRT — RHET type values are Logo 1 / Logo 2 (UI may label "Logo"). */
+export function isLcaShirtCategory(categoryName, categoryKind) {
+  if (isLcaShirtCategoryKind(categoryKind)) return true;
+  const name = String(categoryName || '').trim().toLowerCase();
+  return name === 'shirt' || name === 'lca shirt';
+}
+
+/** Look up categoryKind from unwrapped catalog categories. */
+export function findCatalogCategoryKind(categories, categoryName) {
+  const key = String(categoryName || '').trim().toLowerCase();
+  if (!key) return null;
+  const match = (categories || []).find(
+    (c) => String(c.categoryName || '').trim().toLowerCase() === key
+  );
+  return match?.categoryKind || null;
 }
 
 /** Parse catalog item.variation "Male · Polo · S" into structured fields. */
@@ -44,14 +124,38 @@ export function parseVariation(variation) {
 export function normalizeCatalogItem(item) {
   if (!item || typeof item !== 'object') return null;
   const fromVariation = parseVariation(item.variation);
+  const gender = String(
+    item.uniformGender ||
+      item.uniform_gender ||
+      item.gender ||
+      fromVariation.gender ||
+      ''
+  ).trim();
+  const type = String(
+    item.uniformType ||
+      item.uniform_type ||
+      item.type ||
+      fromVariation.type ||
+      ''
+  ).trim();
+  const size = String(
+    item.uniformSize ||
+      item.uniform_size ||
+      item.size ||
+      fromVariation.size ||
+      ''
+  ).trim();
   return {
     ...item,
     categoryName: String(item.categoryName || item.category_name || '').trim(),
+    categoryKind: normalizeCategoryKind(
+      item.categoryKind || item.category_kind || ''
+    ) || null,
     itemName: String(item.itemName || item.item_name || '').trim(),
     sku: String(item.sku || '').trim(),
-    gender: String(item.gender || fromVariation.gender || '').trim(),
-    type: String(item.type || fromVariation.type || '').trim(),
-    size: String(item.size || fromVariation.size || '').trim(),
+    gender,
+    type,
+    size,
     stocks: item.stocks ?? item.stock ?? null,
     status: item.status || '',
     variation: item.variation || '',
@@ -69,6 +173,8 @@ export function unwrapCatalogPayload(payload) {
       .map((c) => ({
         categoryId: c.categoryId || c.category_id || null,
         categoryName: String(c.categoryName || c.category_name || '').trim(),
+        categoryKind:
+          normalizeCategoryKind(c.categoryKind || c.category_kind || '') || null,
       }))
       .filter((c) => c.categoryName),
     items: items.map(normalizeCatalogItem).filter(Boolean),
@@ -113,7 +219,10 @@ export function getUniformTypeOptions(items, categoryName, gender) {
     const g = String(gender).trim().toLowerCase();
     rows = rows.filter((r) => String(r.gender || '').trim().toLowerCase() === g);
   }
+  // Prefer catalog order; Logo 1/2 first for Shirt, then classic piece types
   return uniqueSorted(rows.map((r) => r.type), [
+    'Logo 1',
+    'Logo 2',
     'Polo',
     'Short',
     'Blouse',
@@ -210,6 +319,7 @@ export function createEmptyCatalogRequestLine() {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     category_name: '',
+    category_kind: '',
     gender: '',
     type: '',
     size: '',
@@ -227,14 +337,20 @@ export function createEmptyCatalogRequestLine() {
  */
 export function buildCatalogRequestPayload(line, requestReason) {
   const categoryName = String(line.category_name || '').trim();
+  const categoryKind = String(line.category_kind || '').trim() || null;
   const qty = parseInt(line.quantity, 10);
+  const mode = resolveRequestStockFormMode({
+    categoryName,
+    categoryKind,
+  });
   const base = {
     category_name: categoryName,
+    category_kind: categoryKind,
     requested_quantity: qty,
     request_reason: String(requestReason || '').trim(),
   };
 
-  if (isLearningKitMerchandiseName(categoryName)) {
+  if (mode === 'kit' || isLearningKitMerchandiseName(categoryName)) {
     return {
       ...base,
       item_name: String(line.item_name || '').trim() || null,
@@ -246,7 +362,7 @@ export function buildCatalogRequestPayload(line, requestReason) {
     };
   }
 
-  if (isUniformLikeCategory(categoryName)) {
+  if (mode === 'uniform' || isUniformLikeCategory(categoryName, categoryKind)) {
     return {
       ...base,
       gender: String(line.gender || '').trim() || null,

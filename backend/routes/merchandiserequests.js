@@ -18,6 +18,7 @@ import {
   looksLikeUuid,
   isLearningKitCategory,
   normalizeMerchandiseRequestInput,
+  resolveUniformFulfillIdentity,
 } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock, findExistingMerchandiseStockRow } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
@@ -425,10 +426,9 @@ router.post(
       .optional({ nullable: true, checkFalsy: true })
       .isIn(['Men', 'Women', 'Unisex', 'Male', 'Female', 'Boys', 'Girls', null, ''])
       .withMessage('Gender must be Male/Female/Unisex (or Men/Women)'),
-    body('type')
-      .optional({ nullable: true, checkFalsy: true })
-      .isIn(['Polo', 'Short', 'Shirt', 'Pants', 'Blouse', 'Skirt', 'Top', 'Bottom', null, ''])
-      .withMessage('Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants (or legacy Top, Bottom)'),
+    // Catalog-driven: School/PE piece types + LCA_SHIRT Logo 1/Logo 2 (not PE "Shirt")
+    body('type').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('category_kind').optional({ nullable: true, checkFalsy: true }).trim(),
     handleValidationErrors,
   ],
   requireRole('Admin'),
@@ -849,7 +849,29 @@ router.post(
         });
       }
 
-      const stockResult = await applyMerchandiseRequestStock(client, request);
+      const identity = resolveUniformFulfillIdentity({
+        request,
+        payload: remote.data || {},
+      });
+      const stockResult = await applyMerchandiseRequestStock(client, {
+        ...request,
+        inventory_matched_sku:
+          remote.data?.matchedSku || request.inventory_matched_sku || null,
+        inventory_category_name:
+          remote.data?.categoryName ||
+          remote.data?.category_name ||
+          request.inventory_category_name ||
+          null,
+        gender: identity.gender,
+        type: identity.type,
+        size: identity.size,
+      });
+      if (stockResult?.merchandiseId) {
+        await client.query(
+          `UPDATE merchandiserequestlogtbl SET merchandise_id = $1 WHERE request_id = $2`,
+          [stockResult.merchandiseId, request.request_id]
+        );
+      }
       const updated = await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
@@ -954,12 +976,29 @@ router.put(
       const finalPrice = parseFloat(price);
 
       // Always use the same fulfill applier as RHET webhook (item-aware for Workbooks/etc.)
-      const stockResult = await applyMerchandiseRequestStock(client, request, {
-        price: finalPrice,
-      });
+      const identity = resolveUniformFulfillIdentity({ request, payload: {} });
+      const stockResult = await applyMerchandiseRequestStock(
+        client,
+        {
+          ...request,
+          gender: identity.gender,
+          type: identity.type,
+          size: identity.size,
+        },
+        {
+          price: finalPrice,
+        }
+      );
       console.log(
         `✅ Stock ${stockResult.action} for request ${id}: merchandise_id=${stockResult.merchandiseId}, qty=${stockResult.newQuantity}`
       );
+
+      if (stockResult?.merchandiseId) {
+        await client.query(
+          `UPDATE merchandiserequestlogtbl SET merchandise_id = $1 WHERE request_id = $2`,
+          [stockResult.merchandiseId, id]
+        );
+      }
 
       // Update request status to Approved
       const updateResult = await runIgnoringMissingUpdatedAt(

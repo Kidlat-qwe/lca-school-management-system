@@ -34,21 +34,11 @@ frontend/
 │   ├── App.jsx              # Main app component
 │   ├── main.jsx             # Entry point
 │   └── index.css            # Global styles
-├── public/                  # Static assets (favicon.ico, LCA Icon.png, …)
-├── Dockerfile               # Coolify production image (Vite build + nginx SPA)
-├── nginx.conf               # SPA try_files → index.html
-├── nixpacks.toml            # Optional Coolify Nixpacks build hints
-├── .dockerignore
+├── public/                  # Static assets
 ├── tailwind.config.js       # Tailwind configuration
 ├── postcss.config.js        # PostCSS configuration
 └── vite.config.js           # Vite configuration
 ```
-
-### Coolify (cms.lca-app.com)
-
-Prefer **Build Pack = Dockerfile**, Base Directory `/frontend`, port **80**.
-See `docs/deployment/COOLIFY_DEPLOYMENT.md` section 5. Do not use
-`npm run build:prod` as the Coolify **Start Command** (causes root 404).
 
 ## Setup Instructions
 

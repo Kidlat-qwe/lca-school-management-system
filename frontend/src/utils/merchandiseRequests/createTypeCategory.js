@@ -5,7 +5,12 @@
  * Source of truth: GET /merchandise-requests/inventory/catalog (CMS → RHET proxy).
  */
 
-import { isUniformLikeCategory } from './catalogOptions';
+import {
+  isUniformLikeCategory,
+  resolveRequestStockFormMode,
+  isLcaShirtCategory,
+  findCatalogCategoryKind,
+} from './catalogOptions';
 import {
   isTshirtMerchandiseName,
   isUniformMerchandiseName,
@@ -67,17 +72,30 @@ export function isInventoryIntegrationDisabledError(err) {
 /**
  * Defaults after picking a RHET category for a new CMS merchandise type.
  * Stores exact RHET categoryName as merchandise_name.
+ * Prefer categoryKind from catalog when available.
+ *
+ * @param {string} categoryName
+ * @param {{ categoryKind?: string, categories?: Array }} [opts]
  */
-export function applyCreateTypeCategoryDefaults(categoryName) {
+export function applyCreateTypeCategoryDefaults(categoryName, opts = {}) {
   const name = String(categoryName || '').trim();
+  const categoryKind =
+    opts.categoryKind ||
+    findCatalogCategoryKind(opts.categories || [], name) ||
+    null;
+  const mode = resolveRequestStockFormMode({ categoryName: name, categoryKind });
   const uniform =
-    isUniformLikeCategory(name) || isUniformMerchandiseName(name);
-  const tshirt = isTshirtMerchandiseName(name);
+    mode === 'uniform' ||
+    isUniformLikeCategory(name, categoryKind) ||
+    isUniformMerchandiseName(name);
+  const lcaShirt = isLcaShirtCategory(name, categoryKind);
+  // Legacy LCA T-Shirt only — never default type "Shirt" for LCA_SHIRT / "Shirt"
+  const legacyTshirt = isTshirtMerchandiseName(name) && !lcaShirt;
 
   return {
     merchandise_name: name,
-    gender: tshirt ? 'Unisex' : '',
-    type: tshirt ? 'Shirt' : '',
+    gender: lcaShirt || legacyTshirt ? 'Unisex' : '',
+    type: '',
     size: '',
     requiresSizing: Boolean(uniform),
   };

@@ -25,6 +25,9 @@ import {
   createEmptyCatalogRequestLine,
   unwrapCatalogPayload,
   isUniformLikeCategory,
+  isLcaShirtCategory,
+  resolveRequestStockFormMode,
+  findCatalogCategoryKind,
   getCatalogItemsForCategory,
   getUniformGenderOptions,
   getUniformTypeOptions,
@@ -119,7 +122,9 @@ const AdminMerchandise = () => {
   const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
 
   const applyRhetCategoryToCreateForm = (categoryName) => {
-    const defaults = applyCreateTypeCategoryDefaults(categoryName);
+    const defaults = applyCreateTypeCategoryDefaults(categoryName, {
+      categories: inventoryCatalog.categories,
+    });
     setFormData((prev) => ({
       ...prev,
       merchandise_name: defaults.merchandise_name,
@@ -434,6 +439,8 @@ const AdminMerchandise = () => {
         const updated = { ...line, [field]: value };
 
         if (field === 'category_name') {
+          updated.category_kind =
+            findCatalogCategoryKind(inventoryCatalog.categories, value) || '';
           updated.gender = '';
           updated.type = '';
           updated.size = '';
@@ -743,17 +750,20 @@ const AdminMerchandise = () => {
       requiresUniformPieceFields(name);
     const isUniform = requiresUniformPieceFields(name);
 
-    if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && needsSizing && !formData.size?.trim()) {
-      errors.size = 'Size is required for this merchandise type';
-    }
-
-    if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && isUniform) {
+    // Shirt / uniforms: Gender + Type/Logo + Size required for type create AND add stock
+    // (never allow blank "Unspecified piece" shells).
+    if (!editingMerchandiseType && isUniform) {
+      if (!formData.size?.trim() || ['n/a', 'na'].includes(formData.size.trim().toLowerCase())) {
+        errors.size = 'Size is required for uniforms (cannot be N/A)';
+      }
       if (!formData.gender?.trim()) {
         errors.gender = 'Gender is required for uniforms';
       }
       if (!formData.type?.trim()) {
-        errors.type = 'Piece is required';
+        errors.type = isLcaShirtCategory(name) ? 'Logo is required' : 'Piece is required';
       }
+    } else if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && needsSizing && !formData.size?.trim()) {
+      errors.size = 'Size is required for this merchandise type';
     }
 
     if (
@@ -820,9 +830,24 @@ const AdminMerchandise = () => {
       if (categoryName && isLearningKitMerchandiseName(categoryName)) {
         const kitErr = validateKitLineComponents(line);
         if (kitErr) row.item_name = kitErr;
-      } else if (categoryName && isUniformLikeCategory(categoryName)) {
+      } else if (
+        categoryName &&
+        resolveRequestStockFormMode({
+          categoryName,
+          categoryKind:
+            line.category_kind ||
+            findCatalogCategoryKind(inventoryCatalog.categories, categoryName),
+        }) === 'uniform'
+      ) {
+        const lcaShirt = isLcaShirtCategory(
+          categoryName,
+          line.category_kind ||
+            findCatalogCategoryKind(inventoryCatalog.categories, categoryName)
+        );
         if (!(line.gender || '').trim()) row.gender = 'Gender is required';
-        if (!(line.type || '').trim()) row.type = 'Type is required';
+        if (!(line.type || '').trim()) {
+          row.type = lcaShirt ? 'Logo is required' : 'Type is required';
+        }
         if (!(line.size || '').trim()) row.size = 'Size is required';
       } else if (categoryName) {
         if (!(line.item_name || '').trim() || !(line.sku || '').trim()) {
@@ -1104,7 +1129,10 @@ const AdminMerchandise = () => {
       const failures = [];
       for (let i = 0; i < payloads.length; i += 1) {
         const payload = payloads[i];
-        const label = isUniformLikeCategory(payload.category_name)
+        const label = isUniformLikeCategory(
+          payload.category_name,
+          payload.category_kind
+        )
           ? `${payload.category_name} ${payload.gender || ''} ${payload.type || ''} ${payload.size || ''}`.trim()
           : `${payload.category_name} / ${payload.item_name || payload.sku || 'item'}`;
         try {
@@ -1750,8 +1778,22 @@ const AdminMerchandise = () => {
                       <tbody className="bg-white divide-y divide-gray-100">
                         {bulkRequestLines.map((line, rowIndex) => {
                           const lineErr = bulkLineErrors[line.id] || {};
-                          const isUniform = isUniformLikeCategory(line.category_name);
-                          const isLearningKit = isLearningKitMerchandiseName(line.category_name);
+                          const categoryKind =
+                            line.category_kind ||
+                            findCatalogCategoryKind(
+                              inventoryCatalog.categories,
+                              line.category_name
+                            );
+                          const formMode = resolveRequestStockFormMode({
+                            categoryName: line.category_name,
+                            categoryKind,
+                          });
+                          const isUniform = formMode === 'uniform';
+                          const isLearningKit = formMode === 'kit';
+                          const lcaShirt = isLcaShirtCategory(
+                            line.category_name,
+                            categoryKind
+                          );
                           const genderOpts = getUniformGenderOptions(
                             inventoryCatalog.items,
                             line.category_name
@@ -1843,10 +1885,7 @@ const AdminMerchandise = () => {
                                         aria-label={`Gender row ${rowIndex + 1}`}
                                       >
                                         <option value="">Gender</option>
-                                        {(genderOpts.length
-                                          ? genderOpts
-                                          : ['Male', 'Female', 'Unisex']
-                                        ).map((g) => (
+                                        {genderOpts.map((g) => (
                                           <option key={g} value={g}>
                                             {g}
                                           </option>
@@ -1854,6 +1893,11 @@ const AdminMerchandise = () => {
                                       </select>
                                       {lineErr.gender && (
                                         <p className="mt-1 text-[11px] text-red-600">{lineErr.gender}</p>
+                                      )}
+                                      {!genderOpts.length && (
+                                        <p className="mt-1 text-[11px] text-amber-700">
+                                          No gender options in catalog for this category.
+                                        </p>
                                       )}
                                     </div>
                                     <div>
@@ -1865,13 +1909,16 @@ const AdminMerchandise = () => {
                                         className={`input-field text-sm py-1.5 w-full ${
                                           lineErr.type ? 'border-red-500' : ''
                                         }`}
-                                        aria-label={`Type row ${rowIndex + 1}`}
+                                        aria-label={
+                                          lcaShirt
+                                            ? `Logo row ${rowIndex + 1}`
+                                            : `Type row ${rowIndex + 1}`
+                                        }
                                       >
-                                        <option value="">Type</option>
-                                        {(typeOpts.length
-                                          ? typeOpts
-                                          : ['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants']
-                                        ).map((t) => (
+                                        <option value="">
+                                          {lcaShirt ? 'Logo' : 'Type'}
+                                        </option>
+                                        {typeOpts.map((t) => (
                                           <option key={t} value={t}>
                                             {t}
                                           </option>
@@ -1879,6 +1926,11 @@ const AdminMerchandise = () => {
                                       </select>
                                       {lineErr.type && (
                                         <p className="mt-1 text-[11px] text-red-600">{lineErr.type}</p>
+                                      )}
+                                      {!typeOpts.length && (
+                                        <p className="mt-1 text-[11px] text-amber-700">
+                                          No {lcaShirt ? 'logo' : 'type'} options in catalog.
+                                        </p>
                                       )}
                                     </div>
                                     <div>
@@ -1893,10 +1945,7 @@ const AdminMerchandise = () => {
                                         aria-label={`Size row ${rowIndex + 1}`}
                                       >
                                         <option value="">Size</option>
-                                        {(sizeOpts.length
-                                          ? sizeOpts
-                                          : ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']
-                                        ).map((sz) => (
+                                        {sizeOpts.map((sz) => (
                                           <option key={sz} value={sz}>
                                             {sz}
                                           </option>
@@ -1904,6 +1953,11 @@ const AdminMerchandise = () => {
                                       </select>
                                       {lineErr.size && (
                                         <p className="mt-1 text-[11px] text-red-600">{lineErr.size}</p>
+                                      )}
+                                      {!sizeOpts.length && (
+                                        <p className="mt-1 text-[11px] text-amber-700">
+                                          No size options in catalog for this selection.
+                                        </p>
                                       )}
                                     </div>
                                   </div>
@@ -2054,13 +2108,36 @@ const AdminMerchandise = () => {
   }
   // Show stocks view
   if (viewingStocksFor) {
-    const stocks = getStocksByMerchandiseName(viewingStocksFor);
+    const rawStocks = getStocksByMerchandiseName(viewingStocksFor);
     const isUniformStocks = isUniformStockCategory(viewingStocksFor);
     const isItemNamedStocks = isItemNamedStockCategory(viewingStocksFor);
+    // Hide empty legacy blank shells (qty 0, no gender/type) — fulfill must not recreate these
+    const stocks = isUniformStocks
+      ? rawStocks.filter((s) => {
+          const blank =
+            !String(s.gender || '').trim() &&
+            !String(s.type || '').trim() &&
+            (!String(s.size || '').trim() ||
+              ['n/a', 'na'].includes(String(s.size || '').trim().toLowerCase()));
+          const qty =
+            s.quantity == null || s.quantity === '' ? 0 : parseInt(s.quantity, 10) || 0;
+          if (blank && qty <= 0) return false;
+          return true;
+        })
+      : rawStocks;
     const showSizeColumn = isUniformStocks && requiresSizingForMerchandise(viewingStocksFor);
     const showGenderTypeColumns = isUniformStocks;
     const pieceCounts = isUniformStocks ? countUniformPiecesByType(stocks) : null;
     const pieceLabels = isUniformStocks ? getUniformPieceLabels(viewingStocksFor) : null;
+    const needsRepairBlankCount = isUniformStocks
+      ? stocks.filter((s) => {
+          const blank =
+            !String(s.gender || '').trim() && !String(s.type || '').trim();
+          const qty =
+            s.quantity == null || s.quantity === '' ? 0 : parseInt(s.quantity, 10) || 0;
+          return blank && qty > 0;
+        }).length
+      : 0;
     const genderFilterOptions = [
       ...new Set(
         stocks
@@ -2148,7 +2225,9 @@ const AdminMerchandise = () => {
                   </span>
                   {pieceCounts.unspecified > 0 && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">
-                      Unspecified piece: {pieceCounts.unspecified}
+                      {needsRepairBlankCount > 0
+                        ? `Needs repair: ${needsRepairBlankCount} blank row(s) with qty`
+                        : `Unspecified piece: ${pieceCounts.unspecified}`}
                     </span>
                   )}
                 </div>

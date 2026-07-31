@@ -1116,6 +1116,7 @@ export function applyPaymentEnrollmentToBranchBreakdown(branchBreakdown, payment
       upsell_count: paymentRow?.upsell_count ?? 0,
       reserved_count: paymentRow?.reserved_count ?? 0,
       completed_count: paymentRow?.completed_count ?? 0,
+      active_completed_count: paymentRow?.active_completed_count ?? 0,
       rejoin_count: paymentRow?.rejoin_count ?? 0,
       dropped_unenrolled_count: paymentRow?.dropped_unenrolled_count ?? 0,
       retention_base_count: paymentRow?.retention_base_count ?? 0,
