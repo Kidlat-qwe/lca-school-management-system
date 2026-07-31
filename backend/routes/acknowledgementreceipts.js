@@ -2848,11 +2848,11 @@ router.put(
       if (Object.prototype.hasOwnProperty.call(raw, 'payment_method')) {
         pushUpdate('payment_method', raw.payment_method || null);
       }
-      // Preserve issue_date after Finance has returned this AR (sale / EOD attribution must stay fixed).
-      // While status is Returned, or notes still contain the "[Returned]" tag (after resubmit to Submitted),
-      // ignore client issue_date — edits + resubmit must not move the AR to another calendar day.
+      // Payment date (ar.issue_date): editable while on Return tab (awaiting branch correction),
+      // same as Payment Logs return-fix. After resubmit, keep fixed for EOD / report history.
       const issueDateLocked =
-        isReturnedForCorrection || notesText.includes('[Returned]');
+        String(ack.prospect_student_notes || '').includes('[Returned]') &&
+        !isReturnedForCorrection;
       if (Object.prototype.hasOwnProperty.call(raw, 'issue_date') && !issueDateLocked) {
         pushUpdate('issue_date', raw.issue_date || null);
       }
@@ -3024,9 +3024,16 @@ router.put(
           ['reference_number', raw.reference_number],
           ['payment_attachment_url', raw.payment_attachment_url],
           ['payment_method', raw.payment_method],
+          ['issue_date', raw.issue_date],
         ];
         for (const [column, rawVal] of sharedFieldMap) {
           if (!Object.prototype.hasOwnProperty.call(raw, column)) continue;
+          if (column === 'issue_date') {
+            // Only mirror payment date onto the paired row when the leader update allowed it.
+            if (issueDateLocked) continue;
+            pushShared(column, rawVal || null);
+            continue;
+          }
           if (column === 'prospect_student_contact') {
             pushShared(column, String(rawVal || '').trim() || null);
           } else if (column === 'prospect_student_phone') {
@@ -3043,6 +3050,32 @@ router.put(
              SET ${sharedUpdates.join(', ')}
              WHERE ack_receipt_id = ANY($${sharedParams.length}::int[])`,
             sharedParams
+          );
+        }
+      }
+
+      // Keep linked payment payment-date in sync (cash / auto-paid AR) when branch corrects it.
+      if (
+        !issueDateLocked &&
+        Object.prototype.hasOwnProperty.call(raw, 'issue_date') &&
+        raw.issue_date
+      ) {
+        const paymentIdsRes = await query(
+          `SELECT DISTINCT payment_id
+           FROM acknowledgement_receiptstbl
+           WHERE ack_receipt_id = ANY($1::int[])
+             AND payment_id IS NOT NULL`,
+          [[Number(id), ...syncIds]]
+        );
+        const paymentIds = paymentIdsRes.rows
+          .map((r) => Number(r.payment_id))
+          .filter((pid) => Number.isInteger(pid) && pid > 0);
+        if (paymentIds.length > 0) {
+          await query(
+            `UPDATE paymenttbl
+             SET issue_date = $1::date
+             WHERE payment_id = ANY($2::int[])`,
+            [raw.issue_date, paymentIds]
           );
         }
       }

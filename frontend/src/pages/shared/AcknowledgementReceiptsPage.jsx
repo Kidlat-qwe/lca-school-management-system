@@ -380,9 +380,16 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     return latest;
   };
 
-  /** Finance return adds "[Returned]" to notes; issue_date must stay fixed for EOD (including after resubmit). */
-  const isAckIssueDateLocked = (receipt) =>
-    !!receipt && isArReturnedForCorrection(receipt);
+  /**
+   * Payment date (AR issue_date) lock:
+   * - Editable while Finance returned the AR for correction (Return tab / resubmit), like Payment Logs.
+   * - Locked after resubmit so EOD history keeps the corrected date.
+   */
+  const isAckIssueDateLocked = (receipt) => {
+    if (!receipt) return false;
+    if (isArReturnedForCorrection(receipt)) return false;
+    return String(receipt.prospect_student_notes || '').includes('[Returned]');
+  };
 
   useEffect(() => {
     if (suppressAutoListFetchRef.current) return;
@@ -1497,7 +1504,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
 
   const handleViewInputChange = (e) => {
     const { name, value } = e.target;
-    if (name === 'issue_date') return;
+    if (name === 'issue_date' && !canResubmitViewReceipt) return;
     if (name === 'package_id') {
       const pkg = packages.find((p) => String(p.package_id) === String(value));
       const packagePrice = Number(pkg?.package_price || 0);
@@ -1557,9 +1564,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       viewFormData.issue_date != null && String(viewFormData.issue_date).trim() !== ''
         ? String(viewFormData.issue_date).slice(0, 10)
         : '';
-    const issueYmd = fromReceipt || fromForm;
-    if (!issueYmd) {
-      appAlert('Issue date is missing on this receipt.');
+    // Optional payment-date correction: only override when the user picks a date.
+    const issueYmd = fromForm || fromReceipt;
+    if (!fromReceipt && !fromForm) {
+      appAlert('This receipt has no payment date on file. Please select a payment date before resubmitting.');
       return;
     }
     const tipNum =
@@ -1612,7 +1620,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         payload.discount_amount = discountNum > 0 ? discountNum : 0;
         payload.package_id = pkgId;
       }
-      if (!isAckIssueDateLocked(viewReceipt)) {
+      // Only send payment date when the user filled the optional field (or receipt has none).
+      if (fromForm) {
+        payload.issue_date = fromForm;
+      } else if (!fromReceipt) {
         payload.issue_date = issueYmd;
       }
 
@@ -2224,8 +2235,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       level_tag: leader.level_tag || '',
       reference_number: leader.reference_number || phase1?.reference_number || '',
       payment_method: leader.payment_method || '',
-      issue_date:
-        leader.issue_date != null && String(leader.issue_date).trim() !== ''
+      // Return/resubmit: leave blank — only set if the branch needs to change the date.
+      issue_date: asResubmit
+        ? ''
+        : leader.issue_date != null && String(leader.issue_date).trim() !== ''
           ? String(leader.issue_date).slice(0, 10)
           : '',
       tip_amount:
@@ -2286,8 +2299,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       level_tag: receipt.level_tag || '',
       reference_number: receipt.reference_number || '',
       payment_method: receipt.payment_method || '',
-      issue_date:
-        receipt.issue_date != null && String(receipt.issue_date).trim() !== ''
+      // Return/resubmit View: leave blank until the branch chooses a new payment date.
+      issue_date: canBranchResubmitReturnedAr(receipt)
+        ? ''
+        : receipt.issue_date != null && String(receipt.issue_date).trim() !== ''
           ? String(receipt.issue_date).slice(0, 10)
           : '',
       tip_amount:
@@ -2390,8 +2405,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     if (!isPaymentMethodSelected(editFormData.payment_method)) {
       errors.payment_method = PAYMENT_METHOD_REQUIRED_MESSAGE;
     }
-    if (!isAckIssueDateLocked(editingReceiptMeta) && !(editFormData.issue_date || '').trim()) {
-      errors.issue_date = 'Issue date is required';
+    // Payment date is optional on Return/resubmit (leave blank to keep the recorded date).
+    if (
+      !isResubmitFlow &&
+      !isAckIssueDateLocked(editingReceiptMeta) &&
+      !(editFormData.issue_date || '').trim()
+    ) {
+      errors.issue_date = 'Payment date is required';
     }
     if (editFormData.tip_amount !== '' && Number(editFormData.tip_amount) < 0) {
       errors.tip_amount = 'Tip amount cannot be negative';
@@ -2422,7 +2442,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
         tip_amount: editFormData.tip_amount === '' ? 0 : Math.max(0, parseFloat(editFormData.tip_amount || '0')),
         payment_attachment_url: (editFormData.payment_attachment_url || '').trim() || null,
       };
-      if (!isAckIssueDateLocked(editingReceiptMeta)) {
+      if (
+        !isAckIssueDateLocked(editingReceiptMeta) &&
+        (editFormData.issue_date || '').trim()
+      ) {
         payload.issue_date = editFormData.issue_date;
       }
       if (isResubmitFlow && editingReceiptMeta?.ar_type === 'Package' && !editingPairedReceiptMeta) {
@@ -5190,23 +5213,30 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                   </div>
 
                   <div>
-                    <label className="label-field text-xs">Issue Date <span className="text-red-500">*</span></label>
+                    <label htmlFor="ar-edit-payment-date" className="label-field text-xs">
+                      Payment date
+                    </label>
                     <input
+                      id="ar-edit-payment-date"
                       type="date"
                       name="issue_date"
                       value={editFormData.issue_date}
                       onChange={handleEditInputChange}
                       readOnly={isAckIssueDateLocked(editingReceiptMeta)}
                       tabIndex={isAckIssueDateLocked(editingReceiptMeta) ? -1 : undefined}
-                      className={`input-field text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''} ${isAckIssueDateLocked(editingReceiptMeta) ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      className={`input-field mt-1 max-w-xs text-sm ${editFormErrors.issue_date ? 'border-red-500' : ''} ${isAckIssueDateLocked(editingReceiptMeta) ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                       disabled={editSaving}
                     />
-                    {isAckIssueDateLocked(editingReceiptMeta) ? (
-                      <p className="mt-1 text-xs text-gray-500">
-                        Original issue date cannot be changed after Finance returned this acknowledgement receipt (used for daily summaries and reports), including after you resubmit.
-                      </p>
-                    ) : null}
-                    {editFormErrors.issue_date && <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>}
+                    <p className="mt-1 text-xs text-gray-500">
+                      {isAckIssueDateLocked(editingReceiptMeta)
+                        ? 'Payment date is locked after resubmit (used for daily summaries and reports).'
+                        : isResubmitFlow
+                          ? 'Optional — leave blank to keep the recorded payment date, or set a new date if needed.'
+                          : 'Adjust the payment date if needed.'}
+                    </p>
+                    {editFormErrors.issue_date && (
+                      <p className="mt-1 text-xs text-red-500">{editFormErrors.issue_date}</p>
+                    )}
                   </div>
 
                   <div>
@@ -5490,45 +5520,80 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       />
                     </div>
                     {canResubmitViewReceipt ? (
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                          <label className="label-field text-xs">
-                            Payment Method <span className="text-red-500">*</span>
-                          </label>
-                          <PaymentMethodSelect
-                            name="payment_method"
-                            value={viewFormData.payment_method}
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="label-field text-xs">
+                              Payment Method <span className="text-red-500">*</span>
+                            </label>
+                            <PaymentMethodSelect
+                              name="payment_method"
+                              value={viewFormData.payment_method}
+                              onChange={handleViewInputChange}
+                              disabled={viewResubmitSaving}
+                            />
+                          </div>
+                          <PaymentReferenceNumberField
+                            paymentMethod={viewFormData.payment_method}
+                            name="reference_number"
+                            value={viewFormData.reference_number}
                             onChange={handleViewInputChange}
                             disabled={viewResubmitSaving}
+                            requiredMark={false}
                           />
                         </div>
-                        <PaymentReferenceNumberField
-                          paymentMethod={viewFormData.payment_method}
-                          name="reference_number"
-                          value={viewFormData.reference_number}
-                          onChange={handleViewInputChange}
-                          disabled={viewResubmitSaving}
-                          requiredMark={false}
-                        />
+                        <div>
+                          <label htmlFor="ar-view-merch-payment-date" className="label-field text-xs">
+                            Payment date
+                          </label>
+                          <input
+                            id="ar-view-merch-payment-date"
+                            type="date"
+                            name="issue_date"
+                            value={viewFormData.issue_date || ''}
+                            onChange={handleViewInputChange}
+                            className="input-field mt-1 max-w-xs text-sm"
+                            disabled={viewResubmitSaving}
+                          />
+                          <p className="mt-1 text-xs text-gray-500">
+                            Optional — leave blank to keep the recorded payment date, or set a new date if needed.
+                          </p>
+                        </div>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                          <label className="label-field text-xs">Payment Method</label>
-                          <input
-                            type="text"
-                            readOnly
-                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                            value={viewReceipt.payment_method || ''}
-                          />
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="label-field text-xs">Payment Method</label>
+                            <input
+                              type="text"
+                              readOnly
+                              className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                              value={viewReceipt.payment_method || ''}
+                            />
+                          </div>
+                          <div>
+                            <label className="label-field text-xs">Reference #</label>
+                            <input
+                              type="text"
+                              readOnly
+                              className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                              value={viewReceipt.reference_number || ''}
+                            />
+                          </div>
                         </div>
                         <div>
-                          <label className="label-field text-xs">Reference #</label>
+                          <label className="label-field text-xs">Payment date</label>
                           <input
-                            type="text"
+                            type="date"
                             readOnly
-                            className="input-field text-sm bg-gray-100 cursor-not-allowed"
-                            value={viewReceipt.reference_number || ''}
+                            tabIndex={-1}
+                            className="input-field mt-1 max-w-xs text-sm bg-gray-100 cursor-not-allowed"
+                            value={
+                              viewReceipt?.issue_date
+                                ? String(viewReceipt.issue_date).slice(0, 10)
+                                : ''
+                            }
                           />
                         </div>
                       </div>
@@ -5679,23 +5744,39 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                         />
                       </div>
                       <div>
-                        <label className="label-field text-xs">Issue Date</label>
+                        <label htmlFor="ar-view-package-payment-date" className="label-field text-xs">
+                          Payment date
+                        </label>
                         <input
+                          id="ar-view-package-payment-date"
                           type="date"
                           name="issue_date"
-                          readOnly
-                          tabIndex={-1}
-                          className="input-field text-sm bg-gray-100 cursor-not-allowed"
+                          readOnly={!canResubmitViewReceipt}
+                          tabIndex={canResubmitViewReceipt ? undefined : -1}
+                          className={`input-field mt-1 max-w-xs text-sm ${
+                            canResubmitViewReceipt ? '' : 'bg-gray-100 cursor-not-allowed'
+                          }`}
                           value={
-                            viewFormData.issue_date ||
-                            (viewReceipt?.issue_date ? String(viewReceipt.issue_date).slice(0, 10) : '')
+                            canResubmitViewReceipt
+                              ? viewFormData.issue_date || ''
+                              : viewFormData.issue_date ||
+                                (viewReceipt?.issue_date
+                                  ? String(viewReceipt.issue_date).slice(0, 10)
+                                  : '')
                           }
-                          aria-readonly="true"
-                          disabled={viewResubmitSaving}
+                          onChange={canResubmitViewReceipt ? handleViewInputChange : undefined}
+                          aria-readonly={!canResubmitViewReceipt}
+                          disabled={viewResubmitSaving || !canResubmitViewReceipt}
                         />
-                        <p className="mt-1 text-xs text-gray-500">
-                          Issue date stays as recorded on this receipt (not changed on resubmit).
-                        </p>
+                        {canResubmitViewReceipt ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            Optional — leave blank to keep the recorded payment date, or set a new date if needed.
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-xs text-gray-500">
+                            Payment date as recorded on this receipt.
+                          </p>
+                        )}
                       </div>
                     </div>
                     {canResubmitViewReceipt ? (
