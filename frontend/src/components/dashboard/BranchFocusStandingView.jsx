@@ -43,6 +43,7 @@ const FOCUS_KPI_CARDS = [
   { key: 're_enrollment_count', label: 'Re-enrolled', format: (v) => formatNumber(v) },
   { key: 'rejoin_count', label: 'Rejoin', format: (v) => formatNumber(v) },
   { key: 'upsell_count', label: 'Upsell', format: (v) => formatNumber(v) },
+  { key: 'active_completed_count', label: 'Completed', format: (v) => formatNumber(v) },
   { key: 'active_students', label: 'Active Students', format: (v) => formatNumber(v) },
 ];
 

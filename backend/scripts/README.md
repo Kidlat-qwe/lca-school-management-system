@@ -775,6 +775,22 @@ node scripts/removeAndreaSalurioInactiveVmp4pmPhase10.js
 node scripts/removeAndreaSalurioInactiveVmp4pmPhase10.js --apply
 ```
 
+### `removeAndreaSalurioWrongKg13pmPending.js`
+
+Same student — remove **wrong pending** enrollment on `KG_1-3PM` (**166**) only. She appears on Class Students as Pending / Not verified because of an **active installment profile** + unpaid downpayment **INV-2368** (`CLASS_ID:166`), not a `classstudent` row.
+
+| Action | Detail |
+|--------|--------|
+| **KEEP** | **162** Active VMP 4PM phases 1–9 unchanged |
+| Soft-remove | any active `classstudent` on **166** (none expected) |
+| Cancel | unpaid invoices on the KG profile (refuse if any **Paid**) |
+| Deactivate | installment profile(s) on **166** (`is_active = false`) |
+
+```bash
+node scripts/removeAndreaSalurioWrongKg13pmPending.js
+node scripts/removeAndreaSalurioWrongKg13pmPending.js --apply
+```
+
 ### `repairMorganAquinoPlaygroupMatrix.js`
 
 **Morgan Atlas Milag Aquino** (`kimberlymilag@gmail.com`, user **514**) — Playgroup class **89** / profile **296**.

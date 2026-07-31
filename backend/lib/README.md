@@ -4,7 +4,7 @@
 
 Cross-branch Leadershipboard payload (`GET /dashboard/leadershipboard`).
 
-Overall = weighted criteria (Invoice Sales 40%, New 20%, Re-enrolled 20%, Rejoin 10%, Upsell 10%). Active is display-only.
+Overall = weighted criteria (Invoice Sales 40%, New 20%, Re-enrolled 20%, Rejoin 10%, Upsell 10%). Active is display-only and equals Monthly Operational **Total Active Students** (New + Re-enrolled + Rejoin + Upsell + multi-phase completed).
 
 Full formula and sample computation: [docs/LEADERSHIPBOARD.md](../../docs/LEADERSHIPBOARD.md).
 

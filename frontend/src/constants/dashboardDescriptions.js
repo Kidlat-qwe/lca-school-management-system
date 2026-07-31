@@ -255,7 +255,7 @@ export const LEADERSHIPBOARD = {
   invoiceSales:
     'Same as Monthly Operational Invoice Sales / completed payment Total Payments for the month: payable + tips on Completed payments by issue date, excluding Returned and Rejected. Does not include Acknowledgement Receipt sales.',
   activeStudents:
-    'Same as Monthly Operational Total Active Students: New + Re-enrollment + Rejoin + Upsell for the selected month (Month Re-enrollment matrix).',
+    'Same as Monthly Operational Total Active Students: New + Re-enrollment + Rejoin + Upsell + multi-phase completed for the selected month (Month Re-enrollment matrix).',
 };
 
 export const PHASE_ENROLLMENT_DASHBOARD = {

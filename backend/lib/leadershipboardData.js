@@ -8,8 +8,9 @@
  *   / Total payments sales lines on Monthly Operational.
  * - New / Re-enroll / Rejoin / Upsell = Month Re-enrollment matrix KPIs on
  *   `branch_breakdown` (via loadMonthlyOperationalDashboardPayload).
- * - Active students = new + re_enrollment + rejoin + upsell (same formula as
- *   Monthly Operational "Total Active Students" card).
+ * - Active students = new + re_enrollment + rejoin + upsell + multi-phase
+ *   completed (`active_completed_count`) — same formula as Monthly Operational
+ *   "Total Active Students" card.
  *
  * Overall ranking uses a weighted score (Active is display-only, not in Overall):
  *   Invoice Sales 40% + New 20% + Re-enrolled 20% + Rejoin 10% + Upsell 10%.
@@ -189,8 +190,11 @@ export async function loadLeadershipboardPayload(opts) {
     const reEnrollment = Number(row.re_enrollment_count) || 0;
     const rejoin = Number(row.rejoin_count) || 0;
     const upsell = Number(row.upsell_count) || 0;
+    // Multi-phase completed only (same as Monthly Operational Total Active card).
+    const activeCompleted = Number(row.active_completed_count) || 0;
     // Same as Monthly Operational totalActiveStudents card.
-    const activeStudents = newEnrollees + reEnrollment + rejoin + upsell;
+    const activeStudents =
+      newEnrollees + reEnrollment + rejoin + upsell + activeCompleted;
 
     return {
       branch_id: row.branch_id,
@@ -208,6 +212,7 @@ export async function loadLeadershipboardPayload(opts) {
       re_enrollment_count: reEnrollment,
       rejoin_count: rejoin,
       upsell_count: upsell,
+      active_completed_count: activeCompleted,
       active_students: activeStudents,
       dropped_unenrolled_count: Number(row.dropped_unenrolled_count) || 0,
       reserved_count: Number(row.reserved_count) || 0,
