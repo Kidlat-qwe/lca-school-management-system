@@ -98,7 +98,7 @@ Implementation: `backend/services/inventory/` (client + field mapping),
 | Column | Purpose |
 |---|---|
 | `inventory_request_id` | RHET stock request UUID |
-| `inventory_status` | `PENDING` / `FULFILLED` / `REJECTED` / `FAILED` |
+| `inventory_status` | `PENDING` / `SHIPPED` / `DELIVERED` / `RETURNED` / `REJECTED` (legacy `FULFILLED` → treated as `DELIVERED`) |
 | `inventory_external_reference` | `<INVENTORY_SYSTEM_CODE>-<request_id>`, e.g. `PSMS-123` |
 | `inventory_matched_sku` | SKU RHET matched (from webhook, reference only) |
 | `inventory_rejection_reason` | Reason from RHET when rejected/failed |
@@ -227,6 +227,7 @@ Content-Type: application/json
 {
   "requestDate": "2026-07-16",
   "requestedBy": "Paul Camus",
+  "branchName": "LCA Makati",
   "reason": "Restock campus store display",
   "webhookUrl": "http://localhost:5000/api/webhooks/inventory",
   "batchReference": "PSMS-BATCH-2026-001",
@@ -257,6 +258,7 @@ Content-Type: application/json
 |---|---|
 | Request Date | `requestDate` |
 | Requested By | `requestedBy` |
+| Branch (campus display name) | `branchName` (**required**, top-level) |
 | Reason for Request | `reason` |
 | Items (category) | `items[].categoryName` |
 | Gender | `items[].gender` |
@@ -266,6 +268,7 @@ Content-Type: application/json
 
 **Notes**
 
+- `branchName` is the branch/campus **display name** from `branchestbl.branch_name` (e.g. `"LCA Makati"`). Do **not** send a numeric id or UUID. RHET rejects missing/short values with `400`.
 - Each table row = one object in `items[]`.
 - Each row becomes a **separate pending request** in inventory.
 - `reason` applies to all rows in the same submission.
@@ -335,10 +338,14 @@ X-Integration-Key: {INVENTORY_INTEGRATION_KEY}
 
 | Status | Meaning |
 |---|---|
-| `PENDING` | Waiting for inventory admin approval |
-| `FULFILLED` | Approved and stock deducted |
-| `REJECTED` | Admin rejected the request |
-| `FAILED` | Could not match item or process request |
+| Status | Meaning |
+|---|---|
+| `PENDING` | Waiting for HQ / warehouse action |
+| `SHIPPED` | Handed to courier; RHET warehouse deducted; CMS does **not** add branch stock yet |
+| `DELIVERED` | Branch received; CMS adds branch stock once |
+| `RETURNED` | Back to warehouse; CMS reverses branch stock if `wasDelivered` |
+| `REJECTED` | Not approved |
+| `FULFILLED` | Legacy alias for `DELIVERED` (CMS treats the same; credit once) |
 
 ---
 
@@ -422,11 +429,12 @@ POST /api/webhooks/inventory
 
 ```json
 {
-  "event": "stock_request.fulfilled",
+  "event": "stock_request.delivered",
   "requestId": "uuid",
-  "externalReference": "PSMS-REQ-1001",
+  "externalReference": "PSMS-41",
   "sourceSystem": "PSMS",
-  "status": "FULFILLED",
+  "status": "DELIVERED",
+  "branchName": "LCA Makati",
   "requestedBy": "Paul Camus",
   "reason": "Restock campus store display",
   "categoryName": "School Uniform",
@@ -444,20 +452,25 @@ POST /api/webhooks/inventory
 }
 ```
 
+Returned example includes `"wasDelivered": true` when reversing a prior delivery.
+
 ### 7.3 Webhook events
 
-| Event | When |
-|---|---|
-| `stock_request.created` | Request saved as `PENDING` |
-| `stock_request.fulfilled` | Admin approved; stock deducted |
-| `stock_request.rejected` | Admin rejected request |
+| Event | When | CMS action |
+|---|---|---|
+| `stock_request.created` | Request saved as `PENDING` | Sync tracking fields |
+| `stock_request.shipped` | Marked shipped; RHET warehouse deducted | Local **Shipped**; no branch stock |
+| `stock_request.delivered` | Branch received | Local **Delivered**; **add** branch stock once |
+| `stock_request.fulfilled` | Legacy alias on deliver | Same as delivered (idempotent) |
+| `stock_request.returned` | Returned to warehouse | Reverse stock if `wasDelivered`; status **Returned** |
+| `stock_request.rejected` | Not approved | Local **Rejected** |
 
 ### 7.4 PSMS webhook handler logic
 
 1. Receive POST body.
 2. Find PSMS record by `requestId` or `externalReference`.
-3. Update local status.
-4. Optionally notify the requester in PSMS UI.
+3. Apply lifecycle action (shipped / delivered / returned / rejected).
+4. Notify the requester in PSMS UI when status changes meaningfully.
 5. Return HTTP `200`.
 
 ---
@@ -506,11 +519,13 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 
 1. Matches the local row by `externalReference` (parsed back to `request_id`)
    or by stored `inventory_request_id`.
-2. On `FULFILLED`: **auto-adds** the requested quantity to the branch
-   `merchandisestbl`, marks the local request `Approved`, and notifies the
+2. On `SHIPPED`: marks local request **Shipped** (in transit). Does **not** add branch stock.
+3. On `DELIVERED` (or legacy `FULFILLED`): **auto-adds** the requested quantity to the branch
+   `merchandisestbl`, marks the local request **Delivered**, and notifies the
    branch Admin. CMS Superadmin is not involved.
-3. On `REJECTED` / `FAILED`: marks the local request `Rejected` and notifies Admin.
-4. Idempotent — repeated FULFILLED webhooks do not double-add stock.
+4. On `RETURNED`: reverses branch stock if `wasDelivered` (or local was Delivered/Approved).
+5. On `REJECTED` / `FAILED`: marks the local request `Rejected` and notifies Admin.
+6. Idempotent — repeated delivered/fulfilled webhooks do not double-add stock.
 
 ---
 
@@ -524,8 +539,9 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 4. User clicks **Submit Request**.
 5. Frontend calls `POST /api/sms/merchandise-requests` (PSMS backend only).
 6. Backend forwards to RHET. Superadmin is **not** notified for integrated requests.
-7. RHET inventory admin reviews the request on **Stock Requests**.
-8. On approve in RHET, webhook adds stock to the CMS branch automatically.
+7. RHET inventory admin marks **Shipped** on **Stock Requests**.
+8. Branch Admin confirms receipt in CMS → CMS calls RHET `/stock-requests/:id/deliver`
+   → RHET moves to **Delivered** → CMS adds branch stock (webhook replay is idempotent).
 
 ---
 
@@ -604,6 +620,7 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 | Check availability | `GET` | `/availability?...` |
 | Submit request | `POST` | `/stock-requests` |
 | Get request status | `GET` | `/stock-requests/:id` |
+| Confirm delivery (branch received) | `POST` | `/stock-requests/:id/deliver` |
 
 **Base URL:** `{INVENTORY_API_URL}`  
 **Auth header:** `X-Integration-Key: {INVENTORY_INTEGRATION_KEY}`

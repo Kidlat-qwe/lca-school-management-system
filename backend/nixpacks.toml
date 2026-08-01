@@ -1,0 +1,11 @@
+# Nixpacks / Coolify defaults for the PSMS backend API.
+# Coolify should also set Base Directory to `/backend`.
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[start]
+cmd = "node server.js --production"

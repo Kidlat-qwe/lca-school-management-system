@@ -10,10 +10,12 @@ import {
   checkAvailability as checkInventoryAvailability,
   submitStockRequests,
   getStockRequest,
+  markStockRequestDelivered,
   InventoryApiError,
 } from '../services/inventory/inventoryClient.js';
 import {
   buildInventorySubmitPayload,
+  normalizeInventoryBranchName,
   pickApproverName,
   looksLikeUuid,
   isLearningKitCategory,
@@ -22,6 +24,13 @@ import {
 } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock, findExistingMerchandiseStockRow } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
+import {
+  LOCAL_REQUEST_STATUS,
+  isDeliveredRemoteStatus,
+  isShippedRemoteStatus,
+  isStockCreditedLocalStatus,
+  normalizeRemoteStatus,
+} from '../services/inventory/stockRequestLifecycle.js';
 
 const router = express.Router();
 
@@ -36,8 +45,12 @@ router.use(verifyFirebaseToken);
  * Forwards a freshly-created local request row to RHET Inventory and stores
  * the returned requestId/status on the local row. Throws InventoryApiError on
  * failure so the caller can decide whether to roll back the local record.
+ *
+ * @param {object} requestRow - Local merchandiserequestlogtbl row
+ * @param {{ requestedBy: string, reason?: string, branchName: string }} options
+ *   `branchName` must be the campus display name (e.g. "LCA Makati"), not an id.
  */
-async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
+async function forwardRequestToInventory(requestRow, { requestedBy, reason, branchName }) {
   if (!isInventoryIntegrationEnabled()) {
     return null;
   }
@@ -48,6 +61,7 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
       requestRow,
       requestedBy,
       reason,
+      branchName,
       webhookUrl: getInventoryWebhookUrl(),
     });
   } catch (buildError) {
@@ -59,6 +73,7 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
 
   console.log('[merchandise-requests] Forwarding to RHET /stock-requests:', {
     localRequestId: requestRow.request_id,
+    branchName: payload.branchName,
     categoryName: payload.items?.[0]?.categoryName,
     itemName: payload.items?.[0]?.itemName,
     sku: payload.items?.[0]?.sku,
@@ -130,7 +145,7 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason }) {
 router.get(
   '/',
   [
-    query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled']).withMessage('Invalid status'),
+    query('status').optional().isIn(['Pending', 'Shipped', 'Delivered', 'Returned', 'Approved', 'Rejected', 'Cancelled']).withMessage('Invalid status'),
     query('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
     query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -252,7 +267,10 @@ router.get(
       const statsQuery = `
         SELECT 
           COUNT(*) FILTER (WHERE status = 'Pending') as pending_count,
-          COUNT(*) FILTER (WHERE status = 'Approved') as approved_count,
+          COUNT(*) FILTER (WHERE status = 'Shipped') as shipped_count,
+          COUNT(*) FILTER (WHERE status IN ('Delivered', 'Approved')) as delivered_count,
+          COUNT(*) FILTER (WHERE status = 'Returned') as returned_count,
+          COUNT(*) FILTER (WHERE status IN ('Delivered', 'Approved')) as approved_count,
           COUNT(*) FILTER (WHERE status = 'Rejected') as rejected_count,
           COUNT(*) FILTER (WHERE status = 'Cancelled') as cancelled_count,
           COUNT(*) as total_count
@@ -614,6 +632,24 @@ router.post(
       const requestRow = result.rows[0];
       const requestId = requestRow.request_id;
 
+      // Branch display name for RHET Stock Requests "Branch" column (required top-level).
+      const branchLookup = await dbQuery(
+        'SELECT branch_name FROM branchestbl WHERE branch_id = $1',
+        [req.user.branchId]
+      );
+      const branchNameText = normalizeInventoryBranchName(branchLookup.rows[0]?.branch_name);
+
+      if (inventoryOn && !branchNameText) {
+        await dbQuery('DELETE FROM merchandiserequestlogtbl WHERE request_id = $1', [requestId]);
+        return res.status(400).json({
+          success: false,
+          message:
+            'Your branch does not have a valid display name (at least 2 characters). ' +
+            'Update the branch name in CMS before requesting stock from RHET Inventory.',
+          error: { code: 'BRANCH_NAME_REQUIRED' },
+        });
+      }
+
       // Forward to RHET Inventory (backend-only call). If this fails, do not
       // silently succeed — roll back the local record so PSMS and RHET never
       // disagree about whether the request exists.
@@ -621,6 +657,7 @@ router.post(
         await forwardRequestToInventory(requestRow, {
           requestedBy: req.user.fullName || req.user.email || 'PSMS Admin',
           reason: request_reason,
+          branchName: branchNameText,
         });
       } catch (inventoryError) {
         // If RHET already accepted the request but CMS could not store the link
@@ -664,13 +701,11 @@ router.post(
         });
       }
 
-      const branchName = await dbQuery('SELECT branch_name FROM branchestbl WHERE branch_id = $1', [req.user.branchId]);
-      const branchNameText = branchName.rows[0]?.branch_name || 'Unknown Branch';
-
       // Inventory-integrated requests are approved by RHET Inventory admin, not CMS Superadmin.
       // Only notify Superadmin for the legacy local-approval flow.
       if (!isInventoryIntegrationEnabled()) {
-        let notificationBody = `${req.user.fullName || req.user.email} from ${branchNameText} has requested ${requested_quantity} units of ${merchandise_name}`;
+        const legacyBranchLabel = branchNameText || 'Unknown Branch';
+        let notificationBody = `${req.user.fullName || req.user.email} from ${legacyBranchLabel} has requested ${requested_quantity} units of ${merchandise_name}`;
         if (gender || type) {
           const genderType = [gender, type].filter(Boolean).join(' - ');
           notificationBody += ` (${genderType})`;
@@ -703,7 +738,7 @@ router.post(
       res.status(201).json({
         success: true,
         message: isInventoryIntegrationEnabled()
-          ? 'Stock request submitted to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
+          ? 'Stock request submitted to RHET Central Inventory. Stock will be added to your branch when inventory marks it delivered.'
           : 'Merchandise request created successfully',
         data: refreshed.rows[0] || requestRow,
         inventoryIntegrated: isInventoryIntegrationEnabled(),
@@ -716,8 +751,10 @@ router.post(
 
 /**
  * POST /api/v1/merchandise-requests/:id/sync-inventory
- * Poll RHET for this request's status and, if FULFILLED, add branch stock.
- * Use when the webhook was missed (e.g. before migration 124 / Coolify env issues).
+ * Poll RHET for this request's status and apply:
+ * - SHIPPED → local Shipped (no stock)
+ * - DELIVERED (or legacy FULFILLED) → local Delivered + credit branch stock once
+ * Use when the webhook was missed.
  * Access: Superadmin, Admin (own branch)
  */
 router.post(
@@ -762,7 +799,7 @@ router.post(
         });
       }
 
-      if (request.status === 'Approved') {
+      if (isStockCreditedLocalStatus(request.status)) {
         const remote = await getStockRequest(request.inventory_request_id);
         const processedBy = pickApproverName(remote.data || remote);
         const existingProcessedBy = request.inventory_processed_by
@@ -770,6 +807,11 @@ router.post(
           : '';
         const needsNameBackfill =
           processedBy && (!existingProcessedBy || looksLikeUuid(existingProcessedBy));
+        const remoteStatusRaw = remote.data?.status
+          ? normalizeRemoteStatus(remote.data.status)
+          : null;
+        const storeStatus =
+          remoteStatusRaw === 'FULFILLED' ? 'DELIVERED' : remoteStatusRaw;
 
         if (needsNameBackfill) {
           await runIgnoringMissingUpdatedAt(
@@ -783,7 +825,7 @@ router.post(
              WHERE request_id = $4`,
             [
               processedBy,
-              remote.data?.status ? String(remote.data.status).toUpperCase() : null,
+              storeStatus,
               remote.data?.matchedSku || null,
               request.request_id,
             ]
@@ -795,21 +837,23 @@ router.post(
           await client.query('COMMIT');
           return res.json({
             success: true,
-            message: 'Request already approved — backfilled Approved By from RHET',
+            message: 'Request already delivered — backfilled Approved By from RHET',
             data: refreshed.rows[0],
           });
         }
         await client.query('COMMIT');
         return res.json({
           success: true,
-          message: 'Request is already approved and stock was applied',
+          message: 'Request is already delivered and stock was applied',
           data: request,
         });
       }
 
       const remote = await getStockRequest(request.inventory_request_id);
-      const remoteStatus = String(remote.data?.status || '').toUpperCase();
+      const remoteStatus = normalizeRemoteStatus(remote.data?.status);
       const processedBy = pickApproverName(remote.data || remote);
+      const storeStatus =
+        remoteStatus === 'FULFILLED' ? 'DELIVERED' : remoteStatus || null;
 
       await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
@@ -821,27 +865,61 @@ router.post(
              updated_at = CURRENT_TIMESTAMP
          WHERE request_id = $4`,
         [
-          remoteStatus || null,
+          storeStatus,
           remote.data?.matchedSku || null,
           processedBy,
           request.request_id,
         ]
       );
 
-      if (remoteStatus !== 'FULFILLED') {
+      // SHIPPED: update local status only — no branch stock
+      if (isShippedRemoteStatus(remoteStatus)) {
+        if (request.status === LOCAL_REQUEST_STATUS.PENDING) {
+          await runIgnoringMissingUpdatedAt(
+            client.query.bind(client),
+            `UPDATE merchandiserequestlogtbl
+             SET status = $1,
+                 reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+                 review_notes = COALESCE(review_notes, $2),
+                 inventory_status = 'SHIPPED',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $3`,
+            [
+              LOCAL_REQUEST_STATUS.SHIPPED,
+              'Synced from RHET Inventory: marked shipped (in transit). Stock adds on delivery.',
+              request.request_id,
+            ]
+          );
+        }
+        const refreshed = await client.query(
+          'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1',
+          [request.request_id]
+        );
         await client.query('COMMIT');
         return res.json({
           success: true,
-          message: `RHET status is ${remoteStatus || 'unknown'} — stock is only added when FULFILLED`,
+          message: 'RHET status is SHIPPED — local request marked Shipped; stock is only added when DELIVERED',
+          data: refreshed.rows[0],
+        });
+      }
+
+      if (!isDeliveredRemoteStatus(remoteStatus)) {
+        await client.query('COMMIT');
+        return res.json({
+          success: true,
+          message: `RHET status is ${remoteStatus || 'unknown'} — stock is only added when DELIVERED`,
           data: {
             ...request,
-            inventory_status: remoteStatus,
+            inventory_status: storeStatus,
             inventory_processed_by: processedBy || request.inventory_processed_by,
           },
         });
       }
 
-      if (request.status !== 'Pending') {
+      if (
+        request.status !== LOCAL_REQUEST_STATUS.PENDING &&
+        request.status !== LOCAL_REQUEST_STATUS.SHIPPED
+      ) {
         await client.query('COMMIT');
         return res.status(400).json({
           success: false,
@@ -875,16 +953,17 @@ router.post(
       const updated = await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
-         SET status = 'Approved',
+         SET status = $1,
              reviewed_at = CURRENT_TIMESTAMP,
-             review_notes = COALESCE(review_notes, $1),
-             inventory_status = 'FULFILLED',
-             inventory_processed_by = COALESCE($2, inventory_processed_by),
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'DELIVERED',
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
              inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE request_id = $3
+         WHERE request_id = $4
          RETURNING *`,
         [
+          LOCAL_REQUEST_STATUS.DELIVERED,
           `Synced from RHET Inventory (${remote.data?.matchedSku || request.inventory_request_id}). Stock ${stockResult.action}.`,
           processedBy,
           request.request_id,
@@ -894,7 +973,7 @@ router.post(
       await client.query('COMMIT');
       res.json({
         success: true,
-        message: 'RHET fulfillment synced — branch stock updated',
+        message: 'RHET delivery synced — branch stock updated',
         data: updated.rows[0],
         stockResult,
       });
@@ -907,6 +986,198 @@ router.post(
           error: { code: error.code },
         });
       }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
+ * POST /api/sms/merchandise-requests/:id/confirm-delivery
+ * Branch Admin confirms physical receipt while local status is Shipped.
+ * Calls RHET POST /stock-requests/:inventoryId/deliver → RHET moves to DELIVERED,
+ * then CMS credits branch stock immediately (webhook replay stays idempotent).
+ * Access: Admin (own branch only)
+ */
+router.post(
+  '/:id/confirm-delivery',
+  [
+    param('id').isInt().withMessage('Request ID must be an integer'),
+    body('notes').optional({ nullable: true }).trim(),
+    handleValidationErrors,
+  ],
+  requireRole('Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      if (!isInventoryIntegrationEnabled()) {
+        return res.status(503).json({
+          success: false,
+          message: 'RHET Inventory integration is not configured',
+          error: { code: 'INTEGRATION_DISABLED' },
+        });
+      }
+
+      await client.query('BEGIN');
+
+      const locked = await client.query(
+        `SELECT * FROM merchandiserequestlogtbl
+         WHERE request_id = $1 AND requested_branch_id = $2
+         FOR UPDATE`,
+        [req.params.id, req.user.branchId]
+      );
+
+      if (locked.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Request not found' });
+      }
+
+      const request = locked.rows[0];
+
+      if (isStockCreditedLocalStatus(request.status)) {
+        await client.query('COMMIT');
+        return res.json({
+          success: true,
+          message: 'Request is already delivered and stock was applied',
+          data: request,
+          alreadyDelivered: true,
+        });
+      }
+
+      if (request.status !== LOCAL_REQUEST_STATUS.SHIPPED) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Only Shipped requests can be confirmed received (current: ${request.status})`,
+          error: { code: 'NOT_SHIPPED' },
+        });
+      }
+
+      if (!request.inventory_request_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'This request has no RHET inventory_request_id. Cannot confirm delivery with Central Inventory.',
+          error: { code: 'MISSING_INVENTORY_REQUEST_ID' },
+        });
+      }
+
+      const branchLookup = await client.query(
+        'SELECT branch_name FROM branchestbl WHERE branch_id = $1',
+        [req.user.branchId]
+      );
+      const branchName =
+        normalizeInventoryBranchName(branchLookup.rows[0]?.branch_name) ||
+        String(branchLookup.rows[0]?.branch_name || '').trim() ||
+        undefined;
+      const confirmedBy =
+        req.user.fullName || req.user.email || 'Branch Admin';
+      const notes =
+        String(req.body.notes || '').trim() ||
+        'Branch admin confirmed physical receipt in CMS';
+
+      let remote;
+      try {
+        remote = await markStockRequestDelivered(request.inventory_request_id, {
+          confirmedBy,
+          branchName,
+          notes,
+        });
+      } catch (inventoryError) {
+        await client.query('ROLLBACK');
+        const statusCode =
+          inventoryError instanceof InventoryApiError ||
+          inventoryError?.name === 'InventoryApiError'
+            ? inventoryError.status || 502
+            : 502;
+        return res.status(statusCode).json({
+          success: false,
+          message:
+            inventoryError.message ||
+            'Failed to mark request delivered in RHET Inventory. Please try again.',
+          error: {
+            code: inventoryError.code || 'INVENTORY_DELIVER_FAILED',
+            details: inventoryError.details || null,
+          },
+        });
+      }
+
+      const remoteData = remote?.data && typeof remote.data === 'object' ? remote.data : remote;
+      const remoteStatus = String(remoteData?.status || '').toUpperCase();
+      // HTTP 200 from /deliver is authoritative. Reject only clear non-delivery terminals.
+      if (remoteStatus === 'REJECTED' || remoteStatus === 'FAILED' || remoteStatus === 'RETURNED') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `RHET returned status ${remoteStatus}; cannot confirm delivery.`,
+          error: { code: 'UNEXPECTED_REMOTE_STATUS', details: { remoteStatus } },
+        });
+      }
+
+      const identity = resolveUniformFulfillIdentity({
+        request,
+        payload: remoteData || {},
+      });
+      const stockResult = await applyMerchandiseRequestStock(client, {
+        ...request,
+        inventory_matched_sku:
+          remoteData?.matchedSku || request.inventory_matched_sku || null,
+        inventory_item_name:
+          remoteData?.itemName ||
+          remoteData?.item_name ||
+          request.inventory_item_name ||
+          null,
+        inventory_category_name:
+          remoteData?.categoryName ||
+          remoteData?.category_name ||
+          request.inventory_category_name ||
+          null,
+        gender: identity.gender,
+        type: identity.type,
+        size: identity.size,
+      });
+
+      if (stockResult?.merchandiseId) {
+        await client.query(
+          `UPDATE merchandiserequestlogtbl SET merchandise_id = $1 WHERE request_id = $2`,
+          [stockResult.merchandiseId, request.request_id]
+        );
+      }
+
+      const updated = await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = CURRENT_TIMESTAMP,
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'DELIVERED',
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
+             inventory_matched_sku = COALESCE($4, inventory_matched_sku),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $5
+         RETURNING *`,
+        [
+          LOCAL_REQUEST_STATUS.DELIVERED,
+          `Branch confirmed receipt (${confirmedBy}). RHET marked delivered. Stock ${stockResult.action} on branch.${notes ? ` Notes: ${notes}` : ''}`,
+          confirmedBy,
+          remoteData?.matchedSku || null,
+          request.request_id,
+        ]
+      );
+
+      await client.query('COMMIT');
+      return res.json({
+        success: true,
+        message:
+          'Receipt confirmed. RHET Inventory moved the request to Delivered and branch stock was updated.',
+        data: updated.rows[0],
+        stockResult,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
       next(error);
     } finally {
       client.release();
@@ -961,14 +1232,19 @@ router.put(
         });
       }
 
-      // Inventory-integrated requests are fulfilled by RHET webhook (auto-adds branch stock).
+      // Inventory-integrated requests are delivered by RHET webhook (auto-adds branch stock).
       // Block Superadmin manual approve to avoid double-adding stock.
-      if (request.inventory_request_id && String(request.inventory_status || '').toUpperCase() !== 'FULFILLED') {
+      if (
+        request.inventory_request_id &&
+        !['DELIVERED', 'FULFILLED'].includes(
+          String(request.inventory_status || '').toUpperCase()
+        )
+      ) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message:
-            'This request was sent to RHET Central Inventory. Stock will be added automatically when the inventory admin approves it. Manual Superadmin approval is not needed.',
+            'This request was sent to RHET Central Inventory. Stock will be added automatically when the inventory admin marks it delivered. Manual Superadmin approval is not needed.',
         });
       }
 

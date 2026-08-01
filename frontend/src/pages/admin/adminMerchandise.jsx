@@ -20,6 +20,8 @@ import {
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
+import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
+import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 import {
   createEmptyCatalogRequestLine,
@@ -111,6 +113,7 @@ const AdminMerchandise = () => {
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'logs'
+  const [trackingRequest, setTrackingRequest] = useState(null);
 
   const requestedByDisplay =
     (userInfo?.nickname && String(userInfo.nickname).trim()) ||
@@ -1199,6 +1202,43 @@ const AdminMerchandise = () => {
     }
   };
 
+  const handleConfirmDelivery = async (request) => {
+    if (!request?.request_id) return;
+    if (
+      !(await appConfirm({
+        title: 'Confirm received',
+        message:
+          'Confirm that this stock has arrived at your branch? This will mark the request as Delivered in RHET Inventory and add the quantity to your branch stock.',
+        confirmLabel: 'Confirm received',
+      }))
+    ) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const response = await apiRequest(
+        `/merchandise-requests/${request.request_id}/confirm-delivery`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            notes: 'Branch admin confirmed physical receipt in CMS',
+          }),
+        }
+      );
+      await fetchMerchandiseRequests();
+      setTrackingRequest(null);
+      appAlert(
+        response?.message ||
+          'Receipt confirmed. Stock was added to your branch and RHET Inventory is now Delivered.'
+      );
+    } catch (err) {
+      appAlert(err.message || 'Failed to confirm delivery. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // Removed formatBranchName - admin only sees their branch
 
   // Get unique merchandise types for the selected branch with their images
@@ -1238,14 +1278,18 @@ const AdminMerchandise = () => {
   const getStatusBadge = (status) => {
     const statusStyles = {
       Pending: 'bg-yellow-100 text-yellow-800',
+      Shipped: 'bg-blue-100 text-blue-800',
+      Delivered: 'bg-green-100 text-green-800',
       Approved: 'bg-green-100 text-green-800',
+      Returned: 'bg-orange-100 text-orange-800',
       Rejected: 'bg-red-100 text-red-800',
       Cancelled: 'bg-gray-100 text-gray-800',
     };
-    
+    const label = status === 'Approved' ? 'Delivered' : status;
+
     return (
       <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {label}
       </span>
     );
   };
@@ -2675,22 +2719,48 @@ const AdminMerchandise = () => {
                           {formatDateTimeManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          {request.status === 'Pending' && (
-                            <button
-                              onClick={() => handleCancelRequest(request.request_id)}
-                              className="px-3 py-1 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          )}
-                          {request.status === 'Rejected' && request.review_notes && (
-                            <button
-                              onClick={() => appAlert(`Rejection reason: ${request.review_notes}`)}
-                              className="px-3 py-1 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                            >
-                              View Notes
-                            </button>
-                          )}
+                          <RequestActionsMenu
+                            requestId={request.request_id}
+                            items={[
+                              {
+                                key: 'track',
+                                label: 'Track request item',
+                                onSelect: () => setTrackingRequest(request),
+                              },
+                              ...(request.status === 'Shipped'
+                                ? [
+                                    {
+                                      key: 'confirm',
+                                      label: 'Confirm received',
+                                      onSelect: () => handleConfirmDelivery(request),
+                                    },
+                                  ]
+                                : []),
+                              ...(request.status === 'Pending'
+                                ? [
+                                    {
+                                      key: 'cancel',
+                                      label: 'Cancel request',
+                                      tone: 'danger',
+                                      onSelect: () => handleCancelRequest(request.request_id),
+                                    },
+                                  ]
+                                : []),
+                              ...((request.status === 'Rejected' || request.status === 'Returned') &&
+                              request.review_notes
+                                ? [
+                                    {
+                                      key: 'notes',
+                                      label: 'View notes',
+                                      onSelect: () =>
+                                        appAlert(
+                                          `${request.status === 'Returned' ? 'Return' : 'Rejection'} notes: ${request.review_notes}`
+                                        ),
+                                    },
+                                  ]
+                                : []),
+                            ]}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -2709,6 +2779,16 @@ const AdminMerchandise = () => {
       )}
       {/* Modals */}
       {renderModals()}
+      <TrackRequestProgressModal
+        open={Boolean(trackingRequest)}
+        request={trackingRequest}
+        onClose={() => setTrackingRequest(null)}
+        canConfirmDelivery={
+          trackingRequest?.status === 'Shipped' && Boolean(trackingRequest?.inventory_request_id)
+        }
+        confirming={submitting}
+        onConfirmDelivery={() => handleConfirmDelivery(trackingRequest)}
+      />
     </div>
   );
 };

@@ -21,6 +21,8 @@ import {
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
+import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
+import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 import { unwrapCatalogPayload } from '../../utils/merchandiseRequests/catalogOptions';
 import {
@@ -38,7 +40,7 @@ import {
 } from '../../utils/merchandiseStock';
 
 /** Flip to `true` after Coolify inventory/CMS deployment is ready. */
-const ADD_MERCHANDISE_TYPE_ENABLED = false;
+const ADD_MERCHANDISE_TYPE_ENABLED = true;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -90,6 +92,7 @@ const Merchandise = () => {
   /** false = inventory env missing → legacy free-text create type */
   const [inventoryIntegrationEnabled, setInventoryIntegrationEnabled] = useState(true);
   const [pendingCategoryName, setPendingCategoryName] = useState('');
+  const [trackingRequest, setTrackingRequest] = useState(null);
 
   const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
 
@@ -954,14 +957,18 @@ const Merchandise = () => {
   const getStatusBadge = (status) => {
     const statusStyles = {
       Pending: 'bg-yellow-100 text-yellow-800',
+      Shipped: 'bg-blue-100 text-blue-800',
+      Delivered: 'bg-green-100 text-green-800',
       Approved: 'bg-green-100 text-green-800',
+      Returned: 'bg-orange-100 text-orange-800',
       Rejected: 'bg-red-100 text-red-800',
       Cancelled: 'bg-gray-100 text-gray-800',
     };
-    
+    const label = status === 'Approved' ? 'Delivered' : status;
+
     return (
       <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${statusStyles[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {label}
       </span>
     );
   };
@@ -1785,7 +1792,10 @@ const Merchandise = () => {
                 </div>
 
                 {/* Review Information (if reviewed) */}
-                {(selectedRequest.status === 'Approved' || selectedRequest.status === 'Rejected') && (
+                {(selectedRequest.status === 'Approved' ||
+                  selectedRequest.status === 'Delivered' ||
+                  selectedRequest.status === 'Returned' ||
+                  selectedRequest.status === 'Rejected') && (
                   <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                     <h3 className="text-sm font-medium text-gray-700 mb-3">Review Information</h3>
                     <div className="grid grid-cols-2 gap-4 text-sm">
@@ -1806,7 +1816,12 @@ const Merchandise = () => {
                       {selectedRequest.review_notes && (
                         <div className="col-span-2">
                           <span className="text-gray-500">
-                            {selectedRequest.status === 'Approved' ? 'Approval Notes:' : 'Rejection Reason:'}
+                            {selectedRequest.status === 'Approved' ||
+                            selectedRequest.status === 'Delivered'
+                              ? 'Delivery / approval notes:'
+                              : selectedRequest.status === 'Returned'
+                                ? 'Return notes:'
+                                : 'Rejection Reason:'}
                           </span>
                           <p className="font-medium text-gray-900 mt-1">{selectedRequest.review_notes}</p>
                         </div>
@@ -2691,28 +2706,37 @@ const Merchandise = () => {
                           {formatDateTimeManila(request.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          {request.status === 'Pending' && !request.inventory_request_id && (
-                            <button
-                              onClick={() => openReviewModal(request)}
-                              className="px-3 py-1 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-                            >
-                              Review
-                            </button>
-                          )}
-                          {request.status === 'Pending' && request.inventory_request_id && (
-                            <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">
-                              Awaiting RHET Inventory
-                              {request.inventory_status ? ` (${request.inventory_status})` : ''}
-                            </span>
-                          )}
-                          {(request.status === 'Approved' || request.status === 'Rejected') && (
-                            <button
-                              onClick={() => openViewModal(request)}
-                              className="px-3 py-1 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                            >
-                              View
-                            </button>
-                          )}
+                          <RequestActionsMenu
+                            requestId={request.request_id}
+                            items={[
+                              {
+                                key: 'track',
+                                label: 'Track request item',
+                                onSelect: () => setTrackingRequest(request),
+                              },
+                              ...(request.status === 'Pending' && !request.inventory_request_id
+                                ? [
+                                    {
+                                      key: 'review',
+                                      label: 'Review request',
+                                      onSelect: () => openReviewModal(request),
+                                    },
+                                  ]
+                                : []),
+                              ...(request.status === 'Approved' ||
+                              request.status === 'Delivered' ||
+                              request.status === 'Returned' ||
+                              request.status === 'Rejected'
+                                ? [
+                                    {
+                                      key: 'view',
+                                      label: 'View details',
+                                      onSelect: () => openViewModal(request),
+                                    },
+                                  ]
+                                : []),
+                            ]}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -2732,6 +2756,11 @@ const Merchandise = () => {
 
       {/* Modals */}
       {renderModals()}
+      <TrackRequestProgressModal
+        open={Boolean(trackingRequest)}
+        request={trackingRequest}
+        onClose={() => setTrackingRequest(null)}
+      />
     </div>
   );
 };

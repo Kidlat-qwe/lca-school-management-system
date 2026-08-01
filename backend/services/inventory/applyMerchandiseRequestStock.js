@@ -647,3 +647,76 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
     };
   }
 }
+
+/**
+ * Reverse a previously delivered stock credit (RHET RETURNED after DELIVERED).
+ * Subtracts requested_quantity from the matching branch row; quantity floors at 0.
+ * Does not delete the stock row.
+ *
+ * @returns {Promise<{ action: 'reversed'|'noop', merchandiseId: number|null, newQuantity: number|null, qtyRemoved: number }>}
+ */
+export async function reverseMerchandiseRequestStock(client, request) {
+  const qtyToRemove = Number(request.requested_quantity) || 0;
+  if (qtyToRemove <= 0) {
+    return { action: 'noop', merchandiseId: null, newQuantity: null, qtyRemoved: 0 };
+  }
+
+  const typeName = resolveLocalMerchandiseTypeName(request);
+  if (!typeName) {
+    throw new Error(
+      'Cannot reverse stock: missing RHET categoryName / local merchandise type.'
+    );
+  }
+
+  const categoryForAttrs =
+    String(request.inventory_category_name || '').trim() || typeName;
+  const isUniform = isUniformLikeCategory(categoryForAttrs);
+  const stockItemName = normalizeAttr(request.inventory_item_name || request.item_name);
+  const stockSku = normalizeAttr(
+    request.inventory_requested_sku || request.inventory_matched_sku || request.sku
+  );
+
+  const merchandiseGender = isUniform
+    ? normalizeAttr(mapGenderToInventory(request.gender) || request.gender)
+    : null;
+  const merchandiseType = isUniform
+    ? normalizeAttr(mapTypeToInventory(request.type, categoryForAttrs) || request.type)
+    : null;
+  const merchandiseSize = isUniform
+    ? normalizeSizeAttr(mapSizeToLocal(request.size) || request.size)
+    : null;
+
+  const requestForMatch = {
+    ...request,
+    merchandise_name: typeName,
+    gender: merchandiseGender,
+    type: merchandiseType,
+    size: merchandiseSize,
+    inventory_item_name: isUniform ? null : stockItemName,
+    inventory_requested_sku: isUniform ? null : stockSku,
+  };
+
+  const existing = await findExistingMerchandiseStockRow(client, requestForMatch);
+  if (!existing?.merchandise_id) {
+    console.warn(
+      `[reverseMerchandiseRequestStock] No matching stock row for request ${request.request_id} — nothing to reverse`
+    );
+    return { action: 'noop', merchandiseId: null, newQuantity: null, qtyRemoved: 0 };
+  }
+
+  const currentQty = Number(existing.quantity) || 0;
+  const remove = Math.min(currentQty, qtyToRemove);
+  const newQuantity = Math.max(0, currentQty - remove);
+
+  await client.query(
+    `UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`,
+    [newQuantity, existing.merchandise_id]
+  );
+
+  return {
+    action: 'reversed',
+    merchandiseId: existing.merchandise_id,
+    newQuantity,
+    qtyRemoved: remove,
+  };
+}

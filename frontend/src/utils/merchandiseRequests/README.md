@@ -9,6 +9,7 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | `learningKit.js` | Learning Kit detection, CMS kit recipes, component validation/serialize for Request Stock. |
 | `catalogOptions.js` | RHET catalog unwrap, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
+| `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
 
 ## Catalog is the source of truth for category dropdowns
 

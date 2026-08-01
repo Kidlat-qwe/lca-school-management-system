@@ -6,15 +6,27 @@ machine-to-machine API.
 ## Business flow (current)
 
 1. Branch Admin submits **Request Merchandise Stock** in CMS.
-2. CMS saves the request and forwards it to RHET `POST /stock-requests`.
+2. CMS saves the request and forwards it to RHET `POST /stock-requests`
+   with top-level `branchName` = campus display name from `branchestbl`
+   (e.g. `"LCA Makati"`). RHET requires this field (min 2 chars) for the
+   Stock Requests **Branch** column; CMS blocks submit locally if missing.
 3. **CMS Superadmin is not notified** and does not approve these requests.
-4. RHET Inventory admin approves on **Stock Requests**.
-5. RHET sends webhook `stock_request.fulfilled` to CMS.
-6. CMS **automatically adds** the requested quantity to the branch's
-   `merchandisestbl` and marks the local request `Approved`.
-7. Branch Admin is notified that stock was added.
+5. RHET marks **Shipped** (warehouse stock deducted).
+   CMS webhook → local status **Shipped**; branch stock **unchanged**.
+6. **Branch Admin confirms receipt** in CMS (⋮ → Confirm received, or Track modal).
+   CMS calls RHET `POST /stock-requests/:id/deliver` → RHET moves to **Delivered**.
+   CMS then credits branch `merchandisestbl` once (idempotent with later webhook).
+7. Optional: RHET marks **Returned**. If `wasDelivered` (or local was
+   Delivered/Approved), CMS reverses the branch credit; otherwise status only.
+8. Branch Admin is notified on shipped / delivered / returned / rejected.
 
-On reject/fail, CMS marks the local request `Rejected` and notifies the Admin.
+On reject: CMS marks the local request `Rejected` and notifies the Admin.
+
+### Local statuses (UI)
+
+`Pending` → `Shipped` → `Delivered` → optional `Returned`  
+`Pending` / `Shipped` → `Rejected`  
+Legacy `Approved` displays as Delivered (stock already credited).
 
 ## RHET matching (structured attributes)
 
@@ -110,8 +122,9 @@ When integration env is missing, CMS falls back to the legacy Superadmin-approva
 | File | Purpose |
 |---|---|
 | `inventoryClient.js` | HTTP client to RHET |
-| `inventoryFieldMapping.js` | Label mapping + `externalReference` |
-| `applyMerchandiseRequestStock.js` | Adds fulfilled qty to branch `merchandisestbl` |
+| `inventoryFieldMapping.js` | Label mapping + `externalReference` + `branchName` |
+| `stockRequestLifecycle.js` | PENDING → SHIPPED → DELIVERED / RETURNED / REJECTED helpers |
+| `applyMerchandiseRequestStock.js` | Adds / reverses qty on branch `merchandisestbl` |
 | `runMerchRequestSql.js` | Retries merch-request UPDATEs if `updated_at` column is missing |
 
 **Fulfill matching (critical):** CMS type = RHET `categoryName` (`Backpack` /
@@ -135,12 +148,14 @@ for normal fulfills — that script is one-time legacy cleanup only.
 `POST /api/webhooks/inventory` (`backend/routes/inventoryWebhooks.js`):
 
 - Auth: `X-Integration-Key` / `Bearer` matching CMS integration key
-- `FULFILLED` → add branch stock + mark `Approved` (idempotent)
+- `SHIPPED` → local **Shipped**; **no** branch stock add
+- `DELIVERED` → local **Delivered** + add branch stock (idempotent)
+- Legacy `FULFILLED` / `stock_request.fulfilled` → same as delivered (credit once)
+- `RETURNED` → local **Returned**; reverse branch qty if `wasDelivered`
 - `REJECTED` / `FAILED` → mark `Rejected` + notify Admin
 - Stores `inventory_processed_by` via `pickApproverName`:
   `processedBy` → `approvedBy` → `processedByName` → `rejectedBy` (skips UUIDs).
   Never uses `processedByUserId`.
-- Written on **fulfilled / rejected** (matched by `status` or `event` name).
 - Re-delivered webhooks backfill Approved By even if local status is already terminal.
 - Does **not** notify Superadmin
 - UPDATEs use `runIgnoringMissingUpdatedAt` so a missing `updated_at` column
@@ -158,40 +173,44 @@ for normal fulfills — that script is one-time legacy cleanup only.
 | `130_...` | Ensure `merchandiserequestlogtbl.updated_at` exists (PSMS-33 500 fix) |
 | `131_...` | `inventory_components_json` (Learning Kit components[] snapshot) |
 | `133_...` | `merchandisestbl.item_name`, `sku` (non-uniform / kit identity under category) |
+| `135_...` | Document lifecycle statuses (Pending/Shipped/Delivered/Returned) |
 
-## Repair stuck FULFILLED (e.g. PSMS-33)
+## Repair stuck DELIVERED (e.g. PSMS-33)
 
-When RHET is `FULFILLED` but CMS stayed `Pending` (webhook 500 / missed delivery):
+When RHET is `DELIVERED` (or legacy `FULFILLED`) but CMS stayed `Pending`/`Shipped`:
 
 1. Deploy webhook fix + run migration **130**.
 2. Repair one of:
-   - `POST /api/v1/merchandise-requests/:id/sync-inventory` (Admin/Superadmin)
+   - `POST /api/sms/merchandise-requests/:id/sync-inventory` (Admin/Superadmin)
    - `node scripts/repairInventoryFulfillment.js --request-id=<localId>`
-   - Ask RHET to resend: `node scripts/resend-processed-by-webhook.mjs PSMS-<n> --send`
-3. Verify: local status `Approved`, `inventory_status = FULFILLED`, Approved By name set,
-   branch stock increased **once**; replaying fulfill webhook does not double stock.
+   - Ask RHET to resend delivered webhook
+3. Verify: local status `Delivered`, `inventory_status = DELIVERED`, Approved By name set,
+   branch stock increased **once**; replaying delivered/fulfilled webhook does not double stock.
 
-Find other stuck rows (local Pending + has inventory id):
+Find other stuck rows (local Pending/Shipped + has inventory id):
 
 ```sql
 SELECT request_id, status, inventory_status, inventory_external_reference,
        inventory_request_id, inventory_processed_by
 FROM merchandiserequestlogtbl
 WHERE inventory_request_id IS NOT NULL
-  AND status = 'Pending'
-  AND COALESCE(inventory_status, '') NOT IN ('REJECTED', 'FAILED', 'CANCELLED');
+  AND status IN ('Pending', 'Shipped')
+  AND COALESCE(inventory_status, '') NOT IN ('REJECTED', 'FAILED', 'CANCELLED', 'RETURNED');
 ```
 
-Then confirm each against RHET; if RHET is FULFILLED, run sync/repair above.
+Then confirm each against RHET; if RHET is DELIVERED, run sync/repair above.
 
 ## Regression checklist
 
 - `node backend/tests/runMerchRequestSql.test.js` — strip/retry helper
 - `node backend/tests/merchandiseFulfillTypeMatch.test.js` — category vs itemName
+- `node backend/tests/stockRequestLifecycle.test.js` — shipped/delivered/returned helpers
 - Grep: no `merchandisestbl` SQL should reference `updated_at`
-- Fulfill webhook → 200, Approved, stock +qty once; replay → 200, stock unchanged
+- Shipped webhook → 200, Shipped, stock unchanged
+- Delivered webhook → 200, Delivered, stock +qty once; fulfilled alias replay → stock unchanged
+- Returned (wasDelivered) → Returned, stock reversed once
 - Reject webhook → Rejected, no stock add
-- Branch has type Backpack qty 0 → fulfill Backpack/lca-backpack → Backpack qty += N;
+- Branch has type Backpack qty 0 → deliver Backpack/lca-backpack → Backpack qty += N;
   **no** new type `lca-backpack`
 
 ### Repair mistaken itemName types

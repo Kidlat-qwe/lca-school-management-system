@@ -5,11 +5,25 @@ import {
   pickApproverName,
   resolveUniformFulfillIdentity,
 } from '../services/inventory/inventoryFieldMapping.js';
-import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
+import {
+  applyMerchandiseRequestStock,
+  reverseMerchandiseRequestStock,
+} from '../services/inventory/applyMerchandiseRequestStock.js';
 import {
   isMissingColumnError,
   runIgnoringMissingUpdatedAt,
 } from '../services/inventory/runMerchRequestSql.js';
+import {
+  LOCAL_REQUEST_STATUS,
+  isDeliveredEvent,
+  isRejectedEvent,
+  isReturnedEvent,
+  isShippedEvent,
+  isStockCreditedLocalStatus,
+  inferInventoryStatusFromPayload,
+  normalizeRemoteStatus,
+  resolveWasDelivered,
+} from '../services/inventory/stockRequestLifecycle.js';
 
 const router = express.Router();
 
@@ -46,36 +60,9 @@ function verifyWebhookKey(req) {
   return headerKey === expectedKey;
 }
 
-function normalizeStatus(status) {
-  return String(status || '').toUpperCase();
-}
-
-function normalizeEventName(event) {
-  return String(event || '').toLowerCase();
-}
-
-function isFulfilledEvent(payload) {
-  const event = normalizeEventName(payload.event);
-  const status = normalizeStatus(payload.status);
-  return status === 'FULFILLED' || event.includes('fulfilled') || event.endsWith('.fulfilled');
-}
-
-function isRejectedEvent(payload) {
-  const event = normalizeEventName(payload.event);
-  const status = normalizeStatus(payload.status);
-  return (
-    status === 'REJECTED' ||
-    status === 'FAILED' ||
-    event.includes('rejected') ||
-    event.endsWith('.rejected') ||
-    event.includes('failed') ||
-    event.endsWith('.failed')
-  );
-}
-
 /**
  * RHET may send the event body at the top level or nested under `data`.
- * Status may also be implied by `event` (stock_request.fulfilled / .rejected).
+ * Status may also be implied by `event` (stock_request.shipped / .delivered / …).
  */
 function normalizeWebhookPayload(body) {
   const raw = body && typeof body === 'object' ? body : {};
@@ -83,23 +70,13 @@ function normalizeWebhookPayload(body) {
     raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : null;
   const payload = nested ? { ...nested, ...raw, data: nested } : { ...raw };
 
-  const event = String(payload.event || '').toLowerCase();
-  let status = normalizeStatus(payload.status);
-  if (!status) {
-    if (event.includes('fulfilled') || event.endsWith('.fulfilled')) status = 'FULFILLED';
-    else if (event.includes('rejected') || event.endsWith('.rejected')) status = 'REJECTED';
-    else if (event.includes('failed') || event.endsWith('.failed')) status = 'FAILED';
-    else if (event.includes('created') || event.endsWith('.created')) status = 'PENDING';
-  }
-
+  const status = inferInventoryStatusFromPayload(payload);
   return { ...payload, status };
 }
 
 /**
  * Approved By = human name only (processedBy / approvedBy / processedByName).
  * Never use processedByUserId. Never store a UUID.
- * On fulfill/reject, overwrite inventory_processed_by with this value (may be null).
- * On created/pending, do not write inventory_processed_by at all.
  */
 function resolveProcessedByName(payload) {
   return pickApproverName(payload);
@@ -141,9 +118,8 @@ async function findLocalRequest(payload, client = null) {
 
 /**
  * Sync RHET tracking fields.
- * - fulfill/reject (`writeApproverName: true`): overwrite inventory_processed_by with pickApproverName
- * - created/pending: do NOT touch inventory_processed_by (name is always null on created)
- * Never stores processedByUserId / UUIDs.
+ * - terminal events (`writeApproverName: true`): overwrite inventory_processed_by
+ * - created/pending/shipped: do NOT touch inventory_processed_by unless writeApproverName
  */
 async function syncInventoryFields(
   localRequest,
@@ -180,7 +156,6 @@ async function syncInventoryFields(
         ]
       );
     } else {
-      // created / PENDING — never write inventory_processed_by (always null on created)
       await runIgnoringMissingUpdatedAt(
         run,
         `UPDATE merchandiserequestlogtbl
@@ -233,17 +208,155 @@ async function syncInventoryFields(
   return processedBy;
 }
 
+function buildStockApplyRequest(request, payload) {
+  const identity = resolveUniformFulfillIdentity({ request, payload });
+  return {
+    ...request,
+    inventory_matched_sku: payload.matchedSku || request.inventory_matched_sku || null,
+    inventory_item_name:
+      payload.itemName || payload.item_name || request.inventory_item_name || null,
+    inventory_requested_sku:
+      request.inventory_requested_sku || payload.matchedSku || null,
+    inventory_category_name:
+      payload.categoryName ||
+      payload.category_name ||
+      request.inventory_category_name ||
+      null,
+    gender: identity.gender,
+    type: identity.type,
+    size: identity.size,
+  };
+}
+
 /**
- * When RHET fulfills a request:
- * 1. Add stock to the requesting branch's merchandisestbl
- * 2. Mark the local request Approved
- * 3. Store Approved By from payload.processedBy (etc.)
- * 4. Notify the branch Admin only (no Superadmin approval step)
- *
- * Idempotent: if the local request is already Approved, only sync inventory fields
- * (including backfilling inventory_processed_by when RHET re-delivers the name).
+ * SHIPPED: warehouse deducted / handed to courier.
+ * Local status → Shipped. Do NOT add branch stock.
  */
-async function handleFulfilled(localRequest, payload, inventoryStatus, rejectionReason) {
+async function handleShipped(localRequest, payload, inventoryStatus) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const locked = await client.query(
+      'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE',
+      [localRequest.request_id]
+    );
+    const request = locked.rows[0];
+    if (!request) {
+      await client.query('ROLLBACK');
+      return { applied: false, reason: 'not_found' };
+    }
+
+    // Already past shipped (delivered/approved/returned) — sync fields only
+    if (
+      isStockCreditedLocalStatus(request.status) ||
+      request.status === LOCAL_REQUEST_STATUS.RETURNED ||
+      request.status === LOCAL_REQUEST_STATUS.REJECTED
+    ) {
+      await syncInventoryFields(request, payload, inventoryStatus || 'SHIPPED', null, {
+        writeApproverName: false,
+        client,
+      });
+      await client.query('COMMIT');
+      return { applied: false, reason: `status_${request.status}` };
+    }
+
+    const processedBy = await syncInventoryFields(
+      request,
+      payload,
+      inventoryStatus || 'SHIPPED',
+      null,
+      { writeApproverName: true, client }
+    );
+
+    if (request.status === LOCAL_REQUEST_STATUS.SHIPPED) {
+      await client.query('COMMIT');
+      return { applied: false, reason: 'already_shipped', processedBy };
+    }
+
+    // Pending (or Cancelled unlikely) → Shipped
+    if (
+      request.status !== LOCAL_REQUEST_STATUS.PENDING &&
+      request.status !== LOCAL_REQUEST_STATUS.SHIPPED
+    ) {
+      await client.query('COMMIT');
+      return { applied: false, reason: `status_${request.status}`, processedBy };
+    }
+
+    try {
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'SHIPPED',
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $4`,
+        [
+          LOCAL_REQUEST_STATUS.SHIPPED,
+          `In transit: RHET Inventory marked this request as shipped${processedBy ? ` (${processedBy})` : ''}. Branch stock will be added when delivered.`,
+          processedBy,
+          request.request_id,
+        ]
+      );
+    } catch (error) {
+      if (!isMissingInventoryProcessedByColumn(error)) throw error;
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'SHIPPED',
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $3`,
+        [
+          LOCAL_REQUEST_STATUS.SHIPPED,
+          `In transit: RHET Inventory marked this request as shipped. Branch stock will be added when delivered.`,
+          request.request_id,
+        ]
+      );
+    }
+
+    const shipperLabel = processedBy ? ` (${processedBy})` : '';
+    await client.query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        'Stock Request Shipped',
+        `${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked shipped by RHET Central Inventory${shipperLabel}. Stock will be added to your branch when delivery is confirmed.`,
+        ['Admin'],
+        'Active',
+        'Medium',
+        request.requested_branch_id,
+        request.requested_by,
+        'merchandise',
+        'notificationTab=requests',
+      ]
+    );
+
+    await client.query('COMMIT');
+    console.log(
+      `[inventory-webhook] SHIPPED local=${request.request_id} (no branch stock add)`
+    );
+    return { applied: true, processedBy, stockAdded: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * DELIVERED (and legacy FULFILLED alias): branch received.
+ * Add branch stock once (idempotent by local Delivered/Approved status).
+ */
+async function handleDelivered(localRequest, payload, inventoryStatus, rejectionReason) {
   const client = await getClient();
   try {
     await client.query('BEGIN');
@@ -261,51 +374,36 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
     const processedBy = await syncInventoryFields(
       request,
       payload,
-      inventoryStatus,
+      inventoryStatus || 'DELIVERED',
       rejectionReason,
       { writeApproverName: true, client }
     );
 
     console.log(
-      `[inventory-webhook] FULFILLED local=${request.request_id} processedBy=${processedBy || '(none)'}`
+      `[inventory-webhook] DELIVERED local=${request.request_id} processedBy=${processedBy || '(none)'} priorStatus=${request.status}`
     );
 
-    if (request.status === 'Approved') {
+    // Idempotent: already credited (Delivered or legacy Approved)
+    if (isStockCreditedLocalStatus(request.status)) {
       await client.query('COMMIT');
-      return { applied: false, reason: 'already_approved', processedBy };
+      return { applied: false, reason: 'already_delivered', processedBy, stockAdded: false };
     }
 
-    if (request.status !== 'Pending') {
+    if (
+      request.status === LOCAL_REQUEST_STATUS.RETURNED ||
+      request.status === LOCAL_REQUEST_STATUS.REJECTED ||
+      request.status === LOCAL_REQUEST_STATUS.CANCELLED
+    ) {
       await client.query('COMMIT');
       return { applied: false, reason: `status_${request.status}`, processedBy };
     }
 
-    const identity = resolveUniformFulfillIdentity({ request, payload });
+    // Pending or Shipped → Delivered + credit
+    const stockResult = await applyMerchandiseRequestStock(
+      client,
+      buildStockApplyRequest(request, payload)
+    );
 
-    const stockResult = await applyMerchandiseRequestStock(client, {
-      ...request,
-      // Prefer webhook identity when present (matchedSku / itemName / uniform attrs)
-      inventory_matched_sku:
-        payload.matchedSku || request.inventory_matched_sku || null,
-      inventory_item_name:
-        payload.itemName ||
-        payload.item_name ||
-        request.inventory_item_name ||
-        null,
-      inventory_requested_sku:
-        request.inventory_requested_sku || payload.matchedSku || null,
-      inventory_category_name:
-        payload.categoryName ||
-        payload.category_name ||
-        request.inventory_category_name ||
-        null,
-      // Shirt / uniforms: local request first, then webhook, then matchedSku parse
-      gender: identity.gender,
-      type: identity.type,
-      size: identity.size,
-    });
-
-    // Always point the request at the identified stock row (never leave blank shell link)
     if (stockResult?.merchandiseId) {
       await client.query(
         `UPDATE merchandiserequestlogtbl
@@ -319,16 +417,17 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
       await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
-         SET status = 'Approved',
+         SET status = $1,
              reviewed_at = CURRENT_TIMESTAMP,
-             review_notes = COALESCE(review_notes, $1),
-             inventory_status = 'FULFILLED',
-             inventory_processed_by = $2,
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'DELIVERED',
+             inventory_processed_by = $3,
              inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE request_id = $3`,
+         WHERE request_id = $4`,
         [
-          `Auto-approved: RHET Inventory fulfilled this request (${payload.matchedSku || payload.requestId || 'no SKU'})${processedBy ? ` by ${processedBy}` : ''}. Stock ${stockResult.action} on branch.`,
+          LOCAL_REQUEST_STATUS.DELIVERED,
+          `Delivered: RHET Inventory confirmed delivery (${payload.matchedSku || payload.requestId || 'no SKU'})${processedBy ? ` by ${processedBy}` : ''}. Stock ${stockResult.action} on branch.`,
           processedBy,
           request.request_id,
         ]
@@ -338,28 +437,28 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
       await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
         `UPDATE merchandiserequestlogtbl
-         SET status = 'Approved',
+         SET status = $1,
              reviewed_at = CURRENT_TIMESTAMP,
-             review_notes = COALESCE(review_notes, $1),
-             inventory_status = 'FULFILLED',
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'DELIVERED',
              inventory_synced_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE request_id = $2`,
+         WHERE request_id = $3`,
         [
-          `Auto-approved: RHET Inventory fulfilled this request (${payload.matchedSku || payload.requestId || 'no SKU'}). Stock ${stockResult.action} on branch.`,
+          LOCAL_REQUEST_STATUS.DELIVERED,
+          `Delivered: RHET Inventory confirmed delivery (${payload.matchedSku || payload.requestId || 'no SKU'}). Stock ${stockResult.action} on branch.`,
           request.request_id,
         ]
       );
     }
 
     const approverLabel = processedBy ? ` (${processedBy})` : '';
-
     await client.query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
-        'Stock Added from Central Inventory',
-        `${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were approved by RHET Central Inventory${approverLabel} and added to your branch stock.`,
+        'Stock Delivered from Central Inventory',
+        `${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked delivered by RHET Central Inventory${approverLabel} and added to your branch stock.`,
         ['Admin'],
         'Active',
         'Medium',
@@ -372,9 +471,9 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
 
     await client.query('COMMIT');
     console.log(
-      `[inventory-webhook] Fulfilled request ${request.request_id}: stock ${stockResult.action}, qty now ${stockResult.newQuantity}, approvedBy=${processedBy}`
+      `[inventory-webhook] Delivered request ${request.request_id}: stock ${stockResult.action}, qty now ${stockResult.newQuantity}`
     );
-    return { applied: true, stockResult, processedBy };
+    return { applied: true, stockResult, processedBy, stockAdded: true };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -384,7 +483,129 @@ async function handleFulfilled(localRequest, payload, inventoryStatus, rejection
 }
 
 /**
- * When RHET rejects/fails a request: mark local request Rejected, store Approved By, notify Admin.
+ * RETURNED: reverse CMS credit only when wasDelivered (or local was Delivered/Approved).
+ * From Shipped only → status Returned, no reverse.
+ */
+async function handleReturned(localRequest, payload, inventoryStatus) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const locked = await client.query(
+      'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE',
+      [localRequest.request_id]
+    );
+    const request = locked.rows[0];
+    if (!request) {
+      await client.query('ROLLBACK');
+      return { applied: false, reason: 'not_found' };
+    }
+
+    const processedBy = await syncInventoryFields(
+      request,
+      payload,
+      inventoryStatus || 'RETURNED',
+      payload.rejectionReason || payload.failureReason || null,
+      { writeApproverName: true, client }
+    );
+
+    if (request.status === LOCAL_REQUEST_STATUS.RETURNED) {
+      await client.query('COMMIT');
+      return { applied: false, reason: 'already_returned', processedBy };
+    }
+
+    const wasDelivered = resolveWasDelivered(payload, request.status);
+    let stockResult = null;
+
+    if (wasDelivered) {
+      stockResult = await reverseMerchandiseRequestStock(
+        client,
+        buildStockApplyRequest(request, payload)
+      );
+    }
+
+    try {
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = CURRENT_TIMESTAMP,
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'RETURNED',
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $4`,
+        [
+          LOCAL_REQUEST_STATUS.RETURNED,
+          wasDelivered
+            ? `Returned to warehouse after delivery${processedBy ? ` (${processedBy})` : ''}. Branch stock reversed (${stockResult?.qtyRemoved ?? 0} units).`
+            : `Returned to warehouse before delivery${processedBy ? ` (${processedBy})` : ''}. No branch stock change.`,
+          processedBy,
+          request.request_id,
+        ]
+      );
+    } catch (error) {
+      if (!isMissingInventoryProcessedByColumn(error)) throw error;
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = CURRENT_TIMESTAMP,
+             review_notes = COALESCE(review_notes, $2),
+             inventory_status = 'RETURNED',
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $3`,
+        [
+          LOCAL_REQUEST_STATUS.RETURNED,
+          wasDelivered
+            ? `Returned to warehouse after delivery. Branch stock reversed (${stockResult?.qtyRemoved ?? 0} units).`
+            : `Returned to warehouse before delivery. No branch stock change.`,
+          request.request_id,
+        ]
+      );
+    }
+
+    const actorLabel = processedBy ? ` (${processedBy})` : '';
+    await client.query(
+      `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        'Stock Request Returned',
+        wasDelivered
+          ? `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel}. Branch stock was reversed.`
+          : `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel} before delivery. Branch stock was unchanged.`,
+        ['Admin'],
+        'Active',
+        'Medium',
+        request.requested_branch_id,
+        request.requested_by,
+        'merchandise',
+        'notificationTab=requests',
+      ]
+    );
+
+    await client.query('COMMIT');
+    console.log(
+      `[inventory-webhook] RETURNED local=${request.request_id} wasDelivered=${wasDelivered} reversed=${stockResult?.action || 'n/a'}`
+    );
+    return {
+      applied: true,
+      processedBy,
+      wasDelivered,
+      stockResult,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * When RHET rejects a request: mark local request Rejected, notify Admin.
  */
 async function handleRejected(localRequest, payload, inventoryStatus, rejectionReason) {
   const client = await getClient();
@@ -404,7 +625,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
     const processedBy = await syncInventoryFields(
       request,
       payload,
-      inventoryStatus,
+      inventoryStatus || 'REJECTED',
       rejectionReason,
       { writeApproverName: true, client }
     );
@@ -413,7 +634,11 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
       `[inventory-webhook] ${inventoryStatus} local=${request.request_id} processedBy=${processedBy || '(none)'}`
     );
 
-    if (request.status === 'Pending') {
+    const canReject =
+      request.status === LOCAL_REQUEST_STATUS.PENDING ||
+      request.status === LOCAL_REQUEST_STATUS.SHIPPED;
+
+    if (canReject) {
       try {
         await runIgnoringMissingUpdatedAt(
           client.query.bind(client),
@@ -422,6 +647,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
                reviewed_at = CURRENT_TIMESTAMP,
                review_notes = COALESCE($1, review_notes),
                inventory_processed_by = $2,
+               inventory_status = 'REJECTED',
                updated_at = CURRENT_TIMESTAMP
            WHERE request_id = $3`,
           [
@@ -439,6 +665,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
            SET status = 'Rejected',
                reviewed_at = CURRENT_TIMESTAMP,
                review_notes = COALESCE($1, review_notes),
+               inventory_status = 'REJECTED',
                updated_at = CURRENT_TIMESTAMP
            WHERE request_id = $2`,
           [
@@ -456,7 +683,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           'Stock Request Rejected by Central Inventory',
-          `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was ${inventoryStatus === 'FAILED' ? 'flagged as failed' : 'rejected'} by RHET Central Inventory${rejectorLabel}.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
+          `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was rejected by RHET Central Inventory${rejectorLabel}.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
           ['Admin'],
           'Active',
           'Medium',
@@ -467,7 +694,6 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
         ]
       );
     } else if (processedBy) {
-      // Re-delivered reject webhook or status already Rejected — still backfill Approved By
       try {
         await runIgnoringMissingUpdatedAt(
           client.query.bind(client),
@@ -483,7 +709,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
     }
 
     await client.query('COMMIT');
-    return { applied: true, processedBy };
+    return { applied: canReject, processedBy };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -494,10 +720,10 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
 
 /**
  * POST /api/webhooks/inventory
- * Receives stock_request.created / fulfilled / rejected events from RHET Inventory.
+ * Receives stock_request.created / shipped / delivered / fulfilled / returned / rejected
+ * from RHET Inventory.
  *
- * On fulfilled: auto-adds stock to the requesting branch and marks the local
- * request Approved. Superadmin does not need to approve inventory-integrated requests.
+ * Stock is added only on delivered (fulfilled is a legacy alias — credit once).
  */
 router.post('/', async (req, res) => {
   try {
@@ -506,10 +732,12 @@ router.post('/', async (req, res) => {
     }
 
     const payload = normalizeWebhookPayload(req.body);
-    const inventoryStatus = normalizeStatus(payload.status);
+    const inventoryStatus = normalizeRemoteStatus(payload.status);
     const rejectionReason = payload.rejectionReason || payload.failureReason || null;
     const processedByPreview = resolveProcessedByName(payload);
-    const fulfilled = isFulfilledEvent(payload);
+    const shipped = isShippedEvent(payload);
+    const delivered = isDeliveredEvent(payload);
+    const returned = isReturnedEvent(payload);
     const rejected = isRejectedEvent(payload);
 
     console.log('[inventory-webhook] Received', {
@@ -517,8 +745,12 @@ router.post('/', async (req, res) => {
       status: inventoryStatus,
       requestId: payload.requestId,
       externalReference: payload.externalReference,
+      branchName: payload.branchName || null,
+      wasDelivered: payload.wasDelivered,
       processedBy: processedByPreview,
-      fulfilled,
+      shipped,
+      delivered,
+      returned,
       rejected,
     });
 
@@ -532,8 +764,10 @@ router.post('/', async (req, res) => {
       return res.json({ success: true, message: 'No matching local request' });
     }
 
-    if (fulfilled) {
-      const result = await handleFulfilled(localRequest, payload, inventoryStatus, rejectionReason);
+    // Order matters: returned/rejected before delivered; shipped before created fallback.
+    // delivered covers legacy fulfilled alias.
+    if (returned) {
+      const result = await handleReturned(localRequest, payload, inventoryStatus);
       return res.json({ success: true, ...result });
     }
 
@@ -542,7 +776,22 @@ router.post('/', async (req, res) => {
       return res.json({ success: true, ...result });
     }
 
-    // created / PENDING — sync tracking fields only; do NOT write inventory_processed_by
+    if (delivered) {
+      const result = await handleDelivered(
+        localRequest,
+        payload,
+        inventoryStatus,
+        rejectionReason
+      );
+      return res.json({ success: true, ...result });
+    }
+
+    if (shipped) {
+      const result = await handleShipped(localRequest, payload, inventoryStatus);
+      return res.json({ success: true, ...result });
+    }
+
+    // created / PENDING — sync tracking fields only
     await syncInventoryFields(localRequest, payload, inventoryStatus, rejectionReason, {
       writeApproverName: false,
     });

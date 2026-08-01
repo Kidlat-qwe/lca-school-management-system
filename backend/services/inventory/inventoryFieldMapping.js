@@ -701,10 +701,32 @@ export function normalizeInventoryReason(reason, fallbackReason) {
 }
 
 /**
+ * Normalize and validate top-level `branchName` for RHET stock requests.
+ * RHET requires a display name (min 2 chars), not a numeric/UUID id.
+ */
+export function normalizeInventoryBranchName(branchName) {
+  const value = String(branchName || '').trim();
+  if (value.length < 2) {
+    return null;
+  }
+  if (looksLikeUuid(value) || /^\d+$/.test(value)) {
+    return null;
+  }
+  return value;
+}
+
+/**
  * Build the full POST /stock-requests body for one local request row.
  * Omits empty optional fields so RHET does not reject null/undefined values.
+ * RHET requires top-level `branchName` (campus display name, min 2 chars).
  */
-export function buildInventorySubmitPayload({ requestRow, requestedBy, reason, webhookUrl }) {
+export function buildInventorySubmitPayload({
+  requestRow,
+  requestedBy,
+  reason,
+  webhookUrl,
+  branchName,
+}) {
   const item = buildInventoryStockRequestItem(requestRow);
   const matchError = assertInventoryItemHasMatchKey(item);
   if (matchError) {
@@ -713,9 +735,20 @@ export function buildInventorySubmitPayload({ requestRow, requestedBy, reason, w
     throw err;
   }
 
+  const normalizedBranchName = normalizeInventoryBranchName(branchName);
+  if (!normalizedBranchName) {
+    const err = new Error(
+      'Branch display name is required for RHET stock requests (at least 2 characters). ' +
+        'Ensure the requesting admin is assigned to a branch with a valid name.'
+    );
+    err.code = 'BRANCH_NAME_REQUIRED';
+    throw err;
+  }
+
   const payload = {
     requestDate: new Date().toISOString().slice(0, 10),
     requestedBy: String(requestedBy || 'PSMS Admin').trim() || 'PSMS Admin',
+    branchName: normalizedBranchName,
     reason: normalizeInventoryReason(reason, requestRow.request_reason),
     items: [item],
   };

@@ -46,7 +46,14 @@ export function getMerchandiseRequestApprovedBy(request) {
   const hasInventoryLink = Boolean(
     request.inventory_request_id || request.inventoryRequestId
   );
-  if ((status === 'Approved' || status === 'Rejected') && hasInventoryLink) {
+  if (
+    (status === 'Approved' ||
+      status === 'Delivered' ||
+      status === 'Shipped' ||
+      status === 'Returned' ||
+      status === 'Rejected') &&
+    hasInventoryLink
+  ) {
     return 'RHET Inventory';
   }
 

@@ -8,15 +8,20 @@ Guides for deploying the Physical School Management System (PSMS).
 
 ## Overview
 
-PSMS deploys as two applications from one repository:
+PSMS deploys as two applications from one repository on RHET/LCA Coolify
+(**Cloudflare Tunnel** — see internal *Coolify New App Deployment Quick Guide*):
 
 - **Backend API** (`backend/`) — Node.js/Express, Nixpacks, port `3000`.
-- **Frontend SPA** (`frontend/`) — Vite/React static build, served with SPA fallback.
+- **Frontend SPA** (`frontend/`) — Vite/React static build (`dist`), SPA fallback.
 
-The PostgreSQL database is external (Neon) and is not deployed by these guides.
+Coolify Domains use `http://*.lca-app.com`; open apps with `https://` in the browser.
+Never use `sslip.io`. PostgreSQL is external (Neon).
 
-## Key gotcha
+## Key gotchas
 
-`backend/config/loadEnv.js` reads `NODE_ENV` from a physical `.env` file. On
-Coolify (no `.env` file), start the backend with `node server.js --production`
-so it selects the `DB_*_PRODUCTION` variables. See `COOLIFY_DEPLOYMENT.md` for details.
+1. Backend start on Coolify: `node server.js --production` (`backend/nixpacks.toml`).
+2. Prefer `FIREBASE_PRIVATE_KEY_BASE64` (PEM `private_key` only).
+3. Frontend: publish `dist` as static SPA; Domain `http://cms.lca-app.com` in Coolify.
+4. Linode (`cms.little-champion.com`) is unchanged — Coolify logic only when `COOLIFY*` is set.
+
+See `COOLIFY_DEPLOYMENT.md` for the full checklist.

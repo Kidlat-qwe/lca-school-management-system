@@ -1,32 +1,32 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Hosts for Vite dev / preview (Linode `cms.little-champion.com`, Coolify `cms.lca-app.com`).
+// Prefer Coolify static publish of `dist` when possible; preview is the fallback.
+const allowedHosts = [
+  'lca-management-system.replit.app',
+  '.replit.app',
+  '.repl.co',
+  'localhost',
+  'cms.little-champion.com',
+  'cms.lca-app.com',
+  '.lca-app.com',
+]
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0', // Allow external connections (for Replit)
+    host: '0.0.0.0', // Allow external connections (for Replit / Coolify)
     port: parseInt(process.env.PORT) || 5173,
     strictPort: false, // Allow port fallback
-    allowedHosts: [
-      'lca-management-system.replit.app',
-      '.replit.app',
-      '.repl.co',
-      'localhost',
-      'cms.little-champion.com',
-    ],
+    allowedHosts,
   },
   preview: {
-    host: '0.0.0.0', // Allow external connections (for Replit)
+    host: '0.0.0.0', // Allow external connections (for Replit / Coolify)
     port: parseInt(process.env.PORT) || 5173,
     strictPort: false, // Allow port fallback
-    allowedHosts: [
-      'lca-management-system.replit.app',
-      '.replit.app',
-      '.repl.co',
-      'localhost',
-      'cms.little-champion.com',
-    ],
+    allowedHosts,
   },
   build: {
     // Optimize build for Replit memory constraints

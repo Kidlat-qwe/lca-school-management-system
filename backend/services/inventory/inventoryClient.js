@@ -242,3 +242,37 @@ export async function submitStockRequests(payload) {
 export async function getStockRequest(requestId) {
   return inventoryRequest(`/stock-requests/${requestId}`);
 }
+
+/**
+ * POST /stock-requests/:id/deliver — branch confirms physical receipt.
+ * RHET moves SHIPPED → DELIVERED and should webhook CMS.
+ *
+ * Body (optional fields RHET may accept):
+ *   confirmedBy, branchName, notes
+ */
+export async function markStockRequestDelivered(requestId, body = {}) {
+  const id = String(requestId || '').trim();
+  if (!id) {
+    throw new InventoryApiError('Missing RHET stock request id for deliver', {
+      code: 'MISSING_REQUEST_ID',
+      status: 400,
+    });
+  }
+
+  const payload = {};
+  const confirmedBy = String(body.confirmedBy || '').trim();
+  const branchName = String(body.branchName || '').trim();
+  const notes = String(body.notes || '').trim();
+  if (confirmedBy) payload.confirmedBy = confirmedBy;
+  if (branchName) payload.branchName = branchName;
+  if (notes) payload.notes = notes;
+
+  return inventoryRequestWithRetry(
+    `/stock-requests/${encodeURIComponent(id)}/deliver`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    { retries: 1 }
+  );
+}

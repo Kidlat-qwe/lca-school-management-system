@@ -1,0 +1,16 @@
+# Nixpacks / Coolify defaults for the PSMS frontend SPA.
+# Preferred Coolify mode: static site with Publish Directory `dist` (no start command).
+# If Coolify runs this as a Node app after build, use vite preview (not `npm start`,
+# which remains `npm run dev` for Linode PM2 / Replit / local).
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npx vite preview --host 0.0.0.0 --strictPort"

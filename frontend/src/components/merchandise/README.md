@@ -26,3 +26,20 @@ CMS category list. Supports `onRetry` when RHET catalog fails temporarily.
 
 Request Stock panel for Learning Kit: kit picker + BOM component collector
 (recipes from `merchandiseRequests/learningKit.js`).
+
+## RequestActionsMenu
+
+Ellipsis (⋮) menu for Merchandise → **Requests** Actions column.
+Always includes **Track request item**; optional Cancel / Review / View.
+
+## TrackRequestProgressModal
+
+Modal timeline for RHET stock-request progress:
+
+`Pending` → `Shipped` → `Delivered` (with terminal `Returned` / `Rejected`).
+
+When status is **Shipped**, Branch Admin can **Confirm received** (calls
+`POST /merchandise-requests/:id/confirm-delivery` → RHET `/stock-requests/:id/deliver`).
+
+Uses `utils/merchandiseRequests/trackProgress.js` to map local `status`
+(and legacy `Approved` → Delivered) onto step states.

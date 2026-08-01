@@ -1,93 +1,90 @@
 # Deploying PSMS on Coolify
 
 Step-by-step guide to deploy the **Physical School Management System (PSMS)** on
-[Coolify](https://coolify.io). PSMS is split into two deployable applications that
-are created as **separate Coolify resources** from the same Git repository:
+the RHET/LCA Coolify host (via **Cloudflare Tunnel**). Aligns with the internal
+*Coolify New App Deployment Quick Guide*.
 
-| Application | Path in repo | Type | Example domain |
-|---|---|---|---|
-| Backend API | `backend/` | Node.js (Nixpacks) | `api-cms.lca-app.com` |
-| Frontend SPA | `frontend/` | Static site (Nixpacks) | `cms.lca-app.com` |
+PSMS is split into **two Coolify Application resources** from the same Git repo:
+
+| Application | Path in repo | Type | Coolify Domain (enter as) | Open in browser |
+|---|---|---|---|---|
+| Backend API | `backend/` | Node.js (Nixpacks) | `http://api-cms.lca-app.com` | `https://api-cms.lca-app.com` |
+| Frontend SPA | `frontend/` | Static / Nixpacks | `http://cms.lca-app.com` | `https://cms.lca-app.com` |
 
 The PostgreSQL database is **external (Neon)** and is not deployed on Coolify.
 
 ---
 
+## Important rules (LCA Coolify + Cloudflare Tunnel)
+
+1. **Do not use** the generated `sslip.io` link. It points at the public IP and may
+   open the Globe router page. Always use an `lca-app.com` subdomain.
+2. In Coolify **Domains**, enter **`http://`** (not `https://`):
+
+   ```text
+   http://api-cms.lca-app.com
+   http://cms.lca-app.com
+   ```
+
+3. In the browser, always open **`https://`**. Cloudflare terminates HTTPS;
+   Coolify receives traffic through the tunnel on HTTP port 80.
+4. After changing domain or environment variables, **Redeploy**.
+
+---
+
 ## 1. Prerequisites
 
-Before starting, make sure you have:
+- App repository on GitHub/GitLab and the correct branch (usually `main`).
+- Coolify project/environment ready; Git source connected.
+- Chosen subdomains: `api-cms.lca-app.com` (API), `cms.lca-app.com` (SPA).
+- Credentials ready:
+  - Neon PostgreSQL (`DB_*_PRODUCTION`)
+  - Firebase Admin (prefer `FIREBASE_PRIVATE_KEY_BASE64`)
+  - AWS S3, SendGrid, Semaphore SMS
+  - RHET Inventory key (optional — see `PSMS_API_INTEGRATION.md`)
 
-- A running Coolify instance (self-hosted server or Coolify Cloud) with a public IP.
-- A Coolify **Source** connected to this Git repository (GitHub App or deploy key).
-- DNS control for your domain so you can point subdomains to the Coolify server.
-- The following external credentials ready:
-  - Neon PostgreSQL connection details (production database).
-  - Firebase Admin SDK service account (JSON downloaded from Firebase Console).
-  - AWS S3 access key/secret and bucket name.
-  - SendGrid API key (or SMTP credentials).
-  - Semaphore SMS API key.
-  - RHET Inventory integration key (see `PSMS_API_INTEGRATION.md`), if the
-    inventory integration is enabled.
-
----
-
-## 2. DNS setup
-
-Create two `A` records pointing to your Coolify server public IP:
-
-  ```text
-  api-cms.lca-app.com   →  <coolify-server-ip>
-  cms.lca-app.com       →  <coolify-server-ip>
-  ```
-
-The frontend auto-detects `*.lca-app.com` and calls `https://api-cms.lca-app.com/api/sms`
-(see `frontend/src/config/api.js`), so using these hostnames avoids extra configuration.
+DNS / tunnel for `*.lca-app.com` is managed by IT (Cloudflare Tunnel). Escalate
+to IT if the app is **Running** but still unreachable after domain, port, and
+env are correct.
 
 ---
 
-## 3. Create a Coolify project
+## 2. Create / open the Coolify project
 
-1. In Coolify, open **Projects → + Add**.
-2. Name it `PSMS` and select an environment (e.g. `production`).
-3. You will add **two resources** to this project in the next sections.
+1. Coolify → **Projects** → select environment.
+2. You will add **two** resources (backend + frontend) from the same repository.
 
 ---
 
-## 4. Deploy the backend API
+## 3. Deploy the backend API
 
-### 4.1 Create the resource
+### 3.1 Create the resource
 
-1. Inside the `PSMS` project, click **+ New Resource → Application**.
-2. Choose the connected Git **Source** and select this repository and branch (`main`).
-3. Build Pack: **Nixpacks**.
-4. Set **Base Directory** to `/backend` so Coolify builds only the backend.
-5. Coolify auto-detects Node.js. Confirm/adjust the commands:
+1. **New Resource → Application → Git Repository**.
+2. Paste the repository URL; select the correct branch.
+3. Build method: **Nixpacks** (no production Dockerfile in this repo).
+4. **Base Directory:** `/backend`.
+5. Confirm commands (`backend/nixpacks.toml` defaults):
 
   ```text
   Install Command:  npm install
   Start Command:    node server.js --production
   ```
 
-> Important: `backend/config/loadEnv.js` reads `NODE_ENV` from a physical `.env`
-> file. On Coolify there is no such file, so it would default to `development`.
-> The `--production` flag in the start command forces production mode and makes
-> the app read the `DB_*_PRODUCTION` variables. Do not omit it.
+> **Required:** start must include `--production`. If logs show
+> `NODE_ENV=development ... | DB: psms_db`, the API is on the wrong database.
+> Do not use bare `node server.js` or `npm start`.
 
-### 4.2 Configure the port
+### 3.2 Network — port
 
-- Set **Ports Exposes** to `3000` (the backend listens on `process.env.PORT || 3000`
-  and binds to `0.0.0.0`).
+- **Ports Exposes:** `3000` (app listens on `process.env.PORT || 3000`, host `0.0.0.0`).
 
-### 4.3 Set the domain
+### 3.3 Domain
 
-- Under **Domains**, set `https://api-cms.lca-app.com`.
-- Coolify provisions a Let's Encrypt certificate automatically.
+- **General → Domains:** `http://api-cms.lca-app.com`  
+  (use `http://` in Coolify; open with `https://` in the browser)
 
-### 4.4 Environment variables
-
-Open the backend resource **Environment Variables** tab and add the following.
-These mirror `backend/.env` and use the `_PRODUCTION` suffix so they are selected
-when the app starts with `--production`.
+### 3.4 Environment variables
 
   ```env
   # Runtime
@@ -102,16 +99,16 @@ when the app starts with `--production`.
   DB_PASSWORD_PRODUCTION=your-db-password
   DB_SSL_PRODUCTION=true
 
-  # CORS (comma-separated) — must include the frontend origin
+  # CORS — external HTTPS origin of the SPA
   CORS_ORIGIN=https://cms.lca-app.com
 
-  # Firebase Admin — recommended on Coolify: BASE64 (avoids newline mangling)
+  # Firebase Admin — BASE64 recommended on Coolify
   FIREBASE_PROJECT_ID=psms-b9ca7
   FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@psms-b9ca7.iam.gserviceaccount.com
   FIREBASE_PRIVATE_KEY_BASE64=<base64-encoded-private-key>
   FIREBASE_API_KEY=your-firebase-web-api-key
 
-  # AWS S3 (image uploads)
+  # AWS S3
   AWS_REGION=ap-southeast-1
   AWS_ACCESS_KEY_ID=your-access-key
   AWS_SECRET_ACCESS_KEY=your-secret-key
@@ -122,13 +119,13 @@ when the app starts with `--production`.
   SENDGRID_API_KEY=your-sendgrid-key
   SENDGRID_FROM_EMAIL=lca@little-champion.com
 
-  # SMS (Semaphore, Philippines)
+  # SMS
   SMS_NOTIFICATIONS_ENABLED=true
   SEMAPHORE_API_KEY=your-semaphore-key
   SEMAPHORE_SENDER_NAME=LCAcademy
   SEMAPHORE_API_URL=https://api.semaphore.co/api/v4/messages
 
-  # RHET Inventory integration (optional — see PSMS_API_INTEGRATION.md)
+  # RHET Inventory (optional)
   INVENTORY_API_URL=https://your-inventory-domain.com/api/v1/integrations
   INVENTORY_INTEGRATION_KEY=your-long-random-shared-secret
   INVENTORY_WEBHOOK_URL=https://api-cms.lca-app.com/api/webhooks/inventory
@@ -136,26 +133,24 @@ when the app starts with `--production`.
 
 #### Generating `FIREBASE_PRIVATE_KEY_BASE64`
 
-From the downloaded service-account JSON, base64-encode the `private_key` value:
+Encode **only** the `private_key` string from the service-account JSON (not the whole file):
 
   ```bash
   node -e "console.log(Buffer.from(require('./service-account.json').private_key).toString('base64'))"
   ```
 
-Paste the output as `FIREBASE_PRIVATE_KEY_BASE64`. If you prefer the raw key, use
-`FIREBASE_PRIVATE_KEY` with Coolify's **Is Multiline** enabled and real line breaks.
+### 3.5 Save and deploy
 
-### 4.5 Deploy
-
-- Click **Deploy**. Watch the logs for:
+- **Save**, then **Deploy** / **Redeploy**. Wait until **Running** / **Healthy**.
+- Expected logs:
 
   ```text
-  ✅ Database connected successfully
+  🔧 NODE_ENV=production ... | DB: psms_production
   ✅ Firebase Admin initialized successfully
   🚀 Server is running on 0.0.0.0:3000
   ```
 
-- Verify the health endpoint:
+- Verify externally:
 
   ```bash
   curl https://api-cms.lca-app.com/health
@@ -163,33 +158,37 @@ Paste the output as `FIREBASE_PRIVATE_KEY_BASE64`. If you prefer the raw key, us
 
 ---
 
-## 5. Deploy the frontend SPA
+## 4. Deploy the frontend SPA
 
-### 5.1 Create the resource
+### 4.1 Create the resource
 
-1. In the same `PSMS` project, click **+ New Resource → Application**.
-2. Select the same Git **Source**, repository, and branch.
-3. Build Pack: **Nixpacks**.
-4. Set **Base Directory** to `/frontend`.
-5. Configure build settings:
+1. **New Resource → Application** — same repo and branch.
+2. Build method: **Nixpacks**.
+3. **Base Directory:** `/frontend`.
+4. Prefer **static** publish of the Vite build:
 
   ```text
-  Install Command:  npm install
-  Build Command:    npm run build
+  Install Command:   npm install
+  Build Command:     npm run build
   Publish Directory: dist
   ```
 
-6. Enable the **SPA / single-page app** option (fallback all routes to
-   `index.html`) so client-side routing works on refresh. If your build pack has
-   no toggle, add a static fallback rule that serves `index.html` for unknown paths.
+5. Enable **SPA** fallback to `index.html` (client-side routing).
 
-### 5.2 Set the domain
+> If you see `Blocked request. This host ("cms.lca-app.com") is not allowed`,
+> Coolify is running Vite instead of static `dist`. Switch to Publish Directory
+> `dist`, or Build `npm run build` + Start
+> `npx vite preview --host 0.0.0.0 --strictPort` (`frontend/nixpacks.toml`).
+> Do **not** use `npm start` on Coolify (`npm start` stays `npm run dev` for Linode).
 
-- Under **Domains**, set `https://cms.lca-app.com`.
+### 4.2 Domain
 
-### 5.3 Environment variables (build-time)
+- **Domains:** `http://cms.lca-app.com`  
+  Browser: `https://cms.lca-app.com`
 
-Vite variables are baked in at build time, so set them **before** deploying:
+### 4.3 Environment variables (build-time)
+
+Use **external HTTPS** URLs (Cloudflare-facing), not `http://`:
 
   ```env
   VITE_API_BASE_URL=https://api-cms.lca-app.com/api/sms
@@ -197,74 +196,68 @@ Vite variables are baked in at build time, so set them **before** deploying:
   VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
   ```
 
-> `VITE_API_BASE_URL` is optional on `*.lca-app.com` because the app auto-detects
-> the API host, but setting it explicitly is recommended and required for any
-> other domain.
+Plus any `VITE_FIREBASE_*` the SPA needs. Change env → **Redeploy** (Vite bakes
+values at build time).
 
-### 5.4 Deploy
+### 4.4 Save and deploy
 
-- Click **Deploy**. After the build finishes, open `https://cms.lca-app.com` and
-  confirm the login page loads and network calls hit `api-cms.lca-app.com`.
-
----
-
-## 6. Database migrations
-
-The production database is external (Neon). Run pending SQL migrations from
-`backend/migrations/` against the production database. Options:
-
-- Run them from a local machine that has the production `.env`:
-
-  ```bash
-  cd backend
-  node -e "import('./config/loadEnv.js').then(async () => { const { readFileSync } = await import('fs'); const { query } = await import('./config/database.js'); const sql = readFileSync('./migrations/124_add_inventory_fields_to_merchandiserequestlogtbl.sql','utf8'); await query(sql); console.log('done'); process.exit(0); });" -- --production
-  ```
-
-- Or apply the `.sql` file directly with `psql` against the Neon connection string.
-
-Always review `backend/migrations/README.md` and apply migrations in numeric order.
+- Open `https://cms.lca-app.com` (not sslip.io). Confirm API calls go to
+  `https://api-cms.lca-app.com`.
 
 ---
 
-## 7. Post-deploy verification checklist
+## 5. Database migrations
 
-- [ ] `GET https://api-cms.lca-app.com/health` returns `success: true`.
-- [ ] Frontend loads at `https://cms.lca-app.com` with no mixed-content errors.
-- [ ] Login works (Firebase Admin initialized on the backend).
-- [ ] An authenticated API call succeeds (no CORS error in the browser console).
-- [ ] Image upload works (AWS S3 credentials valid).
-- [ ] A test email/SMS is delivered.
-- [ ] Merchandise stock request reaches RHET Inventory (if integration enabled).
+Apply `backend/migrations/*.sql` to Neon in numeric order (not run by Coolify).
+See `backend/migrations/README.md`.
 
 ---
 
-## 8. Redeploys and rollbacks
+## 6. Final checklist (LCA guide + PSMS)
 
-- **Redeploy:** push to the deployed branch; enable **Auto Deploy** on each
-  resource for push-to-deploy, or click **Deploy** manually.
-- **Rollback:** use Coolify's **Deployments** history to redeploy a previous build.
-- Frontend env changes require a **rebuild** (Vite variables are compiled in).
+- [ ] Repository and branch are correct.
+- [ ] Build method is **Nixpacks**; base dirs `/backend` and `/frontend`.
+- [ ] Backend start: `node server.js --production`; port **3000**.
+- [ ] Coolify Domains use **`http://`** (`api-cms` + `cms`).
+- [ ] Browser opens **`https://`** only — no `sslip.io`.
+- [ ] Redeployed after domain/env changes.
+- [ ] Backend logs: `NODE_ENV=production`, `DB: psms_production`, Firebase OK.
+- [ ] `GET https://api-cms.lca-app.com/health` succeeds.
+- [ ] Login works; no CORS / mixed-content errors.
+- [ ] Image upload / email / SMS / inventory as needed.
+
+Escalate to IT if the app is Running but still cannot open after domain, port,
+and environment variables are confirmed.
 
 ---
 
-## 9. Troubleshooting
+## 7. Redeploys and rollbacks
+
+- Push to the watched branch or click **Deploy**.
+- Rollback via Coolify **Deployments** history.
+- Frontend env changes require a **rebuild**.
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| App connects to the wrong database | `--production` flag missing | Set start command to `node server.js --production` |
-| `Missing required Firebase environment variables` | Private key not set/decoded | Use `FIREBASE_PRIVATE_KEY_BASE64`, or `FIREBASE_PRIVATE_KEY` with **Is Multiline** |
-| `FIREBASE_PRIVATE_KEY does not look like a PEM key` | Newlines mangled by Coolify | Prefer the BASE64 variable |
-| CORS errors in browser | Frontend origin not allowed | Add the frontend URL to `CORS_ORIGIN` |
-| Mixed-content blocked | API served over HTTP | Ensure both apps use HTTPS domains in Coolify |
-| 404 on page refresh (SPA route) | No SPA fallback | Enable SPA mode / serve `index.html` for unknown paths |
-| Frontend calls wrong API URL | Stale build-time env | Set `VITE_API_BASE_URL` and redeploy the frontend |
+| Globe router / wrong page | Using `sslip.io` or public IP | Use `https://*.lca-app.com` only |
+| Redirect / wrong URL | Domain entered as `https://` in Coolify | Set Domain to `http://subdomain.lca-app.com`, redeploy |
+| Logs show `NODE_ENV=development` / `DB: psms_db` | Missing `--production` | Start: `node server.js --production` |
+| `FIREBASE_PRIVATE_KEY does not look like a PEM key` | Mangling / wrong BASE64 | BASE64 of **only** `private_key` from service-account JSON |
+| `Blocked request... cms.lca-app.com` | Vite instead of static `dist` | Publish Directory `dist`, or nixpacks preview start |
+| CORS errors | Wrong origin | `CORS_ORIGIN=https://cms.lca-app.com` |
+| Frontend calls wrong API | Stale Vite env | Set `VITE_API_BASE_URL=https://api-cms.lca-app.com/api/sms`, redeploy |
+| Running but unreachable | Tunnel / DNS | Escalate to IT (domain, port, env already confirmed) |
 
 ---
 
-## 10. Reference
+## 9. Reference
 
-- API integration: `PSMS_API_INTEGRATION.md` (repository root)
-- Backend overview: `backend/README.md`
-- Migrations: `backend/migrations/README.md`
-- Env loading logic: `backend/config/loadEnv.js`
+- Internal: *Coolify New App Deployment Quick Guide* (Cloudflare Tunnel)
+- API integration: `PSMS_API_INTEGRATION.md`
+- Backend: `backend/README.md`
+- Env loading: `backend/config/loadEnv.js`
 - API host detection: `frontend/src/config/api.js`

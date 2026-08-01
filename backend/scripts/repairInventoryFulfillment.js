@@ -1,17 +1,16 @@
 /**
- * Repair / apply a RHET-fulfilled stock request onto CMS branch merchandise.
+ * Repair / apply a RHET-delivered stock request onto CMS branch merchandise.
  *
  * Use when:
  * - Migration 124 was missing when the request was submitted
  * - The webhook never reached CMS
- * - Local row exists (Pending) and you have the RHET request UUID
+ * - Local row exists (Pending/Shipped) and you have the RHET request UUID
  *
  * Usage:
  *   node scripts/repairInventoryFulfillment.js --production --request-id=123
  *   node scripts/repairInventoryFulfillment.js --production --request-id=123 --inventory-request-id=<uuid>
  *
- * If --inventory-request-id is omitted, the script uses inventory_request_id from the local row
- * (requires migration 124) or polls is not possible without the UUID.
+ * Expects RHET status DELIVERED (legacy FULFILLED still accepted as alias).
  */
 import '../config/loadEnv.js';
 import { query, getClient } from '../config/database.js';
@@ -19,6 +18,11 @@ import { getStockRequest, isInventoryIntegrationEnabled } from '../services/inve
 import { pickApproverName } from '../services/inventory/inventoryFieldMapping.js';
 import { applyMerchandiseRequestStock } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
+import {
+  LOCAL_REQUEST_STATUS,
+  isDeliveredRemoteStatus,
+  isStockCreditedLocalStatus,
+} from '../services/inventory/stockRequestLifecycle.js';
 
 function argValue(name) {
   const prefix = `--${name}=`;
@@ -52,8 +56,8 @@ try {
   }
 
   const request = localRes.rows[0];
-  if (request.status === 'Approved') {
-    console.log('Already Approved — nothing to do.');
+  if (isStockCreditedLocalStatus(request.status)) {
+    console.log(`Already ${request.status} — nothing to do.`);
     await client.query('ROLLBACK');
     process.exit(0);
   }
@@ -70,8 +74,10 @@ try {
   const processedBy = pickApproverName(remote.data || remote);
   console.log('RHET status:', remoteStatus, 'SKU:', remote.data?.matchedSku, 'by:', processedBy);
 
-  if (remoteStatus !== 'FULFILLED') {
-    throw new Error(`RHET status is ${remoteStatus}, expected FULFILLED`);
+  if (!isDeliveredRemoteStatus(remoteStatus)) {
+    throw new Error(
+      `RHET status is ${remoteStatus}, expected DELIVERED (or legacy FULFILLED)`
+    );
   }
 
   // Best-effort store tracking fields (requires migrations 124 + 126).
@@ -80,7 +86,7 @@ try {
       client.query.bind(client),
       `UPDATE merchandiserequestlogtbl
        SET inventory_request_id = $1,
-           inventory_status = 'FULFILLED',
+           inventory_status = 'DELIVERED',
            inventory_external_reference = COALESCE($2, inventory_external_reference),
            inventory_matched_sku = COALESCE($3, inventory_matched_sku),
            inventory_processed_by = COALESCE($4, inventory_processed_by),
@@ -103,12 +109,13 @@ try {
   await runIgnoringMissingUpdatedAt(
     client.query.bind(client),
     `UPDATE merchandiserequestlogtbl
-     SET status = 'Approved',
+     SET status = $1,
          reviewed_at = CURRENT_TIMESTAMP,
-         review_notes = COALESCE(review_notes, $1),
+         review_notes = COALESCE(review_notes, $2),
          updated_at = CURRENT_TIMESTAMP
-     WHERE request_id = $2`,
+     WHERE request_id = $3`,
     [
+      LOCAL_REQUEST_STATUS.DELIVERED,
       `Repaired from RHET Inventory (${remote.data?.matchedSku || inventoryRequestId}). Stock ${stockResult.action}.`,
       request.request_id,
     ]
@@ -119,7 +126,7 @@ try {
   process.exit(0);
 } catch (error) {
   await client.query('ROLLBACK');
-  console.error('Repair failed:', error.message);
+  console.error(error);
   process.exit(1);
 } finally {
   client.release();

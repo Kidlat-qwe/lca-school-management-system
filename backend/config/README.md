@@ -4,6 +4,14 @@ This module contains configuration files for database and Firebase connections.
 
 ## Files
 
+### loadEnv.js
+
+Loads `backend/.env` and selects `DB_*_DEVELOPMENT` vs `DB_*_PRODUCTION`.
+
+- **CLI:** `node server.js --production` (required on Coolify) or `--development`.
+- **Coolify only** (detected via `COOLIFY*` env): UI-injected `process.env` wins; `.env` does not clobber secrets.
+- **Linode / local / PM2 (unchanged):** `.env` wins over shell env (`override: true`); `NODE_ENV` is read from the `.env` file first.
+
 ### database.js
 
 PostgreSQL database connection configuration using connection pooling.
@@ -60,12 +68,12 @@ The Firebase Admin SDK can be configured in two ways (in order of preference):
    - Example: `FIREBASE_ADMIN_SDK_PATH=./config/psms-b9ca7-firebase-adminsdk-xxxxx.json`
 
 2. **Using Environment Variables (Fallback)**:
-   - Set individual Firebase credentials in `.env`:
+   - Set individual Firebase credentials in `.env` / Coolify:
      - `FIREBASE_PROJECT_ID`
-     - `FIREBASE_PRIVATE_KEY`
      - `FIREBASE_CLIENT_EMAIL`
-     - `FIREBASE_CLIENT_ID`
-     - etc.
+     - `FIREBASE_PRIVATE_KEY_BASE64` (recommended on Coolify — base64 of the PEM `private_key` only)
+     - or `FIREBASE_PRIVATE_KEY` (multiline PEM)
+     - `FIREBASE_CLIENT_ID`, etc.
 
 ## Environment Variables
 

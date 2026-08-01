@@ -40,7 +40,16 @@ const resolveFirebasePrivateKey = () => {
   const b64 = String(process.env.FIREBASE_PRIVATE_KEY_BASE64 || '').trim();
   if (b64) {
     try {
-      return Buffer.from(b64, 'base64').toString('utf8');
+      // Decode then normalize (handles whitespace / accidental quotes around the base64 blob)
+      const decoded = Buffer.from(b64.replace(/\s+/g, ''), 'base64').toString('utf8');
+      const normalized = normalizeFirebasePrivateKey(decoded);
+      if (normalized && normalized.includes('BEGIN PRIVATE KEY')) {
+        return normalized;
+      }
+      console.warn(
+        '⚠️  FIREBASE_PRIVATE_KEY_BASE64 decoded but result is not a PEM private key. ' +
+          'Encode only the private_key string from the service-account JSON, not the whole JSON file.'
+      );
     } catch (_) {
       console.warn('⚠️  FIREBASE_PRIVATE_KEY_BASE64 is set but could not be decoded');
     }
