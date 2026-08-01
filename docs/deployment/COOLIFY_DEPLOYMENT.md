@@ -163,9 +163,16 @@ Encode **only** the `private_key` string from the service-account JSON (not the 
 ### 4.1 Create the resource
 
 1. **New Resource → Application** — same repo and branch.
-2. Build method: **Nixpacks**.
-3. **Base Directory:** `/frontend`.
-4. Prefer **static** publish of the Vite build:
+2. **Base Directory:** `/frontend`.
+3. **Recommended Build Pack: Dockerfile** (see `frontend/Dockerfile` + `frontend/COOLIFY_DOCKER.md`):
+
+  ```text
+  Build Pack:      Dockerfile
+  Ports Exposes:   80
+  Start Command:   (leave empty — nginx CMD)
+  ```
+
+4. **Alternative — Nixpacks static** (if not using Dockerfile):
 
   ```text
   Install Command:   npm install
@@ -173,17 +180,15 @@ Encode **only** the `private_key` string from the service-account JSON (not the 
   Publish Directory: dist
   ```
 
-5. Enable **SPA** fallback to `index.html` (client-side routing).
+  Enable **SPA** fallback to `index.html`.
 
-> If you see `Blocked request. This host ("cms.lca-app.com") is not allowed`,
-> Coolify is running Vite instead of static `dist`. Switch to Publish Directory
-> `dist`, or Build `npm run build` + Start
-> `npx vite preview --host 0.0.0.0 --strictPort` (`frontend/nixpacks.toml`).
-> Do **not** use `npm start` on Coolify (`npm start` stays `npm run dev` for Linode).
+> Do **not** set Start to `npm start` on Coolify — that script is `npm run dev`
+> (Linode/Replit). Wrong start causes Vite `allowedHosts` errors.
+> Do **not** put `/api/sms` in the frontend or backend **Domain** field.
 
 ### 4.2 Domain
 
-- **Domains:** `http://cms.lca-app.com`  
+- **Domains:** `http://cms.lca-app.com` only (no path).  
   Browser: `https://cms.lca-app.com`
 
 ### 4.3 Environment variables (build-time)
@@ -245,9 +250,14 @@ and environment variables are confirmed.
 |---|---|---|
 | Globe router / wrong page | Using `sslip.io` or public IP | Use `https://*.lca-app.com` only |
 | Redirect / wrong URL | Domain entered as `https://` in Coolify | Set Domain to `http://subdomain.lca-app.com`, redeploy |
+| `COOLIFY_FQDN=api-cms.lca-app.com/api/sms` | Domain field includes API path | Domain must be `http://api-cms.lca-app.com` only; `/api/sms` belongs in `VITE_API_BASE_URL` |
+| Start still `node server.js` without `--production` | Coolify UI Start Command overrides `nixpacks.toml` | Set Start Command explicitly to `node server.js --production` |
+| Start `npm start` on frontend | Runs Vite **dev** | Use Build Pack **Dockerfile** (port 80) or static `dist` |
+| Build exit 255 mid `apt-get` / `nix-env` | Server OOM / both apps building at once | Deploy **one app at a time**; free disk/RAM; retry |
+| Warning `NODE_ENV=development` at build | Env marked Available at Buildtime | Set `NODE_ENV=production` **Runtime only** (uncheck Buildtime) |
 | Logs show `NODE_ENV=development` / `DB: psms_db` | Missing `--production` | Start: `node server.js --production` |
 | `FIREBASE_PRIVATE_KEY does not look like a PEM key` | Mangling / wrong BASE64 | BASE64 of **only** `private_key` from service-account JSON |
-| `Blocked request... cms.lca-app.com` | Vite instead of static `dist` | Publish Directory `dist`, or nixpacks preview start |
+| `Blocked request... cms.lca-app.com` | Vite instead of nginx/static | Frontend Build Pack = Dockerfile, port 80 |
 | CORS errors | Wrong origin | `CORS_ORIGIN=https://cms.lca-app.com` |
 | Frontend calls wrong API | Stale Vite env | Set `VITE_API_BASE_URL=https://api-cms.lca-app.com/api/sms`, redeploy |
 | Running but unreachable | Tunnel / DNS | Escalate to IT (domain, port, env already confirmed) |
