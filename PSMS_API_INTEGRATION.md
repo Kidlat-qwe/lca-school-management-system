@@ -338,14 +338,43 @@ X-Integration-Key: {INVENTORY_INTEGRATION_KEY}
 
 | Status | Meaning |
 |---|---|
-| Status | Meaning |
-|---|---|
 | `PENDING` | Waiting for HQ / warehouse action |
 | `SHIPPED` | Handed to courier; RHET warehouse deducted; CMS does **not** add branch stock yet |
 | `DELIVERED` | Branch received; CMS adds branch stock once |
 | `RETURNED` | Back to warehouse; CMS reverses branch stock if `wasDelivered` |
 | `REJECTED` | Not approved |
 | `FULFILLED` | Legacy alias for `DELIVERED` (CMS treats the same; credit once) |
+
+### 5.5 Confirm delivery (CMS → RHET)
+
+```http
+POST {INVENTORY_API_URL}/stock-requests/{requestId}/deliver
+X-Integration-Key: {INVENTORY_INTEGRATION_KEY}
+Content-Type: application/json
+```
+
+Path is **/deliver** (not `/confirm-delivery`). CMS keeps this hardcoded.
+
+Optional body:
+
+```json
+{
+  "confirmedBy": "Jane Admin",
+  "branchName": "LCA Makati",
+  "notes": "Branch admin confirmed physical receipt in CMS"
+}
+```
+
+| RHET response | Meaning | CMS action |
+|---|---|---|
+| `200` + `status: DELIVERED` | First transition **or** already DELIVERED (idempotent) | Credit branch stock once; set local Delivered |
+| `409` | Not SHIPPED (and not already DELIVERED) | Surface error; no stock change |
+
+CMS route: `POST /api/sms/merchandise-requests/:id/confirm-delivery` (Admin, own branch; local status must be Shipped).
+
+---
+
+## 6. Item matching (no SKU required)
 
 ---
 
@@ -541,7 +570,8 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 6. Backend forwards to RHET. Superadmin is **not** notified for integrated requests.
 7. RHET inventory admin marks **Shipped** on **Stock Requests**.
 8. Branch Admin confirms receipt in CMS → CMS calls RHET `/stock-requests/:id/deliver`
-   → RHET moves to **Delivered** → CMS adds branch stock (webhook replay is idempotent).
+   → RHET: SHIPPED → DELIVERED (**409** if not SHIPPED; **200 idempotent** if already DELIVERED)
+   → CMS adds branch stock once (`delivered` / legacy `fulfilled` webhook replay is idempotent).
 
 ---
 

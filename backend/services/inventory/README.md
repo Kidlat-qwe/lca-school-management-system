@@ -14,8 +14,11 @@ machine-to-machine API.
 5. RHET marks **Shipped** (warehouse stock deducted).
    CMS webhook → local status **Shipped**; branch stock **unchanged**.
 6. **Branch Admin confirms receipt** in CMS (⋮ → Confirm received, or Track modal).
-   CMS calls RHET `POST /stock-requests/:id/deliver` → RHET moves to **Delivered**.
-   CMS then credits branch `merchandisestbl` once (idempotent with later webhook).
+   CMS calls RHET `POST /stock-requests/:id/deliver` (hardcoded **/deliver** path):
+   - SHIPPED → DELIVERED; RHET returns **409** if not SHIPPED
+   - Already DELIVERED → **200 idempotent** (safe CMS retry; no re-webhook)
+   CMS then credits branch `merchandisestbl` once (idempotent with later
+   `stock_request.delivered` / legacy `.fulfilled` webhooks).
 7. Optional: RHET marks **Returned**. If `wasDelivered` (or local was
    Delivered/Approved), CMS reverses the branch credit; otherwise status only.
 8. Branch Admin is notified on shipped / delivered / returned / rejected.

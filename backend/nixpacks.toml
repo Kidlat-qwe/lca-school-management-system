@@ -1,5 +1,9 @@
 # Nixpacks / Coolify defaults for the PSMS backend API.
-# Coolify should also set Base Directory to `/backend`.
+# Coolify Base Directory: `/backend`
+#
+# LCA Coolify (cms.lca-app.com) uses the DEVELOPMENT database.
+# Lock with Start Command below + PSMS_DB_TARGET=development in Coolify env.
+# Linode production is unchanged (its own host + .env NODE_ENV=production).
 
 [phases.setup]
 nixPkgs = ["nodejs_22"]
@@ -8,4 +12,4 @@ nixPkgs = ["nodejs_22"]
 cmds = ["npm install"]
 
 [start]
-cmd = "node server.js --production"
+cmd = "node server.js --development"

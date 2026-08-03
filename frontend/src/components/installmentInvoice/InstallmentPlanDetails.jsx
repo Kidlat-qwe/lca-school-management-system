@@ -1217,8 +1217,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       const blockedByUnpaidDrop =
                         unpaidDropIdx >= 0 && idx > unpaidDropIdx && !continuedAfterDrop;
                       const isLockedFuture =
-                        (isNotGenerated || lockedByPriorPartial) &&
-                        !(firstPayAction && firstPayAction.index === idx && firstPayAction.mode === 'advance');
+                        ((isNotGenerated || lockedByPriorPartial) &&
+                          !(firstPayAction && firstPayAction.index === idx && firstPayAction.mode === 'advance')) ||
+                        (blockedByUnpaidDrop && !isDroppedEnrollmentPhase(phase));
                       const lockTitle = lockedByPriorPartial
                         ? 'Settle the remaining balance on the earlier partially paid phase before paying this phase.'
                         : blockedByUnpaidDrop

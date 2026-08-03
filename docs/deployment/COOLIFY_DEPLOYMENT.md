@@ -64,16 +64,22 @@ env are correct.
 2. Paste the repository URL; select the correct branch.
 3. Build method: **Nixpacks** (no production Dockerfile in this repo).
 4. **Base Directory:** `/backend`.
-5. Confirm commands (`backend/nixpacks.toml` defaults):
+5. Confirm commands (`backend/nixpacks.toml` defaults to `node server.js`).
+   Coolify **Start Command** and `NODE_ENV` control which DB is used:
 
   ```text
-  Install Command:  npm install
-  Start Command:    node server.js --production
+  # Staging / development DB (psms_db) — typical for Coolify *.lca-app.com
+  NODE_ENV=development
+  Start Command:  node server.js
+
+  # Production DB (psms_production) — only if you intentionally want prod on Coolify
+  NODE_ENV=production
+  Start Command:  node server.js --production
   ```
 
-> **Required:** start must include `--production`. If logs show
-> `NODE_ENV=development ... | DB: psms_db`, the API is on the wrong database.
-> Do not use bare `node server.js` or `npm start`.
+> Match `NODE_ENV` to the `DB_*_DEVELOPMENT` or `DB_*_PRODUCTION` vars you set
+> in Coolify. Firebase must still initialize successfully or the container crashes
+> and `/health` returns Cloudflare 404.
 
 ### 3.2 Network — port
 

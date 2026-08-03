@@ -50,6 +50,14 @@ Enrolls a student in the class phase after an installment phase invoice receives
 
 Used by: `routes/payments.js`, `routes/acknowledgementreceipts.js`, `routes/installmentinvoices.js` (partial advance-pay).
 
+## `installmentProfileActivity/`
+
+Keeps installment `is_active` aligned with **unrejoined drops** (dropped on a class with no later active phase on that class). See [installmentProfileActivity/README.md](./installmentProfileActivity/README.md).
+
+- Student History plan Status → Inactive
+- Re-enrollment matrix → Inactive lifecycle cells for that track
+- Wired into `billingNotificationEligibility.js` (reactivate / class-status sync)
+
 ## `installmentDelinquencyDrop.js`
 
 Auto-drop students when an installment phase invoice is unpaid past **`installment_final_dropoff_days`** after `due_date`.

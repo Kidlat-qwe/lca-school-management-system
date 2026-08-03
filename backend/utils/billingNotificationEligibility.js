@@ -6,6 +6,10 @@
  */
 
 import { ACTIVE_ENROLLMENT_STATUSES, PROGRAM_ENROLLMENT_STATUS } from './enrollmentStatus.js';
+import {
+  deactivateInstallmentProfileIfUnrejoinedDrop,
+  unrejoinedDropPredicateSql,
+} from './installmentProfileActivity/index.js';
 
 const runQuery = (db, text, params) => {
   if (typeof db === 'function') {
@@ -220,6 +224,10 @@ export async function deactivateInstallmentProfileForClassDrop(client, { student
        AND is_active = true`,
     [sid, cid]
   );
+  await deactivateInstallmentProfileIfUnrejoinedDrop(client, {
+    studentId: sid,
+    classId: cid,
+  });
   return res.rowCount || 0;
 }
 
@@ -255,6 +263,7 @@ export async function reactivateInstallmentProfilesForActiveClass(client, classI
   const cid = Number(classId);
   if (!cid) return 0;
 
+  const unrejoinedDrop = unrejoinedDropPredicateSql(2);
   const res = await client.query(
     `UPDATE installmentinvoiceprofilestbl ip
      SET is_active = true
@@ -267,7 +276,8 @@ export async function reactivateInstallmentProfilesForActiveClass(client, classI
            AND cs.class_id = ip.class_id
            AND cs.program_enrollment_status = ANY($2::text[])
            AND cs.removed_at IS NULL
-       )`,
+       )
+       AND NOT (${unrejoinedDrop})`,
     [cid, ACTIVE_ENROLLMENT_STATUSES]
   );
   return res.rowCount || 0;
@@ -293,6 +303,7 @@ export async function syncInstallmentProfilesWithClassStatus(db) {
        )`
   );
 
+  const unrejoinedDrop = unrejoinedDropPredicateSql(1);
   await runQuery(
     db,
     `UPDATE installmentinvoiceprofilestbl ip
@@ -312,7 +323,19 @@ export async function syncInstallmentProfilesWithClassStatus(db) {
            AND cs.class_id = ip.class_id
            AND cs.program_enrollment_status = ANY($1::text[])
            AND cs.removed_at IS NULL
-       )`,
+       )
+       AND NOT (${unrejoinedDrop})`,
+    [ACTIVE_ENROLLMENT_STATUSES]
+  );
+
+  // Force Inactive for any still-active profile with an unrejoined drop
+  await runQuery(
+    db,
+    `UPDATE installmentinvoiceprofilestbl ip
+     SET is_active = false
+     WHERE ip.is_active = true
+       AND ip.class_id IS NOT NULL
+       AND (${unrejoinedDrop})`,
     [ACTIVE_ENROLLMENT_STATUSES]
   );
 }

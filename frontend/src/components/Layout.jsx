@@ -8,9 +8,15 @@ import BranchCashHoldingAlertModal from './BranchCashHoldingAlertModal';
 import BranchAdminUpcomingDropAlertModal from './branchAdmin/BranchAdminUpcomingDropAlertModal';
 import BranchAdminHelpFloatingButton from './branchAdmin/BranchAdminHelpFloatingButton';
 import { GlobalBranchFilterProvider } from '../contexts/GlobalBranchFilterContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const LayoutBody = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { userInfo } = useAuth();
+  const userType = userInfo?.user_type || userInfo?.userType || '';
+  // Branch Admin FAB ("Need help?") sits fixed bottom-right — reserve page space so
+  // pagination / primary actions are not covered when scrolled to the end.
+  const isBranchAdmin = userType === 'Admin';
 
   return (
       <div className="min-h-screen bg-gray-50 overflow-x-hidden">
@@ -19,7 +25,11 @@ const LayoutBody = () => {
         <div className="flex pt-16">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <main className="flex-1 lg:ml-64 pt-0 min-w-0">
-            <div className="p-4 sm:p-6 lg:p-8 min-w-0">
+            <div
+              className={`p-4 sm:p-6 lg:p-8 min-w-0 ${
+                isBranchAdmin ? 'pb-28 sm:pb-28 lg:pb-28' : ''
+              }`}
+            >
               <Outlet />
             </div>
           </main>

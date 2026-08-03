@@ -996,8 +996,12 @@ router.post(
 /**
  * POST /api/sms/merchandise-requests/:id/confirm-delivery
  * Branch Admin confirms physical receipt while local status is Shipped.
- * Calls RHET POST /stock-requests/:inventoryId/deliver → RHET moves to DELIVERED,
- * then CMS credits branch stock immediately (webhook replay stays idempotent).
+ *
+ * Flow (aligned with RHET contract):
+ * 1. POST {INVENTORY_API_URL}/stock-requests/:inventoryId/deliver  (path /deliver)
+ * 2. RHET: SHIPPED → DELIVERED (409 if not SHIPPED; 200 idempotent if already DELIVERED)
+ * 3. CMS credits branch stock once; later stock_request.delivered / .fulfilled webhooks are idempotent
+ *
  * Access: Admin (own branch only)
  */
 router.post(
@@ -1092,21 +1096,29 @@ router.post(
           inventoryError?.name === 'InventoryApiError'
             ? inventoryError.status || 502
             : 502;
+        // RHET returns 409 when request is not SHIPPED (and not already DELIVERED)
+        const message =
+          statusCode === 409
+            ? inventoryError.message ||
+              'RHET Inventory cannot mark this request delivered (it must be Shipped).'
+            : inventoryError.message ||
+              'Failed to mark request delivered in RHET Inventory. Please try again.';
         return res.status(statusCode).json({
           success: false,
-          message:
-            inventoryError.message ||
-            'Failed to mark request delivered in RHET Inventory. Please try again.',
+          message,
           error: {
-            code: inventoryError.code || 'INVENTORY_DELIVER_FAILED',
+            code:
+              statusCode === 409
+                ? 'RHET_NOT_SHIPPED'
+                : inventoryError.code || 'INVENTORY_DELIVER_FAILED',
             details: inventoryError.details || null,
           },
         });
       }
 
       const remoteData = remote?.data && typeof remote.data === 'object' ? remote.data : remote;
-      const remoteStatus = String(remoteData?.status || '').toUpperCase();
-      // HTTP 200 from /deliver is authoritative. Reject only clear non-delivery terminals.
+      const remoteStatus = String(remoteData?.status || 'DELIVERED').toUpperCase();
+      // HTTP 200 from /deliver is authoritative (first transition or RHET idempotent already-DELIVERED).
       if (remoteStatus === 'REJECTED' || remoteStatus === 'FAILED' || remoteStatus === 'RETURNED') {
         await client.query('ROLLBACK');
         return res.status(409).json({
@@ -1115,6 +1127,13 @@ router.post(
           error: { code: 'UNEXPECTED_REMOTE_STATUS', details: { remoteStatus } },
         });
       }
+
+      console.log('[merchandise-requests] RHET /deliver OK', {
+        localRequestId: request.request_id,
+        inventoryRequestId: request.inventory_request_id,
+        remoteStatus,
+        rhetAlreadyDelivered: isDeliveredRemoteStatus(remoteStatus),
+      });
 
       const identity = resolveUniformFulfillIdentity({
         request,

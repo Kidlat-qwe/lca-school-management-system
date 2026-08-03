@@ -24,6 +24,16 @@ const isCoolify = Boolean(
 const cliProduction = process.argv.includes('--production');
 const cliDevelopment = process.argv.includes('--development');
 
+/**
+ * Explicit lock for Coolify staging: set PSMS_DB_TARGET=development|production
+ * so a Coolify project named "production" cannot accidentally select prod DB.
+ */
+const dbTargetRaw = String(process.env.PSMS_DB_TARGET || '')
+  .trim()
+  .toLowerCase();
+const dbTarget =
+  dbTargetRaw === 'production' || dbTargetRaw === 'development' ? dbTargetRaw : null;
+
 const readNodeEnvFromFile = () => {
   if (!existsSync(envPath)) return null;
   try {
@@ -38,11 +48,12 @@ const readNodeEnvFromFile = () => {
   return null;
 };
 
-// Resolve NODE_ENV:
+// Resolve NODE_ENV / DB mode:
 // 1) CLI --production / --development
-// 2) Coolify: process.env.NODE_ENV from Coolify UI
-// 3) Linode/local (unchanged): NODE_ENV from .env file (beats PM2/shell)
-// 4) process.env fallback, else development
+// 2) PSMS_DB_TARGET (Coolify staging lock)
+// 3) Coolify: process.env.NODE_ENV from Coolify UI
+// 4) Linode/local: NODE_ENV from .env file
+// 5) process.env fallback, else development
 let nodeEnv = 'development';
 let nodeEnvSource = 'default';
 
@@ -56,6 +67,9 @@ if (cliProduction && cliDevelopment) {
 } else if (cliDevelopment) {
   nodeEnv = 'development';
   nodeEnvSource = 'CLI override';
+} else if (dbTarget) {
+  nodeEnv = dbTarget;
+  nodeEnvSource = 'PSMS_DB_TARGET';
 } else if (
   isCoolify &&
   (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'development')
@@ -90,5 +104,6 @@ for (const key of dbKeys) {
 
 console.log(
   `🔧 NODE_ENV=${nodeEnv} (${nodeEnvSource}) | DB: ${process.env.DB_NAME || '(not set)'}` +
+    ` | host: ${process.env.DB_HOST || '(not set)'}` +
     (isCoolify ? ' | runtime=coolify' : '')
 );

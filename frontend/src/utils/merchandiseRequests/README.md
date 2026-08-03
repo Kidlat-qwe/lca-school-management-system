@@ -10,6 +10,8 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | `catalogOptions.js` | RHET catalog unwrap, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
+| `requestActionMenu.js` | Ellipsis menu items: terminal statuses → View details only; Pending/Shipped → Track + actions. |
+| `requestStatusModules.js` | Count/filter/paginate helpers for My Requests status modules (Pending / Shipped / Delivered / Returned / Rejected). |
 
 ## Catalog is the source of truth for category dropdowns
 
@@ -33,6 +35,33 @@ Do **not** reintroduce hard-coded arrays like
 `['School Uniform', 'PE Uniform', 'Backpack', …]` or
 `['LCA Uniform', 'LCA Bag', …]` as the primary dropdown source.
 
+## Add Merchandise Type (category + image only)
+
+Creating a branch merchandise type is **not** Request Stock and must not invent local taxonomy
+(Uniform vs Other toggles, gender/size/piece, custom type codes).
+
+| Field | Rule |
+|---|---|
+| Category | Required. Exact RHET `categoryName` from catalog proxy. |
+| Image | Required when inventory integration is enabled. |
+| Learning Kit | Hidden from create-type dropdown by default (`excludeLearningKit: true`). |
+| Already added | Pass `excludeNames` so branch types already present are omitted. |
+| Edit type | Image only — category locked after create (fulfill matches on `categoryName`). |
+| Stock / sizes | Come later from Request Stock / View Stocks — type create posts a CMS **type shell** only. |
+| View Stocks | Type-shell rows are hidden via `isMerchandiseTypeShellRow` (empty table until real stock). |
+| Request Stock (Admin) | Category dropdown = branch types ∩ RHET catalog (`getRequestStockCategoryOptions`). |
+
+```js
+getCreateMerchandiseCategoryOptions(catalog, {
+  excludeLearningKit: true,
+  excludeNames: existingTypeNames,
+});
+isCreateMerchandiseTypeMode({ editingMerchandise, editingMerchandiseType, viewingStocksFor });
+```
+
+Backend `POST /merchandise` accepts a type shell (`quantity` + attrs blank) with
+`allowTypeShell` and rejects a duplicate type name per branch.
+
 ## Learning Kit
 
 RHET kits are virtual (category-slot BOM). CMS recipes live in
@@ -49,7 +78,7 @@ import {
 } from '../utils/merchandiseRequests/catalogOptions';
 ```
 
-## Create Merchandise Type (RHET categories)
+## Create Merchandise Type helpers
 
 ```js
 import {
@@ -57,6 +86,7 @@ import {
   applyCreateTypeCategoryDefaults,
   getMerchandiseTypeNamesFromStock,
   isInventoryIntegrationDisabledError,
+  isCreateMerchandiseTypeMode,
 } from '../utils/merchandiseRequests/createTypeCategory';
 ```
 

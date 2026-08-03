@@ -38,6 +38,7 @@ const FixedTablePagination = ({
   itemsPerPage,
   itemLabel = 'items',
   onPageChange,
+  className = '',
 }) => {
   const { safePage } = getPaginationRange(page, totalItems, itemsPerPage);
   const safeTotalPages = Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1;
@@ -54,7 +55,9 @@ const FixedTablePagination = ({
   }
 
   return (
-    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+    <div
+      className={`mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 ${className}`.trim()}
+    >
       <TablePaginationSummary
         page={safePage}
         totalItems={totalItems}
@@ -62,7 +65,7 @@ const FixedTablePagination = ({
         itemLabel={itemLabel}
       />
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-shrink-0 sm:pr-1">
         <button
           type="button"
           onClick={() => handleChangePage(safePage - 1)}
@@ -71,7 +74,7 @@ const FixedTablePagination = ({
         >
           Previous
         </button>
-        <span className="text-xs sm:text-sm text-gray-700">
+        <span className="text-xs sm:text-sm text-gray-700 whitespace-nowrap">
           Page{' '}
           <span className="font-semibold">
             {safePage}

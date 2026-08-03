@@ -8,9 +8,14 @@ This module contains configuration files for database and Firebase connections.
 
 Loads `backend/.env` and selects `DB_*_DEVELOPMENT` vs `DB_*_PRODUCTION`.
 
-- **CLI:** `node server.js --production` (required on Coolify) or `--development`.
-- **Coolify only** (detected via `COOLIFY*` env): UI-injected `process.env` wins; `.env` does not clobber secrets.
-- **Linode / local / PM2 (unchanged):** `.env` wins over shell env (`override: true`); `NODE_ENV` is read from the `.env` file first.
+- **CLI:** `node server.js --development` or `--production`.
+- **Coolify staging lock:** set `PSMS_DB_TARGET=development` and Start
+  `node server.js --development` so a Coolify project named "production" still
+  uses `psms_db`.
+- **Coolify only** (detected via `COOLIFY*` env): UI-injected `process.env` wins;
+  `.env` does not clobber secrets.
+- **Linode / local / PM2 (unchanged):** `.env` wins over shell env; `NODE_ENV`
+  is read from the `.env` file first.
 
 ### database.js
 

@@ -25,6 +25,7 @@ function stepLineClass(state) {
 /**
  * Modal: track RHET stock-request progress (Pending → Shipped → Delivered / Returned / Rejected).
  * When Shipped, Branch Admin can confirm receipt (moves RHET → Delivered + credits stock).
+ * For Delivered / Returned / Rejected (and legacy Approved), opens as read-only "View details".
  */
 export default function TrackRequestProgressModal({
   request,
@@ -42,6 +43,16 @@ export default function TrackRequestProgressModal({
   const itemName = request.inventory_item_name || null;
   const sku = request.inventory_matched_sku || request.inventory_requested_sku || null;
   const processedBy = getMerchandiseRequestApprovedBy(request);
+  const status = String(request.status || '').trim();
+  const isViewDetailsMode =
+    status === 'Delivered' ||
+    status === 'Approved' ||
+    status === 'Returned' ||
+    status === 'Rejected';
+  const modalTitle = isViewDetailsMode ? 'View details' : 'Track request item';
+  const modalSubtitle = isViewDetailsMode
+    ? 'Stock request progress and order details'
+    : 'Monitor stock request progress from RHET Inventory';
 
   return createPortal(
     <div
@@ -58,10 +69,10 @@ export default function TrackRequestProgressModal({
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-100">
           <div className="min-w-0">
             <h2 id="track-request-title" className="text-lg font-semibold text-gray-900">
-              Track request item
+              {modalTitle}
             </h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              Monitor stock request progress from RHET Inventory
+              {modalSubtitle}
             </p>
           </div>
           <button

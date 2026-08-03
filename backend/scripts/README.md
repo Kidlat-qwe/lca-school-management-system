@@ -4,6 +4,38 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `repairOliviaSalesDeactivatePlan1.js`
+
+Sets Olivia Brie Sales **Plan 1** (profile 128 / 9:30AM Nursery) `is_active = false`
+after unpaid drops (last paid May). Production DB.
+
+```bash
+node backend/scripts/repairOliviaSalesDeactivatePlan1.js --production
+node backend/scripts/repairOliviaSalesDeactivatePlan1.js --production --apply
+```
+
+### `repairOliviaSalesGeneratePlan2Phase6.js`
+
+Generates Olivia Brie Sales **Plan 2 Phase 6** (INV issue 2026-07-25 / due 2026-08-05)
+and sets installment queue to next_generation_date **2026-08-25**, next_invoice_month
+**2026-09-01** (`generated_count` → 4). Production DB.
+
+```bash
+node backend/scripts/repairOliviaSalesGeneratePlan2Phase6.js --production
+node backend/scripts/repairOliviaSalesGeneratePlan2Phase6.js --production --apply
+```
+
+### `repairOliviaSalesMovePhase9PaymentToPlan2Phase5.js`
+
+Moves mistaken PAY-1498 (AR 261470) from **Plan 1 Phase 9 INV-1804** to
+**Plan 2 Phase 5 INV-1744** for Olivia Brie Sales; drops Plan 1 Phase 9 enrollment;
+waives late penalty on INV-1744 so ₱5,146 settles Paid. **Production DB only.**
+
+```bash
+node backend/scripts/repairOliviaSalesMovePhase9PaymentToPlan2Phase5.js --production
+node backend/scripts/repairOliviaSalesMovePhase9PaymentToPlan2Phase5.js --production --apply
+```
+
 ### `migrateMerchandiseLabelsToRhet.js`
 
 Rewrites `merchandisestbl` category / gender / size labels to RHET-canonical values

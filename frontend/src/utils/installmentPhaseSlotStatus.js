@@ -86,7 +86,9 @@ const ACTIVE_ENROLLMENT_KEYS = new Set([
 
 /**
  * True when billing/enrollment continued after an unpaid drop
- * (rejoin / later active enrollment / later generated invoice that is not dropped).
+ * (active enrollment, paid later invoice, or a dedicated rejoin invoice).
+ * A later auto-generated unpaid invoice alone is NOT a continue — that is
+ * still blocked and the student must Rejoin.
  */
 export const hasContinuedAfterUnpaidDrop = (phases, dropIdx) => {
   if (!Array.isArray(phases) || dropIdx < 0) return false;
@@ -95,7 +97,10 @@ export const hasContinuedAfterUnpaidDrop = (phases, dropIdx) => {
     if (isLateStartGapPhase(p) || isDroppedEnrollmentPhase(p)) continue;
     const enr = String(p?.program_enrollment_status || '').toLowerCase();
     if (ACTIVE_ENROLLMENT_KEYS.has(enr)) return true;
-    if (p?.is_generated) return true;
+    if (!p?.is_generated) continue;
+    const st = String(p.status || '').toLowerCase();
+    if (st === 'paid' || st === 'paid all') return true;
+    if (p?.is_rejoin_invoice) return true;
   }
   return false;
 };
@@ -139,7 +144,7 @@ export const isPastUnenrolledGapPhase = (phases, phaseIndex) => {
 
 /**
  * Latest index after an unpaid drop where the student continued
- * (active enrollment or a generated invoice). -1 if none.
+ * (active enrollment, paid invoice, or rejoin invoice). -1 if none.
  */
 export const findLatestContinuedPhaseIndexAfterDrop = (phases, dropIdx) => {
   if (!Array.isArray(phases) || dropIdx < 0) return -1;
@@ -148,7 +153,13 @@ export const findLatestContinuedPhaseIndexAfterDrop = (phases, dropIdx) => {
     const p = phases[i];
     if (isLateStartGapPhase(p) || isDroppedEnrollmentPhase(p)) continue;
     const enr = String(p?.program_enrollment_status || '').toLowerCase();
-    if (ACTIVE_ENROLLMENT_KEYS.has(enr) || p?.is_generated) {
+    if (ACTIVE_ENROLLMENT_KEYS.has(enr)) {
+      latest = i;
+      continue;
+    }
+    if (!p?.is_generated) continue;
+    const st = String(p.status || '').toLowerCase();
+    if (st === 'paid' || st === 'paid all' || p?.is_rejoin_invoice) {
       latest = i;
     }
   }
@@ -167,8 +178,12 @@ export const shouldOfferInstallmentPlanRejoin = (phases, profile = null) => {
   if (hasContinuedAfterUnpaidDrop(list, blockIdx)) return false;
   const hasLaterOpenSlot = list.slice(blockIdx + 1).some((p) => {
     if (isLateStartGapPhase(p)) return false;
+    if (isDroppedEnrollmentPhase(p)) return false;
     const st = String(p?.status || '').toLowerCase();
-    return !p?.is_generated || st === 'not generated';
+    if (!p?.is_generated || st === 'not generated') return true;
+    // Later unpaid auto-generated invoice after a drop still needs Rejoin.
+    if (p?.is_rejoin_invoice) return false;
+    return getInstallmentPhaseOutstanding(p) > PHASE_OUTSTANDING_EPSILON;
   });
   if (hasLaterOpenSlot) return true;
   return profile?.is_active === false;

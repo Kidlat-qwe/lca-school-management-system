@@ -245,10 +245,14 @@ export async function getStockRequest(requestId) {
 
 /**
  * POST /stock-requests/:id/deliver — branch confirms physical receipt.
- * RHET moves SHIPPED → DELIVERED and should webhook CMS.
  *
- * Body (optional fields RHET may accept):
- *   confirmedBy, branchName, notes
+ * RHET contract:
+ * - Path is /deliver (not /confirm-delivery) — keep hardcoded.
+ * - Auth: X-Integration-Key / Bearer (same PSMS integration key).
+ * - Only SHIPPED → DELIVERED; otherwise RHET returns 409.
+ * - If already DELIVERED → 200 idempotent (safe CMS retry; no re-webhook / no re-deduct).
+ * - Optional body: confirmedBy, branchName, notes.
+ * - Success 200: { success, data: { requestId, status: "DELIVERED", externalReference, ... } }
  */
 export async function markStockRequestDelivered(requestId, body = {}) {
   const id = String(requestId || '').trim();
@@ -267,6 +271,7 @@ export async function markStockRequestDelivered(requestId, body = {}) {
   if (branchName) payload.branchName = branchName;
   if (notes) payload.notes = notes;
 
+  // Retry is safe: RHET /deliver is idempotent when already DELIVERED (200, no re-webhook).
   return inventoryRequestWithRetry(
     `/stock-requests/${encodeURIComponent(id)}/deliver`,
     {

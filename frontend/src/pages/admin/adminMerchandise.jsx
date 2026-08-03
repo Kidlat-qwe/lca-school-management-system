@@ -22,7 +22,19 @@ import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect'
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
+import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
+import FixedTablePagination, {
+  TablePaginationSummary,
+} from '../../components/table/FixedTablePagination';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
+import {
+  DEFAULT_REQUEST_STATUS_MODULE,
+  filterRequestsByStatusModule,
+  getRequestStatusModuleMeta,
+  paginateRequestList,
+  REQUEST_STATUS_MODULE_PAGE_SIZE,
+} from '../../utils/merchandiseRequests/requestStatusModules';
+import { buildMerchandiseRequestActionItems } from '../../utils/merchandiseRequests/requestActionMenu';
 import {
   createEmptyCatalogRequestLine,
   unwrapCatalogPayload,
@@ -47,9 +59,12 @@ import {
 } from '../../utils/merchandiseRequests/learningKit';
 import {
   getCreateMerchandiseCategoryOptions,
+  getRequestStockCategoryOptions,
   applyCreateTypeCategoryDefaults,
   isInventoryIntegrationDisabledError,
+  isMerchandiseTypeShellRow,
 } from '../../utils/merchandiseRequests/createTypeCategory';
+import { useMerchandiseLiveRefresh } from '../../hooks/useMerchandiseLiveRefresh';
 import {
   isItemNamedStockCategory,
   isUniformStockCategory,
@@ -113,6 +128,9 @@ const AdminMerchandise = () => {
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'logs'
+  const [requestStatusModule, setRequestStatusModule] = useState(DEFAULT_REQUEST_STATUS_MODULE);
+  /** Page number per status module so switching tabs keeps each module's page. */
+  const [requestModulePageByStatus, setRequestModulePageByStatus] = useState({});
   const [trackingRequest, setTrackingRequest] = useState(null);
 
   const requestedByDisplay =
@@ -122,7 +140,27 @@ const AdminMerchandise = () => {
     userInfo?.email ||
     'Admin';
   const requestDateDisplay = formatDateManila(new Date());
-  const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog);
+  const merchandiseTypeList = (() => {
+    // Lightweight unique names for excluding already-added RHET categories from create-type dropdown
+    const names = new Set();
+    (merchandise || []).forEach((item) => {
+      if (item?.branch_id === adminBranchId && item?.merchandise_name) {
+        names.add(String(item.merchandise_name).trim());
+      }
+    });
+    return [...names];
+  })();
+  const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog, {
+    excludeLearningKit: true,
+    excludeNames: merchandiseTypeList,
+  });
+  /** Request Stock: only categories already added as types on this branch. */
+  const requestStockCategoryOptions = getRequestStockCategoryOptions(
+    inventoryCatalog,
+    merchandiseTypeList
+  );
+  const isCreateTypeMode =
+    !editingMerchandise && !editingMerchandiseType && !viewingStocksFor;
 
   const applyRhetCategoryToCreateForm = (categoryName) => {
     const defaults = applyCreateTypeCategoryDefaults(categoryName, {
@@ -131,11 +169,18 @@ const AdminMerchandise = () => {
     setFormData((prev) => ({
       ...prev,
       merchandise_name: defaults.merchandise_name,
-      gender: defaults.gender,
-      type: defaults.type,
-      size: defaults.size,
+      gender: '',
+      type: '',
+      size: '',
     }));
-    setRequiresSizing(defaults.requiresSizing);
+    setRequiresSizing(false);
+    if (formErrors.merchandise_name) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next.merchandise_name;
+        return next;
+      });
+    }
   };
 
   // Fetch branch name if not in userInfo
@@ -185,29 +230,64 @@ const AdminMerchandise = () => {
 
   // Removed fetchBranches - admin only sees their branch
 
-  const fetchMerchandiseByBranch = async (branchId) => {
+  const fetchMerchandiseByBranch = async (branchId, { silent = false } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       // Fetch merchandise filtered by branch_id from backend
       const response = await apiRequest(`/merchandise?branch_id=${branchId}&limit=100`);
       setMerchandise(response.data || []);
-      setError('');
+      if (!silent) setError('');
     } catch (err) {
-      setError(err.message || 'Failed to fetch merchandise');
+      if (!silent) setError(err.message || 'Failed to fetch merchandise');
       console.error('Error fetching merchandise:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   const fetchMerchandiseRequests = async () => {
     try {
       const response = await apiRequest('/merchandise-requests?limit=100');
-      setRequests(response.data || []);
+      const next = response.data || [];
+      setRequests(next);
+      setTrackingRequest((prev) => {
+        if (!prev?.request_id) return prev;
+        const updated = next.find(
+          (r) => String(r.request_id) === String(prev.request_id)
+        );
+        return updated || prev;
+      });
     } catch (err) {
       console.error('Error fetching merchandise requests:', err);
     }
   };
+
+  // Auto-refresh when RHET ships / delivers — no manual page reload required
+  useMerchandiseLiveRefresh({
+    enabled: Boolean(adminBranchId),
+    requests,
+    onRefresh: async () => {
+      await fetchMerchandiseRequests();
+      if (adminBranchId) {
+        await fetchMerchandiseByBranch(adminBranchId, { silent: true });
+      }
+    },
+  });
+
+  // Keep each status module on a valid page after list changes (live refresh / cancel)
+  useEffect(() => {
+    setRequestModulePageByStatus((prev) => {
+      const current = prev[requestStatusModule] || 1;
+      const filtered = filterRequestsByStatusModule(requests, requestStatusModule);
+      const paged = paginateRequestList(
+        filtered,
+        current,
+        REQUEST_STATUS_MODULE_PAGE_SIZE
+      );
+      if (paged.page === current) return prev;
+      return { ...prev, [requestStatusModule]: paged.page };
+    });
+  }, [requests, requestStatusModule]);
 
   // Removed handleViewMerch and handleBackToBranches - admin only sees their branch
 
@@ -649,15 +729,16 @@ const AdminMerchandise = () => {
   // Moved up for use in requiresSizingForMerchandise
   const getStocksByMerchandiseName = (merchandiseName) => {
     if (!adminBranchId || !merchandiseName) return [];
-    
-    // Filter merchandise by branch_id and merchandise_name
+
+    // Exclude type-shell rows (category + image only) — View Stocks stays empty until real stock.
     const filteredStocks = merchandise.filter(
-      (item) => item.branch_id === adminBranchId && 
-                 item.merchandise_name === merchandiseName
+      (item) =>
+        item.branch_id === adminBranchId &&
+        item.merchandise_name === merchandiseName &&
+        !isMerchandiseTypeShellRow(item)
     );
-    
-    // Group by size or return as is
-    return filteredStocks.map(item => ({
+
+    return filteredStocks.map((item) => ({
       merchandise_id: item.merchandise_id,
       size: item.size || 'N/A',
       quantity: item.quantity || 0,
@@ -725,61 +806,64 @@ const AdminMerchandise = () => {
 
   const validateForm = () => {
     const errors = {};
-    
+
     // When editing merchandise type image only, we don't need merchandise_name validation
     if (!editingMerchandiseType && !formData.merchandise_name.trim()) {
-      errors.merchandise_name = 'Merchandise name is required';
+      errors.merchandise_name = 'Merchandise category is required';
     }
 
     const name = formData.merchandise_name?.trim() || '';
-    if (
-      inventoryIntegrationEnabled &&
-      !editingMerchandise &&
-      !editingMerchandiseType &&
-      !viewingStocksFor &&
-      createTypeCategoryOptions.length > 0 &&
-      name &&
-      !createTypeCategoryOptions.some((c) => c.toLowerCase() === name.toLowerCase())
-    ) {
-      errors.merchandise_name =
-        'Select a category from the RHET Inventory list (exact category name required).';
-    }
-    if (isLearningKitMerchandiseName(name)) {
-      // Allowed — local Learning Kit type for branch display after RHET fulfill
-    }
-    const needsSizing =
-      requiresSizing ||
-      requiresSizingForMerchandise(name) ||
-      requiresUniformPieceFields(name);
-    const isUniform = requiresUniformPieceFields(name);
+    const creatingType =
+      !editingMerchandise && !editingMerchandiseType && !viewingStocksFor;
 
-    // Shirt / uniforms: Gender + Type/Logo + Size required for type create AND add stock
-    // (never allow blank "Unspecified piece" shells).
-    if (!editingMerchandiseType && isUniform) {
-      if (!formData.size?.trim() || ['n/a', 'na'].includes(formData.size.trim().toLowerCase())) {
-        errors.size = 'Size is required for uniforms (cannot be N/A)';
+    // New type must be an exact RHET category when catalog is available
+    if (inventoryIntegrationEnabled && creatingType && name) {
+      const allCatalog = getCreateMerchandiseCategoryOptions(inventoryCatalog, {
+        excludeLearningKit: true,
+      });
+      if (
+        allCatalog.length > 0 &&
+        !allCatalog.some((c) => c.toLowerCase() === name.toLowerCase())
+      ) {
+        errors.merchandise_name =
+          'Select a category from the RHET Inventory list (exact category name required).';
       }
-      if (!formData.gender?.trim()) {
-        errors.gender = 'Gender is required for uniforms';
-      }
-      if (!formData.type?.trim()) {
-        errors.type = isLcaShirtCategory(name) ? 'Logo is required' : 'Piece is required';
-      }
-    } else if (!editingMerchandiseType && (viewingStocksFor || editingMerchandise) && needsSizing && !formData.size?.trim()) {
-      errors.size = 'Size is required for this merchandise type';
     }
 
-    if (
-      !editingMerchandiseType &&
-      isItemNamedStockCategory(name) &&
-      (viewingStocksFor || editingMerchandise)
-    ) {
-      if (!(formData.item_name || '').trim()) {
-        errors.item_name =
-          'Item name is required (RHET itemName, e.g. string-bag / nc-pk-worksheets)';
+    if (creatingType && inventoryIntegrationEnabled && !formData.image_url?.trim()) {
+      errors.image_url = 'Image is required for merchandise types';
+    }
+
+    // Add / Edit Stock: keep attribute validation (not on create-type shell)
+    if (!creatingType && !editingMerchandiseType) {
+      const needsSizing =
+        requiresSizing ||
+        requiresSizingForMerchandise(name) ||
+        requiresUniformPieceFields(name);
+      const isUniform = requiresUniformPieceFields(name);
+
+      if (isUniform) {
+        if (!formData.size?.trim() || ['n/a', 'na'].includes(formData.size.trim().toLowerCase())) {
+          errors.size = 'Size is required for uniforms (cannot be N/A)';
+        }
+        if (!formData.gender?.trim()) {
+          errors.gender = 'Gender is required for uniforms';
+        }
+        if (!formData.type?.trim()) {
+          errors.type = isLcaShirtCategory(name) ? 'Logo is required' : 'Piece is required';
+        }
+      } else if (needsSizing && !formData.size?.trim()) {
+        errors.size = 'Size is required for this merchandise type';
       }
-      if (!(formData.sku || '').trim()) {
-        errors.sku = 'SKU is required for non-uniform stock (from the same catalog row)';
+
+      if (isItemNamedStockCategory(name) && (viewingStocksFor || editingMerchandise)) {
+        if (!(formData.item_name || '').trim()) {
+          errors.item_name =
+            'Item name is required (RHET itemName, e.g. string-bag / nc-pk-worksheets)';
+        }
+        if (!(formData.sku || '').trim()) {
+          errors.sku = 'SKU is required for non-uniform stock (from the same catalog row)';
+        }
       }
     }
 
@@ -807,14 +891,24 @@ const AdminMerchandise = () => {
 
     if (catalogError || !inventoryCatalog.categories.length) {
       errors.bulk = catalogError || 'RHET Inventory catalog is required before submitting.';
+    } else if (!merchandiseTypeList.length) {
+      errors.bulk =
+        'No merchandise types on this branch yet. Add a Merchandise Type first, then request stock.';
+    } else if (!requestStockCategoryOptions.length) {
+      errors.bulk =
+        'None of this branch’s merchandise types match the RHET catalog. Add types using exact RHET category names.';
     }
 
     if (!bulkRequestLines.length) {
       errors.bulk = 'Add at least one item row';
     }
 
-    const catalogCategoryNames = new Set(
-      inventoryCatalog.categories.map((c) => c.categoryName.toLowerCase())
+    const branchCategoryNames = new Set(
+      requestStockCategoryOptions.map((c) =>
+        String(c.categoryName || c.category_name || '')
+          .trim()
+          .toLowerCase()
+      )
     );
 
     bulkRequestLines.forEach((line, index) => {
@@ -824,10 +918,10 @@ const AdminMerchandise = () => {
       if (!categoryName) {
         row.category_name = 'Category is required';
       } else if (
-        inventoryCatalog.categories.length &&
-        !catalogCategoryNames.has(categoryName.toLowerCase())
+        requestStockCategoryOptions.length &&
+        !branchCategoryNames.has(categoryName.toLowerCase())
       ) {
-        row.category_name = 'Select a category from the RHET catalog';
+        row.category_name = 'Select a category already added for this branch';
       }
 
       if (categoryName && isLearningKitMerchandiseName(categoryName)) {
@@ -980,23 +1074,39 @@ const AdminMerchandise = () => {
         size: formData.size,
         type: formData.type,
       });
-      const basePayload = {
-        merchandise_name: normalized.merchandise_name,
-        size: normalized.size,
-        quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
-        price: formData.price && formData.price !== '' ? parseFloat(formData.price) : null,
-        branch_id: adminBranchId || (formData.branch_id ? parseInt(formData.branch_id) : null),
-        gender: normalized.gender,
-        type: normalized.type,
-        image_url: formData.image_url || null,
-        remarks: formData.remarks?.trim() || null,
-        item_name: isItemNamedStockCategory(normalized.merchandise_name)
-          ? formData.item_name?.trim() || null
-          : null,
-        sku: isItemNamedStockCategory(normalized.merchandise_name)
-          ? formData.sku?.trim() || null
-          : null,
-      };
+      const creatingType =
+        !editingMerchandise && !editingMerchandiseType && !viewingStocksFor;
+      const basePayload = creatingType
+        ? {
+            merchandise_name: normalized.merchandise_name,
+            size: null,
+            quantity: null,
+            price: null,
+            branch_id: adminBranchId || (formData.branch_id ? parseInt(formData.branch_id, 10) : null),
+            gender: null,
+            type: null,
+            image_url: formData.image_url || null,
+            remarks: null,
+            item_name: null,
+            sku: null,
+          }
+        : {
+            merchandise_name: normalized.merchandise_name,
+            size: normalized.size,
+            quantity: formData.quantity && formData.quantity !== '' ? parseInt(formData.quantity) : null,
+            price: formData.price && formData.price !== '' ? parseFloat(formData.price) : null,
+            branch_id: adminBranchId || (formData.branch_id ? parseInt(formData.branch_id) : null),
+            gender: normalized.gender,
+            type: normalized.type,
+            image_url: formData.image_url || null,
+            remarks: formData.remarks?.trim() || null,
+            item_name: isItemNamedStockCategory(normalized.merchandise_name)
+              ? formData.item_name?.trim() || null
+              : null,
+            sku: isItemNamedStockCategory(normalized.merchandise_name)
+              ? formData.sku?.trim() || null
+              : null,
+          };
       
       if (editingMerchandise) {
         if (requiresUniformPieceFields(basePayload.merchandise_name)) {
@@ -1304,22 +1414,28 @@ const AdminMerchandise = () => {
             onClick={closeModal}
           >
             <div 
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            className={`bg-white rounded-lg shadow-xl ${isCreateTypeMode || editingMerchandiseType ? 'max-w-lg w-full' : 'max-w-2xl w-full'} max-h-[90vh] flex flex-col overflow-hidden`}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  {editingMerchandiseType ? 'Edit Merchandise Image' : editingMerchandise ? 'Edit Stock' : viewingStocksFor ? 'Add Stock' : 'Add Merchandise Type'}
+                  {editingMerchandiseType
+                    ? 'Edit Merchandise Image'
+                    : editingMerchandise
+                      ? 'Edit Stock'
+                      : viewingStocksFor
+                        ? 'Add Stock'
+                        : 'Add Merchandise Type'}
                   </h2>
                   {modalStep === 'form' && !editingMerchandise && (
                     <p className="text-sm text-gray-500 mt-1">
-                      {editingMerchandiseType 
-                        ? 'Update the image for this merchandise type' 
-                        : viewingStocksFor 
-                        ? 'Fill in the stock details for this merchandise type' 
-                      : 'Fill in the details to create a new merchandise type for this branch'}
+                      {editingMerchandiseType
+                        ? 'Update the image for this merchandise type'
+                        : viewingStocksFor
+                          ? 'Fill in the stock details for this merchandise type'
+                          : 'Pick a RHET Inventory category and set a display image. Stock and sizes come from Request Stock.'}
                     </p>
                   )}
                 </div>
@@ -1405,6 +1521,19 @@ const AdminMerchandise = () => {
                               <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
                             )}
                           </>
+                        ) : editingMerchandiseType ? (
+                          <>
+                            <label className="label-field">Category</label>
+                            <input
+                              type="text"
+                              value={formData.merchandise_name}
+                              readOnly
+                              className="input-field bg-gray-50 cursor-not-allowed"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              Category is locked after create (must stay exact RHET categoryName for fulfill matching).
+                            </p>
+                          </>
                         ) : (
                           <>
                             <label htmlFor="merchandise_name" className="label-field">
@@ -1450,6 +1579,15 @@ const AdminMerchandise = () => {
                           </p>
                         </div>
                       </div>
+
+                      {isCreateTypeMode && (
+                        <div className="md:col-span-2">
+                          <p className="text-xs text-gray-500 rounded-lg bg-gray-50 border border-gray-100 p-3">
+                            Stock quantities, sizes, and variants come from{' '}
+                            <strong>Request Stock</strong> / RHET Inventory — not from this form.
+                          </p>
+                        </div>
+                      )}
 
                     {/* Only show these fields when adding/editing stock (not when adding merchandise type) */}
                     {(viewingStocksFor || editingMerchandise) && (
@@ -1644,20 +1782,32 @@ const AdminMerchandise = () => {
                       </>
                     )}
 
-                      {/* Image Upload - Show for merchandise type editing or when adding new merchandise type */}
-                      {(editingMerchandiseType || (!editingMerchandise && !viewingStocksFor && adminBranchId)) && (
+                      {/* Image Upload - create type shell or edit type image only */}
+                      {(editingMerchandiseType || isCreateTypeMode) && (
                         <div className="md:col-span-2">
                           <MerchandiseImageUpload
                             currentImageUrl={formData.image_url}
                             onImageUploaded={(imageUrl) => {
-                              setFormData(prev => ({
+                              setFormData((prev) => ({
                                 ...prev,
                                 image_url: imageUrl || '',
                               }));
+                              if (formErrors.image_url) {
+                                setFormErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next.image_url;
+                                  return next;
+                                });
+                              }
                             }}
                             merchandiseName={formData.merchandise_name}
-                            merchandiseId={editingMerchandise?.merchandise_id || editingMerchandiseType?.sampleItem?.merchandise_id}
+                            merchandiseId={
+                              editingMerchandiseType?.sampleItem?.merchandise_id
+                            }
                           />
+                          {formErrors.image_url && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.image_url}</p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1718,7 +1868,7 @@ const AdminMerchandise = () => {
               <div className="min-w-0">
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Request Merchandise Stock</h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  Pick a RHET Inventory category, then the exact variant or item RHET stocks. Each row is submitted as a separate request.
+                  Choose a merchandise category already added for this branch, then the exact RHET variant or item. Each row is a separate request.
                 </p>
               </div>
               <button
@@ -1771,6 +1921,21 @@ const AdminMerchandise = () => {
                   </div>
                 )}
 
+                {!catalogLoading && !catalogError && merchandiseTypeList.length === 0 && (
+                  <div className="flex-shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    No merchandise types on this branch yet. Add a Merchandise Type first, then request stock for it.
+                  </div>
+                )}
+
+                {!catalogLoading &&
+                  !catalogError &&
+                  merchandiseTypeList.length > 0 &&
+                  requestStockCategoryOptions.length === 0 && (
+                  <div className="flex-shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    Branch types exist but none match the live RHET catalog. Re-add types using exact RHET category names.
+                  </div>
+                )}
+
 
 
                 <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -1779,7 +1944,11 @@ const AdminMerchandise = () => {
                     <button
                       type="button"
                       onClick={addBulkRequestLine}
-                      disabled={catalogLoading || !!catalogError}
+                      disabled={
+                        catalogLoading ||
+                        !!catalogError ||
+                        requestStockCategoryOptions.length === 0
+                      }
                       className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors disabled:opacity-50"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1879,8 +2048,8 @@ const AdminMerchandise = () => {
                                   aria-label={`Category row ${rowIndex + 1}`}
                                   disabled={catalogLoading}
                                 >
-                                  <option value="">-- Select RHET category --</option>
-                                  {inventoryCatalog.categories.map((cat) => (
+                                  <option value="">-- Select branch category --</option>
+                                  {requestStockCategoryOptions.map((cat) => (
                                     <option
                                       key={cat.categoryId || cat.categoryName}
                                       value={cat.categoryName}
@@ -1891,6 +2060,13 @@ const AdminMerchandise = () => {
                                 </select>
                                 {lineErr.category_name && (
                                   <p className="mt-1 text-[11px] text-red-600">{lineErr.category_name}</p>
+                                )}
+                                {!lineErr.category_name &&
+                                  !catalogLoading &&
+                                  requestStockCategoryOptions.length === 0 && (
+                                  <p className="mt-1 text-[11px] text-amber-700">
+                                    No branch categories available for request.
+                                  </p>
                                 )}
                               </td>
                               <td className="px-2 py-2 align-top">
@@ -2155,7 +2331,7 @@ const AdminMerchandise = () => {
     const rawStocks = getStocksByMerchandiseName(viewingStocksFor);
     const isUniformStocks = isUniformStockCategory(viewingStocksFor);
     const isItemNamedStocks = isItemNamedStockCategory(viewingStocksFor);
-    // Hide empty legacy blank shells (qty 0, no gender/type) — fulfill must not recreate these
+    // Type shells already excluded in getStocksByMerchandiseName; keep legacy blank-qty filter for uniforms.
     const stocks = isUniformStocks
       ? rawStocks.filter((s) => {
           const blank =
@@ -2464,7 +2640,7 @@ const AdminMerchandise = () => {
                   <tr>
                     <td colSpan={stockColCount} className="px-6 py-4 text-center text-sm text-gray-500">
                       {stocks.length === 0
-                        ? 'No stock information available for this merchandise type.'
+                        ? 'No stock items yet. Use Request Stock or Add Stocks to add inventory for this category.'
                         : 'No stocks match the selected filters.'}
                     </td>
                   </tr>
@@ -2627,9 +2803,50 @@ const AdminMerchandise = () => {
         />
       ) : (
         <>
-          {/* Requests List */}
-          {requests.length > 0 ? (
-            <div className="bg-white rounded-lg shadow">
+          <MerchandiseRequestStatusModules
+            requests={requests}
+            value={requestStatusModule}
+            onChange={setRequestStatusModule}
+          />
+          {(() => {
+            const filteredRequests = filterRequestsByStatusModule(
+              requests,
+              requestStatusModule
+            );
+            const moduleMeta = getRequestStatusModuleMeta(requestStatusModule);
+            const modulePage = requestModulePageByStatus[requestStatusModule] || 1;
+            const paged = paginateRequestList(
+              filteredRequests,
+              modulePage,
+              REQUEST_STATUS_MODULE_PAGE_SIZE
+            );
+            const setModulePage = (nextPage) => {
+              setRequestModulePageByStatus((prev) => ({
+                ...prev,
+                [requestStatusModule]: nextPage,
+              }));
+            };
+            if (filteredRequests.length === 0) {
+              return (
+                <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-10 sm:p-12 text-center">
+                  <p className="text-base font-semibold text-gray-800">{moduleMeta.emptyTitle}</p>
+                  <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
+                    {requests.length === 0
+                      ? 'Submit a stock request and it will appear here under Pending.'
+                      : 'Merchandise stock requests in this status will appear here.'}
+                  </p>
+                </div>
+              );
+            }
+            return (
+            <div className="bg-white rounded-lg shadow border border-gray-200">
+              <TablePaginationSummary
+                page={paged.page}
+                totalItems={paged.total}
+                itemsPerPage={REQUEST_STATUS_MODULE_PAGE_SIZE}
+                itemLabel="requests"
+                className="px-4 pt-4 pb-2"
+              />
               <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
                 <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1320px' }}>
                   <thead className="bg-white">
@@ -2667,7 +2884,7 @@ const AdminMerchandise = () => {
                     </tr>
                   </thead>
                   <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                    {requests.map((request) => (
+                    {paged.items.map((request) => (
                       <tr key={request.request_id}>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900">
@@ -2721,45 +2938,12 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <RequestActionsMenu
                             requestId={request.request_id}
-                            items={[
-                              {
-                                key: 'track',
-                                label: 'Track request item',
-                                onSelect: () => setTrackingRequest(request),
-                              },
-                              ...(request.status === 'Shipped'
-                                ? [
-                                    {
-                                      key: 'confirm',
-                                      label: 'Confirm received',
-                                      onSelect: () => handleConfirmDelivery(request),
-                                    },
-                                  ]
-                                : []),
-                              ...(request.status === 'Pending'
-                                ? [
-                                    {
-                                      key: 'cancel',
-                                      label: 'Cancel request',
-                                      tone: 'danger',
-                                      onSelect: () => handleCancelRequest(request.request_id),
-                                    },
-                                  ]
-                                : []),
-                              ...((request.status === 'Rejected' || request.status === 'Returned') &&
-                              request.review_notes
-                                ? [
-                                    {
-                                      key: 'notes',
-                                      label: 'View notes',
-                                      onSelect: () =>
-                                        appAlert(
-                                          `${request.status === 'Returned' ? 'Return' : 'Rejection'} notes: ${request.review_notes}`
-                                        ),
-                                    },
-                                  ]
-                                : []),
-                            ]}
+                            items={buildMerchandiseRequestActionItems(request, {
+                              role: 'admin',
+                              onTrack: setTrackingRequest,
+                              onConfirmDelivery: handleConfirmDelivery,
+                              onCancel: handleCancelRequest,
+                            })}
                           />
                         </td>
                       </tr>
@@ -2767,14 +2951,19 @@ const AdminMerchandise = () => {
                   </tbody>
                 </table>
               </div>
+              <div className="px-4 pb-4 sm:pr-36">
+                <FixedTablePagination
+                  page={paged.page}
+                  totalPages={paged.totalPages}
+                  totalItems={paged.total}
+                  itemsPerPage={REQUEST_STATUS_MODULE_PAGE_SIZE}
+                  itemLabel="requests"
+                  onPageChange={setModulePage}
+                />
+              </div>
             </div>
-          ) : (
-            <div className="bg-white rounded-lg shadow p-12 text-center">
-              <p className="text-gray-500">
-                No requests found. Click "Request Stock" to submit a request to Superadmin.
-              </p>
-            </div>
-          )}
+            );
+          })()}
         </>
       )}
       {/* Modals */}

@@ -31,22 +31,24 @@ const ALLOWED_UNIFORM_PIECE_TYPES = [
 ];
 
 /**
- * Uniforms are always separate upper/lower SKUs; size, gender, and piece are required.
- * RHET-aligned: Male/Female/Unisex · XS…5XL · Polo/Short/…/Logo 1/Logo 2 (LCA Shirt)
- * Legacy Men/Women and Top/Bottom still accepted and normalized on write.
+ * Uniforms are always separate upper/lower SKUs; size, gender, and piece are required
+ * when creating real stock rows. Type shells (category + image only, no quantity/attrs)
+ * skip this check so Add Merchandise Type can key off RHET categoryName alone.
  * @returns {string|null} error message or null if ok
  */
-function validateUniformPieceFields(merchandiseName, size, gender, type) {
+function validateUniformPieceFields(merchandiseName, size, gender, type, { allowTypeShell = false } = {}) {
   if (!isUniformMerchandiseName(merchandiseName)) return null;
   const sizeText = String(size || '').trim();
+  const g = String(gender || '').trim();
+  const t = String(type || '').trim();
+  const blankAttrs = !sizeText && !g && !t;
+  if (allowTypeShell && blankAttrs) return null;
   if (!sizeText || ['n/a', 'na'].includes(sizeText.toLowerCase())) {
     return 'Size is required for uniforms (cannot be blank or N/A)';
   }
-  const g = String(gender || '').trim();
   if (!g || !['Male', 'Female', 'Unisex', 'Men', 'Women'].includes(g)) {
     return 'Gender is required for uniforms (Male, Female, or Unisex)';
   }
-  const t = String(type || '').trim();
   if (!t || !ALLOWED_UNIFORM_PIECE_TYPES.includes(t)) {
     return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt, Shirt/Pants for PE, Logo 1/Logo 2 for Shirt)';
   }
@@ -317,7 +319,18 @@ router.post(
       // Learning Kit is allowed as a local type/category (RHET categoryName).
       // Does not create RHET warehouse kits — stock is credited on fulfill.
 
-      const uniformError = validateUniformPieceFields(merchandise_name, size, gender, type);
+      const hasQuantity =
+        quantity !== null && quantity !== undefined && quantity !== '';
+      const isTypeShell =
+        !hasQuantity &&
+        !String(size || '').trim() &&
+        !String(gender || '').trim() &&
+        !String(type || '').trim() &&
+        !item_name;
+
+      const uniformError = validateUniformPieceFields(merchandise_name, size, gender, type, {
+        allowTypeShell: isTypeShell,
+      });
       if (uniformError) {
         return res.status(400).json({
           success: false,
@@ -325,9 +338,25 @@ router.post(
         });
       }
 
+      // Type shell: one CMS type per branch + RHET categoryName (image placeholder row)
+      if (isTypeShell && branch_id) {
+        const typeExists = await query(
+          `SELECT merchandise_id
+           FROM merchandisestbl
+           WHERE branch_id = $1 AND merchandise_name = $2
+           LIMIT 1`,
+          [parseInt(branch_id, 10), merchandise_name]
+        );
+        if (typeExists.rows.length > 0) {
+          return res.status(409).json({
+            success: false,
+            message: `Merchandise type "${merchandise_name}" already exists for this branch. Edit the type image or use View Stocks / Request Stock for quantities.`,
+            data: { existing_merchandise_id: typeExists.rows[0].merchandise_id },
+          });
+        }
+      }
+
       // Non-uniform / Learning Kit: concrete item identity required when creating stock qty
-      const hasQuantity =
-        quantity !== null && quantity !== undefined && quantity !== '';
       if (!isUniformMerchandiseName(merchandise_name) && hasQuantity) {
         if (!item_name) {
           return res.status(400).json({

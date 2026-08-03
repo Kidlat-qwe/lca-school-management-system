@@ -18,19 +18,40 @@ Sources: Package first payment (`package_enroll`) and Merchandise AR (`merchandi
 
 ## RhetCategorySelect
 
-Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**.
+Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**
+(category + image shell only — no local Uniform/Other taxonomy on create).
+
 Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy) — not a hard-coded
 CMS category list. Supports `onRetry` when RHET catalog fails temporarily.
+
+Options are usually filtered with `getCreateMerchandiseCategoryOptions(catalog, {
+  excludeLearningKit: true,
+  excludeNames: existingBranchTypeNames,
+})`.
+
 
 ## LearningKitRequestFields
 
 Request Stock panel for Learning Kit: kit picker + BOM component collector
 (recipes from `merchandiseRequests/learningKit.js`).
 
+## MerchandiseRequestStatusModules
+
+RHET Inventory-style status chips for Merchandise → **My Requests** /
+**Stock Requests**:
+
+`Pending` · `Shipped` · `Delivered` · `Returned` · `Rejected`
+
+Shows live counts and filters the request table. Legacy `Approved` counts as Delivered.
+Each module has its own pagination (10 requests per page via `FixedTablePagination`).
+
 ## RequestActionsMenu
 
 Ellipsis (⋮) menu for Merchandise → **Requests** Actions column.
-Always includes **Track request item**; optional Cancel / Review / View.
+Built via `buildMerchandiseRequestActionItems`:
+- **Delivered / Returned / Rejected** (and legacy Approved): **View details** only → track timeline (read-only)
+- **Pending / Shipped**: **Track request item** plus Cancel / Confirm / Review as applicable
+
 
 ## TrackRequestProgressModal
 
@@ -43,3 +64,6 @@ When status is **Shipped**, Branch Admin can **Confirm received** (calls
 
 Uses `utils/merchandiseRequests/trackProgress.js` to map local `status`
 (and legacy `Approved` → Delivered) onto step states.
+
+Admin / Superadmin Merchandise pages use `useMerchandiseLiveRefresh` so request
+status and branch stock update automatically after RHET webhooks (no manual reload).
