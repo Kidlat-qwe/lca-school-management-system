@@ -53,9 +53,8 @@ import {
   getMerchandiseStockSku,
 } from '../../utils/merchandiseStock';
 
-/** Flip to `true` after Coolify inventory/CMS deployment is ready. */
-/** Set to true later to re-enable Superadmin "Add Merchandise Type". */
-const ADD_MERCHANDISE_TYPE_ENABLED = false;
+/** Superadmin "Add Merchandise Type" control. */
+const ADD_MERCHANDISE_TYPE_ENABLED = true;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
