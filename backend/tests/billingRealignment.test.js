@@ -236,6 +236,48 @@ function testMidPackageTargetGeneratedCount() {
   assert.equal(generatedCountChange, undefined);
 }
 
+function testRecurringDateByPhaseOverridesSessionMinusOne() {
+  const phaseStartDateMap = { 1: '2026-07-20', 2: '2026-08-17' };
+  const profile = {
+    installmentinvoiceprofiles_id: 6,
+    student_id: 15,
+    generated_count: 2,
+    total_phases: 6,
+    is_active: true,
+  };
+  const phaseInvoices = [
+    {
+      invoice_id: 600,
+      invoice_ar_number: 'INV-600',
+      status: 'Unpaid',
+      issue_ymd: '2026-07-20',
+      due_ymd: '2026-07-19',
+      phase: 1,
+      remarks: 'TARGET_PHASE:1',
+    },
+    {
+      invoice_id: 601,
+      invoice_ar_number: 'INV-601',
+      status: 'Unpaid',
+      issue_ymd: '2026-07-25',
+      due_ymd: '2026-08-05',
+      phase: 2,
+      remarks: 'TARGET_PHASE:2',
+    },
+  ];
+
+  const plan = planProfileBillingRealignment(profile, phaseInvoices, null, phaseStartDateMap, {
+    recurringDateByPhase: {
+      2: { issue: '2026-08-01', due: '2026-08-05' },
+    },
+  });
+
+  const phase2Update = plan.changes.find((c) => c.type === 'update_phase_invoice' && c.phase === 2);
+  assert.ok(phase2Update);
+  assert.equal(phase2Update.new_issue_date, '2026-08-01');
+  assert.equal(phase2Update.new_due_date, '2026-08-05');
+}
+
 const tests = [
   testComputePhaseDueFromStart,
   testJulyToAugustShiftScenario,
@@ -248,6 +290,7 @@ const tests = [
   testDateParam,
   testFirstInvoiceWithoutTargetPhaseRemark,
   testMidPackageTargetGeneratedCount,
+  testRecurringDateByPhaseOverridesSessionMinusOne,
 ];
 
 let failed = 0;

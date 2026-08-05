@@ -87,6 +87,24 @@ Used by: `GET /installment-invoices/profiles/:id/phases`, manual/auto invoice ge
 
 Phase API rows include `amount`, `paid_amount`, `remaining_balance` / `balance` (invoice-chain summary), and `invoice_id` as the payable leaf after partial payment.
 
+## `phaseInstallmentUtils.js`
+
+Builds class-linked installment issue / due / queue dates (`buildPhaseInstallmentSchedule`).
+
+| Rule | Behavior |
+|------|----------|
+| First phase (`generated_count = 0`) | Due = day before that phase’s first session; issue = enrollment / payment day |
+| Class start day 1–7 | Recurring cadence **25th / next-month 5th** |
+| Class start day 8+ | Recurring cadence **1st / same-month 5th** |
+| 7-day skip | If the next 1st is ≤ 7 days after class start, skip to the following 1st (e.g. June 24 → Aug 1) |
+| Existing queues | Day-25 `next_generation_date` stays on 25/5 (grandfather). Start-date rebuild uses `ignoreStoredQueueAnchor` + new class start |
+| Late joiners | Same class cadence; first invoice stays phase-tied; first recurring 1st is after that invoice (still respects the class skip) |
+| Grace / drop-off | Unchanged — still based on invoice `due_date` (5th) |
+
+Used by: enrollment (`routes/classes.js`), daily generation (`installmentInvoiceGenerator.js`), class start-date billing realignment.
+
+Tests: `node backend/tests/phaseInstallmentCadence.test.js`.
+
 ## `installmentPhaseRowMapping.js`
 
 Maps invoice chains to profile-local phase rows for Student History / Installment Plan tables. See `normalizeAdjacentPhaseDisplayDates` for issue-date display ordering.

@@ -70,8 +70,10 @@ export function planProfileBillingRealignment(
   profile,
   phaseInvoices,
   enrollment,
-  phaseStartDateMap
+  phaseStartDateMap,
+  options = {}
 ) {
+  const recurringDateByPhase = options.recurringDateByPhase || {};
   const changes = [];
   const deleteInvoiceIds = [];
 
@@ -113,7 +115,8 @@ export function planProfileBillingRealignment(
     if (isSettledInvoiceStatus(inv.status)) continue;
 
     const phaseStart = phaseStartDateMap[inv.phase];
-    const newDue = phaseStart ? computePhaseDueFromStart(phaseStart) : null;
+    const scheduled = recurringDateByPhase[inv.phase];
+    const newDue = scheduled?.due || (phaseStart ? computePhaseDueFromStart(phaseStart) : null);
     if (!newDue) {
       changes.push({
         type: 'warning',
@@ -125,7 +128,7 @@ export function planProfileBillingRealignment(
       continue;
     }
 
-    const newIssue = resolveIssueDateAfterDueAlign(inv.issue_ymd, newDue);
+    const newIssue = scheduled?.issue || resolveIssueDateAfterDueAlign(inv.issue_ymd, newDue);
     const needDue = ymd(inv.due_ymd) !== newDue;
     const needIssue = ymd(inv.issue_ymd) !== newIssue;
     if (needDue || needIssue) {
@@ -352,6 +355,7 @@ export async function planQueueRealignmentForProfile(
 ) {
   try {
     const generatedCount = profilePlan.targetGeneratedCount ?? profile.generated_count ?? 0;
+    const classStartYmd = options.classStartYmd || phaseStartDateMap?.[1] || null;
     const schedule = await buildPhaseInstallmentSchedule({
       db: client,
       profile: {
@@ -363,6 +367,7 @@ export async function planQueueRealignmentForProfile(
       generatedCountOverride: generatedCount,
       phaseStartDateMapOverride: phaseStartDateMap,
       ignoreStoredQueueAnchor: true,
+      classStartYmdOverride: classStartYmd,
     });
 
     if (!schedule || schedule.is_last_phase) {
@@ -451,11 +456,44 @@ export async function planBillingRealignmentForClass(client, classId, phaseStart
     const dpChange = planDownpaymentRealignment(downpayment, enrollmentDateYmd);
     if (dpChange) changes.push(dpChange);
 
+    const classStartYmd = phaseStartDateMap?.[1] || options.classStartYmd || null;
+    const recurringDateByPhase = {};
+    const startPhase = Number(profile.phase_start) > 0 ? Number(profile.phase_start) : 1;
+    const totalPhases = Number(profile.total_phases) || 0;
+    const lastPhase = totalPhases > 0 ? startPhase + totalPhases - 1 : startPhase + 12;
+    for (let absPhase = startPhase + 1; absPhase <= lastPhase; absPhase += 1) {
+      const genCount = absPhase - startPhase;
+      try {
+        const sched = await buildPhaseInstallmentSchedule({
+          db: client,
+          profile: {
+            class_id: classId,
+            phase_start: startPhase,
+            total_phases: totalPhases || undefined,
+            generated_count: genCount,
+          },
+          generatedCountOverride: genCount,
+          phaseStartDateMapOverride: phaseStartDateMap,
+          ignoreStoredQueueAnchor: true,
+          classStartYmdOverride: classStartYmd,
+        });
+        if (sched?.current_issue_date && sched?.current_due_date) {
+          recurringDateByPhase[absPhase] = {
+            issue: ymd(sched.current_issue_date),
+            due: ymd(sched.current_due_date),
+          };
+        }
+      } catch {
+        break;
+      }
+    }
+
     const profilePlan = planProfileBillingRealignment(
       profile,
       phaseInvoices,
       enrollment,
-      phaseStartDateMap
+      phaseStartDateMap,
+      { recurringDateByPhase }
     );
     changes.push(...profilePlan.changes);
 
@@ -465,7 +503,7 @@ export async function planBillingRealignmentForClass(client, classId, phaseStart
       profile,
       profilePlan,
       phaseStartDateMap,
-      options
+      { ...options, classStartYmd }
     );
     if (queueChange) {
       changes.push(queueChange);

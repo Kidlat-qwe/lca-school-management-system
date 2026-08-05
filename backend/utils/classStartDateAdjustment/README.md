@@ -38,8 +38,8 @@ POST /classes/:id/adjust-start-date/apply
 - **Paid / partially paid** phase invoices: dates unchanged
 - **Unpaid phase 1**: `due_date` = new phase 1 session start − 1 day; penalties cleared
 - **First generated invoice** without `TARGET_PHASE` in remarks (e.g. enrollment merch overwrite) is still treated as phase 1 when `generated_count >= 1`
-- **Unpaid phase 2+**: `due_date` = new phase session start − 1 day (same rule as phase 1); penalties cleared; invoice is kept
-- **Installment queue**: rebuilt via `buildPhaseInstallmentSchedule` using the new session schedule (`next_generation_date`, `next_invoice_month`, profile due fields)
+- **Unpaid phase 2+**: `due_date` / `issue_date` follow the class billing cadence from `buildPhaseInstallmentSchedule` (first-week start → 25th / next-month 5th; otherwise 1st / same-month 5th). Falls back to session start − 1 day when no schedule can be built; penalties cleared; invoice is kept
+- **Installment queue**: rebuilt via `buildPhaseInstallmentSchedule` with `ignoreStoredQueueAnchor` and the new class/phase-1 start (`next_generation_date`, `next_invoice_month`, profile due fields)
 - **Delinquency drops** on old due dates: enrollment restored when drop reason references delinquency
 
 ## Guards

@@ -6640,23 +6640,22 @@ router.post(
         try {
           const frequencyMonths = parseInt(effectiveInstallmentSettings.frequency_months, 10) || 1;
 
-          // Fixed cadence:
-          // - Generate on 25th of current cycle month
-          // - Due on 5th of next month
+          // Default recurring cadence is 25th / next-month 5th (first-week class starts).
+          // Class-linked plans may switch to 1st / same-month 5th via buildPhaseInstallmentSchedule.
           const cycleGenerationDate = new Date(effectiveInstallmentSettings.invoice_issue_date || new Date());
           cycleGenerationDate.setDate(25);
 
-          const firstBillingMonth = new Date(cycleGenerationDate);
+          let firstBillingMonth = new Date(cycleGenerationDate);
           firstBillingMonth.setDate(1);
           firstBillingMonth.setMonth(firstBillingMonth.getMonth() + 1);
 
-          const firstDueDate = new Date(firstBillingMonth);
+          let firstDueDate = new Date(firstBillingMonth);
           firstDueDate.setDate(5);
 
-          const nextInvoiceDueDate = new Date(firstDueDate);
+          let nextInvoiceDueDate = new Date(firstDueDate);
           nextInvoiceDueDate.setMonth(nextInvoiceDueDate.getMonth() + frequencyMonths);
 
-          const generationDate = new Date(cycleGenerationDate);
+          let generationDate = new Date(cycleGenerationDate);
           const nextGenerationDate = new Date(cycleGenerationDate);
           nextGenerationDate.setMonth(nextGenerationDate.getMonth() + frequencyMonths);
           nextGenerationDate.setDate(25);
@@ -6715,7 +6714,7 @@ router.post(
           }
 
           let firstPhaseSchedule = null;
-          if (isPhaseInstallmentPackage) {
+          if (class_id) {
             firstPhaseSchedule = await buildPhaseInstallmentSchedule({
               db: client,
               profile: {
@@ -6727,6 +6726,18 @@ router.post(
               generatedCountOverride: 0,
               issueDateOverride: issueDateStr,
             });
+            if (firstPhaseSchedule?.next_generation_date) {
+              const scheduledGen = parseYmdToLocalNoon(firstPhaseSchedule.next_generation_date);
+              const scheduledMonth = parseYmdToLocalNoon(firstPhaseSchedule.next_invoice_month);
+              const scheduledDue = parseYmdToLocalNoon(firstPhaseSchedule.next_due_date);
+              if (scheduledGen) generationDate = scheduledGen;
+              if (scheduledMonth) firstBillingMonth = scheduledMonth;
+              if (scheduledDue) {
+                firstDueDate = scheduledDue;
+                nextInvoiceDueDate = new Date(scheduledDue);
+                nextInvoiceDueDate.setMonth(nextInvoiceDueDate.getMonth() + frequencyMonths);
+              }
+            }
           }
 
           const profileResult = await client.query(

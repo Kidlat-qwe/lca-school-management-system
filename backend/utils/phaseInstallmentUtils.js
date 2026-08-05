@@ -3,6 +3,11 @@ import { coerceToManilaYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila 
 const PHASE_INSTALLMENT_DUE_DAYS_BEFORE = 1;
 const RECURRING_DUE_DAY = 5;
 const RECURRING_GENERATION_DAY = 25;
+const FIRST_WEEK_LAST_DAY = 7;
+const FIRST_OF_MONTH_SKIP_GAP_DAYS = 7;
+
+export const BILLING_CADENCE_25_5 = '25_5';
+export const BILLING_CADENCE_1_5 = '1_5';
 
 const normalizeDateInput = (value) => {
   if (!value) return null;
@@ -58,6 +63,72 @@ const addMonths = (dateValue, months) => {
 
 const ymdCompare = (a, b) => String(a || '').slice(0, 10).localeCompare(String(b || '').slice(0, 10));
 
+const dayOfYmd = (value) => {
+  const ymd = coerceToManilaYmd(value, { fallbackToToday: false });
+  if (!ymd) return null;
+  const day = Number(ymd.slice(8, 10));
+  return Number.isInteger(day) ? day : null;
+};
+
+const diffUtcDays = (fromDate, toDate) => {
+  if (!fromDate || !toDate) return null;
+  const fromUtc = Date.UTC(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+  const toUtc = Date.UTC(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
+  return Math.round((toUtc - fromUtc) / 86400000);
+};
+
+/**
+ * Class start day 1–7 keeps current 25th / next-month 5th.
+ * Later start days use 1st / same-month 5th.
+ */
+export const resolveClassBillingCadence = (classStartYmd) => {
+  const start = normalizeDateInput(classStartYmd);
+  if (!start) return BILLING_CADENCE_25_5;
+  const day = start.getDate();
+  if (day >= 1 && day <= FIRST_WEEK_LAST_DAY) return BILLING_CADENCE_25_5;
+  return BILLING_CADENCE_1_5;
+};
+
+/**
+ * Next month's 1st after class start. If that 1st is within 7 days, skip to the following 1st.
+ * Example: July 20 → Aug 1; June 24 → Aug 1 (skip July 1).
+ */
+export const resolveFirstOfMonthRecurringIssueYmd = (classStartYmd) => {
+  const start = normalizeDateInput(classStartYmd);
+  if (!start) return null;
+  let nextFirst = startOfMonth(addMonths(start, 1));
+  const gap = diffUtcDays(start, nextFirst);
+  if (gap != null && gap <= FIRST_OF_MONTH_SKIP_GAP_DAYS) {
+    nextFirst = startOfMonth(addMonths(nextFirst, 1));
+  }
+  return formatYmdLocal(nextFirst);
+};
+
+export const inferBillingCadenceFromAnchorYmd = (anchorYmd) => {
+  const day = dayOfYmd(anchorYmd);
+  if (day === 1) return BILLING_CADENCE_1_5;
+  if (day === RECURRING_GENERATION_DAY) return BILLING_CADENCE_25_5;
+  return null;
+};
+
+/**
+ * Existing 25th queues stay on 25/5. New plans use class.start_date.
+ * ignoreStoredQueueAnchor (start-date rebuild) recomputes from class start.
+ */
+export const resolveProfileBillingCadence = ({
+  classStartYmd,
+  profile = {},
+  generatedCount = 0,
+  ignoreStoredQueueAnchor = false,
+} = {}) => {
+  if (!ignoreStoredQueueAnchor) {
+    const inferred = inferBillingCadenceFromAnchorYmd(profile.next_generation_date);
+    if (inferred) return inferred;
+    if (Number(generatedCount) >= 1) return BILLING_CADENCE_25_5;
+  }
+  return resolveClassBillingCadence(classStartYmd);
+};
+
 /**
  * Fixed recurring installment cycle: issue on 25th of anchor month, due on 5th of next month.
  */
@@ -89,6 +160,38 @@ export const buildFixedRecurringCycleDates = (generationAnchorYmd, frequencyMont
 };
 
 /**
+ * Recurring cycle: issue on the 1st, due on the 5th of the same month.
+ */
+export const buildFirstOfMonthCycleDates = (generationAnchorYmd, frequencyMonths = 1) => {
+  const anchor = parseYmdToLocalNoon(generationAnchorYmd) || new Date();
+  const issueDate = startOfMonth(anchor);
+  const dueDate = setDayOfMonth(issueDate, RECURRING_DUE_DAY);
+  const nextGenerationDate = addMonths(issueDate, frequencyMonths);
+  const invoiceMonth = startOfMonth(dueDate);
+  const nextInvoiceMonth = addMonths(invoiceMonth, frequencyMonths);
+
+  return {
+    issueDate,
+    dueDate,
+    invoiceMonth,
+    nextGenerationDate,
+    nextInvoiceMonth,
+    generationAnchorYmd: formatYmdLocal(issueDate),
+  };
+};
+
+export const buildRecurringCycleDates = (
+  generationAnchorYmd,
+  frequencyMonths = 1,
+  cadence = BILLING_CADENCE_25_5
+) => {
+  if (cadence === BILLING_CADENCE_1_5) {
+    return buildFirstOfMonthCycleDates(generationAnchorYmd, frequencyMonths);
+  }
+  return buildFixedRecurringCycleDates(generationAnchorYmd, frequencyMonths);
+};
+
+/**
  * Advance the installment auto-generation queue by one billing cycle.
  * Manual advance pay consumes the pending generation slot (same as if auto-generated),
  * so next_generation_date / next_invoice_month move forward one month (e.g. Aug 25 → Sep 25).
@@ -102,7 +205,9 @@ export const advanceInstallmentQueueByOneCycle = (nextGenerationDateYmd, frequen
   if (!anchor) {
     return { next_generation_date: null, next_invoice_month: null };
   }
-  const cycle = buildFixedRecurringCycleDates(anchor, frequencyMonths);
+  const cadence =
+    inferBillingCadenceFromAnchorYmd(anchor) || BILLING_CADENCE_25_5;
+  const cycle = buildRecurringCycleDates(anchor, frequencyMonths, cadence);
   return {
     next_generation_date: formatYmdLocal(cycle.nextGenerationDate),
     next_invoice_month: formatYmdLocal(cycle.nextInvoiceMonth),
@@ -111,15 +216,54 @@ export const advanceInstallmentQueueByOneCycle = (nextGenerationDateYmd, frequen
 
 /**
  * First recurring cycle after the initial (phase-tied) invoice.
- * Fixed calendar cadence: 25th issue → 5th of next month.
  *
- * Pre-start enrollment (issue on/before phase start): skip 25th on or before phase start
- * so Phase N+1 bills from the next month (e.g. enroll Mar 24, phase 7 Mar 25 → Apr 25).
- * Ongoing mid-enrollment: first 25th on/after phase start (e.g. enroll Mar 25 into phase
- * that started Mar 2 → Mar 25).
+ * 25/5: issue 25th → due 5th of next month (legacy / first-week class starts).
+ * 1/5: issue 1st → due 5th same month, from class.start_date (+ optional 7-day skip).
  */
 export const resolveFirstRecurringCycleAfterIssue = (issueYmd, options = {}) => {
-  const { firstPhaseStartYmd = null, minDaysAfterIssue = 7 } = options;
+  const {
+    firstPhaseStartYmd = null,
+    minDaysAfterIssue = 7,
+    classStartYmd = null,
+    cadence = null,
+  } = options;
+
+  const resolvedCadence =
+    cadence ||
+    (classStartYmd ? resolveClassBillingCadence(classStartYmd) : BILLING_CADENCE_25_5);
+
+  if (resolvedCadence === BILLING_CADENCE_1_5) {
+    const seedStart = classStartYmd || firstPhaseStartYmd || issueYmd;
+    let firstIssueYmd = resolveFirstOfMonthRecurringIssueYmd(seedStart);
+    if (!firstIssueYmd) return null;
+
+    const issue = parseYmdToLocalNoon(issueYmd);
+    const firstPhaseStart = firstPhaseStartYmd ? parseYmdToLocalNoon(firstPhaseStartYmd) : null;
+    const isPreStartEnrollment =
+      Boolean(firstPhaseStart && issue && firstPhaseStart.getTime() >= issue.getTime());
+
+    for (let step = 0; step < 24; step += 1) {
+      const cycle = buildFirstOfMonthCycleDates(firstIssueYmd);
+      if (!cycle?.issueDate) return null;
+      const anchorYmd = formatYmdLocal(cycle.issueDate);
+
+      if (issue && ymdCompare(anchorYmd, formatYmdLocal(issue)) <= 0) {
+        firstIssueYmd = formatYmdLocal(cycle.nextGenerationDate);
+        continue;
+      }
+      if (isPreStartEnrollment && cycle.issueDate.getTime() <= firstPhaseStart.getTime()) {
+        firstIssueYmd = formatYmdLocal(cycle.nextGenerationDate);
+        continue;
+      }
+
+      return {
+        ...cycle,
+        catchUp: false,
+      };
+    }
+    return null;
+  }
+
   const issue = parseYmdToLocalNoon(issueYmd);
   if (!issue) return null;
 
@@ -241,21 +385,32 @@ async function getFirstGeneratedInstallmentIssueYmd(db, profile) {
 }
 
 /**
- * Advance a 25th anchor by N monthly billing cycles.
+ * Advance a recurring anchor by N monthly billing cycles.
  */
-function advanceRecurringAnchorYmd(anchorYmd, steps, frequencyMonths = 1) {
+function advanceRecurringAnchorYmd(anchorYmd, steps, frequencyMonths = 1, cadence = BILLING_CADENCE_25_5) {
   if (!anchorYmd || steps <= 0) return anchorYmd;
   let cursor = anchorYmd;
   for (let step = 0; step < steps; step += 1) {
-    const cycle = buildFixedRecurringCycleDates(cursor, frequencyMonths);
+    const cycle = buildRecurringCycleDates(cursor, frequencyMonths, cadence);
     cursor = formatYmdLocal(cycle.nextGenerationDate);
   }
   return cursor;
 }
 
+export async function loadClassStartYmd(db, classId) {
+  if (!classId || !db?.query) return null;
+  const result = await db.query(
+    `SELECT TO_CHAR(start_date, 'YYYY-MM-DD') AS start_ymd
+     FROM classestbl
+     WHERE class_id = $1`,
+    [classId]
+  );
+  return result.rows[0]?.start_ymd || null;
+}
+
 /**
- * Resolve the 25th-of-month anchor for recurring billing at a given generated_count.
- * Uses stored queue dates when present; otherwise derives from first phase issue + fixed cadence.
+ * Resolve the recurring billing anchor at a given generated_count.
+ * Uses stored queue dates when present; otherwise derives from class start / first phase issue.
  */
 async function resolveRecurringBillingAnchorYmd(
   db,
@@ -267,6 +422,8 @@ async function resolveRecurringBillingAnchorYmd(
     frequencyMonths = 1,
     ignoreStoredQueueAnchor = false,
     resolvePhaseStartDate = null,
+    classStartYmd = null,
+    cadence = BILLING_CADENCE_25_5,
   } = {}
 ) {
   const profileCount = parseInt(profile.generated_count ?? generatedCount, 10);
@@ -291,13 +448,16 @@ async function resolveRecurringBillingAnchorYmd(
 
   const firstRecurring = resolveFirstRecurringCycleAfterIssue(seedIssueYmd, {
     firstPhaseStartYmd: firstPhaseStart ? formatYmdLocal(firstPhaseStart) : null,
+    classStartYmd,
+    cadence,
   });
   if (!firstRecurring?.generationAnchorYmd) return null;
 
   return advanceRecurringAnchorYmd(
     firstRecurring.generationAnchorYmd,
     Math.max(0, generatedCount - 1),
-    frequencyMonths
+    frequencyMonths,
+    cadence
   );
 }
 
@@ -364,7 +524,8 @@ export const getPhaseDueDateYmd = async (db, classId, phaseNumber, dueDaysBefore
 /**
  * Hybrid installment schedule:
  * - First phase (generated_count 0): due = day before phase start; issue = payment/enrollment day.
- * - Recurring phases (generated_count ≥ 1): issue on 25th, due on 5th of next month.
+ * - Recurring: first-week class start → 25th / next-month 5th.
+ *   Otherwise → 1st / same-month 5th (skip next 1st when gap ≤ 7 days).
  */
 export const buildPhaseInstallmentSchedule = async ({
   db,
@@ -375,6 +536,7 @@ export const buildPhaseInstallmentSchedule = async ({
   frequencyMonths = 1,
   phaseStartDateMapOverride = null,
   ignoreStoredQueueAnchor = false,
+  classStartYmdOverride = null,
 }) => {
   if (!isPhaseInstallmentProfile(profile)) {
     return null;
@@ -395,6 +557,17 @@ export const buildPhaseInstallmentSchedule = async ({
   const generatedCount = resolveGeneratedCount(profile, generatedCountOverride);
   const isFirstPhaseBilling = generatedCount === 0;
   const isRecurringPhaseBilling = generatedCount >= 1;
+  const classStartYmd =
+    coerceScheduleYmd(classStartYmdOverride) || (await loadClassStartYmd(db, profile.class_id));
+  const billingCadence = resolveProfileBillingCadence({
+    classStartYmd,
+    profile: {
+      ...profileWithPhaseStart,
+      next_generation_date: profile.next_generation_date || generationAnchorYmd,
+    },
+    generatedCount,
+    ignoreStoredQueueAnchor,
+  });
 
   const currentPhaseNumber = getCurrentInstallmentPhaseNumber(profileWithPhaseStart, generatedCountOverride);
   const lastPhaseNumber = getLastInstallmentPhaseNumber(profileWithPhaseStart);
@@ -414,6 +587,7 @@ export const buildPhaseInstallmentSchedule = async ({
       next_generation_date: null,
       is_last_phase: true,
       billing_mode: null,
+      billing_cadence: billingCadence,
     };
   }
 
@@ -438,9 +612,11 @@ export const buildPhaseInstallmentSchedule = async ({
       frequencyMonths,
       ignoreStoredQueueAnchor,
       resolvePhaseStartDate: phaseStartDateMapOverride ? resolvePhaseStartDate : null,
+      classStartYmd,
+      cadence: billingCadence,
     });
 
-    const cycle = buildFixedRecurringCycleDates(anchorYmd, frequencyMonths);
+    const cycle = buildRecurringCycleDates(anchorYmd, frequencyMonths, billingCadence);
     currentDueDate = cycle.dueDate;
     currentGenerationDate = cycle.issueDate;
     currentInvoiceMonthDate = cycle.invoiceMonth;
@@ -482,7 +658,11 @@ export const buildPhaseInstallmentSchedule = async ({
       const firstPhaseStartYmd = formatYmdLocal(currentPhaseStart);
       const firstRecurring = resolveFirstRecurringCycleAfterIssue(
         currentIssueYmd || firstPhaseStartYmd,
-        { firstPhaseStartYmd }
+        {
+          firstPhaseStartYmd,
+          classStartYmd,
+          cadence: billingCadence,
+        }
       );
       if (firstRecurring) {
         nextIssueDate = firstRecurring.issueDate;
@@ -499,11 +679,12 @@ export const buildPhaseInstallmentSchedule = async ({
         generatedCount === parseInt(profile.generated_count ?? generatedCount, 10)
           ? coerceScheduleYmd(profile.next_generation_date)
           : null);
-      const nextCycle = buildFixedRecurringCycleDates(
+      const nextCycle = buildRecurringCycleDates(
         formatYmdLocal(
-          buildFixedRecurringCycleDates(anchorYmd, frequencyMonths).nextGenerationDate
+          buildRecurringCycleDates(anchorYmd, frequencyMonths, billingCadence).nextGenerationDate
         ),
-        frequencyMonths
+        frequencyMonths,
+        billingCadence
       );
       nextIssueDate = nextCycle.issueDate;
       nextDueDate = nextCycle.dueDate;
@@ -528,6 +709,7 @@ export const buildPhaseInstallmentSchedule = async ({
     next_recurring_catch_up: nextCatchUp,
     is_last_phase: !nextPhaseStart,
     billing_mode: billingMode,
+    billing_cadence: billingCadence,
     is_mid_enrollment_first_phase: isMidEnrollmentFirstPhase,
     recurring_catch_up: recurringCatchUp,
   };
