@@ -203,7 +203,7 @@ Reservation fee is credited separately on the invoice line items when possible; 
 | `ambiguous_active_profiles` | Multiple active profiles — manual resolution required |
 | `unsupported_current_package` | Student is not on an installment plan |
 | `not_currently_enrolled` | No active enrollment in the class |
-| `partial_recurring_payment_detected` | Partial payment in progress on a phase |
+| `partial_recurring_payment_detected` | Open partial/balance payment on a phase (settled chains like Partially Paid → Paid leaf do **not** block) |
 | `negative_difference_blocked` | Credits already exceed full payment price |
 | `inactive_target_package` | Selected package is not active |
 | `target_package_branch_mismatch` | Package branch ≠ class branch |
@@ -280,4 +280,4 @@ flowchart TD
 
 ---
 
-*Last updated: June 2026 — aligns with `packageChangeConversion.js` and Classes **Update Plan** modal.*
+*Last updated: August 2026 — settled balance chains no longer trigger `partial_recurring_payment_detected`; aligns with `packageChangeConversion.js` and Classes **Update Plan** modal.*

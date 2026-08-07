@@ -200,6 +200,8 @@ Supports **Update Plan** on a class student (`POST .../package-change-preview` a
 | `installment_to_installment` | Another installment / Phase+Installment package | Adjustment invoice; profile recurring amount updated |
 | `installment_to_fullpayment` | Fullpayment or Phase+Fullpayment package | Credits all prior class payments (downpayment, reservation fee, phase invoices); enrolls full target phase range (e.g. 1–10); deactivates installment profile and cancels pending installment invoices |
 
+`countOpenPartialRecurringInvoices()` gates preview/invoice creation: Completed payments on non-Paid recurring invoices block Update Plan, except **settled balance-chain parents** (Partially Paid → Paid leaf via `balance_invoice_id`).
+
 Zero-balance full payment conversion runs immediately without an invoice.
 
 `GET /installment-invoices/profiles/:id/phases` uses `resolveInstallmentProfileFullPaymentConversion()` and `applyFullPaymentUpgradePhaseDisplay()` so Student History shows unpaid/cancelled/not-generated slots as **Paid** with note **Upgraded to Full Payment** and `total_outstanding` = 0 after conversion.

@@ -216,7 +216,7 @@ const main = async () => {
       upsell_kpi_card: kpiTotals.upsell_count,
       rate_numerator_sum_for_percent_card: matrix.total_re_enrolled_count ?? sumRateNumerators,
       note:
-        'Rate denominator = prior-month new + re-enrolled + rejoin + upsell. Rate numerator = re-enrolled + completed in current month (upsell excluded).',
+        'Rate denominator = prior-month new + re-enrolled + rejoin + upsell + completed-with-prior-history. Rate numerator = re-enrolled + Active + completed-with-prior-history (Inactive excluded).',
     },
     cells: detailRows,
   };

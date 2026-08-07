@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MONTHLY_ENROLLMENT_DASHBOARD } from '../../constants/dashboardDescriptions';
+import { manilaMonthYYYYMM } from '../../utils/dateUtils';
 import {
   filterMonthMatrixStudentsByStatus,
   hasMatrixStatusFilters,
@@ -30,6 +31,16 @@ const matrixTableScrollStyle = {
   WebkitOverflowScrolling: 'touch',
 };
 
+/** Sticky header styles for the current Manila calendar month column. */
+const CURRENT_MONTH_RATE_HEADER_CLASS =
+  'sticky top-0 z-[60] border-b border-sky-300 bg-sky-100 px-3 py-2.5 text-center whitespace-nowrap ring-2 ring-inset ring-sky-400';
+const CURRENT_MONTH_LABEL_HEADER_CLASS =
+  'sticky z-[55] border-b-2 border-sky-500 bg-sky-100 px-3 py-3 text-center whitespace-nowrap text-sky-900 shadow-[0_2px_4px_rgba(0,0,0,0.04)] ring-2 ring-inset ring-sky-400';
+const DEFAULT_RATE_HEADER_CLASS =
+  'sticky top-0 z-[60] border-b border-gray-200 bg-amber-50 px-3 py-2.5 text-center whitespace-nowrap';
+const DEFAULT_LABEL_HEADER_CLASS =
+  'sticky z-[55] border-b-2 border-gray-300 bg-gray-50 px-3 py-3 text-center whitespace-nowrap shadow-[0_2px_4px_rgba(0,0,0,0.04)]';
+
 /**
  * Student × month enrollment matrix (Jan–Dec for selected year).
  */
@@ -40,6 +51,7 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
   const { historyStudent, isHistoryOpen, openHistory, closeHistory } =
     useEnrollmentMatrixStudentHistory();
   const months = matrix?.months ?? [];
+  const currentMonthKey = manilaMonthYYYYMM();
   const students = useMemo(() => {
     const rows = matrix?.students ?? [];
     const filtered = filterMonthMatrixStudentsByStatus(rows, months, statusFilters);
@@ -129,15 +141,24 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                     </MatrixInfoTooltip>
                   </span>
                 </th>
-                {monthStats.map((row) => (
-                  <th
-                    key={`stat-${row.month_key}`}
-                    className="sticky top-0 z-[60] border-b border-gray-200 bg-amber-50 px-3 py-2.5 text-center whitespace-nowrap"
-                    style={{ height: RATE_HEADER_HEIGHT_PX }}
-                  >
-                    <ReEnrollmentRateMatrixCell row={row} />
-                  </th>
-                ))}
+                {monthStats.map((row) => {
+                  const isCurrentMonth = row.month_key === currentMonthKey;
+                  return (
+                    <th
+                      key={`stat-${row.month_key}`}
+                      className={
+                        isCurrentMonth
+                          ? CURRENT_MONTH_RATE_HEADER_CLASS
+                          : DEFAULT_RATE_HEADER_CLASS
+                      }
+                      style={{ height: RATE_HEADER_HEIGHT_PX }}
+                      title={isCurrentMonth ? 'Current month (Asia/Manila)' : undefined}
+                      aria-current={isCurrentMonth ? 'date' : undefined}
+                    >
+                      <ReEnrollmentRateMatrixCell row={row} />
+                    </th>
+                  );
+                })}
               </tr>
             )}
 
@@ -156,15 +177,24 @@ const StudentMonthEnrollmentMatrixChart = ({ matrix, displayYear, className = ''
                   onToggleSort={handleToggleStudentSort}
                 />
               </th>
-              {months.map((m) => (
-                <th
-                  key={m.key}
-                  className="sticky z-[55] border-b-2 border-gray-300 bg-gray-50 px-3 py-3 text-center whitespace-nowrap shadow-[0_2px_4px_rgba(0,0,0,0.04)]"
-                  style={{ top: columnHeaderTop, height: COLUMN_HEADER_HEIGHT_PX }}
-                >
-                  {m.label}
-                </th>
-              ))}
+              {months.map((m) => {
+                const isCurrentMonth = m.key === currentMonthKey;
+                return (
+                  <th
+                    key={m.key}
+                    className={
+                      isCurrentMonth
+                        ? CURRENT_MONTH_LABEL_HEADER_CLASS
+                        : DEFAULT_LABEL_HEADER_CLASS
+                    }
+                    style={{ top: columnHeaderTop, height: COLUMN_HEADER_HEIGHT_PX }}
+                    title={isCurrentMonth ? 'Current month (Asia/Manila)' : undefined}
+                    aria-current={isCurrentMonth ? 'date' : undefined}
+                  >
+                    {m.label}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
 

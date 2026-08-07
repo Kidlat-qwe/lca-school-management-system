@@ -131,7 +131,11 @@ export const hasMatrixStatusFilters = (statusFilters) =>
 export const matrixCellMatchesStatusFilters = (cell, statusFilters) => {
   const keys = normalizeMatrixStatusFilters(statusFilters);
   if (!keys.length) return true;
-  return keys.includes(matrixCellStatusSortKey(cell));
+  const cellKey = matrixCellStatusSortKey(cell);
+  if (keys.includes(cellKey)) return true;
+  // "Completed" legend filter includes both multi-phase and 1-phase completed.
+  if (keys.includes('completed') && cellKey === 'completed_single_phase') return true;
+  return false;
 };
 
 /**
@@ -162,7 +166,12 @@ export const filterMatrixStudentsWithAnyMatchingStatus = (
   const periodKeyList = periodKeys || [];
   if (!periodKeyList.length) return students;
   return students.filter((student) =>
-    periodKeyList.some((key) => keys.includes(matrixCellStatusSortKey(getCell(student, key))))
+    periodKeyList.some((key) => {
+      const cellKey = matrixCellStatusSortKey(getCell(student, key));
+      if (keys.includes(cellKey)) return true;
+      if (keys.includes('completed') && cellKey === 'completed_single_phase') return true;
+      return false;
+    })
   );
 };
 

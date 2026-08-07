@@ -341,6 +341,13 @@ export function resolveInstallmentPhaseEnrollmentStatus({
     return null;
   }
 
+  // Prefer explicit enrollment labels (ops repairs / sync) over paid-phase
+  // inference. Without this, a paid Phase 2 can never display "new" while Phase 1
+  // is also paid — inference always forces re_enrolled.
+  if (dbStatus === 'new' || dbStatus === 're_enrolled' || dbStatus === 'rejoin') {
+    return dbStatus;
+  }
+
   const start = Math.max(1, parseInt(phaseStart, 10) || 1);
   const planSlots = parseInt(totalPhases, 10);
   const finalPlanAbsolutePhase =

@@ -56,6 +56,7 @@ import {
   PACKAGE_CHANGE_TO_FULLPAYMENT,
   buildFullPaymentConversionInvoiceLineItems,
   buildFullPaymentRemarks,
+  countOpenPartialRecurringInvoices,
   getStudentClassPaymentCreditTotal,
   getStudentClassPaymentCreditBreakdown,
   isFullpaymentLikePackage,
@@ -281,19 +282,14 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
     );
   }
 
-  const partialRecurringResult = await client.query(
-    `SELECT COUNT(DISTINCT i.invoice_id) AS partial_count
-     FROM invoicestbl i
-     INNER JOIN paymenttbl p ON p.invoice_id = i.invoice_id
-     WHERE i.installmentinvoiceprofiles_id = $1
-       AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
-       AND p.status = 'Completed'
-       AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
-       AND COALESCE(i.status, '') <> 'Paid'`,
-    [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
-  );
+  // Block only while a partial/balance chain is still open. Settled parents
+  // (e.g. Partially Paid → Paid balance leaf) must not block Update Plan.
+  const openPartialCount = await countOpenPartialRecurringInvoices(client, {
+    profileId: currentProfile.installmentinvoiceprofiles_id,
+    downpaymentInvoiceId: currentProfile.downpayment_invoice_id || null,
+  });
 
-  if (parseInt(partialRecurringResult.rows[0]?.partial_count || 0, 10) > 0) {
+  if (openPartialCount > 0) {
     return getPackageChangeBlockedResult(
       'partial_recurring_payment_detected',
       'This student has a partial or in-progress recurring payment. Automatic package change is blocked for now.',

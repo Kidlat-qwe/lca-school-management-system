@@ -1292,6 +1292,29 @@ const isSinglePhaseEnrollmentTrack = (student) => {
   return classPhases === 1 || planPhases === 1;
 };
 
+/**
+ * Mark completed cells on single-phase *classes* (e.g. Active Champs, number_of_phase = 1)
+ * so the UI can use a distinct badge color from multi-phase completed.
+ * Uses class phase count only — not installment plan length — so a 10-phase class
+ * with a short plan is not recolored.
+ */
+const flagSinglePhaseCompletedCells = (students, periodKey = 'months') => {
+  for (const student of students || []) {
+    const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
+    if (classPhases !== 1) continue;
+    const bucket = student?.[periodKey];
+    if (!bucket) continue;
+    for (const cell of Object.values(bucket)) {
+      if (!cell) continue;
+      const label = String(cell.label || '').trim().toLowerCase();
+      const status = String(cell.status || '').trim().toLowerCase();
+      if (label === 'completed' || status === 'completed') {
+        cell.single_phase_completed = true;
+      }
+    }
+  }
+};
+
 /** Resolve billing month that should display as completed on the month matrix. */
 const resolveTerminalCompletionMonthKey = (student, firstEnrolledKey) => {
   if (!firstEnrolledKey) return null;
@@ -1333,38 +1356,112 @@ const resolveMatrixTrackPhaseCountForCompletionKpi = (student, cell = null) => {
 };
 
 /**
- * Whether a matrix cell label counts toward the Re-enrollment KPI / rate numerator.
- * Only visible **re-enrolled** cells — matches the purple "re-enrolled" badge count
- * on the Month Re-enrollment matrix. Completed has its own Completed card and is
- * not counted here (single- or multi-phase).
+ * Visible matrix labels that count as prior enrollment history for a later
+ * completed cell (numerator and denominator both use this). Upsell alone
+ * does not qualify a later completed cell.
  */
-const matrixLabelCountsTowardReEnrollmentKpi = (label, student, cell = null) => {
+const isPriorActiveEnrollmentLabel = (label) => {
   const normalizedLabel = String(label || '').trim().toLowerCase();
-  const status = String(cell?.status || '').trim().toLowerCase();
-
-  if (normalizedLabel === 'upsell' || status === 'upsell') return false;
-
   return (
+    normalizedLabel === 'new' ||
     normalizedLabel === 're-enrolled' ||
     normalizedLabel === 're_enrolled' ||
-    status === 're_enrolled'
+    normalizedLabel === 'rejoin'
+  );
+};
+
+const isVisibleReEnrolledLabel = (label) => {
+  const normalizedLabel = String(label || '').trim().toLowerCase();
+  return normalizedLabel === 're-enrolled' || normalizedLabel === 're_enrolled';
+};
+
+const isVisibleCompletedLabel = (label) =>
+  String(label || '').trim().toLowerCase() === 'completed';
+
+/** Payment-lifecycle Active (✓) — counts toward rate numerator as retained. */
+const isVisibleActiveLifecycleCell = (cell) => {
+  if (!cell) return false;
+  const label = String(cell.label || '').trim().toLowerCase();
+  const status = String(cell.status || '').trim().toLowerCase();
+  return cell.mark === '✓' || label === 'active' || status === 'active';
+};
+
+/** Payment-lifecycle Inactive (X) — never counts toward rate numerator. */
+const isVisibleInactiveLifecycleCell = (cell) => {
+  if (!cell) return false;
+  const label = String(cell.label || '').trim().toLowerCase();
+  const status = String(cell.status || '').trim().toLowerCase();
+  return (
+    cell.mark === 'X' ||
+    label === 'inactive' ||
+    status === 'inactive'
   );
 };
 
 /**
- * Rate-header numerator — same as Re-enrollment KPI (re-enrolled cells only)
- * so Operational and Month Re-enrollment stay aligned.
+ * True when this student already had a visible new, re-enrolled, or rejoin cell in an
+ * earlier month/phase than currentKey (same matrix row / track).
  */
-const matrixLabelCountsTowardReEnrollmentRateNumerator = (label, student, cell = null) =>
-  matrixLabelCountsTowardReEnrollmentKpi(label, student, cell);
+const studentHasPriorActiveEnrollmentCell = (student, currentKey, periodCellsAccessor) => {
+  const currentKeyStr = String(currentKey);
+  const isMonthKey = /^\d{4}-\d{2}$/.test(currentKeyStr);
+  const bucket = isMonthKey ? student?.months || {} : student?.phases || {};
 
-/** Whether a matrix cell counts toward the month/phase re-enrollment rate header numerator. */
-const matrixCellCountsTowardReEnrollmentRate = (cell, student) => {
-  if (!cell?.label || cell.mark !== '1') return false;
-  return matrixLabelCountsTowardReEnrollmentRateNumerator(cell.label, student, cell);
+  for (const key of Object.keys(bucket)) {
+    if (isMonthKey) {
+      if (String(key) >= currentKeyStr) continue;
+    } else if (!(Number(key) < Number(currentKey))) {
+      continue;
+    }
+
+    const priorCell = periodCellsAccessor(student, key);
+    if (!priorCell?.label || priorCell.mark !== '1') continue;
+    if (isPriorActiveEnrollmentLabel(priorCell.label)) return true;
+  }
+
+  return false;
 };
 
-/** Whether a prior-month/phase cell counts toward the rate header denominator. */
+/**
+ * Re-enrollment KPI / purple badge: visible re-enrolled labels only.
+ * Completed is handled separately on the Completed card and (conditionally) on the rate numerator.
+ */
+const matrixLabelCountsTowardReEnrollmentKpi = (label, _student = null, _cell = null) =>
+  isVisibleReEnrolledLabel(label);
+
+/**
+ * Rate-header numerator:
+ * - Always count visible re-enrolled cells.
+ * - Count Active (✓) lifecycle cells as retained (same as re-enrolled for the rate).
+ * - Never count Inactive (X).
+ * - Count completed only when the same student already had a prior new, re-enrolled,
+ *   or rejoin cell. Standalone completed (no prior active enrollment) is excluded.
+ */
+const matrixCellCountsTowardReEnrollmentRate = (
+  cell,
+  student,
+  currentKey = null,
+  periodCellsAccessor = null
+) => {
+  if (!cell?.label) return false;
+
+  // Lifecycle overlays use mark ✓ / X (not "1").
+  if (isVisibleInactiveLifecycleCell(cell)) return false;
+  if (isVisibleActiveLifecycleCell(cell)) return true;
+
+  if (cell.mark !== '1') return false;
+
+  if (isVisibleReEnrolledLabel(cell.label)) return true;
+
+  if (isVisibleCompletedLabel(cell.label)) {
+    if (currentKey == null || typeof periodCellsAccessor !== 'function') return false;
+    return studentHasPriorActiveEnrollmentCell(student, currentKey, periodCellsAccessor);
+  }
+
+  return false;
+};
+
+/** Whether a prior-month/phase cell counts toward the rate header denominator (excluding completed). */
 const matrixLabelCountsTowardRateDenominator = (label, cell = null) => {
   const normalizedLabel = String(label || '').trim().toLowerCase();
   const status = String(cell?.status || '').trim().toLowerCase();
@@ -1389,9 +1486,31 @@ const matrixLabelCountsTowardRateDenominator = (label, cell = null) => {
 };
 
 /**
- * Rate header denominator: prior-month/phase cells labeled new, re-enrolled, rejoin, or upsell.
- * Excludes completed, pending enrollment, reserved, and dropped.
+ * Rate header denominator cell check:
+ * - Prior-month/phase cells labeled new, re-enrolled, rejoin, or upsell always count.
+ * - completed counts only when that same prior-month completed cell already had an
+ *   earlier new, re-enrolled, or rejoin cell on the same student row (same rule as
+ *   the numerator's completed-with-history check).
+ * - Pending enrollment, reserved, dropped, and standalone completed are excluded.
  */
+const matrixCellCountsTowardRateDenominator = (
+  cell,
+  student,
+  priorKey = null,
+  periodCellsAccessor = null
+) => {
+  if (!cell?.label || cell.mark !== '1') return false;
+
+  if (matrixLabelCountsTowardRateDenominator(cell.label, cell)) return true;
+
+  if (isVisibleCompletedLabel(cell.label)) {
+    if (priorKey == null || typeof periodCellsAccessor !== 'function') return false;
+    return studentHasPriorActiveEnrollmentCell(student, priorKey, periodCellsAccessor);
+  }
+
+  return false;
+};
+
 const countMatrixRateHeaderDenominator = (
   students,
   prevKey,
@@ -1405,9 +1524,7 @@ const countMatrixRateHeaderDenominator = (
     if (firstEnrolledKey != null && currentPeriodKey === firstEnrolledKey) continue;
 
     const cell = periodCellsAccessor(student, prevKey);
-    if (!cell?.label || cell.mark !== '1') continue;
-
-    if (matrixLabelCountsTowardRateDenominator(cell.label, cell)) {
+    if (matrixCellCountsTowardRateDenominator(cell, student, prevKey, periodCellsAccessor)) {
       count += 1;
     }
   }
@@ -1436,8 +1553,8 @@ const countMatrixPriorPeriodEnrolledStudents = (
 };
 
 /**
- * Re-enrollment rate header numerator: same as Re-enrollment KPI
- * (visible re-enrolled cells only; completed and upsell excluded).
+ * Re-enrollment rate header numerator:
+ * visible re-enrolled + completed that follow a prior new/re-enrolled on the same row.
  */
 const countMatrixRateHeaderNumerator = (students, currentKey, periodCellsAccessor) => {
   let count = 0;
@@ -1445,14 +1562,14 @@ const countMatrixRateHeaderNumerator = (students, currentKey, periodCellsAccesso
     const cell = periodCellsAccessor(student, currentKey);
     if (!cell?.label) continue;
 
-    if (matrixCellCountsTowardReEnrollmentRate(cell, student)) {
+    if (matrixCellCountsTowardReEnrollmentRate(cell, student, currentKey, periodCellsAccessor)) {
       count += 1;
     }
   }
   return count;
 };
 
-/** Visible month-matrix rate header numerator (same as Re-enrollment KPI). */
+/** Visible month-matrix rate header numerator. */
 export const countMonthMatrixRateHeaderNumerator = (students, monthKey) =>
   countMatrixRateHeaderNumerator(
     students,
@@ -1466,6 +1583,7 @@ const emptyRateBreakdown = () => ({
   upsell: 0,
   rejoin: 0,
   completed: 0,
+  active: 0,
   total: 0,
 });
 
@@ -1473,16 +1591,21 @@ const countMatrixRateHeaderNumeratorBreakdown = (students, currentKey, periodCel
   const breakdown = emptyRateBreakdown();
   for (const student of students) {
     const cell = periodCellsAccessor(student, currentKey);
-    if (!matrixCellCountsTowardReEnrollmentRate(cell, student)) continue;
+    if (
+      !matrixCellCountsTowardReEnrollmentRate(cell, student, currentKey, periodCellsAccessor)
+    ) {
+      continue;
+    }
 
-    const normalizedLabel = String(cell.label || '').trim().toLowerCase();
-    if (normalizedLabel === 'completed') {
+    if (isVisibleActiveLifecycleCell(cell)) {
+      breakdown.active += 1;
+    } else if (isVisibleCompletedLabel(cell.label)) {
       breakdown.completed += 1;
     } else {
       breakdown.re_enrolled += 1;
     }
   }
-  breakdown.total = breakdown.re_enrolled + breakdown.completed;
+  breakdown.total = breakdown.re_enrolled + breakdown.completed + breakdown.active;
   return breakdown;
 };
 
@@ -1499,13 +1622,18 @@ const countMatrixRateHeaderDenominatorBreakdown = (
     if (firstEnrolledKey != null && currentPeriodKey === firstEnrolledKey) continue;
 
     const cell = periodCellsAccessor(student, prevKey);
-    if (!cell?.label || cell.mark !== '1') continue;
-    if (!matrixLabelCountsTowardRateDenominator(cell.label, cell)) continue;
+    if (
+      !matrixCellCountsTowardRateDenominator(cell, student, prevKey, periodCellsAccessor)
+    ) {
+      continue;
+    }
 
     const normalizedLabel = String(cell.label || '').trim().toLowerCase();
     const status = String(cell?.status || '').trim().toLowerCase();
 
-    if (normalizedLabel === 'new' || status === 'new') {
+    if (isVisibleCompletedLabel(cell.label)) {
+      breakdown.completed += 1;
+    } else if (normalizedLabel === 'new' || status === 'new') {
       breakdown.new += 1;
     } else if (
       normalizedLabel === 're-enrolled' ||
@@ -1519,7 +1647,8 @@ const countMatrixRateHeaderDenominatorBreakdown = (
       breakdown.rejoin += 1;
     }
   }
-  breakdown.total = breakdown.new + breakdown.re_enrolled + breakdown.upsell + breakdown.rejoin;
+  breakdown.total =
+    breakdown.new + breakdown.re_enrolled + breakdown.upsell + breakdown.rejoin + breakdown.completed;
   return breakdown;
 };
 
@@ -1543,8 +1672,12 @@ export const countMonthMatrixRateHeaderDenominator = (
 
 /**
  * Re-enrollment rate per display month (spreadsheet logic):
- * - Numerator: visible re-enrolled cells only (same as Re-enrollment KPI / purple badge count).
- * - Denominator: prior-month cells labeled new, re-enrolled, rejoin, or upsell only.
+ * - Numerator: visible re-enrolled cells, Active (✓) lifecycle cells, and completed
+ *   cells that already had a prior new, re-enrolled, or rejoin cell on the same row.
+ * - Inactive (X) and standalone completed are excluded from the numerator.
+ * - Denominator: prior-month cells labeled new, re-enrolled, rejoin, or upsell, plus
+ *   completed cells that already had a prior new/re-enrolled/rejoin cell (same rule
+ *   as the numerator). Standalone completed and upsell-preceded completed are excluded.
  */
 export const computeReEnrollmentMonthStats = (displayMonths, students, options = {}) => {
   const { selectedYear = null } = options;
@@ -1644,9 +1777,10 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
 
 /**
  * Re-enrollment rate per phase (same KPI rules as monthly matrix, by phase):
- * - Numerator: re-enrolled and completed cells in this phase column (upsell excluded).
- * - Denominator: prior-phase cells labeled new, re-enrolled, rejoin, or upsell only.
- * - New, upsell, rejoin, reserved, and dropped are excluded from the numerator.
+ * - Numerator: visible re-enrolled, Active (✓), and completed with a prior new/re-enrolled/rejoin.
+ * - Denominator: prior-phase cells labeled new, re-enrolled, rejoin, or upsell, plus
+ *   completed cells with a prior new/re-enrolled/rejoin cell (same rule as the numerator).
+ * - Inactive, standalone completed, and reserved/dropped/pending are excluded.
  * - First phase has no prior (N/A).
  */
 export const computeReEnrollmentPhaseStats = (displayPhases, students) => {
@@ -2915,13 +3049,16 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     installmentProfileActiveByTrack,
   });
 
+  flagSinglePhaseCompletedCells(students, 'phases');
+
   const visibleStudents = filterHiddenMatrixTracks(students);
   const cohortSize = visibleStudents.length;
   const kpiTotals = aggregatePhaseMatrixKpiTotals(visibleStudents, phases);
   const reEnrollmentStats = computeReEnrollmentPhaseStats(phases, visibleStudents);
 
   // kpi_totals.re_enrollment_count = Re-enrollment KPI (excludes single-phase completed).
-  // phase_stats / total_re_enrolled_count = rate-header numerators (all completed).
+  // phase_stats / total_re_enrolled_count = rate-header numerators
+  // (re-enrolled + completed with prior new/re-enrolled).
   return {
     phases,
     students: visibleStudents,
@@ -3347,6 +3484,10 @@ const loadInstallmentInvoiceBillingLifecycle = async (queryFn, options = {}) => 
          AND ip.class_id = cs.class_id
         WHERE cs.student_id = ANY($1::int[])
           AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          -- Late-start plans: ignore enrollments below phase_start so the billing
+          -- anchor matches the month matrix (orphan pre-start rows must not shift
+          -- unpaid due months — e.g. Xahari Miranda phase 2 kept Aug Active).
+          AND COALESCE(cs.phase_number, 1) >= COALESCE(NULLIF(ip.phase_start, 0), 1)
           ${programJoin}
           ${classJoin}
           ${teacherJoin}
@@ -3533,6 +3674,7 @@ const loadPaidInstallmentPhaseMatrixOverlay = async (queryFn, options = {}) => {
           ON ip.student_id = cs.student_id
          AND ip.class_id = cs.class_id
         WHERE COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+          AND COALESCE(cs.phase_number, 1) >= COALESCE(NULLIF(ip.phase_start, 0), 1)
           ${programJoin}
           ${classJoin}
           ${teacherJoin}
@@ -3676,8 +3818,9 @@ const findLatestInstallmentLifecycleAnchorIndex = (cellBucket, periods) => {
  * - After **dropped**, the immediate next period is always **Inactive**.
  * - After **pending_enrollment**, the immediate next period is always **Inactive**
  *   (downpayment paid but Phase 1 not settled — not yet Active).
- * - After enrolled cells: **Active** until the next invoice due date passes unpaid;
- *   **Inactive** only once that due date is already past (Manila calendar).
+ * - After enrolled cells: **Active** while the next unpaid invoice due date is
+ *   still on/after today (Manila). Once past due — including "Under grace period" —
+ *   the next cell is **Inactive**.
  * - When the track's **only** enrollment status is **completed**, do not overlay Active/Inactive
  *   (single-status short course — completed alone is enough).
  * - When the latest anchor is **completed** (multi-phase / recurring finished), the next
@@ -3741,7 +3884,7 @@ const applyMatrixPaymentLifecycleOverlay = (students, periods, lifecycleRows, op
       lifecycleByTrackPeriod
     );
     const dueDateYmd = lifecycle?.due_date_ymd || null;
-    // An unpaid invoice only breaks Active once its grace window (due date) has elapsed.
+    // Past due (including under grace) → Inactive. On/before due → Active.
     const unpaidPastDue = Boolean(lifecycle) && isYmdBefore(dueDateYmd, todayYmd);
     const inferredPhaseAfterDrop =
       anchorIsDropped && anchorCell?.phase_number != null
@@ -5648,6 +5791,8 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     installmentProfileActiveByTrack,
   });
 
+  flagSinglePhaseCompletedCells(students, 'months');
+
   const visibleStudents = filterHiddenMatrixTracks(students);
   const cohortSize = visibleStudents.length;
 
@@ -5656,9 +5801,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     selectedYear,
   });
 
-  // kpi_totals.re_enrollment_count = Re-enrollment KPI card
-  // (re-enrolled + multi-phase completed only; single-phase completed excluded).
-  // month_stats / total_re_enrolled_count = rate-header numerators (all completed).
+  // kpi_totals.re_enrollment_count = Re-enrollment KPI card (visible re-enrolled labels).
+  // month_stats / total_re_enrolled_count = rate numerator
+  // (re-enrolled + Active + completed that follow prior new/re-enrolled; Inactive excluded).
   return {
     months,
     students: visibleStudents,
@@ -5864,8 +6009,8 @@ export const loadMonthMatrixOperationalStatsForMonth = async (queryFn, options =
     month_key: monthKey,
     ...statusCounts,
     /**
-     * Re-enrollment KPI and rate retained numerator share the same rule
-     * (re-enrolled + multi-phase completed; single-phase completed excluded).
+     * Rate retained numerator: re-enrolled + completed with prior new/re-enrolled.
+     * KPI re_enrollment_count remains visible re-enrolled labels only.
      */
     re_enrollment_count: statusCounts.re_enrollment_count,
     re_enrollment_rate_retained_count: monthRateStat?.re_enrolled_count ?? statusCounts.re_enrollment_count,

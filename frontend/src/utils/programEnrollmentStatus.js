@@ -144,7 +144,14 @@ export const ENROLLMENT_MATRIX_STATUS_ITEMS = [
     key: 'completed',
     label: 'Completed',
     tone: 'bg-amber-100 text-amber-900',
-    description: 'Student finished the final enrolled phase (common for full-payment).',
+    description: 'Student finished the final enrolled phase of a multi-phase plan (common for full-payment).',
+  },
+  {
+    key: 'completed_single_phase',
+    label: 'Completed (1-phase)',
+    tone: 'bg-fuchsia-100 text-fuchsia-900 ring-1 ring-inset ring-fuchsia-300',
+    description:
+      'Finished a one-phase class (number_of_phase = 1, e.g. Active Champs). Distinct fuchsia color so it is not confused with re-enrolled (indigo).',
   },
   {
     key: 'rejoin',
@@ -181,14 +188,14 @@ export const ENROLLMENT_MATRIX_STATUS_ITEMS = [
     label: 'Active',
     tone: 'bg-sky-100 text-sky-800',
     description:
-      'Recurring installment: the billing month/phase after the latest re-enrolled status is active until the invoice due date passes unpaid.',
+      'Recurring installment: numbered like other statuses, with a mini ✓ above the cycle number while the next unpaid invoice is still on/before due.',
   },
   {
     key: 'inactive',
     label: 'Inactive',
     tone: 'bg-slate-200 text-slate-700',
     description:
-      'Recurring installment: the next billing month/phase after re-enrollment when the invoice was not paid by the due date.',
+      'Recurring installment: numbered like other statuses, with a mini X above the cycle number when the invoice was not paid by the due date.',
   },
   {
     key: 'not_enrolled',
@@ -240,26 +247,36 @@ export const MATRIX_SEQUENCE_STATUS_KEYS = new Set([
   'new',
   're_enrolled',
   'completed',
+  'completed_single_phase',
   'rejoin',
   'upsell',
   'pending_enrollment',
   'reserved',
   'dropped',
+  'active',
+  'inactive',
 ]);
 
 /**
  * Resolve badge tone for phase/month enrollment matrix cells.
- * @param {{ mark?: string, label?: string, status?: string|null }} cell
+ * @param {{ mark?: string, label?: string, status?: string|null, single_phase_completed?: boolean }} cell
  */
 export function enrollmentMatrixCellTone(cell) {
   const mark = cell?.mark ?? '-';
-
   const labelKey = MATRIX_LABEL_TO_KEY[normalizeMatrixLabelKey(cell?.label)];
+  const statusKey = String(cell?.status || '').trim().toLowerCase();
+
+  if (
+    (labelKey === 'completed' || statusKey === 'completed') &&
+    cell?.single_phase_completed
+  ) {
+    return MATRIX_STATUS_BY_KEY.completed_single_phase.tone;
+  }
+
   if (labelKey && MATRIX_STATUS_BY_KEY[labelKey]) {
     return MATRIX_STATUS_BY_KEY[labelKey].tone;
   }
 
-  const statusKey = String(cell?.status || '').trim().toLowerCase();
   if (statusKey && MATRIX_STATUS_BY_KEY[statusKey]) {
     return MATRIX_STATUS_BY_KEY[statusKey].tone;
   }
@@ -309,8 +326,12 @@ export function enrollmentMatrixCellHoverTitle(cell, options = {}) {
     if (isNew) {
       return `Enrolled in Phase ${phaseNumber}`;
     }
+    if (cell?.single_phase_completed) {
+      return `Enrolled in Phase ${phaseNumber} · completed (1-phase)`;
+    }
     return `Enrolled in Phase ${phaseNumber} · ${statusLabel}`;
   }
+  if (cell?.single_phase_completed) return 'completed (1-phase)';
   return statusLabel;
 }
 
@@ -324,6 +345,13 @@ export function enrollmentMatrixSequenceKey(cell) {
   }
 
   const labelKey = MATRIX_LABEL_TO_KEY[normalizeMatrixLabelKey(cell?.label)];
+  if (
+    (labelKey === 'completed' || statusKey === 'completed') &&
+    cell?.single_phase_completed
+  ) {
+    return 'completed_single_phase';
+  }
+
   if (labelKey && MATRIX_SEQUENCE_STATUS_KEYS.has(labelKey)) {
     return labelKey;
   }
@@ -339,11 +367,21 @@ export function enrollmentMatrixSequenceKey(cell) {
   return null;
 }
 
-/** True when the cell should show a numbered badge (all matrix statuses except empty / not enrolled / active-inactive symbols). */
+/** True when the cell should show a numbered badge (all matrix statuses except empty / not enrolled). */
 export function enrollmentMatrixCellShowsSequence(cell) {
   const key = enrollmentMatrixSequenceKey(cell);
-  if (!key || key === 'active' || key === 'inactive') return false;
+  if (!key) return false;
   return MATRIX_SEQUENCE_STATUS_KEYS.has(key);
+}
+
+/** Mini ✓ / X for Active / Inactive lifecycle cells (shown above the cycle number). */
+export function enrollmentMatrixLifecycleMark(cell) {
+  if (!cell) return null;
+  const status = String(cell.status || '').trim().toLowerCase();
+  const label = String(cell.label || '').trim().toLowerCase();
+  if (cell.mark === '✓' || status === 'active' || label === 'active') return '✓';
+  if (cell.mark === 'X' || status === 'inactive' || label === 'inactive') return 'X';
+  return null;
 }
 
 const ACTIVE_ENROLLMENT_STATUSES = new Set(['new', 're_enrolled', 'upsell', 'rejoin']);

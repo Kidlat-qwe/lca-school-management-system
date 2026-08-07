@@ -1,0 +1,120 @@
+{
+  "invoice_id": 2367,
+  "payment_id": 1774,
+  "ar_cols": [
+    "ack_receipt_id",
+    "ack_receipt_number",
+    "status",
+    "prospect_student_name",
+    "prospect_student_contact",
+    "prospect_student_notes",
+    "student_id",
+    "branch_id",
+    "package_id",
+    "package_name_snapshot",
+    "package_amount_snapshot",
+    "payment_amount",
+    "issue_date",
+    "invoice_id",
+    "payment_id",
+    "created_by",
+    "created_at",
+    "installment_option",
+    "reference_number",
+    "payment_attachment_url",
+    "level_tag",
+    "ar_type",
+    "merchandise_items_snapshot",
+    "prospect_student_email",
+    "tip_amount",
+    "payment_method",
+    "verified_by_user_id",
+    "verified_at",
+    "paired_ack_receipt_id",
+    "prospect_student_phone"
+  ],
+  "ar_by_invoice": [],
+  "ar_by_payment": [],
+  "invoice": {
+    "invoice_id": 2367,
+    "status": "Cancelled",
+    "amount": "0.00",
+    "ack_receipt_id": null,
+    "invoice_ar_number": "262032",
+    "installmentinvoiceprofiles_id": null,
+    "parent_invoice_id": null,
+    "balance_invoice_id": null
+  },
+  "payment_refs": [
+    {
+      "table_name": "acknowledgement_receiptstbl",
+      "column_name": "payment_id"
+    },
+    {
+      "table_name": "merchandise_release_logtbl",
+      "column_name": "payment_id"
+    }
+  ],
+  "invoice_refs": [
+    {
+      "table_name": "installmentinvoiceprofilestbl",
+      "column_name": "downpayment_invoice_id"
+    },
+    {
+      "table_name": "invoiceitemstbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "invoicestudentstbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "paymenttbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "promousagetbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "reservedstudentstbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "acknowledgement_receiptstbl",
+      "column_name": "invoice_id"
+    },
+    {
+      "table_name": "invoicestbl",
+      "column_name": "parent_invoice_id"
+    },
+    {
+      "table_name": "invoicestbl",
+      "column_name": "balance_invoice_id"
+    },
+    {
+      "table_name": "invoicestbl",
+      "column_name": "invoice_chain_root_id"
+    },
+    {
+      "table_name": "program_payment_statustbl",
+      "column_name": "invoice_id"
+    }
+  ],
+  "keep_plan_invoices": [
+    {
+      "invoice_id": 2365,
+      "status": "Paid",
+      "amount": "0.00",
+      "invoice_ar_number": "262030",
+      "remarks": "CLASS_ID:121;PHASE_START:2;PHASE_END:10;MERCH_PENDING:[{\"merchandise_id\":148,\"qu"
+    },
+    {
+      "invoice_id": 2366,
+      "status": "Paid",
+      "amount": "0.00",
+      "invoice_ar_number": "262031",
+      "remarks": "Auto-generated from installment invoice: Installment plan for Daelan Alaistair S"
+    }
+  ]
+}

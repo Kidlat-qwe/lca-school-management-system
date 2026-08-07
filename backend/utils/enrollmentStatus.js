@@ -167,8 +167,11 @@ export async function determineRejoinEnrollmentStatus({ db, studentId, classId, 
 
   const latestDropped = latestDroppedResult.rows[0];
   const droppedPhase = Number(latestDropped.phase_number) || 0;
-  const droppedAt = latestDropped.removed_at || null;
 
+  // First active phase after the drop is rejoin; later phases must not be rejoin again.
+  // Use phase_number only — do not require enrolled_at > removed_at. Rejoin rows are
+  // often enrolled on/before the drop marker's removed_at (same-day ops), which would
+  // otherwise miss the comeback and label every later phase as rejoin (e.g. Yohan Hipolito).
   const activeAfterDropResult = await db.query(
     `SELECT 1
      FROM classstudentstbl
@@ -178,12 +181,8 @@ export async function determineRejoinEnrollmentStatus({ db, studentId, classId, 
        AND removed_at IS NULL
        AND COALESCE(phase_number, 0) > $3
        AND COALESCE(phase_number, 0) < $4
-       AND (
-         $5::timestamptz IS NULL
-         OR enrolled_at > $5::timestamptz
-       )
      LIMIT 1`,
-    [sid, cid, droppedPhase, phase, droppedAt]
+    [sid, cid, droppedPhase, phase]
   );
 
   return activeAfterDropResult.rows.length === 0 ? PROGRAM_ENROLLMENT_STATUS.REJOIN : null;

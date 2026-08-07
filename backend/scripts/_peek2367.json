@@ -1,0 +1,93 @@
+{
+  "invoice_cols": [
+    "invoice_id",
+    "invoice_description",
+    "branch_id",
+    "amount",
+    "status",
+    "remarks",
+    "issue_date",
+    "due_date",
+    "created_by",
+    "installmentinvoiceprofiles_id",
+    "package_id",
+    "promo_id",
+    "late_penalty_applied_for_due_date",
+    "ack_receipt_id",
+    "invoice_ar_number",
+    "parent_invoice_id",
+    "balance_invoice_id",
+    "invoice_chain_root_id"
+  ],
+  "invoice": [
+    {
+      "invoice_id": 2367,
+      "status": "Cancelled",
+      "amount": "0.00",
+      "description": "INV-2367",
+      "remarks": "CLASS_ID:167;PHASE_START:1;PHASE_END:10;MERCH_PENDING:[{\"merchandise_id\":148,\"quantity\":1,\"size\":null,\"merchandise_name\":\"LCA Learning Kits\",\"category\":\"General\"},{\"merchandise_id\":1,\"quantity\":1,\"siz",
+      "issue_date": "2026-07-29",
+      "due_date": "2026-08-02",
+      "installmentinvoiceprofiles_id": null,
+      "invoice_ar_number": "262032",
+      "student_id": 673,
+      "student_name": "Daelan Alaistair Shun Cordova",
+      "email": "gwenthampal14@gmail.com"
+    }
+  ],
+  "payments": [
+    {
+      "payment_id": 1774,
+      "invoice_id": 2367,
+      "student_id": 673,
+      "branch_id": 3,
+      "payment_method": "Online Banking",
+      "payment_type": "Full Payment",
+      "payable_amount": "5146.00",
+      "issue_date": "2026-07-28T16:00:00.000Z",
+      "status": "Completed",
+      "reference_number": "166392",
+      "remarks": null,
+      "created_by": 92,
+      "created_at": "2026-07-29T01:36:37.625Z",
+      "approval_status": "Approved",
+      "approved_by": 519,
+      "approved_at": "2026-07-29T19:36:22.223Z",
+      "payment_attachment_url": "https://zoom-recording-2025.s3.ap-southeast-1.amazonaws.com/psms/invoice-image/92_1785317780439_fefbd4bab4edcd55.jpg",
+      "return_reason": null,
+      "returned_by": null,
+      "returned_at": null,
+      "action_owner_user_id": 92,
+      "tip_amount": "0.00",
+      "finance_verified_reference_number": "166392",
+      "reject_reason": null,
+      "rejected_by": null,
+      "rejected_at": null,
+      "discount_amount": "0.00",
+      "updated_at": "2026-07-29T19:36:22.223Z"
+    }
+  ],
+  "items": [
+    {
+      "invoice_item_id": 3457,
+      "invoice_id": 2367,
+      "description": "Installment plan for Daelan Alaistair Shun Cordova - Pre-Kindergarten",
+      "amount": "5146.00",
+      "tax_item": null,
+      "tax_percentage": "0.00",
+      "discount_amount": null,
+      "penalty_amount": null
+    }
+  ],
+  "program_payment_status": [],
+  "invoice_students": [
+    {
+      "invoice_student_id": 2363,
+      "invoice_id": 2367,
+      "student_id": 673,
+      "overdue_email_first_sent_at": null
+    }
+  ],
+  "balance_refs": [],
+  "error": "column \"amount\" does not exist"
+}

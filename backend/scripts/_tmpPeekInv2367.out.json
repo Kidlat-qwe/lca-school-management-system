@@ -1,0 +1,5 @@
+{
+  "invoice_id": 2367,
+  "error": "column i.received_by does not exist",
+  "stack": "error: column i.received_by does not exist\n    at C:\\Projects\\Physical School Management System\\backend\\node_modules\\pg\\lib\\client.js:652:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async query (file:///C:/Projects/Physical%20School%20Management%20System/backend/config/database.js:86:17)\n    at async file:///C:/Projects/Physical%20School%20Management%20System/backend/scripts/_tmpPeekInv2367.js:10:5"
+}

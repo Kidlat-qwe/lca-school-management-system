@@ -10,6 +10,64 @@ export const PACKAGE_CHANGE_TO_FULLPAYMENT = 'PACKAGE_CHANGE_TO_FULLPAYMENT';
 export const roundCurrency = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+/**
+ * Count recurring invoices that still have an open partial / in-progress payment.
+ *
+ * A Completed payment on a non-Paid invoice normally blocks package change.
+ * Settled balance-chain parents are excluded: when `balance_invoice_id` walks to a
+ * leaf whose status is Paid (e.g. Partially Paid INV-2048 → Paid INV-2049), the
+ * phase is fully settled and must not block Update Plan.
+ *
+ * @param {object} client - pg client or pool query wrapper with `.query`
+ * @param {{ profileId: number, downpaymentInvoiceId?: number|null }} args
+ * @returns {Promise<number>}
+ */
+export async function countOpenPartialRecurringInvoices(
+  client,
+  { profileId, downpaymentInvoiceId = null }
+) {
+  const result = await client.query(
+    `SELECT COUNT(DISTINCT i.invoice_id) AS partial_count
+     FROM invoicestbl i
+     INNER JOIN paymenttbl p ON p.invoice_id = i.invoice_id
+     WHERE i.installmentinvoiceprofiles_id = $1
+       AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)
+       AND p.status = 'Completed'
+       AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'
+       AND COALESCE(i.status, '') <> 'Paid'
+       AND NOT (
+         i.balance_invoice_id IS NOT NULL
+         AND EXISTS (
+           WITH RECURSIVE chain AS (
+             SELECT
+               inv.invoice_id,
+               inv.balance_invoice_id,
+               inv.status,
+               0 AS depth
+             FROM invoicestbl inv
+             WHERE inv.invoice_id = i.balance_invoice_id
+             UNION ALL
+             SELECT
+               nxt.invoice_id,
+               nxt.balance_invoice_id,
+               nxt.status,
+               chain.depth + 1
+             FROM invoicestbl nxt
+             INNER JOIN chain ON nxt.invoice_id = chain.balance_invoice_id
+             WHERE chain.depth < 20
+               AND chain.balance_invoice_id IS NOT NULL
+           )
+           SELECT 1
+           FROM chain
+           WHERE chain.balance_invoice_id IS NULL
+             AND COALESCE(chain.status, '') = 'Paid'
+         )
+       )`,
+    [profileId, downpaymentInvoiceId]
+  );
+  return parseInt(result.rows[0]?.partial_count || 0, 10);
+}
+
 export const isInstallmentLikePackage = (pkg) =>
   Boolean(
     pkg &&

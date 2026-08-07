@@ -46,23 +46,35 @@ const EnrollmentMatrixStatusLegend = ({
         ) : null}
         {ENROLLMENT_MATRIX_STATUS_ITEMS.map((item) => {
           const isActive = selectedKeys.includes(item.key);
+          const lifecycleMini =
+            item.key === 'active' ? '✓' : item.key === 'inactive' ? 'X' : null;
           const badgeSymbol =
-            item.key === 'not_enrolled'
-              ? '—'
-              : item.key === 'active'
-                ? '✓'
-                : item.key === 'inactive'
-                  ? 'X'
-                  : 'n';
+            item.key === 'not_enrolled' ? '—' : 'n';
+
+          const badge = (
+            <span
+              className={`inline-flex min-w-[1.75rem] flex-col items-center justify-center rounded-md px-1.5 text-[10px] font-semibold tabular-nums ${
+                lifecycleMini ? 'gap-0 pb-0.5 pt-0.5' : 'py-0.5'
+              } ${item.tone}`}
+            >
+              {lifecycleMini ? (
+                <span
+                  className={`text-[7px] font-bold leading-none ${
+                    lifecycleMini === '✓' ? 'text-sky-700' : 'text-slate-700'
+                  }`}
+                  aria-hidden="true"
+                >
+                  {lifecycleMini}
+                </span>
+              ) : null}
+              <span className="leading-tight">{badgeSymbol}</span>
+            </span>
+          );
 
           if (!isInteractive) {
             return (
               <div key={item.key} className="flex items-center gap-1.5" title={item.description}>
-                <span
-                  className={`inline-flex min-w-[1.75rem] items-center justify-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${item.tone}`}
-                >
-                  {badgeSymbol}
-                </span>
+                {badge}
                 <span className="text-xs font-medium text-gray-700">{item.label}</span>
               </div>
             );
@@ -85,11 +97,7 @@ const EnrollmentMatrixStatusLegend = ({
                   : 'hover:bg-white/80'
               }`}
             >
-              <span
-                className={`inline-flex min-w-[1.75rem] items-center justify-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${item.tone}`}
-              >
-                {badgeSymbol}
-              </span>
+              {badge}
               <span
                 className={`text-xs font-medium ${isActive ? 'text-gray-900' : 'text-gray-700'}`}
               >
